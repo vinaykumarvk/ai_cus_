@@ -1,0 +1,337 @@
+
+
+
+
+
+
+
+
+
+#include "Intellect_Common.h"
+#include "CO_HostStructdef.h"
+#include "DL_Interface.h" 
+#include<stdlib.h>
+#define FEED_LINERR_LENGTH 500
+
+EXEC SQL INCLUDE SQLCA.H;
+//main(int argc,char **argv)
+int main(int argc,char **argv)//Changes done for AIX Migration
+{
+   DEBUG_INFO_STRUCT_H *l_debug_info_ptr = (DEBUG_INFO_STRUCT_H *) NULL;
+   INTL_ENV_DATA_STRUCT_H l_intl_env_data_h;
+   FILE *l_logfile, *l_finifile;
+   char **temp;
+   int int_num=0;
+   char chr_l_hoff_file[PATH_LENGTH]=APL_NULL_STRING;
+   char chr_l_inifile[PATH_LENGTH] = APL_NULL_STRING;
+	  char l_temp_processing_status[51] = APL_NULL_STRING;
+   struct sqlca sqlca;
+   char chr_l_sys_date[11] = APL_NULL_STRING;
+   int int_retval=0;
+
+   char chr_uname[APL_USERID_LEN] = APL_NULL_STRING;
+   char chr_custody_id_b[APL_USERID_LEN] = APL_NULL_STRING;
+   char chr_passwd[APL_USERID_LEN] = APL_NULL_STRING;
+
+   EXEC SQL BEGIN DECLARE SECTION;
+   int int_l_count =0;
+
+   EXEC SQL VAR chr_l_sys_date         IS STRING;
+   EXEC SQL VAR chr_uname IS STRING;
+   EXEC SQL VAR chr_passwd IS STRING;
+	EXEC SQL END DECLARE SECTION;
+
+   memset(&l_intl_env_data_h, NULL, sizeof(INTL_ENV_DATA_STRUCT_H));
+   strcpy(l_intl_env_data_h.usr, argv[3]);
+   strcpy(l_intl_env_data_h.h_mode, argv[4]);
+   strcpy(l_intl_env_data_h.processtion, argv[5]);
+   strcpy(l_intl_env_data_h.auth_req, argv[6]);
+   strcpy(l_intl_env_data_h.subprocess, argv[7]);
+   strcpy(l_intl_env_data_h.h_process, argv[8]);
+
+
+
+   strcpy(chr_l_inifile,getenv("INTL_ROOT_PATH"));
+   strcat(chr_l_inifile,"intl_sun.cfg");
+   if ( ( l_finifile=fopen(chr_l_inifile,"r") ) == NULL)
+   {
+	APL_GOBACK_FAIL
+   }
+   sqlca.sqlcode=0;
+   APL_FETCH_DB_LOGIN_DETAILS(l_finifile, chr_custody_id_b, chr_uname, chr_passwd, APL_OUT_FILE, &l_debug_info_ptr)
+   IS_ANY_ORA_ERROR
+   EXEC SQL CONNECT :chr_uname IDENTIFIED BY :chr_passwd;
+  
+  IS_ANY_ORA_ERROR
+
+    if (APL_FAILURE == CO_Rtv_RptFileName( "EO",
+				APL_LOGFILE_DESC,
+			        100,
+					  argv[5],
+			        argv,
+			        &l_logfile,
+			        &l_debug_info_ptr ))	
+   {
+	APL_GOBACK_FAIL
+   }
+
+   if ( APL_FAILURE == CO_ReadToken(l_finifile,
+				    "INTL_UPL_PATH",
+				    chr_l_hoff_file,
+				    &l_debug_info_ptr ))
+    {
+	fprintf(l_logfile,"\nReturning unsuccessfully from CO_ReadToken\n");
+	APL_GOBACK_FAIL
+    }
+
+
+   if (APL_FAILURE == CO_SplitStr( argv[9],
+				    '|',
+				    &int_num,
+				    &temp ))
+   {
+	fprintf(l_logfile,"Returns unsuccessfully from CO_SplitStr\n");
+   }
+   if (int_num < 3)
+   {
+	fprintf(l_logfile,"\n InValid Arguments\n");
+   APL_GOBACK_FAIL
+	}
+
+     EXEC SQL SELECT PROCESSING_STATUS into :l_temp_processing_status
+     FROM SYS_BATCHPROC
+     WHERE PROCESS_NAME=:argv[0]
+     AND   PROC_INIT=:argv[1]
+     AND   STARTDATE=:argv[2]
+     AND   STATUS='started'
+     FOR UPDATE OF PROCESSING_STATUS,STATUS; 
+
+   if(APL_ZERO_RESULT_SET)
+   {
+      CO_ProcMonitor(l_logfile,"E:No entry in batch_in_proc\n",NULL,NULL);
+      APL_GOBACK_FAIL
+   }
+
+   if (APL_FAILURE == CO_RtvSysParams(&l_debug_info_ptr))
+   {
+   	CO_ProcMonitor(l_logfile, "Error In Getting System Parameters", NULL, NULL);
+   	CO_Proc_RptClose(l_logfile, &l_debug_info_ptr);
+   	APL_GOBACK_FAIL
+  	} 
+
+   EXEC SQL SELECT to_char(SYS_DATE,'DD/MM/YYYY') 
+		into :chr_l_sys_date FROM PRO_SYS_DATE;
+
+   strcat(chr_l_hoff_file,temp[1]);
+	fprintf(l_logfile,"EOC File Name : %s\n",chr_l_hoff_file);
+	fprintf(l_logfile,"System Date   : %s\n",chr_l_sys_date);
+
+   CO_ProcMonitor(l_logfile,"Start Processing\n",&l_debug_info_ptr,&l_intl_env_data_h);
+ 
+ 	if(APL_FAILURE==ReadRecord(&l_intl_env_data_h,chr_l_hoff_file,chr_l_sys_date,l_logfile,&l_debug_info_ptr))
+    {
+	    APL_GOBACK_FAIL 
+    }
+
+  CO_ProcMonitor(l_logfile,"Finished Processing\n",&l_debug_info_ptr,&l_intl_env_data_h);
+  
+  APL_GOBACK_SUCCESS
+
+  RETURN_SUCCESS : 
+	  EXEC SQL UPDATE SYS_BATCHPROC
+	  SET  status = 'completed'
+	  WHERE PROCESS_NAME=:argv[0]
+	  AND   PROC_INIT=:argv[1]
+	  AND   STARTDATE=:argv[2]
+	  AND   STATUS='started';
+
+  	  EXEC SQL COMMIT WORK RELEASE;			   
+	  fprintf(l_logfile,"Successfully Exiting the program EOC_Uplaod\n"); 
+	  CO_Proc_RptClose(l_logfile, &l_debug_info_ptr);
+	  fclose(l_finifile);
+	  exit(APL_SUCCESS);
+
+  RETURN_FAILURE :
+  	  EXEC SQL COMMIT WORK RELEASE;			   
+	  fprintf(l_logfile,"Unsuccessfully Exiting the program EOC_Upload\n"); 
+	  CO_Proc_RptClose(l_logfile, &l_debug_info_ptr);
+	  fclose(l_finifile);
+	  exit(APL_FAILURE);
+}
+
+ 
+
+
+int ReadRecord(INTL_ENV_DATA_STRUCT_H *p_intl_envdatastruct_h,char *p_hoff_file,char *chr_p_sys_date,FILE *p_logfile,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+FILE *l_fhoff_file;
+FILE *l_logfile;
+char *chr_l_hoff_file;
+char chr_tempbuff_a[500] = APL_NULL_STRING;
+char chr_l_sys_date[11]=APL_NULL_STRING;
+char chr_l_hdat_line[500] = APL_NULL_STRING;
+char **chr_l_param;
+int int_retval=0;
+int int_l_rec = 1;
+char chr_l_lot_qty[21];
+int int_noelem =  0;
+int i = 0;
+int int_l_length = 0;
+char chr_l_line_read[500]=APL_NULL_STRING;
+
+l_logfile=p_logfile;
+
+chr_l_hoff_file=p_hoff_file;
+printf("file -- biju %s\n%s\n",chr_l_hoff_file,p_hoff_file);
+strcpy(chr_l_sys_date,chr_p_sys_date);
+   if ( ( l_fhoff_file=fopen(chr_l_hoff_file,"r") ) == NULL)
+	{ 
+	 fprintf(l_logfile,"Could not open the handoff h_file \n");
+	 APL_GOBACK_FAIL 
+   }
+   else 
+	 { 
+	 fprintf(l_logfile,"Opened the handoff h_file \n");
+	 }
+
+memset(chr_tempbuff_a,APL_NULL_CHAR,500);
+fgets(chr_tempbuff_a,FEED_LINERR_LENGTH,l_fhoff_file);     
+for ( ; ; )
+	{
+	memset(chr_l_hdat_line,APL_NULL_CHAR,500);
+	strcpy(chr_l_hdat_line,chr_tempbuff_a);	
+	memset(chr_tempbuff_a,APL_NULL_CHAR,500);
+	fgets(chr_tempbuff_a,FEED_LINERR_LENGTH,l_fhoff_file);
+	fprintf(l_logfile,"Record No : %d\n",int_l_rec);
+   if (int_l_rec == 1 )
+      {
+        strcpy(chr_l_line_read,chr_l_hdat_line);
+        int_l_length = strlen(chr_l_line_read);
+
+       for (i = 0;i <int_l_length;i++)
+        {
+	     if ((chr_l_line_read[i] == '\r') || (chr_l_line_read[i] == '\n'))
+         	{
+		         chr_l_line_read[i]=',';
+		         chr_l_line_read[i+1]=APL_NULL_CHAR;
+		         break;
+	         }
+
+        }	
+       CO_SplitStr(chr_l_line_read,',', &int_noelem, &chr_l_param);
+       if (int_noelem < 4)
+           {
+              fprintf(p_logfile,"No of Elem are %d \n",int_noelem);
+              fprintf(p_logfile,"4 elements not int_found. \n");
+              APL_GOBACK_FAIL;
+           }
+       EXEC SQL DELETE FROM MT_IDENTMNT WHERE DSN_CD =:chr_l_param[3];
+       IS_ANY_ORA_ERROR
+       
+		}
+	int_l_rec++;
+	    int_retval=CR_Proc_EOCUpd(p_intl_envdatastruct_h,chr_l_hdat_line,chr_l_sys_date,l_logfile,l_debug_info_ptr); 
+	memset(chr_l_hdat_line,APL_NULL_CHAR,500);
+
+		if (feof(l_fhoff_file))
+		{
+	   	 break;
+		}
+	}
+ 
+ APL_GOBACK_SUCCESS
+
+ RETURN_SUCCESS  :
+   {
+      fprintf(p_logfile,"Success from ReadRecord \n");
+		CO_FreeErrLst(l_debug_info_ptr);
+      fclose(l_fhoff_file);
+		return(APL_SUCCESS);
+   }
+
+   RETURN_FAILURE  :
+   {
+      fprintf(p_logfile,"Failure from ReadRecord \n");
+		CO_FreeErrLst(l_debug_info_ptr);
+      fclose(l_fhoff_file);
+      return(APL_FAILURE);
+   }
+}
+
+ 
+
+int CR_Proc_EOCUpd(INTL_ENV_DATA_STRUCT_H *p_intl_envdatastruct_h,char *p_hdat_line,char *chr_p_sys_date,FILE *p_logfile,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{ 
+int int_noelem =  0;
+int i = 0;
+char chr_l_sys_date[11]=APL_NULL_STRING;
+char **chr_l_param;
+int int_l_count = 0;
+int int_l_length = 0;
+char chr_l_cname[66] = APL_NULL_STRING;
+char chr_l_cbiccode[13] = APL_NULL_STRING;
+char chr_l_line_read[500]=APL_NULL_STRING;
+EXEC SQL BEGIN DECLARE SECTION;
+EXEC SQL VAR chr_l_cname IS STRING;
+EXEC SQL VAR chr_l_cbiccode IS STRING;
+
+EXEC SQL END DECLARE SECTION;
+sqlca.sqlcode = 0;
+
+memset(chr_l_cname,APL_NULL_CHAR,66);
+memset(chr_l_cbiccode,APL_NULL_CHAR,13);
+
+strcpy(chr_l_sys_date,chr_p_sys_date);
+strcpy(chr_l_line_read,p_hdat_line);
+
+
+int_l_length = strlen(chr_l_line_read);
+
+for (i = 0;i <int_l_length;i++)
+{
+	if ((chr_l_line_read[i] == '\r') || (chr_l_line_read[i] == '\n'))
+	{
+		chr_l_line_read[i]=',';
+		chr_l_line_read[i+1]=APL_NULL_CHAR;
+		break;
+	}
+
+}	
+
+CO_SplitStr(chr_l_line_read,',', &int_noelem, &chr_l_param);
+printf ("-->%s<--\n",chr_l_param[0]);
+printf ("-->%s<--\n",chr_l_param[1]);
+printf ("-->%s<--\n",chr_l_param[2]);
+printf ("-->%s<--\n",chr_l_param[3]);
+if (int_noelem < 4)
+{
+fprintf(p_logfile,"No of Elem are %d \n",int_noelem);
+fprintf(p_logfile,"5 elements not int_found - The record details are not complete. \n");
+fprintf(p_logfile,"[[[%s]]]\n",p_hdat_line); 
+APL_GOBACK_FAIL;
+}
+EXEC SQL INSERT INTO MT_IDENTMNT VALUES (:chr_l_param[0],:chr_l_param[1],:chr_l_param[2],:chr_l_param[3]);
+IS_ANY_ORA_ERROR
+
+EXEC SQL COMMIT WORK;
+IS_ANY_ORA_ERROR
+
+APL_GOBACK_SUCCESS
+
+   RETURN_SUCCESS  :
+   {
+      fprintf(p_logfile,"Success from CR_Proc_EOCUpd \n");
+      CO_FreeErrLst(l_debug_info_ptr);
+      fflush(p_logfile);
+      return(APL_SUCCESS);
+   }
+
+   RETURN_FAILURE  :
+   {
+      fprintf(p_logfile,"Failure from CR_Proc_EOCUpd \n");
+      CO_FreeErrLst(l_debug_info_ptr);
+      fflush(p_logfile);
+      return(APL_FAILURE);
+   }
+}
+

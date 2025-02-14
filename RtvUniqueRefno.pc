@@ -1,0 +1,625 @@
+
+
+#include "stdio_64.h"
+#include "Intellect_Interface.h"
+#include "CR_Common.h"
+#include "MS_Swift.h"
+#define UNIQUE_REF_DECADE '2'     
+#define CORP_IND '9'
+/* OPT:AIX */
+#ifdef SETTLEMENT
+#undef SETTLEMENT
+#endif
+#define SETTLEMENT '6'
+#define COMMIT_COUNT_C 10000 
+EXEC SQL INCLUDE SQLCA;
+
+
+
+int main()
+{
+char  chr_inifile[PATH_LENGTH]       = APL_NULL_STRING;
+FILE  *chr_finifile                  = NULL;
+FILE  *fl_logfile                = NULL;
+char  chr_logfilename[PATH_LENGTH]   = APL_NULL_STRING;
+char  chr_uname[APL_USERID_LEN];
+char  chr_passwd[APL_PASSWD_LEN];
+char  chr_logfile[PATH_LENGTH]      = APL_NULL_STRING;
+char  chr_l_h_select_stmt[200] = APL_NULL_STRING;
+DEBUG_INFO_STRUCT_H **l_debug_info_ptr;
+int int_l_count=0;
+char chr_l_unique_ref_num[APL_UNIQUE_REF_NUM_LEN]=APL_NULL_STRING;
+char chr_l_sys_date[APL_DATE_LEN]=APL_NULL_STRING;
+int int_h_jul_date = 0;
+int int_h_jul_date_forhist = 0;
+char chr_h_char_jul_date[4]=APL_NULL_STRING;
+long int_l_seq_num=1,i=0; 
+char int_l_seqno[17]=APL_NULL_STRING;
+short i_sequenceno = 0;
+short i_sequence_num=0;
+char chr_h_char_seq_num[6]=APL_NULL_STRING;
+
+char chr_l_client_a[APL_CLIENT_LENGTH]=APL_NULL_STRING;
+char chr_l_rowid_A[APL_ROWID_LEN]=APL_NULL_STRING;
+char chr_l_refno_a[APL_TXNREFNO_LEN]=APL_NULL_STRING;
+char chr_l_inputdt[APL_DATE_LEN]=APL_NULL_STRING;
+char chr_l_typeoftrd[3] = APL_NULL_STRING;
+
+short i_dl_client = 0;
+short i_ora_rowid = 0;
+short i_indentity_no = 0;
+short i_newdt = 0;
+short i_classofdl = 0;
+
+EXEC SQL BEGIN DECLARE SECTION;
+
+	EXEC SQL VAR chr_l_client_a IS STRING;
+	EXEC SQL VAR chr_l_rowid_A IS STRING;
+	EXEC SQL VAR chr_l_refno_a IS STRING;
+	EXEC SQL VAR chr_l_inputdt IS STRING;
+	EXEC SQL VAR chr_l_typeoftrd IS STRING;
+	EXEC SQL VAR chr_l_unique_ref_num IS STRING;
+	EXEC SQL VAR int_l_seqno IS STRING;
+	EXEC SQL VAR  chr_l_h_select_stmt IS STRING;
+
+EXEC SQL END DECLARE SECTION;
+
+
+
+   strcpy(chr_inifile,getenv("INTL_ROOT_PATH"));
+   strcat(chr_inifile,"/intl_sun.cfg");
+
+	if ( (chr_finifile = fopen(chr_inifile,"r") ) == NULL)
+		exit(-1);
+	if (APL_FAILURE ==   CO_ReadToken(chr_finifile,
+												"INTL_LOG_PATH",
+												chr_logfile,
+												l_debug_info_ptr) )
+	{
+		APL_GOBACK_FAIL
+	}
+	sprintf(chr_logfilename,"%s/%s",chr_logfile,"Populate_UniqRefNo_live.log");
+
+	if ((fl_logfile=fopen(chr_logfilename,"w+")) == (FILE *) NULL)
+	{
+		printf("Failed to craete and open the chr_log h_file \n");
+	}
+
+	printf ("ENTER THE SMACADMIN ID       : ");
+	scanf("%s",chr_uname); 
+	printf ("ENTER THE SMACADMIN PASSWORD : ");
+	system("stty -echo");
+	scanf("%s",chr_passwd); 
+	system("stty echo");
+
+
+   
+
+	EXEC SQL CONNECT :chr_uname IDENTIFIED BY :chr_passwd;
+	IS_ANY_ORA_ERROR
+	
+	if ( APL_FAILURE == CO_Rtv_JulDt(&int_h_jul_date, l_debug_info_ptr) )
+		APL_GOBACK_FAIL
+
+printf("\nUpdating the TRADE details... "); 
+
+EXEC SQL DECLARE TRADE_DETAILS CURSOR FOR
+SELECT CLIENT,IDENTIY_NO,DATEOF_INPUT,DL_CLASS FROM DL_DEAL 
+WHERE UNIQ_IDENT_NO IS NULL
+ORDER BY CLIENT,IDENTIY_NO,DATEOF_INPUT
+FOR UPDATE OF UNIQ_IDENT_NO;
+fprintf(fl_logfile,"\n   A/C              REFNO               INPUT DATE       TYPE OF TRADE \n");
+fprintf(fl_logfile,"---------------------------------------------------------------------------------\n");
+EXEC SQL OPEN TRADE_DETAILS;
+i=0;
+int_h_jul_date_forhist=int_h_jul_date-10;
+for(;;)
+{
+	 strcpy(chr_l_unique_ref_num,APL_NULL_STRING);
+	 strcpy(chr_l_refno_a,APL_NULL_STRING);
+	 strcpy(chr_l_inputdt,APL_NULL_STRING);
+	 strcpy(chr_l_typeoftrd,APL_NULL_STRING);
+	 EXEC SQL FETCH TRADE_DETAILS INTO 
+						:chr_l_client_a:i_dl_client,
+						:chr_l_refno_a:i_indentity_no,
+						:chr_l_inputdt:i_newdt,
+						:chr_l_typeoftrd:i_classofdl;
+	if ( APL_ZERO_RESULT_SET ) break;  
+	chr_l_unique_ref_num[0]=UNIQUE_REF_DECADE;
+	if (!strcmp(chr_l_typeoftrd,"18")||!strcmp(chr_l_typeoftrd,"19"))
+		chr_l_unique_ref_num[1]=CORP_IND;
+	else 
+		chr_l_unique_ref_num[1]=SETTLEMENT;
+	chr_l_unique_ref_num[2]=chr_l_inputdt[9];
+	chr_l_unique_ref_num[3]='\0';
+	sprintf(chr_h_char_jul_date, "%.3d", int_h_jul_date);
+	  
+	sprintf(chr_h_char_seq_num, "%.5ld", int_l_seq_num);
+	strcat(chr_l_unique_ref_num,chr_h_char_jul_date);
+	strcat(chr_l_unique_ref_num,chr_h_char_seq_num);
+
+ 	EXEC SQL UPDATE DL_DEAL 
+				SET UNIQ_IDENT_NO = :chr_l_unique_ref_num
+				WHERE CLIENT=:chr_l_client_a
+				AND IDENTIY_NO=:chr_l_refno_a; 
+	IS_ANY_ORA_ERROR  
+	fprintf(fl_logfile,"%-13s  %-20s  %-21s  %-3s  %-16s\n",chr_l_client_a,chr_l_refno_a,chr_l_inputdt,chr_l_typeoftrd,chr_l_unique_ref_num);
+
+	i++;	
+   int_l_seq_num++; 
+	if (i==COMMIT_COUNT_C)
+	{
+		i=0;
+		EXEC SQL COMMIT;		
+		EXEC SQL OPEN TRADE_DETAILS;
+	}  
+	IS_ANY_ORA_ERROR  
+	if(int_l_seq_num==99999)
+	{
+		int_h_jul_date_forhist++;
+		int_l_seq_num=1;	
+	}
+}  
+EXEC SQL CLOSE TRADE_DETAILS;
+
+fclose(fl_logfile);
+printf("......   DONE\n");
+
+
+
+
+	EXEC SQL UPDATE DL_SMI_TMP_TRADE A SET A.UNIQ_IDENT_NO  = ( SELECT B.UNIQ_IDENT_NO FROM DL_DEAL B
+	WHERE B.CLIENT=A.CLIENT AND B.IDENTIY_NO=A.IDENTIY_NO ) ;
+	IS_ANY_ORA_ERROR
+	
+
+
+
+
+
+	sprintf(chr_logfilename,"%s/%s",chr_logfile,"Populate_UniqRefNo_history.log");
+
+	if ((fl_logfile=fopen(chr_logfilename,"w+")) == (FILE *) NULL)
+	{
+		printf("Failed to craete and open the chr_log h_file \n");
+	}
+printf("Updating the TRADE HISTORY details... "); 
+fprintf(fl_logfile,"Starting CHISTRADE\n");
+fflush(fl_logfile);
+EXEC SQL DECLARE HISTRADE_DETAILS CURSOR FOR
+SELECT CLIENT,IDENTIY_NO,DATEOF_INPUT,DL_CLASS FROM DL_HISDEAL 
+WHERE UNIQ_IDENT_NO IS NULL; 
+
+
+	IS_ANY_ORA_ERROR  
+fprintf(fl_logfile,"\n   A/C              REFNO               INPUT DATE       TYPE OF TRADE \n");
+fflush(fl_logfile);
+fprintf(fl_logfile,"---------------------------------------------------------------------------------\n");
+fflush(fl_logfile);
+EXEC SQL OPEN HISTRADE_DETAILS;
+i=0;
+for(;;)
+{
+	 strcpy(chr_l_unique_ref_num,APL_NULL_STRING);
+	 strcpy(chr_l_refno_a,APL_NULL_STRING);
+	 strcpy(chr_l_inputdt,APL_NULL_STRING);
+	 strcpy(chr_l_typeoftrd,APL_NULL_STRING);
+	 EXEC SQL FETCH HISTRADE_DETAILS INTO 
+						:chr_l_client_a:i_dl_client,
+						:chr_l_refno_a:i_indentity_no,
+						:chr_l_inputdt:i_newdt,
+						:chr_l_typeoftrd:i_classofdl;
+	if ( APL_ZERO_RESULT_SET ) break;  
+	IS_ANY_ORA_ERROR  
+	chr_l_unique_ref_num[0]=UNIQUE_REF_DECADE;
+	if (!strcmp(chr_l_typeoftrd,"18")||!strcmp(chr_l_typeoftrd,"19"))
+		chr_l_unique_ref_num[1]=CORP_IND;
+	else 
+		chr_l_unique_ref_num[1]=SETTLEMENT;
+	chr_l_unique_ref_num[2]=chr_l_inputdt[9];
+	chr_l_unique_ref_num[3]='\0';
+	 
+	sprintf(chr_h_char_jul_date, "%.3d", int_h_jul_date);
+	 
+	sprintf(chr_h_char_seq_num, "%.5ld", int_l_seq_num);
+	strcat(chr_l_unique_ref_num,chr_h_char_jul_date);
+	strcat(chr_l_unique_ref_num,chr_h_char_seq_num);
+
+ 	EXEC SQL UPDATE DL_HISDEAL 
+				SET UNIQ_IDENT_NO = :chr_l_unique_ref_num
+				WHERE CLIENT=:chr_l_client_a
+				AND IDENTIY_NO=:chr_l_refno_a; 
+	IS_ANY_ORA_ERROR  
+	fprintf(fl_logfile,"%-13s  %-20s  %-21s  %-3s  %-16s\n",chr_l_client_a,chr_l_refno_a,chr_l_inputdt,chr_l_typeoftrd,chr_l_unique_ref_num);
+	fflush(fl_logfile);
+
+	i++;	
+   int_l_seq_num++; 
+	if (i==COMMIT_COUNT_C)
+	{
+		i=0;
+		EXEC SQL COMMIT;		
+		IS_ANY_ORA_ERROR  
+		EXEC SQL OPEN HISTRADE_DETAILS;
+		fprintf(fl_logfile,"Reopening the cursor\n");
+		fflush(fl_logfile);
+		IS_ANY_ORA_ERROR  
+	}  
+	IS_ANY_ORA_ERROR  
+	
+	if(int_l_seq_num==99999)
+	{
+		int_h_jul_date_forhist++;
+		int_l_seq_num=1;	
+	}
+}  
+EXEC SQL CLOSE HISTRADE_DETAILS;
+fclose(fl_logfile);
+printf("......   DONE\n");
+
+
+
+
+	sprintf(chr_logfilename,"%s/%s",chr_logfile,"Populate_UniqRefNo_CPYhistory.log");
+
+	if ((fl_logfile=fopen(chr_logfilename,"w+")) == (FILE *) NULL)
+	{
+		printf("Failed to craete and open the chr_log h_file \n");
+	}
+printf("Updating the TRADE CPYHISTORY details... "); 
+EXEC SQL DECLARE CPYHISTRADE_DETAILS CURSOR FOR
+SELECT CLIENT,IDENTIY_NO,DATEOF_INPUT,DL_CLASS FROM DL_COPYHISTORY 
+WHERE UNIQ_IDENT_NO IS NULL
+ORDER BY CLIENT,IDENTIY_NO,DATEOF_INPUT
+FOR UPDATE OF UNIQ_IDENT_NO;
+fprintf(fl_logfile,"\n   A/C              REFNO               INPUT DATE       TYPE OF TRADE \n");
+fprintf(fl_logfile,"---------------------------------------------------------------------------------\n");
+EXEC SQL OPEN CPYHISTRADE_DETAILS;
+i=0;
+for(;;)
+{
+	 strcpy(chr_l_unique_ref_num,APL_NULL_STRING);
+	 strcpy(chr_l_refno_a,APL_NULL_STRING);
+	 strcpy(chr_l_inputdt,APL_NULL_STRING);
+	 strcpy(chr_l_typeoftrd,APL_NULL_STRING);
+	 EXEC SQL FETCH CPYHISTRADE_DETAILS INTO 
+						:chr_l_client_a:i_dl_client,
+						:chr_l_refno_a:i_indentity_no,
+						:chr_l_inputdt:i_newdt,
+						:chr_l_typeoftrd:i_classofdl;
+	if ( APL_ZERO_RESULT_SET ) break;  
+	chr_l_unique_ref_num[0]=UNIQUE_REF_DECADE;
+	if (!strcmp(chr_l_typeoftrd,"18")||!strcmp(chr_l_typeoftrd,"19"))
+		chr_l_unique_ref_num[1]=CORP_IND;
+	else 
+		chr_l_unique_ref_num[1]=SETTLEMENT;
+	chr_l_unique_ref_num[2]=chr_l_inputdt[9];
+	chr_l_unique_ref_num[3]='\0';
+	 
+	sprintf(chr_h_char_jul_date, "%.3d", int_h_jul_date);
+	
+	sprintf(chr_h_char_seq_num, "%.5ld", int_l_seq_num);
+	strcat(chr_l_unique_ref_num,chr_h_char_jul_date);
+	strcat(chr_l_unique_ref_num,chr_h_char_seq_num);
+
+ 	EXEC SQL UPDATE DL_COPYHISTORY 
+				SET UNIQ_IDENT_NO = :chr_l_unique_ref_num
+				WHERE CLIENT=:chr_l_client_a
+				AND IDENTIY_NO=:chr_l_refno_a; 
+	IS_ANY_ORA_ERROR  
+	fprintf(fl_logfile,"%-13s  %-20s  %-21s  %-3s  %-16s\n",chr_l_client_a,chr_l_refno_a,chr_l_inputdt,chr_l_typeoftrd,chr_l_unique_ref_num);
+
+	i++;	
+   int_l_seq_num++; 
+	if (i==COMMIT_COUNT_C)
+	{
+		i=0;
+		EXEC SQL COMMIT;		
+		EXEC SQL OPEN CPYHISTRADE_DETAILS;
+	}  
+	IS_ANY_ORA_ERROR  
+	if(int_l_seq_num==99999)
+	{
+		int_h_jul_date_forhist++;
+		int_l_seq_num=1;	
+	}
+}  
+EXEC SQL CLOSE CPYHISTRADE_DETAILS;
+fclose(fl_logfile);
+printf("......   DONE\n");
+
+
+
+
+
+	sprintf(chr_logfilename,"%s/%s",chr_logfile,"Populate_UniqRefNo_CEOMTRADE.log");
+
+	if ((fl_logfile=fopen(chr_logfilename,"w+")) == (FILE *) NULL)
+	{
+		printf("Failed to craete and open the chr_log h_file \n");
+	}
+printf("Updating the TRADE CEOMTRADE details... "); 
+EXEC SQL DECLARE CEOMTRADE_DETAILS CURSOR FOR
+SELECT CLIENT,IDENTIY_NO,DATEOF_INPUT,DL_CLASS FROM DL_EOMDEAL 
+WHERE UNIQ_IDENT_NO IS NULL
+ORDER BY CLIENT,IDENTIY_NO,DATEOF_INPUT
+FOR UPDATE OF UNIQ_IDENT_NO;
+fprintf(fl_logfile,"\n   A/C              REFNO               INPUT DATE       TYPE OF TRADE \n");
+fprintf(fl_logfile,"---------------------------------------------------------------------------------\n");
+EXEC SQL OPEN CEOMTRADE_DETAILS;
+i=0;
+for(;;)
+{
+	 strcpy(chr_l_unique_ref_num,APL_NULL_STRING);
+	 strcpy(chr_l_refno_a,APL_NULL_STRING);
+	 strcpy(chr_l_inputdt,APL_NULL_STRING);
+	 strcpy(chr_l_typeoftrd,APL_NULL_STRING);
+	 EXEC SQL FETCH CEOMTRADE_DETAILS INTO 
+						:chr_l_client_a:i_dl_client,
+						:chr_l_refno_a:i_indentity_no,
+						:chr_l_inputdt:i_newdt,
+						:chr_l_typeoftrd:i_classofdl;
+	if ( APL_ZERO_RESULT_SET ) break;  
+	chr_l_unique_ref_num[0]=UNIQUE_REF_DECADE;
+	if (!strcmp(chr_l_typeoftrd,"18")||!strcmp(chr_l_typeoftrd,"19"))
+		chr_l_unique_ref_num[1]=CORP_IND;
+	else 
+		chr_l_unique_ref_num[1]=SETTLEMENT;
+	chr_l_unique_ref_num[2]=chr_l_inputdt[9];
+	chr_l_unique_ref_num[3]='\0';
+	 
+	sprintf(chr_h_char_jul_date, "%.3d", int_h_jul_date);
+	
+	sprintf(chr_h_char_seq_num, "%.5ld", int_l_seq_num);
+	strcat(chr_l_unique_ref_num,chr_h_char_jul_date);
+	strcat(chr_l_unique_ref_num,chr_h_char_seq_num);
+
+ 	EXEC SQL UPDATE  DL_EOMDEAL
+				SET UNIQ_IDENT_NO = :chr_l_unique_ref_num
+				WHERE CLIENT=:chr_l_client_a
+				AND IDENTIY_NO=:chr_l_refno_a; 
+	IS_ANY_ORA_ERROR  
+	fprintf(fl_logfile,"%-13s  %-20s  %-21s  %-3s  %-16s\n",chr_l_client_a,chr_l_refno_a,chr_l_inputdt,chr_l_typeoftrd,chr_l_unique_ref_num);
+
+	i++;	
+	int_l_seq_num++; 
+	if (i==COMMIT_COUNT_C)
+	{
+		i=0;
+		EXEC SQL COMMIT;		
+		EXEC SQL OPEN CEOMTRADE_DETAILS;
+	}  
+	IS_ANY_ORA_ERROR  
+	if(int_l_seq_num==99999)
+	{
+		int_h_jul_date_forhist++;
+		int_l_seq_num=1;	
+	}
+}  
+EXEC SQL CLOSE CEOMTRADE_DETAILS;
+fclose(fl_logfile);
+printf("......   DONE\n");
+
+
+
+
+	sprintf(chr_logfilename,"%s/%s",chr_logfile,"Populate_UniqRefNo_repair.log");
+
+	if ((fl_logfile=fopen(chr_logfilename,"w+")) == (FILE *) NULL)
+	{
+		printf("Failed to craete and open the chr_log h_file \n");
+	}
+printf("Updating the TRADE REPAIR details... "); 
+EXEC SQL DECLARE REPAIR_DETAILS CURSOR FOR
+SELECT ROWID,CLIENT,IDENTIY_NO,DATEOF_INPUT,DL_CLASS FROM DL_DEALREPAIR 
+WHERE UNIQ_IDENT_NO IS NULL
+ORDER BY CLIENT,IDENTIY_NO,DATEOF_INPUT
+FOR UPDATE OF UNIQ_IDENT_NO;
+fprintf(fl_logfile,"\n   A/C              REFNO               INPUT DATE       TYPE OF TRADE \n");
+fprintf(fl_logfile,"---------------------------------------------------------------------------------\n");
+EXEC SQL OPEN REPAIR_DETAILS;
+i=0;
+for(;;)
+{
+	 strcpy(chr_l_unique_ref_num,APL_NULL_STRING);
+	 strcpy(chr_l_refno_a,APL_NULL_STRING);
+	 strcpy(chr_l_inputdt,APL_NULL_STRING);
+	 strcpy(chr_l_typeoftrd,APL_NULL_STRING);
+	 EXEC SQL FETCH REPAIR_DETAILS INTO 
+						:chr_l_rowid_A:i_ora_rowid,
+						:chr_l_client_a:i_dl_client,
+						:chr_l_refno_a:i_indentity_no,
+						:chr_l_inputdt:i_newdt,
+						:chr_l_typeoftrd:i_classofdl;
+	if ( APL_ZERO_RESULT_SET ) break;  
+	chr_l_unique_ref_num[0]=UNIQUE_REF_DECADE;
+	if (!strcmp(chr_l_typeoftrd,"18")||!strcmp(chr_l_typeoftrd,"19"))
+		chr_l_unique_ref_num[1]=CORP_IND;
+	else 
+		chr_l_unique_ref_num[1]=SETTLEMENT;
+	chr_l_unique_ref_num[2]=chr_l_inputdt[9];
+	chr_l_unique_ref_num[3]='\0';
+	 
+	sprintf(chr_h_char_jul_date, "%.3d", int_h_jul_date);
+	
+	sprintf(chr_h_char_seq_num, "%.5ld", int_l_seq_num);
+	strcat(chr_l_unique_ref_num,chr_h_char_jul_date);
+	strcat(chr_l_unique_ref_num,chr_h_char_seq_num);
+
+ 	EXEC SQL UPDATE DL_DEALREPAIR
+				SET UNIQ_IDENT_NO = :chr_l_unique_ref_num
+				WHERE ROWID=:chr_l_rowid_A;
+
+				 
+	IS_ANY_ORA_ERROR  
+	fprintf(fl_logfile,"%-13s  %-20s  %-21s  %-3s  %-16s\n",chr_l_client_a,chr_l_refno_a,chr_l_inputdt,chr_l_typeoftrd,chr_l_unique_ref_num);
+
+	i++;	
+	int_l_seq_num++; 
+	if (i==COMMIT_COUNT_C)
+	{
+		i=0;
+		EXEC SQL COMMIT;		
+		EXEC SQL OPEN REPAIR_DETAILS;
+	}  
+	IS_ANY_ORA_ERROR  
+	if(int_l_seq_num==99999)
+	{
+		int_h_jul_date_forhist++;
+		int_l_seq_num=1;	
+	}
+}  
+EXEC SQL CLOSE REPAIR_DETAILS;
+fclose(fl_logfile);
+printf("......   DONE\n");
+
+
+
+
+	sprintf(chr_logfilename,"%s/%s",chr_logfile,"Populate_UniqRefNo_mistxn.log");
+
+	if ((fl_logfile=fopen(chr_logfilename,"w+")) == (FILE *) NULL)
+	{
+		printf("Failed to craete and open the chr_log h_file \n");
+	}
+printf("Updating the MISSING TXN details... "); 
+EXEC SQL DECLARE MISTXN_REPAIR CURSOR FOR
+SELECT CLIENT,IDENTIY_NO,DATEOF_INPUT FROM DL_MISDEAL 
+WHERE UNIQ_IDENT_NO IS NULL
+ORDER BY CLIENT,IDENTIY_NO,DATEOF_INPUT
+FOR UPDATE OF UNIQ_IDENT_NO;
+fprintf(fl_logfile,"\n   A/C              REFNO               INPUT DATE       UNIQUE_REF_NUM \n");
+fprintf(fl_logfile,"---------------------------------------------------------------------------------\n");
+EXEC SQL OPEN MISTXN_REPAIR;
+i=0;
+for(;;)
+{
+	 strcpy(chr_l_unique_ref_num,APL_NULL_STRING);
+	 strcpy(chr_l_refno_a,APL_NULL_STRING);
+	 strcpy(chr_l_inputdt,APL_NULL_STRING);
+	 EXEC SQL FETCH MISTXN_REPAIR INTO 
+						:chr_l_client_a:i_dl_client,
+						:chr_l_refno_a:i_indentity_no,
+						:chr_l_inputdt:i_newdt;
+	if ( APL_ZERO_RESULT_SET ) break;  
+	chr_l_unique_ref_num[0]=UNIQUE_REF_DECADE;
+	chr_l_unique_ref_num[1]=SETTLEMENT;
+	chr_l_unique_ref_num[2]=chr_l_inputdt[9];
+	chr_l_unique_ref_num[3]='\0';
+	
+	sprintf(chr_h_char_jul_date, "%.3d", int_h_jul_date);
+	 
+	sprintf(chr_h_char_seq_num, "%.5ld", int_l_seq_num);
+	strcat(chr_l_unique_ref_num,chr_h_char_jul_date);
+	strcat(chr_l_unique_ref_num,chr_h_char_seq_num);
+
+ 	EXEC SQL UPDATE DL_MISDEAL
+				SET UNIQ_IDENT_NO = :chr_l_unique_ref_num
+				WHERE CLIENT=:chr_l_client_a
+				AND IDENTIY_NO=:chr_l_refno_a; 
+	IS_ANY_ORA_ERROR  
+	fprintf(fl_logfile,"%-13s  %-20s  %-21s  %-3s  %-16s\n",chr_l_client_a,chr_l_refno_a,chr_l_inputdt,chr_l_typeoftrd,chr_l_unique_ref_num);
+
+	i++;	
+	int_l_seq_num++; 
+	if (i==COMMIT_COUNT_C)
+	{
+		i=0;
+		EXEC SQL COMMIT;		
+		EXEC SQL OPEN MISTXN_REPAIR;
+	}  
+	IS_ANY_ORA_ERROR  
+	if(int_l_seq_num==99999)
+	{
+		int_h_jul_date_forhist++;
+		int_l_seq_num=1;	
+	}
+}  
+EXEC SQL CLOSE MISTXN_REPAIR;
+fclose(fl_logfile);
+printf("......   DONE\n");
+
+
+
+
+
+	sprintf(chr_logfilename,"%s/%s",chr_logfile,"Populate_UniqRefNo_locnchg.log");
+
+	if ((fl_logfile=fopen(chr_logfilename,"w+")) == (FILE *) NULL)
+	{
+		printf("Failed to craete and open the chr_log h_file \n");
+	}
+printf("Updating the LOCATION CHANGE details... "); 
+EXEC SQL DECLARE LOCNCHG_REPAIR CURSOR FOR
+SELECT IDEN_NO,DATEOF_INPUT FROM DL_LOCNCHG
+WHERE UNIQ_IDENT_NO IS NULL
+ORDER BY IDEN_NO
+FOR UPDATE OF UNIQ_IDENT_NO;
+fprintf(fl_logfile,"\n   SEQUENCE NUMBER       UNIQUE_REF_NUM \n");
+fprintf(fl_logfile,"------------------------------------------\n");
+EXEC SQL OPEN LOCNCHG_REPAIR;
+i=0;
+for(;;)
+{
+	 strcpy(chr_l_unique_ref_num,APL_NULL_STRING);
+	 strcpy(int_l_seqno,APL_NULL_STRING);
+	 strcpy(chr_l_inputdt,APL_NULL_STRING);
+	 EXEC SQL FETCH LOCNCHG_REPAIR INTO 
+						:int_l_seqno:i_sequenceno,
+						:chr_l_inputdt:i_newdt;
+	if ( APL_ZERO_RESULT_SET ) break;  
+	chr_l_unique_ref_num[0]=UNIQUE_REF_DECADE;
+	chr_l_unique_ref_num[1]=SETTLEMENT;
+	chr_l_unique_ref_num[2]=chr_l_inputdt[9];
+	chr_l_unique_ref_num[3]='\0';
+	 
+	sprintf(chr_h_char_jul_date, "%.3d", int_h_jul_date);
+	 
+	sprintf(chr_h_char_seq_num, "%.5ld", int_l_seq_num);
+	strcat(chr_l_unique_ref_num,chr_h_char_jul_date);
+	strcat(chr_l_unique_ref_num,chr_h_char_seq_num);
+
+ 	EXEC SQL UPDATE DL_LOCNCHG
+				SET UNIQ_IDENT_NO = :chr_l_unique_ref_num
+				WHERE IDEN_NO=:int_l_seqno; 
+	IS_ANY_ORA_ERROR  
+	fprintf(fl_logfile,"%-20s  %-20s  \n",int_l_seqno,chr_l_unique_ref_num);
+
+	i++;	
+	int_l_seq_num++; 
+	if (i==COMMIT_COUNT_C)
+	{
+		i=0;
+		EXEC SQL COMMIT;		
+		EXEC SQL OPEN LOCNCHG_REPAIR;
+	}  
+	IS_ANY_ORA_ERROR  
+	if(int_l_seq_num==99999)
+	{
+		int_h_jul_date_forhist++;
+		int_l_seq_num=1;	
+	}
+}  
+EXEC SQL CLOSE LOCNCHG_REPAIR;
+	EXEC SQL COMMIT;		
+//fprintf(fl_logfile,"Sequence reached to (%d)\n",int_l_seq_num);  Chnages done for AIX Migration
+fprintf(fl_logfile,"Sequence reached to (%ld)\n",int_l_seq_num); 
+fflush(fl_logfile);
+
+
+
+fclose(fl_logfile);
+printf("......   DONE\n");
+
+		  EXEC SQL COMMIT WORK;
+		  printf("Success in Populate_UniqRefNo\n");
+		  fclose(chr_finifile);
+		  fclose(fl_logfile);
+		  return(1);
+RETURN_FAILURE:
+		  EXEC SQL COMMIT WORK;
+		  printf("Failure in Populate_UniqRefNo\n");
+		  fclose(chr_finifile);
+		  fclose(fl_logfile);
+		  return(0);
+}

@@ -1,0 +1,2675 @@
+
+
+
+
+
+#include "IV_Control_A.h"
+#include "strings.h"
+EXEC SQL INCLUDE SQLCA;
+
+
+
+int Cdlymktprc(char *p_instr_code, double *p_mktprc, int *int_p_retstat,
+	       DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	
+	/* Bageshri HB_IV_003 : To consider market price till Next Billing Date only (not till Bill Processing date)*/ 
+
+	char h_instr_code[APL_INSTRUMENTCODE_LEN],chr_h_bl_upto_dt[APL_DATE_LEN];
+	char chr_l_buf[BUFFER_LEN];
+	double h_closing_pr=0;
+	short i_closing_pr;
+	EXEC SQL VAR h_instr_code IS STRING;
+	EXEC SQL VAR chr_h_bl_upto_dt IS STRING;
+
+	EXEC SQL END DECLARE SECTION;
+
+	int int_retstat = IV_SUCCESS;
+
+	struct sqlca sqlca;
+	sqlca.sqlcode = 0;
+
+	memset(h_instr_code, APL_NULL_CHAR, APL_INSTRUMENTCODE_LEN);
+	memset(chr_h_bl_upto_dt, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(chr_l_buf, APL_NULL_CHAR, BUFFER_LEN);
+
+	strcpy(chr_h_bl_upto_dt,chr_g_bl_upto_dt);
+	strcpy(h_instr_code,p_instr_code);
+
+	EXEC SQL SELECT CLOSING_PR 
+	INTO :h_closing_pr:i_closing_pr
+	FROM MT_DLYMKTPRC
+	WHERE PRICE_DATE = :chr_h_bl_upto_dt AND
+			instr_code = :h_instr_code;
+
+	*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+	IS_ANY_ORA_ERROR;
+
+	if(sqlca.sqlcode == 1403)
+	{
+		*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+
+		APL_GOBACK_FAIL;
+	}
+
+	if(i_closing_pr == -1)
+	{
+		h_closing_pr = 0;
+		*p_mktprc = h_closing_pr;
+		*int_p_retstat = IV_COLUMN_NULL_ERR;
+
+		APL_GOBACK_FAIL;
+	}
+
+	*int_p_retstat = IV_SUCCESS;
+
+	*p_mktprc = h_closing_pr;
+
+	APL_GOBACK_SUCCESS
+
+RETURN_SUCCESS:
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,
+			 "Exiting Successfully Out Of Cdlymktprc\n",
+			 NULL, NULL);
+	}
+	return APL_SUCCESS;
+
+RETURN_FAILURE:
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,
+			 "Exiting Unsuccessfully Out Of Cdlymktprc\n",
+			 NULL, NULL);
+	}
+	return APL_FAILURE;
+}
+
+
+
+int IV_Mod_BillDtForTrade(char *chr_p_client, double p_numamend, char *p_ora_rowid,
+		      char p_hisflg, char *chr_p_bill_dep, int *int_p_retstat,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	/* char *int_pos = NULL; PJ */
+	char *int_pos,*chr_h_upto_dt_temp ;
+	
+	char chr_l_cod_numamd[10];
+	char chr_l_bill_dep[4];			/* Bageshri HB_IV_001 */
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+	char chr_h_sel_stmt[1200],h_dl_client[APL_CLIENT_LENGTH],h_ora_rowid[APL_ROWID_LEN];
+	char chr_h_bl_upto_dt[APL_DATE_LEN];
+	struct sqlca sqlca;
+
+
+	EXEC SQL VAR chr_h_sel_stmt IS STRING;
+	EXEC SQL VAR chr_h_bl_upto_dt IS STRING;
+
+	EXEC SQL END DECLARE SECTION;
+
+	sqlca.sqlcode = 0;
+	int_pos = (char *) calloc(APL_DATE_LEN,sizeof(char)); /* PJ */
+	memset(chr_h_sel_stmt, APL_NULL_CHAR, 1200);
+	memset(h_dl_client, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+	memset(h_ora_rowid, APL_NULL_CHAR, APL_ROWID_LEN);
+	memset(chr_h_bl_upto_dt, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(chr_l_bill_dep, APL_NULL_CHAR, 4);		/* Bageshri HB_IV_001 */
+	
+	memset(chr_l_cod_numamd,'\0',10);
+	
+
+	strcpy(h_dl_client,chr_p_client);
+	strcpy(h_ora_rowid,p_ora_rowid);
+	strcpy(chr_h_bl_upto_dt,chr_g_bl_upto_dt);
+	chr_h_upto_dt_temp = strtok_r(chr_h_bl_upto_dt," ",&int_pos);
+	strcpy(chr_l_bill_dep,chr_p_bill_dep);			/* Bageshri HB_IV_001 */
+	
+	strcpy(chr_h_bl_upto_dt,chr_h_upto_dt_temp);
+
+	/* strcpy(chr_h_bl_upto_dt,strtok_r(chr_h_bl_upto_dt," ",&int_pos)); PJ*/
+	strcat(chr_h_bl_upto_dt," 23:59:59");
+
+	if(p_hisflg == 'H')
+	{
+		strcpy(chr_h_sel_stmt,"UPDATE DL_HISDEAL ");
+	}
+	else
+	{
+		strcpy(chr_h_sel_stmt,"UPDATE DL_DEAL ");
+	}
+	strcat(chr_h_sel_stmt," SET DATEOFBILLING = '");
+	strcat(chr_h_sel_stmt,chr_g_bl_upto_dt);
+	strcat(chr_h_sel_stmt,"'");
+	
+	if(p_numamend != 0.00)
+	{
+		strcat(chr_h_sel_stmt,",number_a = ");
+		
+		sprintf(chr_l_cod_numamd,"%.0lf",p_numamend);
+		strcat(chr_h_sel_stmt,chr_l_cod_numamd);
+		strcat(chr_h_sel_stmt,", NUMBER_B = ");
+		
+		strcat(chr_h_sel_stmt,chr_l_cod_numamd);
+	}
+	strcat(chr_h_sel_stmt," WHERE ");
+	if(strlen(h_ora_rowid) == 0)
+	{
+		strcat(chr_h_sel_stmt,"client = '");
+		strcat(chr_h_sel_stmt,h_dl_client);
+		strcat(chr_h_sel_stmt,"' AND ");
+		/* strcat(chr_h_sel_stmt," DL_CLASS NOT IN ('28','19','20','90','26','59','56') AND "); /* Bageshri commented - ISKB 2263 - to update date of billing of CA trades */
+		strcat(chr_h_sel_stmt," DL_CLASS NOT IN ('28','20','90','26','59','56') AND ");
+		strcat(chr_h_sel_stmt," MF_SEQNO IS NULL AND ");
+		strcat(chr_h_sel_stmt," DEAL_STAT NOT IN ('DU','DD') AND ");
+		strcat(chr_h_sel_stmt," ( PAY_MODE IS NULL OR PAY_MODE != 'N' ) AND  ");/*Added by siva.ganapathi for ISKB_2295*/
+		strcat(chr_h_sel_stmt," (INFORMATON != 'TAKEOVER' OR INFORMATON IS NULL) AND ");
+		strcat(chr_h_sel_stmt," checker IS NOT NULL AND (DATEOFBILLING is null OR  ");
+		strcat(chr_h_sel_stmt,"  DATEOFBILLING = '");
+		strcat(chr_h_sel_stmt,chr_g_bl_upto_dt);
+		strcat(chr_h_sel_stmt,"' OR (DATEOFBILLING != '");
+		strcat(chr_h_sel_stmt,chr_g_bl_upto_dt);
+		strcat(chr_h_sel_stmt,"' and amend_count != number_a)) AND  ");
+
+
+		if(strcmp(chr_l_bill_dep,"INP") == 0)
+		{
+			strcat(chr_h_sel_stmt," DATEOF_INPUT <= '");
+			strcat(chr_h_sel_stmt,chr_h_bl_upto_dt);
+			strcat(chr_h_sel_stmt,"'");
+		}
+		else if(strcmp(chr_l_bill_dep,"ASD") == 0)
+		{
+			strcat(chr_h_sel_stmt," (INSTRUMENT_DT is not null AND INSTRUMENT_DT <= '");
+			strcat(chr_h_sel_stmt,chr_h_bl_upto_dt);
+			strcat(chr_h_sel_stmt,"')");
+		}
+	}
+	else
+	{
+		strcat(chr_h_sel_stmt," rowid = '");
+		strcat(chr_h_sel_stmt,h_ora_rowid);
+		strcat(chr_h_sel_stmt,"'");
+	}
+
+	strcat(chr_h_sel_stmt,APL_NULL_STRING);
+      	printf("%s",chr_h_sel_stmt);
+
+	EXEC SQL EXECUTE IMMEDIATE :chr_h_sel_stmt;
+
+	*int_p_retstat = IV_CRITCAL_ERROR_IND;
+	
+   
+   if (sqlca.sqlcode !=0)
+   {
+      printf(" The sql l_debuglist is : %d",sqlca.sqlcode);
+      printf("%s",chr_h_sel_stmt);
+   }
+
+	IS_ANY_ORA_ERROR;
+
+	*int_p_retstat = IV_SUCCESS;
+
+	APL_GOBACK_SUCCESS;
+
+RETURN_SUCCESS:
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Exiting Successfully Out Of IV_Mod_BillDtForTrade\n",
+					NULL, NULL);
+	}
+	return APL_SUCCESS;
+
+RETURN_FAILURE:
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Exiting Unsuccessfully Out Of IV_Mod_BillDtForTrade\n",
+			 NULL, NULL);
+	}
+	return APL_FAILURE;
+}
+
+
+
+int IV_Chk_PosnExistTrd(char *chr_p_client, int *int_p_retstat,
+			DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+
+	double int_h_posn_cnt=0;
+	short int int_i_posn_cnt = 0;
+	char h_dl_client[APL_CLIENT_LENGTH];
+	struct sqlca sqlca;
+
+	EXEC SQL VAR h_dl_client IS STRING;
+
+	EXEC SQL END DECLARE SECTION;
+
+	sqlca.sqlcode = 0;
+
+	memset(h_dl_client, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+	strcpy(h_dl_client,chr_p_client);
+
+	EXEC SQL SELECT NVL(COUNT(*),0) 
+	INTO :int_h_posn_cnt:int_i_posn_cnt
+	FROM DL_SAFEK,SYS_IVCONTROLPARAM,PRO_SYS_DATE
+	WHERE CLIENT = :h_dl_client AND
+			(STATUS IS NULL OR 
+			(STATUS IS NOT NULL AND 
+			STATUS != '004'))
+			AND SYS_DATE = B_UPTO_DATE;	/* Bageshri Onsite fix -- 13/11/2007*/
+
+	*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+	IS_ANY_ORA_ERROR;
+
+	if(int_h_posn_cnt > 0)
+	{
+		*int_p_retstat = IV_SUCCESS;
+		APL_GOBACK_SUCCESS
+	}
+	else
+	{
+		/* Bageshri Onsite fix -- 13/11/2007 to calculate custody charges eventhough holdings not in DL_SAFEK --  */
+		EXEC SQL SELECT NVL(COUNT(*),0) 
+		INTO :int_h_posn_cnt:int_i_posn_cnt
+		FROM DL_HISSAFEK,SYS_IVCONTROLPARAM
+	WHERE CLIENT = :h_dl_client AND
+			(STATUS IS NULL OR 
+			(STATUS IS NOT NULL AND 
+				STATUS != '004'))
+				AND POSIT_DATE BETWEEN (B_PREV_DATE + 1) AND  B_UPTO_DATE;
+
+	*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+	IS_ANY_ORA_ERROR;
+
+	if(int_h_posn_cnt > 0)
+	{
+		*int_p_retstat = IV_SUCCESS;
+		APL_GOBACK_SUCCESS
+	}
+	else
+	{
+		*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+		APL_GOBACK_FAIL
+	}
+
+		/* Bageshri Onsite fix -- 13/11/2007 to calculate custody charges eventhough holdings not in DL_SAFEK -- END */
+
+	}
+
+RETURN_SUCCESS:
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,
+					"Exiting Successfully Out Of IV_Chk_PosnExistTrd\n",
+					NULL, NULL);
+	}
+	return APL_SUCCESS;
+
+RETURN_FAILURE:
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,
+					"Exiting Unsuccessfully Out Of IV_Chk_PosnExistTrd\n",
+					NULL, NULL);
+	}
+	return APL_FAILURE;
+}
+
+
+
+int IV_Mod_Num2DLTrade(char *p_ora_rowid, char p_hisflg, double p_num2, 
+		  int *int_p_retstat, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+
+	char h_ora_rowid[APL_ROWID_LEN];
+	double h_number_b = p_num2;
+	struct sqlca sqlca;
+	EXEC SQL VAR h_ora_rowid IS STRING;
+
+	EXEC SQL END DECLARE SECTION;
+
+	sqlca.sqlcode = 0;
+
+	memset(h_ora_rowid, APL_NULL_CHAR, APL_ROWID_LEN);
+	strcpy(h_ora_rowid,p_ora_rowid);
+
+	*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+	if(p_hisflg == 'L')
+	{
+		EXEC SQL UPDATE DL_DEAL
+		SET NUMBER_B = :h_number_b
+		WHERE rowid = :h_ora_rowid;
+
+		IS_ANY_ORA_ERROR;
+	}
+	else
+	{
+		EXEC SQL UPDATE DL_HISDEAL
+		SET NUMBER_B = :h_number_b
+		WHERE rowid = :h_ora_rowid;
+
+		IS_ANY_ORA_ERROR;
+	}
+
+	*int_p_retstat = IV_SUCCESS;
+
+	APL_GOBACK_SUCCESS;
+
+RETURN_SUCCESS:
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,
+					"Exiting Successfully Out Of IV_Mod_Num2DLTrade\n",
+					NULL, NULL);
+	}
+	return APL_SUCCESS;
+
+RETURN_FAILURE:
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,
+					"Exiting Unsuccessfully Out Of IV_Mod_Num2DLTrade\n",
+					NULL, NULL);
+	}
+	return APL_FAILURE;
+}
+
+
+
+int IV_Mod_Num1DLTrade(char *p_ora_rowid, char p_hisflg, double p_num1, 
+		  int *int_p_retstat, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+
+	char h_ora_rowid[APL_ROWID_LEN];
+	double h_number_a = p_num1;
+	struct sqlca sqlca;
+	EXEC SQL VAR h_ora_rowid IS STRING;
+
+	EXEC SQL END DECLARE SECTION;
+
+	sqlca.sqlcode = 0;
+
+	memset(h_ora_rowid, APL_NULL_CHAR, APL_ROWID_LEN);
+	strcpy(h_ora_rowid,p_ora_rowid);
+
+	*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+	if(p_hisflg == 'L')
+	{
+		EXEC SQL UPDATE DL_DEAL
+		SET number_a = :h_number_a
+		WHERE rowid = :h_ora_rowid;
+
+		IS_ANY_ORA_ERROR;
+	}
+	else
+	{
+		EXEC SQL UPDATE DL_HISDEAL
+		SET number_a = :h_number_a
+		WHERE rowid = :h_ora_rowid;
+
+		IS_ANY_ORA_ERROR;
+	}
+
+	*int_p_retstat = IV_SUCCESS; 
+
+	APL_GOBACK_SUCCESS;
+
+RETURN_SUCCESS:
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,
+					"Exiting Successfully Out Of IV_Mod_Num1DLTrade\n",
+					NULL, NULL);
+	}
+	return APL_SUCCESS;
+
+RETURN_FAILURE:
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,
+					"Exiting Unsuccessfully Out Of IV_Mod_Num1DLTrade\n",
+					NULL, NULL);
+	}
+	return APL_FAILURE;
+}
+
+
+
+int IV_Proc_CalcNoAmend(char *p_cltt_str, double *nnoamend, char *chr_p_bill_dep,
+		int *int_p_retstat, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+   char chr_l_bill_dep[4];       /* Bageshri HB_IV_001 */
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+	char h_dl_client[APL_CLIENT_LENGTH],h_ora_rowid[APL_ROWID_LEN];
+	char chr_h_bl_upto_dt[APL_DATE_LEN],chr_h_sel_stmt[1200],chr_h_hisflg='L';
+	char h_dealclass[IV_DLTYPE_LEN];
+	double h_number_a=0,h_number_b=0,h_amend_count=0;
+	short i_no_amend = 0, i_ora_rowid = 0, i_number_a = 0, i_number_b = 0,i_dealclass = 0;
+	short i_hisflg = 0, i_amend_count = 0;
+	struct sqlca sqlca;
+
+	EXEC SQL VAR h_dl_client IS STRING;
+	EXEC SQL VAR h_ora_rowid   IS STRING;
+	EXEC SQL VAR chr_h_bl_upto_dt IS STRING;
+	EXEC SQL VAR chr_h_sel_stmt IS STRING;
+	EXEC SQL VAR h_dealclass IS STRING;
+	 
+	EXEC SQL END DECLARE SECTION;
+
+	double nNoAmendments = 0.0;
+	int int_amendfeeexists = 0,int_retstat = 0;
+	int int_is_amend_cur_open = 0;
+	char chr_l_acct_str[IV_CLT_LEN],*chr_l_client_a = NULL,*k = NULL;
+	char chr_l_buf[BUFFER_LEN], *int_pos = NULL;
+
+	sqlca.sqlcode = 0;
+
+	memset(h_dl_client, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+	memset(h_ora_rowid, APL_NULL_CHAR, APL_ROWID_LEN);
+	memset(chr_h_bl_upto_dt, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(chr_h_sel_stmt, APL_NULL_CHAR, 1200);
+	memset(chr_l_acct_str, APL_NULL_CHAR, IV_CLT_LEN);
+	
+	memset(chr_l_buf, APL_NULL_CHAR, BUFFER_LEN);
+	memset(h_dealclass,APL_NULL_CHAR,IV_DLTYPE_LEN);
+	memset(chr_l_bill_dep, APL_NULL_CHAR, 4);
+	k=(char *) calloc(IV_CLT_LEN,sizeof(char));
+
+	APL_IF_DEBUG
+	{
+  		CO_ProcMonitor(APL_OUT_FILE,"Calculating amendments for client ",NULL,NULL);
+  		memset(chr_l_buf,NULL,BUFFER_LEN);
+  		sprintf(chr_l_buf," %s",p_cltt_str);
+  		CO_ProcMonitor(APL_OUT_FILE,chr_l_buf,NULL,NULL);
+	}
+
+	strcpy(chr_l_acct_str,p_cltt_str);
+	chr_l_client_a = strtok_r(chr_l_acct_str,";",&k);
+
+	strcpy(h_dl_client,chr_l_client_a);
+	strcpy(chr_h_bl_upto_dt,chr_g_bl_upto_dt);
+	strcpy(chr_h_bl_upto_dt,strtok_r(chr_h_bl_upto_dt," ",&int_pos));
+	strcat(chr_h_bl_upto_dt," 23:59:59");
+	strcpy(chr_l_bill_dep,chr_p_bill_dep);			/* Bageshri HB_IV_001 */
+
+	if(APL_FAILURE == IV_Chk_IsFeeExists(p_cltt_str, AMEND_FEE_IND, &int_amendfeeexists, 
+												&int_retstat, l_debug_info_ptr))
+	{
+			if(int_retstat == IV_CRITCAL_ERROR_IND)
+			{
+				fprintf(fp,"Error in accessing table for client %s. Please contact support\n",h_dl_client);
+				fprintf(fp, "File: %s, Line: %d\n", __FILE__, __LINE__);					
+				int_bl_err_level = 1;
+				*int_p_retstat = IV_CRITCAL_ERROR_IND;
+			}
+	}
+
+	strcpy(chr_h_sel_stmt,"SELECT rowid,number_a,NUMBER_B,amend_count,dl_class ");
+	strcat(chr_h_sel_stmt,",'L' AS HISFLG");
+	strcat(chr_h_sel_stmt," FROM  dl_deal ");
+	strcat(chr_h_sel_stmt," WHERE client = '");
+	strcat(chr_h_sel_stmt,h_dl_client);
+	strcat(chr_h_sel_stmt,"' and checker IS NOT NULL AND (DATEOFBILLING is null OR ");
+	strcat(chr_h_sel_stmt,"  DATEOFBILLING = '");
+	strcat(chr_h_sel_stmt,chr_g_bl_upto_dt);
+	strcat(chr_h_sel_stmt,"' OR (DATEOFBILLING != '");
+	strcat(chr_h_sel_stmt,chr_g_bl_upto_dt);
+	strcat(chr_h_sel_stmt,"'  and amend_count != number_a)) AND ");
+	if(strcmp(chr_l_bill_dep,"INP") == 0)
+	{
+		strcat(chr_h_sel_stmt," DATEOF_INPUT <= '");
+		strcat(chr_h_sel_stmt,chr_h_bl_upto_dt);
+		strcat(chr_h_sel_stmt,"'");
+	}
+	else if(strcmp(chr_l_bill_dep,"ASD") == 0)
+	{
+		strcat(chr_h_sel_stmt," (INSTRUMENT_DT is not null and INSTRUMENT_DT <= '");
+		strcat(chr_h_sel_stmt,chr_h_bl_upto_dt);
+		strcat(chr_h_sel_stmt,"')");
+	}
+	strcat(chr_h_sel_stmt," UNION ALL ");
+	strcat(chr_h_sel_stmt,"SELECT rowid,NUMBER_A,NUMBER_B,amend_count, dl_class ");
+	strcat(chr_h_sel_stmt,",'H' AS HISFLG");
+	strcat(chr_h_sel_stmt," FROM  DL_HISDEAL ");
+	strcat(chr_h_sel_stmt," WHERE client = '");
+	strcat(chr_h_sel_stmt,h_dl_client);
+	strcat(chr_h_sel_stmt,"' and checker IS NOT NULL AND (DATEOFBILLING is null OR ");
+	strcat(chr_h_sel_stmt,"  DATEOFBILLING = '");
+	strcat(chr_h_sel_stmt,chr_g_bl_upto_dt);
+	strcat(chr_h_sel_stmt,"' OR   (DATEOFBILLING != '");
+	strcat(chr_h_sel_stmt,chr_g_bl_upto_dt);
+	strcat(chr_h_sel_stmt,"' and amend_count != number_a)) AND  ");
+	if(strcmp(chr_l_bill_dep,"INP") == 0)
+	{
+		strcat(chr_h_sel_stmt," DATEOF_INPUT <= '");
+		strcat(chr_h_sel_stmt,chr_h_bl_upto_dt);
+		strcat(chr_h_sel_stmt,"'");
+	}
+	else if(strcmp(chr_l_bill_dep,"ASD") == 0)
+	{
+		strcat(chr_h_sel_stmt," (INSTRUMENT_DT is not null and INSTRUMENT_DT <= '");
+		strcat(chr_h_sel_stmt,chr_h_bl_upto_dt);
+		strcat(chr_h_sel_stmt,"')");
+	}
+	strcat(chr_h_sel_stmt,APL_NULL_STRING);
+
+	EXEC SQL PREPARE S FROM :chr_h_sel_stmt;
+	EXEC SQL DECLARE amend_cur CURSOR FOR S;
+	EXEC SQL OPEN amend_cur;
+
+	IS_ANY_ORA_ERROR;
+
+	int_is_amend_cur_open = 1;
+
+	for( ; ; )
+	{
+		memset(h_dealclass,APL_NULL_CHAR,IV_DLTYPE_LEN);
+
+		EXEC SQL FETCH amend_cur 
+			 INTO :h_ora_rowid:i_ora_rowid,
+			      :h_number_a:i_number_a,
+			      :h_number_b:i_number_b,
+			      :h_amend_count:i_amend_count,
+					:h_dealclass:i_dealclass,
+			      :chr_h_hisflg:i_hisflg;
+
+		if( APL_ZERO_RESULT_SET )
+			break;
+
+		int_retstat = IV_SUCCESS;
+      if ( APL_FAILURE == IV_Proc_TransactionFn(h_dealclass, &int_retstat, l_debug_info_ptr) )
+      {
+         if(int_retstat == IV_CRITCAL_ERROR_IND)
+         {
+            fprintf(fp,"Error in accessing table for client %s. Please contact support\n",h_dl_client);
+            fprintf(fp, "File: %s, Line: %d\n", __FILE__, __LINE__);
+            fflush(fp);
+            int_bl_err_level = 1;
+            if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+            {
+               CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+               CO_FreeErrLst(l_debug_info_ptr);
+            }
+            *int_p_retstat = int_retstat;
+         }
+      }
+      else
+      {
+         continue;
+      }
+		
+
+		
+
+		if(chr_regen_flg == 'Y')
+		{
+			nNoAmendments += h_number_a - h_number_b;
+		}
+		else
+		{
+			nNoAmendments += h_amend_count - h_number_a;
+
+			if ( int_amendfeeexists )
+			{
+				int_retstat = IV_SUCCESS;
+
+				if ( APL_FAILURE == IV_Mod_Num2DLTrade(h_ora_rowid, chr_h_hisflg, h_number_a, 
+															 &int_retstat, l_debug_info_ptr) )
+				{
+					int_bl_err_level = 1;
+					APL_GOBACK_FAIL;
+				}
+
+				int_retstat = IV_SUCCESS;
+
+				if(APL_FAILURE == IV_Mod_Num1DLTrade(h_ora_rowid, chr_h_hisflg, h_amend_count, 
+														  &int_retstat, l_debug_info_ptr))
+				{
+					int_bl_err_level = 1;
+					APL_GOBACK_FAIL;
+				}
+			}
+		} 
+
+	} 
+
+	EXEC SQL CLOSE amend_cur;
+	int_is_amend_cur_open = 0;
+
+	*nnoamend = nNoAmendments;
+
+	APL_GOBACK_SUCCESS
+
+RETURN_SUCCESS:
+	if(int_is_amend_cur_open == 1)
+	{
+		EXEC SQL CLOSE amend_cur;
+	}
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE, "Exiting Successfully Out Of IV_Proc_CalcNoAmend\n",
+			 NULL, NULL);
+	}
+	return APL_SUCCESS;
+
+RETURN_FAILURE:
+	if(int_is_amend_cur_open == 1)
+	{
+		EXEC SQL CLOSE amend_cur;
+	}
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE, "Exiting Unsuccessfully Out Of IV_Proc_CalcNoAmend\n",
+			 NULL, NULL);
+	}
+	return APL_FAILURE;
+}
+
+
+
+int IV_Proc_CalcCountervalue(char *chr_p_client, char *p_where_stmt,double *p_tot_ctr ,
+		     char p_instrflg, char *chr_p_bill_dep,int *int_p_retstat,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+   char chr_l_bill_dep[4];       /* Bageshri HB_IV_001 */
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+	char chr_h_sel_stmt[1200],h_dl_client[APL_CLIENT_LENGTH],chr_l_buf[BUFFER_LEN];
+	char h_instr_code[APL_INSTRUMENTCODE_LEN], chr_h_instr_ccy[APL_CCYCODE_LEN];
+	char h_dealclass[IV_DLTYPE_LEN];
+	char chr_h_bl_upto_dt[APL_DATE_LEN];
+	double h_tot_credit_indr=0.0;
+	struct sqlca sqlca;
+	short i_dealclass=0;
+	EXEC SQL VAR chr_h_sel_stmt 	IS STRING;
+	EXEC SQL VAR h_dl_client 		IS STRING;
+	EXEC SQL VAR chr_h_instr_ccy 		IS STRING;
+	EXEC SQL VAR chr_h_bl_upto_dt 		IS STRING;
+	EXEC SQL VAR h_dealclass IS STRING;
+
+
+	EXEC SQL END DECLARE SECTION;
+
+	double tot_credit_indr= 0;
+	char *int_pos = NULL;
+	double l_exchg_rt= 1.0;
+	double l_round_val = 0.0; 
+	int int_is_a_open = 0;
+	int int_retstat = 0;
+	sqlca.sqlcode = 0;
+
+
+	memset(chr_h_sel_stmt, APL_NULL_CHAR, 1200);
+	memset(h_dl_client,  APL_NULL_CHAR, APL_CLIENT_LENGTH);
+	memset(chr_h_instr_ccy,  APL_NULL_CHAR, APL_CCYCODE_LEN);
+	memset(h_dealclass,APL_NULL_CHAR,IV_DLTYPE_LEN);
+	memset(chr_l_buf,APL_NULL_CHAR,BUFFER_LEN);
+	memset(chr_h_bl_upto_dt,APL_NULL_CHAR,APL_DATE_LEN);
+	memset(chr_l_bill_dep, APL_NULL_CHAR, 4);			/* Bageshri HB_IV_001 */
+
+	APL_IF_DEBUG
+	{
+  		CO_ProcMonitor(APL_OUT_FILE,"Calculating countervalue for client ",NULL,NULL);
+  		memset(chr_l_buf,APL_NULL_CHAR,BUFFER_LEN);
+  		sprintf(chr_l_buf,"%s",h_dl_client);
+  		CO_ProcMonitor(APL_OUT_FILE,chr_l_buf,NULL,NULL);
+	}
+
+	strcpy(h_dl_client,chr_p_client);
+	strcpy(chr_h_bl_upto_dt,chr_g_bl_upto_dt);
+	strcpy(chr_h_bl_upto_dt,strtok_r(chr_h_bl_upto_dt," ",&int_pos));
+	strcat(chr_h_bl_upto_dt," 23:59:59");
+	strcpy(chr_l_bill_dep,chr_p_bill_dep);			/* Bageshri HB_IV_001 */
+	
+
+	strcpy(chr_h_sel_stmt,"SELECT b.AMOUNT, b.CURRENCY_CD, b.DL_CLASS ");
+	strcat(chr_h_sel_stmt," FROM  DL_DEAL b");
+	if(p_instrflg == 'Y')
+		strcat(chr_h_sel_stmt," ,MT_INSTRUMENT a");
+	strcat(chr_h_sel_stmt," WHERE b.client = '");
+	strcat(chr_h_sel_stmt,h_dl_client);
+	strcat(chr_h_sel_stmt,"' AND b.CHECKER IS NOT NULL AND (b.DATEOFBILLING IS NULL OR ");
+	strcat(chr_h_sel_stmt,"  b.DATEOFBILLING = '");
+	strcat(chr_h_sel_stmt,chr_g_bl_upto_dt);
+	strcat(chr_h_sel_stmt,"' OR (  b.DATEOFBILLING != '");
+	strcat(chr_h_sel_stmt,chr_g_bl_upto_dt);
+	strcat(chr_h_sel_stmt,"' AND b.amend_count != b.NUMBER_A)) AND  ");
+	/* strcat(chr_h_sel_stmt,"b.DEAL_STAT != 'DD' AND "); */
+	strcat(chr_h_sel_stmt,"b.DEAL_STAT != 'DU' AND ");	/* ISKB-2247 Not to pick DU and DD deals */
+	if(strcmp(chr_l_bill_dep,"INP") == 0)
+	{
+		strcat(chr_h_sel_stmt," b.DATEOF_INPUT <= '");
+		strcat(chr_h_sel_stmt,chr_h_bl_upto_dt);
+		strcat(chr_h_sel_stmt,"'");
+	}
+	else if(strcmp(chr_l_bill_dep,"ASD") == 0)
+	{
+		strcat(chr_h_sel_stmt," (b.INSTRUMENT_DT IS NOT NULL AND b.INSTRUMENT_DT <= '");
+		strcat(chr_h_sel_stmt,chr_h_bl_upto_dt);
+		strcat(chr_h_sel_stmt,"')");
+	}
+	strcat(chr_h_sel_stmt,p_where_stmt);
+	strcat(chr_h_sel_stmt," UNION ALL ");
+	strcat(chr_h_sel_stmt,"SELECT b.AMOUNT, b.CURRENCY_CD, b.DL_CLASS ");
+	strcat(chr_h_sel_stmt," FROM  DL_HISDEAL b");
+	if(p_instrflg == 'Y')
+		strcat(chr_h_sel_stmt," ,MT_INSTRUMENT a");
+	strcat(chr_h_sel_stmt," WHERE b.client = '");
+	strcat(chr_h_sel_stmt,h_dl_client);
+	strcat(chr_h_sel_stmt,"' AND b.DEAL_STAT != 'DD'");
+	strcat(chr_h_sel_stmt," AND b.CHECKER IS NOT NULL AND (b.DATEOFBILLING IS NULL OR ");
+	strcat(chr_h_sel_stmt,"  b.DATEOFBILLING = '");
+	strcat(chr_h_sel_stmt,chr_g_bl_upto_dt);
+	strcat(chr_h_sel_stmt,"' OR (  b.DATEOFBILLING != '");
+	strcat(chr_h_sel_stmt,chr_g_bl_upto_dt);
+	strcat(chr_h_sel_stmt,"' AND b.amend_count != b.NUMBER_A)) AND  ");
+	strcat(chr_h_sel_stmt,"b.DEAL_STAT != 'DD' AND ");
+	if(strcmp(chr_l_bill_dep,"INP") == 0)
+	{
+		strcat(chr_h_sel_stmt," b.DATEOF_INPUT <= '");
+		strcat(chr_h_sel_stmt,chr_h_bl_upto_dt);
+		strcat(chr_h_sel_stmt,"'");
+	}
+	else if(strcmp(chr_l_bill_dep,"ASD") == 0)
+	{
+		strcat(chr_h_sel_stmt," (b.INSTRUMENT_DT IS NOT NULL AND b.INSTRUMENT_DT <= '");
+		strcat(chr_h_sel_stmt,chr_h_bl_upto_dt);
+		strcat(chr_h_sel_stmt,"')");
+	}
+	strcat(chr_h_sel_stmt,p_where_stmt);
+	strcat(chr_h_sel_stmt,APL_NULL_STRING);
+
+	EXEC SQL PREPARE S FROM :chr_h_sel_stmt;
+
+	EXEC SQL DECLARE A CURSOR FOR S;
+	EXEC SQL OPEN A;
+	if(sqlca.sqlcode < 0)
+	{
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+	}
+	IS_ANY_ORA_ERROR;
+	int_is_a_open = 1;
+	for( ; ; )
+	{
+		memset(chr_h_instr_ccy,  APL_NULL_CHAR, APL_CCYCODE_LEN);
+	  memset(h_dealclass,APL_NULL_CHAR,IV_DLTYPE_LEN);
+		h_tot_credit_indr = 0;
+	
+		EXEC SQL FETCH A 
+		INTO :h_tot_credit_indr,
+				:chr_h_instr_ccy,
+				:h_dealclass:i_dealclass;
+
+		if(APL_ZERO_RESULT_SET)
+			break;
+
+		if (h_tot_credit_indr == 0)
+			continue;
+
+		int_retstat = IV_SUCCESS;
+      if ( APL_FAILURE == IV_Proc_TransactionFn(h_dealclass, &int_retstat, l_debug_info_ptr) )
+      {
+         if(int_retstat == IV_CRITCAL_ERROR_IND)
+         {
+            fprintf(fp,"Error in accessing table for client %s. Please contact support\n",h_dl_client);
+            fprintf(fp, "File: %s, Line: %d\n", __FILE__, __LINE__);
+            fflush(fp);
+            int_bl_err_level = 1;
+            if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+            {
+               CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+               CO_FreeErrLst(l_debug_info_ptr);
+            }
+            *int_p_retstat = int_retstat;
+         }
+      }
+      else
+      {
+         continue;
+      }
+
+		l_exchg_rt = 1.0;
+		if( strcmp(chr_g_fee_ccycode,chr_h_instr_ccy) != 0)              
+		{
+			int_retstat = IV_SUCCESS;
+			if(APL_FAILURE == IV_Rtv_ExchRate(chr_h_instr_ccy,chr_g_fee_ccycode,chr_g_bl_upto_dt,&l_exchg_rt,&int_retstat,l_debug_info_ptr))   
+			{
+				fprintf(fp,"Error : Exchange Rate not found for currency %s %s\n",chr_h_instr_ccy,chr_g_fee_ccycode);  
+				fflush(fp);
+				int_bl_err_level = 1;
+				*int_p_retstat = int_retstat;
+			}
+		}
+
+		
+
+		l_round_val = 0.0;
+		CO_Round(h_tot_credit_indr * l_exchg_rt, int_g_ccy_decimallen, &l_round_val);
+		tot_credit_indr += l_round_val;
+	}
+	EXEC SQL CLOSE A;
+	int_is_a_open = 0;
+	*p_tot_ctr = tot_credit_indr;
+	APL_GOBACK_SUCCESS;
+
+RETURN_SUCCESS:
+	if(int_is_a_open == 1)
+	{
+		EXEC SQL CLOSE A;
+	}
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,
+			 "Exiting Successfully Out Of IV_Proc_CalcCountervalue\n",
+			 NULL, NULL);
+	}
+	return APL_SUCCESS;
+
+RETURN_FAILURE:
+	if(int_is_a_open == 1)
+	{
+		EXEC SQL CLOSE A;
+	}	
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,
+			 "Exiting Unsuccessfully Out Of IV_Proc_CalcCountervalue\n",
+			 NULL, NULL);
+	}
+	return APL_FAILURE;
+}
+
+
+
+
+int IV_Proc_CalcNoTrd(char *chr_p_client,char *p_where_stmt,double *p_no_of_trades,
+char p_calcfor,char p_instrflg, char p_bsdeal, char *chr_p_bill_dep, int *int_p_retstat,
+DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+ 	char chr_l_bill_dep[4];       /* Bageshri HB_IV_001 */
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+	char chr_h_sel_stmt[1600],h_dl_client[APL_CLIENT_LENGTH];
+	char chr_l_buf[BUFFER_LEN],chr_h_bl_upto_dt[APL_DATE_LEN];
+	char h_nation[APL_CTRY_CODE_LEN];
+	double dbl_h_no_of_trades =0.0;
+	struct sqlca sqlca;
+	EXEC SQL VAR chr_h_sel_stmt IS STRING;
+	EXEC SQL VAR h_dl_client  IS STRING;
+	EXEC SQL VAR chr_h_bl_upto_dt  IS STRING;
+	EXEC SQL VAR h_nation IS STRING;
+	 
+	EXEC SQL END DECLARE SECTION;
+
+	double no_of_trades = 0;
+	int int_is_c_open       = 0;
+	char *int_pos= NULL;
+	sqlca.sqlcode       = 0;	
+	
+	memset(chr_h_sel_stmt,APL_NULL_CHAR,1600);
+	memset(h_nation, APL_NULL_CHAR, APL_CTRY_CODE_LEN);
+	memset(h_dl_client, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+	memset(chr_h_bl_upto_dt, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(chr_l_buf,APL_NULL_CHAR,BUFFER_LEN);
+	memset(chr_l_bill_dep, APL_NULL_CHAR, 4);
+	APL_IF_DEBUG
+	{
+  		CO_ProcMonitor(APL_OUT_FILE,"Calculating no of trade",NULL,NULL);
+	}
+
+	strcpy(h_dl_client,chr_p_client);
+	strcpy(chr_h_bl_upto_dt,chr_g_bl_upto_dt);
+	strcpy(chr_h_bl_upto_dt,strtok_r(chr_h_bl_upto_dt," ",&int_pos));
+	strcat(chr_h_bl_upto_dt," 23:59:59");
+	strcpy(h_nation,chr_g_country);
+   strcat(h_nation,APL_NULL_STRING);
+	strcpy(chr_l_bill_dep,chr_p_bill_dep);			/* Bageshri HB_IV_001 */
+
+
+	strcpy(chr_h_sel_stmt,"SELECT NVL(count(*),0) ");
+	strcat(chr_h_sel_stmt," FROM  dl_deal b");
+	if(p_instrflg == 'Y')
+		strcat(chr_h_sel_stmt," ,MT_INSTRUMENT a");
+   if(p_calcfor == 'R')
+      strcat(chr_h_sel_stmt," ,DL_SFEREJ c");
+	strcat(chr_h_sel_stmt," WHERE b.client = '");
+	strcat(chr_h_sel_stmt,h_dl_client);
+	strcat(chr_h_sel_stmt,"' and b.deal_stat = 'CS' and b.checker IS NOT NULL AND (b.DATEOFBILLING is null OR ");
+	strcat(chr_h_sel_stmt,"  b.DATEOFBILLING = '");
+	strcat(chr_h_sel_stmt,chr_g_bl_upto_dt);
+	strcat(chr_h_sel_stmt,"' OR (  b.DATEOFBILLING != '");
+	strcat(chr_h_sel_stmt,chr_g_bl_upto_dt);
+	strcat(chr_h_sel_stmt,"' and b.amend_count != b.NUMBER_A)) AND  ");
+	if(strstr(p_where_stmt,"clt_reqdel_ind") == NULL)
+		strcat(chr_h_sel_stmt,"b.DEAL_STAT != 'DU' AND  ");	/* ISKB-2247 Not to pick DU and DD deals */
+		/* strcat(chr_h_sel_stmt,"b.DEAL_STAT != 'DD' AND ");*/
+	if(p_bsdeal == 'Y')
+	{
+		strcat( chr_h_sel_stmt, " b.DL_CLASS not in (SELECT DL_CLASS FROM IV_DEAL_TYPE WHERE (NATION_CD = '");
+		strcat( chr_h_sel_stmt,h_nation);
+		strcat( chr_h_sel_stmt, "' OR NATION_CD = 'XX' )) AND ");
+	}
+
+	printf("%s\n" ,chr_h_sel_stmt);
+
+
+	if(strcmp(chr_l_bill_dep,"INP") == 0)
+	{
+		strcat(chr_h_sel_stmt," b.DATEOF_INPUT <= '");
+		strcat(chr_h_sel_stmt,chr_h_bl_upto_dt);
+		strcat(chr_h_sel_stmt,"'");
+	}
+	else if(strcmp(chr_l_bill_dep,"ASD") == 0)
+	{
+		if(strstr(p_where_stmt,"clt_reqdel_ind") == NULL)
+		{
+			strcat(chr_h_sel_stmt," (b.INSTRUMENT_DT is not null and b.INSTRUMENT_DT <= '");
+			strcat(chr_h_sel_stmt,chr_h_bl_upto_dt);
+			strcat(chr_h_sel_stmt,"')");
+		}
+		else
+		{
+			strcat(chr_h_sel_stmt," ( b.CHECKER_DT IS NOT NULL AND ");
+			strcat(chr_h_sel_stmt," b.checker_dt > '");
+			strcat(chr_h_sel_stmt,chr_g_bl_prv_dt);
+			strcat(chr_h_sel_stmt,"' AND ");
+			strcat(chr_h_sel_stmt," b.checker_dt <= '");
+			strcat(chr_h_sel_stmt,chr_h_bl_upto_dt);
+			strcat(chr_h_sel_stmt,"')");
+		}
+	}
+	strcat(chr_h_sel_stmt,p_where_stmt);
+	strcat(chr_h_sel_stmt," UNION ALL ");
+	strcat(chr_h_sel_stmt,"SELECT NVL(count(*),0) ");
+	strcat(chr_h_sel_stmt," FROM  DL_HISDEAL b");
+	if(p_instrflg == 'Y')
+		strcat(chr_h_sel_stmt," ,MT_INSTRUMENT a");
+   if(p_calcfor == 'R')
+      strcat(chr_h_sel_stmt," ,DL_SFEREJ c");
+	strcat(chr_h_sel_stmt," WHERE b.client = '");
+	strcat(chr_h_sel_stmt,h_dl_client);
+	strcat(chr_h_sel_stmt,"' and b.checker IS NOT NULL AND (b.DATEOFBILLING is null OR ");
+	strcat(chr_h_sel_stmt,"  b.DATEOFBILLING = '");
+	strcat(chr_h_sel_stmt,chr_g_bl_upto_dt);
+	strcat(chr_h_sel_stmt,"' OR (  b.DATEOFBILLING != '");
+	strcat(chr_h_sel_stmt,chr_g_bl_upto_dt);
+	strcat(chr_h_sel_stmt,"' and b.amend_count != b.NUMBER_A)) AND  ");
+	if(strstr(p_where_stmt,"clt_reqdel_ind") == NULL)
+		strcat(chr_h_sel_stmt,"b.DEAL_STAT != 'DD' AND ");
+	if(p_bsdeal == 'Y')
+   {
+      strcat( chr_h_sel_stmt, " b.DL_CLASS not in (SELECT DL_CLASS FROM IV_DEAL_TYPE WHERE (NATION_CD = '");
+      strcat( chr_h_sel_stmt, h_nation);
+      strcat( chr_h_sel_stmt, "' OR NATION_CD = 'XX' )) AND ");
+   }
+
+	printf("%s\n" ,chr_h_sel_stmt);
+
+	if(strcmp(chr_l_bill_dep,"INP") == 0)
+	{
+		strcat(chr_h_sel_stmt," b.DATEOF_INPUT <= '");
+		strcat(chr_h_sel_stmt,chr_h_bl_upto_dt);
+		strcat(chr_h_sel_stmt,"'");
+	}
+	else if(strcmp(chr_l_bill_dep,"ASD") == 0)
+	{
+		if(strstr(p_where_stmt,"clt_reqdel_ind") == NULL)
+		{
+			strcat(chr_h_sel_stmt," (b.INSTRUMENT_DT IS NOT NULL AND b.INSTRUMENT_DT <= '");
+			strcat(chr_h_sel_stmt,chr_h_bl_upto_dt);
+			strcat(chr_h_sel_stmt,"')");
+		}
+		else
+		{
+			strcat(chr_h_sel_stmt," ( b.CHECKER_DT IS NOT NULL AND ");
+			strcat(chr_h_sel_stmt," b.CHECKER_DT > '");
+			strcat(chr_h_sel_stmt,chr_g_bl_prv_dt);
+			strcat(chr_h_sel_stmt,"' AND ");
+			strcat(chr_h_sel_stmt," b.CHECKER_DT <= '");
+			strcat(chr_h_sel_stmt,chr_h_bl_upto_dt);
+			strcat(chr_h_sel_stmt,"')");
+		}
+	}
+	strcat(chr_h_sel_stmt,p_where_stmt);
+	strcat(chr_h_sel_stmt,APL_NULL_STRING);
+
+	printf("****No. of trade***%s\n" ,chr_h_sel_stmt);
+	EXEC SQL PREPARE S FROM :chr_h_sel_stmt;
+
+	EXEC SQL DECLARE C CURSOR FOR S;
+	EXEC SQL OPEN C;
+
+	IS_ANY_ORA_ERROR;
+	int_is_c_open = 1;
+
+	for( ; ; )
+	{
+		EXEC SQL FETCH C INTO :dbl_h_no_of_trades;
+		if(APL_ZERO_RESULT_SET)
+			break;
+		no_of_trades += dbl_h_no_of_trades;
+
+	}
+	EXEC SQL CLOSE C;
+	int_is_c_open = 0;
+	*p_no_of_trades = no_of_trades;
+	APL_GOBACK_SUCCESS;
+
+RETURN_SUCCESS:
+	if(int_is_c_open == 1)
+	{
+		EXEC SQL CLOSE C;
+	}
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,
+			 "Exiting Successfully Out Of IV_Proc_CalcNoTrd\n",
+			 NULL, NULL);
+	}
+	return APL_SUCCESS;
+
+RETURN_FAILURE:
+	if(int_is_c_open == 1)
+	{
+		EXEC SQL CLOSE C;
+	}
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,
+			 "Exiting Unsuccessfully Out Of IV_Proc_CalcNoTrd\n",
+			 NULL, NULL);
+	}
+	return APL_FAILURE;
+}
+
+int IV_Proc_CalcNoLateTxns(char *chr_p_client,double *p_no_of_trades,
+		  int *int_p_retstat,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+
+	char h_dl_client[APL_CLIENT_LENGTH];
+	char chr_h_bl_upto_dt[APL_DATE_LEN];
+	char h_nation[APL_CTRY_CODE_LEN];
+	struct sqlca sqlca;
+	EXEC SQL VAR h_dl_client  IS STRING;
+	EXEC SQL VAR chr_h_bl_upto_dt  IS STRING;
+	EXEC SQL VAR h_nation IS STRING;
+
+	EXEC SQL END DECLARE SECTION;
+
+	double no_of_trades = 0;
+	double int_h_count      = 0;
+	double dbl_h_hiscount   = 0;
+	char *int_pos= NULL;
+	sqlca.sqlcode       = 0;	
+	
+	memset(h_nation, APL_NULL_CHAR, APL_CTRY_CODE_LEN);
+	memset(h_dl_client, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+	memset(chr_h_bl_upto_dt, APL_NULL_CHAR, APL_DATE_LEN);
+
+	APL_IF_DEBUG
+	{
+  		CO_ProcMonitor(APL_OUT_FILE,"Calculating no of late Txns",NULL,NULL);
+	}
+
+	strcpy(h_dl_client,chr_p_client);
+	strcpy(chr_h_bl_upto_dt,chr_g_bl_upto_dt);
+	strcpy(chr_h_bl_upto_dt,strtok_r(chr_h_bl_upto_dt," ",&int_pos));
+	strcat(chr_h_bl_upto_dt," 23:59:59");
+	strcpy(h_nation,chr_g_country);
+        strcat(h_nation,APL_NULL_STRING);
+
+
+   /********************** Commented By Vinay : For Calculating Proper Late Txn **************
+
+   EXEC SQL SELECT NVL(count(*),0) into :int_h_count
+	FROM DL_DEAL B, MT_INSTRUMENT A , INVOICE_SYSTEMPARAM C, MT_CORE_SYS_PARAMS d, IV_CLIENTSETUP e
+	where b.client = :h_dl_client
+   AND b.client = e.client
+	AND b.instr_code = a.instr_code
+	and b.checker IS NOT NULL 
+	and b.dl_class NOT IN ('17','19')
+   and b.dl_class not in (SELECT DL_CLASS FROM IV_DEAL_TYPE WHERE (NATION_CD ='XX' OR NATION_CD=:h_nation))
+	AND (b.DATEOFBILLING is null OR b.DATEOFBILLING = :chr_g_bl_upto_dt OR 
+		 (  b.DATEOFBILLING != :chr_g_bl_upto_dt and b.AMEND_COUNT != b.NUMBER_A)) 
+   AND b.DEAL_STAT != 'DD' 
+	AND ( ( (e.b_basis = 'INP'  and  b.DATEOF_INPUT <= :chr_h_bl_upto_dt ) or
+		    (e.b_basis ='ASD' and (b.INSTRUMENT_DT is not null and b.INSTRUMENT_DT <= :chr_h_bl_upto_dt) ) ) or
+			( (c.b_basis ='INP' and  e.b_basis is null and b.DATEOF_INPUT <= :chr_h_bl_upto_dt ) or
+           (c.b_basis ='ASD' and e.b_basis is null and (b.INSTRUMENT_DT is not null and b.INSTRUMENT_DT <= :chr_h_bl_upto_dt) ) ) )
+   AND (  ( b.DATEOF_INPUT  > b.setl_date )  OR
+          ( b.domestic_cpclt = d.custody_clt_cd and 
+            ( ( concat(to_char(setl_date-c.late_dl_days_b,'dd/mm/yyyy'),concat(c.latetime_b,':00')) < b.DATEOF_INPUT  
+			       and a.PROD_CLASS=1 ) OR
+            ( concat(to_char(setl_date-c.late_dl_days_d,'dd/mm/yyyy'),concat(c.latetime_d,':00')) < b.DATEOF_INPUT  
+					 and a.PROD_CLASS =2 ) ) ) OR
+	       ( b.domestic_cpclt != d.custody_clt_cd and 
+            ( ( concat(to_char(setl_date-c.late_dl_days_a,'dd/mm/yyyy'),concat(c.latetime_a,':00')) < b.DATEOF_INPUT  
+					 and a.PROD_CLASS=1 ) or
+            ( concat(to_char(setl_date-c.late_dl_days_c,'dd/mm/yyyy'),concat(c.latetime_c,':00')) < b.DATEOF_INPUT  
+					 and a.PROD_CLASS =2 ) ) ) ) ;
+
+	IS_ANY_ORA_ERROR
+
+   EXEC SQL SELECT NVL(count(*),0) into :dbl_h_hiscount
+	FROM  DL_HISDEAL B, MT_INSTRUMENT A , INVOICE_SYSTEMPARAM C, MT_CORE_SYS_PARAMS d, IV_CLIENTSETUP e
+	where b.client = :h_dl_client
+   AND b.client = e.client
+	AND b.instr_code = a.instr_code
+	and b.checker IS NOT NULL 
+	and b.dl_class NOT IN ('17','19')
+   	and b.dl_class not in (SELECT DL_CLASS FROM IV_DEAL_TYPE WHERE (NATION_CD ='XX' OR NATION_CD=:h_nation))
+	AND (b.DATEOFBILLING is null OR b.DATEOFBILLING = :chr_g_bl_upto_dt OR 
+		 (  b.DATEOFBILLING != :chr_g_bl_upto_dt  and b.AMEND_COUNT != b.NUMBER_A)) 
+   AND b.DEAL_STAT != 'DD' 
+	AND ( ( (e.b_basis = 'INP'  and  b.DATEOF_INPUT <= :chr_h_bl_upto_dt ) or
+		    (e.b_basis ='ASD' and (b.INSTRUMENT_DT is not null and b.INSTRUMENT_DT <= :chr_h_bl_upto_dt) ) ) or
+			( (c.b_basis ='INP' and  e.b_basis is null and b.DATEOF_INPUT <= :chr_h_bl_upto_dt ) or
+           (c.b_basis ='ASD' and e.b_basis is null and (b.INSTRUMENT_DT is not null and b.INSTRUMENT_DT <= :chr_h_bl_upto_dt) ) ) )
+   AND (  ( b.DATEOF_INPUT  > b.setl_date )  OR
+          ( b.domestic_cpclt = d.custody_clt_cd and 
+            ( ( concat(to_char(setl_date-c.late_dl_days_b,'dd/mm/yyyy'),concat(c.latetime_b,':00')) < b.DATEOF_INPUT  
+			       and a.PROD_CLASS=1 ) OR
+            ( concat(to_char(setl_date-c.late_dl_days_d,'dd/mm/yyyy'),concat(c.latetime_d,':00')) < b.DATEOF_INPUT  
+					 and a.PROD_CLASS =2 ) ) ) OR
+	       ( b.domestic_cpclt != d.custody_clt_cd and 
+            ( ( concat(to_char(setl_date-c.late_dl_days_a,'dd/mm/yyyy'),concat(c.latetime_a,':00')) < b.DATEOF_INPUT  
+					 and a.PROD_CLASS=1 ) or
+            ( concat(to_char(setl_date-c.late_dl_days_c,'dd/mm/yyyy'),concat(c.latetime_c,':00')) < b.DATEOF_INPUT  
+					 and a.PROD_CLASS =2 ) ) ) ) ;
+
+   
+   	************************** End ***************************************************************/
+
+
+	/********************************************************************************************/
+
+	printf("Late Txn Calculation For : |%s||%s|\n",h_dl_client,chr_g_bl_upto_dt);
+
+	/*      ISKB 1910 Exclude Shortage Deal 59,Square Off 56,Internal 26,Interscheme 90 Deal        */
+
+	EXEC SQL SELECT COUNT(*) INTO :int_h_count 
+	FROM  DL_DEAL B, MT_INSTRUMENT A , INVOICE_SYSTEMPARAM C, MT_CORE_SYS_PARAMS D, IV_CLIENTSETUP E
+	WHERE B.CLIENT = :h_dl_client
+	AND B.CLIENT = E.CLIENT
+	AND B.INSTR_CODE = A.INSTR_CODE
+	AND B.CHECKER IS NOT NULL
+	AND B.DL_CLASS NOT IN ('18','19','20','90','26','59','56')
+	AND B.INFORMATON IS NULL
+	/*AND B.DEAL_STAT != 'DD' */
+   AND B.DEAL_STAT != 'DU' /* ISKB-2247 Not to pick DU and DD deals */
+   AND ( B.PAY_MODE IS NULL OR B.PAY_MODE != 'N' ) /*Added by siva.ganapathi for ISKB_2295*/
+	AND B.DL_CLASS NOT IN (SELECT DL_CLASS FROM IV_DEAL_TYPE WHERE (NATION_CD ='XX' OR NATION_CD='IN')) 
+	AND (B.DATEOFBILLING IS NULL OR B.DATEOFBILLING = :chr_g_bl_upto_dt 
+	OR (B.DATEOFBILLING != :chr_g_bl_upto_dt AND B.AMEND_COUNT != B.NUMBER_A))
+	AND ( ( (E.B_BASIS = 'INP' AND  B.DATEOF_INPUT <= :chr_h_bl_upto_dt ) OR (E.B_BASIS ='ASD' 
+	AND (B.INSTRUMENT_DT IS NOT NULL AND B.INSTRUMENT_DT <= :chr_h_bl_upto_dt ) ) ) 
+	OR ( (C.B_BASIS ='INP' AND  E.B_BASIS IS NULL AND B.DATEOF_INPUT <= :chr_h_bl_upto_dt ) 
+	OR (C.B_BASIS ='ASD' AND E.B_BASIS IS NULL 
+	AND (B.INSTRUMENT_DT IS NOT NULL AND B.INSTRUMENT_DT <= :chr_h_bl_upto_dt ) ) ) )
+	AND (  ( TRUNC(B.DATEOF_INPUT)  > TRUNC(B.SETL_DATE) )  
+	OR ( ( B.DOMESTIC_CPCLT = D.CUSTODY_CLT_CD  
+	AND ( ( (TRUNC(SETL_DATE) - TRUNC(B.DATEOF_INPUT)) <= C.LATE_DL_DAYS_B AND A.PROD_CLASS=1 ) 
+	OR ( (TRUNC(SETL_DATE) - TRUNC(B.DATEOF_INPUT)) <= C.LATE_DL_DAYS_D AND A.PROD_CLASS=2 ) ) )
+	OR ( B.DOMESTIC_CPCLT != D.CUSTODY_CLT_CD  
+	AND ( ( (TRUNC(SETL_DATE) - TRUNC(B.DATEOF_INPUT)) <= C.LATE_DL_DAYS_A AND A.PROD_CLASS=1 ) 
+	OR ( (TRUNC(SETL_DATE) - TRUNC(B.DATEOF_INPUT)) <= C.LATE_DL_DAYS_C AND A.PROD_CLASS=2 ) ) ) ) );
+
+	printf("After Execute Deal part in Late Txn :|%d|\n",sqlca.sqlcode);
+	IS_ANY_ORA_ERROR
+
+
+	EXEC SQL SELECT COUNT(*) INTO :dbl_h_hiscount 
+	FROM  DL_HISDEAL B, MT_INSTRUMENT A , INVOICE_SYSTEMPARAM C, MT_CORE_SYS_PARAMS D, IV_CLIENTSETUP E
+	WHERE B.CLIENT = :h_dl_client
+	AND B.CLIENT = E.CLIENT
+	AND B.INSTR_CODE = A.INSTR_CODE
+	AND B.CHECKER IS NOT NULL
+	AND B.DL_CLASS NOT IN ('18','19','20','90','26','59','56')
+	AND B.INFORMATON IS NULL
+	/*	AND B.DEAL_STAT != 'DD' 	*/
+   AND B.DEAL_STAT != 'DD' /* ISKB-2247 Not to pick DU and DD deals */
+    AND ( B.PAY_MODE IS NULL OR B.PAY_MODE != 'N' ) /*Added by siva.ganapathi for ISKB_2295*/
+	AND B.DL_CLASS NOT IN (SELECT DL_CLASS FROM IV_DEAL_TYPE WHERE (NATION_CD ='XX' OR NATION_CD='IN')) 
+	AND (B.DATEOFBILLING IS NULL OR B.DATEOFBILLING = :chr_g_bl_upto_dt 
+	OR (B.DATEOFBILLING != :chr_g_bl_upto_dt AND B.AMEND_COUNT != B.NUMBER_A))
+	AND ( ( (E.B_BASIS = 'INP' AND  B.DATEOF_INPUT <= :chr_h_bl_upto_dt ) OR (E.B_BASIS ='ASD' 
+	AND (B.INSTRUMENT_DT IS NOT NULL AND B.INSTRUMENT_DT <= :chr_h_bl_upto_dt ) ) ) 
+	OR ( (C.B_BASIS ='INP' AND  E.B_BASIS IS NULL AND B.DATEOF_INPUT <= :chr_h_bl_upto_dt ) 
+	OR (C.B_BASIS ='ASD' AND E.B_BASIS IS NULL 
+	AND (B.INSTRUMENT_DT IS NOT NULL AND B.INSTRUMENT_DT <= :chr_h_bl_upto_dt ) ) ) )
+	AND (  ( TRUNC(B.DATEOF_INPUT)  > TRUNC(B.SETL_DATE) )  
+	OR ( ( B.DOMESTIC_CPCLT = D.CUSTODY_CLT_CD  
+	AND ( ( (TRUNC(SETL_DATE) - TRUNC(B.DATEOF_INPUT)) <= C.LATE_DL_DAYS_B AND A.PROD_CLASS=1 ) 
+	OR ( (TRUNC(SETL_DATE) - (B.DATEOF_INPUT)) <= C.LATE_DL_DAYS_D AND A.PROD_CLASS=2 ) ) )
+	OR ( B.DOMESTIC_CPCLT != D.CUSTODY_CLT_CD  
+	AND ( ( (TRUNC(SETL_DATE) - TRUNC(B.DATEOF_INPUT)) <= C.LATE_DL_DAYS_A AND A.PROD_CLASS=1 ) 
+	OR ( (TRUNC(SETL_DATE) - TRUNC(B.DATEOF_INPUT)) <= C.LATE_DL_DAYS_C AND A.PROD_CLASS=2 ) ) ) ) );
+
+
+	printf("After Execute His Deal part in Late Txn :|%d|\n",sqlca.sqlcode);
+	IS_ANY_ORA_ERROR
+
+	/********************************************************************************************/
+
+
+	no_of_trades = int_h_count + dbl_h_hiscount;
+
+	printf("\nLate Txn Deal Count :|%lf|\n",int_h_count);
+	printf("Late Txn HisDeal Count :|%lf|\n\n",dbl_h_hiscount);
+
+	*p_no_of_trades = no_of_trades;
+	APL_GOBACK_SUCCESS;
+
+RETURN_SUCCESS:
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,
+			 "Exiting Successfully Out Of IV_Proc_CalcNoLateTxns\n",
+			 NULL, NULL);
+	}
+	return APL_SUCCESS;
+
+RETURN_FAILURE:
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,
+			 "Exiting Unsuccessfully Out Of IV_Proc_CalcNoLateTxns\n",
+			 NULL, NULL);
+	}
+	return APL_FAILURE;
+}
+
+
+int IV_Proc_CalcPerTxnServChrg(char *p_cltt_str, char *chr_p_param_str,char *chr_p_param_code,  char p_charge_type,char p_fee_type, IV_DATA_STRUCT_H *p_iv_data_struct_h,char p_cons_ind, char *p_mstclt_a, char *p_charge_basis,char *p_fee_basis, char *chr_p_client, char *p_where_stmt,char *p_txnadmfeeccycode, double *p_tot_serv_chg, char p_instrflg, char *chr_p_bill_dep,int *int_p_retstat,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	char chr_l_bill_dep[4];       /* Bageshri HB_IV_001 */
+	
+   EXEC SQL BEGIN DECLARE SECTION;
+	char chr_mstacctstr[IV_CLT_LEN];
+   char chr_h_sel_stmt[2000],h_dl_client[APL_CLIENT_LENGTH],chr_l_buf[BUFFER_LEN];
+   char h_instr_code[APL_INSTRUMENTCODE_LEN], chr_h_instr_ccy[APL_CCYCODE_LEN];
+	char chr_mst_fee_ccycode[APL_CCYCODE_LEN],chr_mst_bl_ccycode[APL_CCYCODE_LEN];
+   char chr_h_bl_upto_dt[APL_DATE_LEN];
+	char *chr_h_bl_upto_dt_t=NULL;
+	char h_dealclass[IV_DLTYPE_LEN],chr_txn_stmt1[1000];
+	char h_dealcd[IV_DLCD_LEN],chr_l_param_code[IV_PARAM_LEN];
+
+	char chr_h_txnsrvind[50],chr_newtdep[IV_PARAM_LEN], chr_h_txnsrvconsind[50];
+	char *chr_newtdep_t;
+	char *chr_l_param_dep = NULL;
+	char chr_h_param_str[IV_PARAM_LEN];
+	char chr_h_param_cons_str[IV_PARAM_LEN];
+	int int_h_mst_fee_decimallen=0,int_h_mst_bl_decimallen=0;
+	double h_exchg_rt_mstfee_bl=1.0;
+	double tot_charge_cons_quantity=0.0, tot_fee_cons_quantity=0.0, tot_serv_cons_chg=0.0; 
+	double dbl_h_countervalue=0.0, dbl_h_mstcountervalue = 0.0,l_subbl_mstbl_rt = 1.0;
+	IV_CLIENTSETUP_STRUCT l_iv_clientsetup_struct;
+
+	IV_DATA_STRUCT_H l_iv_data_struct_h_dladmgrp[50];
+	IV_DATA_STRUCT_H l_iv_data_struct_h_dladmgrpcon[50];
+	IV_DEAL_DATA_STRUCT_H l_iv_deal_data_struct_h_dladmgrpcon[50];
+	IV_DEAL_DATA_STRUCT_H l_iv_deal_data_struct_h_dladmgrp[50];
+   double dbl_h_tot_serv_chg = 0.0;
+	double srv_charge=0.0, srv_cons_charge=0.0;
+	int int_firstfound=0,int_grp_cnt=0,int_i_cnt=0,int_new_grp=0;
+   struct sqlca sqlca;
+   EXEC SQL VAR chr_h_sel_stmt    IS STRING;
+   EXEC SQL VAR h_dl_client     IS STRING;
+   EXEC SQL VAR chr_h_instr_ccy     IS STRING;
+   EXEC SQL VAR chr_h_bl_upto_dt     IS STRING;
+	EXEC SQL VAR h_dealclass IS STRING;
+	EXEC SQL VAR h_dealcd IS STRING;
+	EXEC SQL VAR chr_h_param_str IS STRING;
+	EXEC SQL VAR chr_h_param_cons_str IS STRING;
+	
+	EXEC SQL END DECLARE SECTION;
+
+   double tot_serv_chg = 0;
+	double tot_charge_quantity = 0;
+	double tot_fee_quantity = 0;		
+	
+   char *int_pos = NULL;
+   double l_exchg_rt= 1.0;
+   double l_round_val = 0.0;
+	int int_is_a_open = 0;
+   int int_retstat = 0;
+	int int_h_count = 0;
+   short int_i_count = 0;
+	short i_dealclass=0;
+	short i_dealcd=0;
+	int int_forarr = 0;
+	sqlca.sqlcode = 0;
+
+	memset(chr_mstacctstr,APL_NULL_CHAR,IV_CLT_LEN);
+	memset(h_dealclass,APL_NULL_CHAR,IV_DLTYPE_LEN);
+   memset(chr_h_sel_stmt, APL_NULL_CHAR, 2000);
+   memset(h_dl_client,  APL_NULL_CHAR, APL_CLIENT_LENGTH);
+   memset(chr_h_instr_ccy,  APL_NULL_CHAR, APL_CCYCODE_LEN);
+	memset(chr_mst_fee_ccycode, APL_NULL_CHAR, APL_CCYCODE_LEN);
+   memset(chr_mst_bl_ccycode, APL_NULL_CHAR, APL_CCYCODE_LEN);
+   memset(chr_l_buf,APL_NULL_CHAR,BUFFER_LEN);
+   memset(chr_h_bl_upto_dt,APL_NULL_CHAR,APL_DATE_LEN);
+	memset(chr_h_txnsrvind,APL_NULL_CHAR,51);
+	memset(chr_h_txnsrvconsind, APL_NULL_CHAR, 51);
+	
+	memset(chr_l_param_code,APL_NULL_CHAR,IV_PARAM_LEN);
+	memset(chr_txn_stmt1,APL_NULL_CHAR,1000);
+	memset(l_iv_data_struct_h_dladmgrpcon, NULL, sizeof(IV_DATA_STRUCT_H));
+	memset(l_iv_deal_data_struct_h_dladmgrpcon, NULL, sizeof(IV_DEAL_DATA_STRUCT_H));
+	 memset(l_iv_deal_data_struct_h_dladmgrp[0].proc_data,APL_NULL_CHAR,100);
+	 memset(&l_iv_deal_data_struct_h_dladmgrp, NULL, sizeof(IV_DEAL_DATA_STRUCT_H));
+	memset(&l_iv_data_struct_h_dladmgrp, NULL, sizeof(IV_DATA_STRUCT_H));
+	memset(l_iv_deal_data_struct_h_dladmgrpcon[0].proc_data,APL_NULL_CHAR,100);
+	memset(l_iv_data_struct_h_dladmgrp[0].proc_data,APL_NULL_CHAR,100);
+	memset(l_iv_data_struct_h_dladmgrpcon[0].proc_data,APL_NULL_CHAR,100);
+	memset(l_iv_deal_data_struct_h_dladmgrp[0].proc_data,APL_NULL_CHAR,100);
+	 memset(chr_h_param_str,APL_NULL_CHAR,IV_PARAM_LEN);
+	memset(chr_h_param_cons_str,APL_NULL_CHAR,IV_PARAM_LEN);
+	memset(chr_newtdep,APL_NULL_CHAR,IV_PARAM_LEN);
+	memset(&l_iv_clientsetup_struct,NULL,sizeof(IV_CLIENTSETUP_STRUCT));
+	memset(chr_l_bill_dep, APL_NULL_CHAR, 4);
+
+   APL_IF_DEBUG
+   {
+      CO_ProcMonitor(APL_OUT_FILE,"Calculating sum of Service Charge for client per txn ",NULL,NULL);
+      memset(chr_l_buf,APL_NULL_CHAR,BUFFER_LEN);
+      sprintf(chr_l_buf,"%s",h_dl_client);
+      CO_ProcMonitor(APL_OUT_FILE,chr_l_buf,NULL,NULL);
+   }
+
+   strcpy(h_dl_client,chr_p_client);
+   strcpy(chr_h_bl_upto_dt,chr_g_bl_upto_dt);
+	chr_h_bl_upto_dt_t = strtok_r(chr_h_bl_upto_dt," ",&int_pos);
+	strcpy(chr_h_bl_upto_dt,chr_h_bl_upto_dt_t);
+   /* strcpy(chr_h_bl_upto_dt,strtok_r(chr_h_bl_upto_dt," ",&int_pos)); PJ */
+
+   strcat(chr_h_bl_upto_dt," 23:59:59");
+	strcpy(chr_h_param_str,chr_p_param_str);
+	strcpy(chr_h_param_cons_str,chr_p_param_str);
+	strcpy(chr_l_param_code,chr_p_param_code);
+	strcpy(chr_l_bill_dep,chr_p_bill_dep);			/* Bageshri HB_IV_001 */
+	
+	
+	
+	
+	if(chr_g_bl_gen == 'M')
+   {
+      strcpy(chr_mstacctstr,p_mstclt_a);
+      strcat(chr_mstacctstr,";");
+      if(APL_FAILURE == IV_Rtv_IVCUSTSETUP(p_mstclt_a,&l_iv_clientsetup_struct,&int_retstat,l_debug_info_ptr))
+      {
+         if(int_retstat == IV_CRITCAL_ERROR_IND)
+         {
+            fprintf(fp,"Error : Account %s  not found in billing system\n",p_mstclt_a);
+            fflush(fp);
+            *int_p_retstat = IV_CRITCAL_ERROR_IND;
+            int_bl_err_level = 1;
+            if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+            {
+               CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+               CO_FreeErrLst(l_debug_info_ptr);
+            }
+            APL_GOBACK_FAIL;
+         }
+      }
+
+   strcat(chr_mstacctstr,l_iv_clientsetup_struct.default_feeclt);
+      strcat(chr_mstacctstr,";");
+      strcat(chr_mstacctstr,chr_g_cb_code);
+		strcat(chr_mstacctstr,";");
+      strcat(chr_mstacctstr,APL_NULL_STRING);
+
+      
+      strcpy(chr_mst_fee_ccycode,APL_NULL_STRING);
+      strcpy(chr_mst_fee_ccycode,l_iv_clientsetup_struct.fees_ccy);
+      strcpy(chr_mst_bl_ccycode,APL_NULL_STRING);
+      strcpy(chr_mst_bl_ccycode,l_iv_clientsetup_struct.b_ccycd);
+
+
+      if ( APL_FAILURE == CR_Rtv_CCYFldVal(chr_mst_fee_ccycode,"decimallen",&int_h_mst_fee_decimallen,l_debug_info_ptr))
+      {
+         fprintf(fp,"Error : Could not fetch decimal length for currency %s\n", chr_mst_fee_ccycode);
+         fflush(fp);
+         int_bl_err_level = 1;
+         *int_p_retstat = int_retstat;
+         if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+         {
+            CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+            CO_FreeErrLst(l_debug_info_ptr);
+         }
+      }
+		
+		
+      if ( APL_FAILURE == CR_Rtv_CCYFldVal(chr_mst_bl_ccycode,"decimallen",&int_h_mst_bl_decimallen,l_debug_info_ptr))
+      {
+         fprintf(fp,"Error : Could not fetch decimal length for currency %s\n", chr_mst_bl_ccycode);
+         fflush(fp);
+         int_bl_err_level = 1;
+         *int_p_retstat = int_retstat;
+         if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+         {
+            CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+            CO_FreeErrLst(l_debug_info_ptr);
+         }
+      }
+
+		
+      h_exchg_rt_mstfee_bl = 1.0;
+      if (strcmp(chr_mst_bl_ccycode, chr_mst_fee_ccycode) != 0)
+      {
+         int_retstat = IV_SUCCESS;
+         if(APL_FAILURE == IV_Rtv_ExchRate(chr_mst_fee_ccycode,chr_mst_bl_ccycode,chr_g_bl_upto_dt,&h_exchg_rt_mstfee_bl, &int_retstat,l_debug_info_ptr
+))
+         {
+            fprintf(fp,"Error : Exchange Rate not found for currency %s %s\n",chr_mst_fee_ccycode,chr_mst_bl_ccycode);
+            fflush(fp);
+            int_bl_err_level = 1;
+            *int_p_retstat = int_retstat;
+         }
+       }
+
+		
+
+      l_subbl_mstbl_rt = 1.0;
+      if (strcmp(chr_mst_bl_ccycode, chr_g_bl_ccycode) != 0)
+      {
+         int_retstat = IV_SUCCESS;
+         if(APL_FAILURE == IV_Rtv_ExchRate(chr_g_bl_ccycode,chr_mst_bl_ccycode,chr_g_bl_upto_dt,&l_subbl_mstbl_rt, &int_retstat,l_debug_info_ptr))
+         {
+            fprintf(fp,"Error : Exchange Rate not found for currency %s %s\n",chr_g_bl_ccycode,chr_mst_bl_ccycode);
+            fflush(fp);
+            int_bl_err_level = 1;
+            *int_p_retstat = int_retstat;
+         }
+		}
+
+	}
+
+	strcpy(chr_h_sel_stmt,"SELECT b.AMOUNT, b.CURRENCY_CD, RTRIM(b.DL_CLASS), RTRIM(b.DEAL_CD) ");
+	strcat(chr_h_sel_stmt," FROM  DL_DEAL b");
+	if(p_instrflg == 'Y')
+      strcat(chr_h_sel_stmt," ,MT_INSTRUMENT a");
+	if (p_cons_ind == 'C')
+      strcat(chr_h_sel_stmt," , MT_CLIENT c");
+   strcat(chr_h_sel_stmt," WHERE "); 
+	if (p_cons_ind != 'C')
+   {
+		strcat(chr_h_sel_stmt," b.client = '");
+   	strcat(chr_h_sel_stmt,h_dl_client );
+		strcat(chr_h_sel_stmt,"' AND ");
+	}
+   strcat(chr_h_sel_stmt," b.CHECKER IS NOT NULL AND (b.DATEOFBILLING IS NULL OR ");
+   strcat(chr_h_sel_stmt,"  b.DATEOFBILLING = '");
+   strcat(chr_h_sel_stmt,chr_g_bl_upto_dt);
+	strcat(chr_h_sel_stmt,"' OR (  b.DATEOFBILLING != '");
+   strcat(chr_h_sel_stmt,chr_g_bl_upto_dt);
+   strcat(chr_h_sel_stmt,"' AND b.amend_count != b.NUMBER_A)) AND  ");
+   /* strcat(chr_h_sel_stmt,"b.DEAL_STAT != 'DD' AND "); */
+   strcat(chr_h_sel_stmt,"b.DEAL_STAT != 'DU' AND "); /* ISKB-2247 Not to pick DU and DD deals */
+   if(strcmp(chr_l_bill_dep,"INP") == 0)
+   {
+      strcat(chr_h_sel_stmt," b.DATEOF_INPUT <= '");
+      strcat(chr_h_sel_stmt,chr_h_bl_upto_dt);
+      strcat(chr_h_sel_stmt,"'");
+   }
+   else if(strcmp(chr_l_bill_dep,"ASD") == 0)
+   {
+      strcat(chr_h_sel_stmt," (b.INSTRUMENT_DT IS NOT NULL AND b.INSTRUMENT_DT <= '");
+      strcat(chr_h_sel_stmt,chr_h_bl_upto_dt);
+      strcat(chr_h_sel_stmt,"')");
+   }
+   strcat(chr_h_sel_stmt,p_where_stmt);
+   strcat(chr_h_sel_stmt," UNION ALL ");
+   strcat(chr_h_sel_stmt,"SELECT b.AMOUNT, b.CURRENCY_CD , RTRIM(b.DL_CLASS), RTRIM(b.DEAL_CD) ");
+   strcat(chr_h_sel_stmt," FROM  DL_HISDEAL b");
+   if(p_instrflg == 'Y')
+      strcat(chr_h_sel_stmt," ,MT_INSTRUMENT a");
+	if (p_cons_ind == 'C')
+      strcat(chr_h_sel_stmt," , MT_CLIENT c");
+	strcat(chr_h_sel_stmt," WHERE ");
+	if (p_cons_ind != 'C')
+   {
+		strcat(chr_h_sel_stmt," b.client = '");
+   	strcat(chr_h_sel_stmt,h_dl_client );
+		strcat(chr_h_sel_stmt,"' AND ");
+	}
+   strcat(chr_h_sel_stmt," b.DEAL_STAT != 'DD'");
+   strcat(chr_h_sel_stmt," AND b.CHECKER IS NOT NULL AND (b.DATEOFBILLING IS NULL OR ");
+   strcat(chr_h_sel_stmt,"  b.DATEOFBILLING = '");
+   strcat(chr_h_sel_stmt,chr_g_bl_upto_dt);
+   strcat(chr_h_sel_stmt,"' OR (  b.DATEOFBILLING != '");
+   strcat(chr_h_sel_stmt,chr_g_bl_upto_dt);
+   strcat(chr_h_sel_stmt,"' AND b.amend_count != b.NUMBER_A)) AND  ");
+   strcat(chr_h_sel_stmt,"b.DEAL_STAT != 'DD' AND ");
+   if(strcmp(chr_l_bill_dep,"INP") == 0)
+   {
+      strcat(chr_h_sel_stmt," b.DATEOF_INPUT <= '");
+      strcat(chr_h_sel_stmt,chr_h_bl_upto_dt);
+      strcat(chr_h_sel_stmt,"'");
+   }
+   else if(strcmp(chr_l_bill_dep,"ASD") == 0)
+   {
+		strcat(chr_h_sel_stmt," (b.INSTRUMENT_DT IS NOT NULL AND b.INSTRUMENT_DT <= '");
+      strcat(chr_h_sel_stmt,chr_h_bl_upto_dt);
+      strcat(chr_h_sel_stmt,"')");
+   }
+   strcat(chr_h_sel_stmt,p_where_stmt);
+	/* chr_newtdep_t = &chr_newtdep; OPT:AIX */
+	strcpy( (char *) chr_newtdep_t , chr_newtdep);
+	/*chr_l_param_dep = strtok_r(chr_l_param_code,";",&chr_newtdep); */
+	chr_l_param_dep = strtok_r(chr_l_param_code,";",&chr_newtdep_t);
+		if (chr_l_param_dep != NULL ) /* HDFCIV_004 PJ */
+		{
+      while(strlen(chr_l_param_dep) > 0)
+      {
+         if(strcmp(chr_l_param_dep,"LOCATION") == 0)
+         {
+            if(int_firstfound)
+               strcat(chr_txn_stmt1, ",2");
+            else
+            {
+               strcat(chr_txn_stmt1," ORDER BY ");
+               strcat(chr_txn_stmt1, "2");
+               int_firstfound = 1;
+            }
+         }
+         else if(strcmp(chr_l_param_dep,"PRODUCT") == 0)
+         {
+            if(int_firstfound)
+               strcat(chr_txn_stmt1, ",4");
+            else
+            {
+               strcat(chr_txn_stmt1," ORDER BY ");
+               strcat(chr_txn_stmt1, "4");
+               int_firstfound = 1;
+            }
+         }
+         else if(strcmp(chr_l_param_dep,"DEALCD") == 0)
+         {
+            if(int_firstfound)
+               strcat(chr_txn_stmt1, ",3");
+            else
+            {
+               strcat(chr_txn_stmt1," ORDER BY ");
+               strcat(chr_txn_stmt1, "3");
+               int_firstfound = 1;
+            }
+         }
+			else if(strcmp(chr_l_param_dep,"DEALTYPE") == 0)
+         {
+            if(int_firstfound)
+               strcat(chr_txn_stmt1, ",5");
+            else
+            {
+               strcat(chr_txn_stmt1," ORDER BY ");
+               strcat(chr_txn_stmt1, "5");
+               int_firstfound = 1;
+            }
+         }
+         chr_l_param_dep = strtok_r(NULL,";",&chr_newtdep_t); 
+         /*chr_l_param_dep = strtok_r(NULL,";",&chr_newtdep); PJ */
+			if (chr_l_param_dep == NULL) break;
+      }
+		}
+	strcat(chr_h_sel_stmt, chr_txn_stmt1);	
+   strcat(chr_h_sel_stmt,APL_NULL_STRING);
+	printf("%s\n",chr_h_sel_stmt);
+
+   EXEC SQL PREPARE S FROM :chr_h_sel_stmt;
+
+   EXEC SQL DECLARE A1 CURSOR FOR S;
+   EXEC SQL OPEN A1;
+   if(sqlca.sqlcode < 0)
+   {
+      *int_p_retstat = IV_CRITCAL_ERROR_IND;
+   }
+   IS_ANY_ORA_ERROR;
+   int_is_a_open = 1;
+   for( ; ; )
+   {
+      memset(chr_h_instr_ccy,  APL_NULL_CHAR, APL_CCYCODE_LEN);
+		memset(h_dealclass,APL_NULL_CHAR,IV_DLTYPE_LEN);
+      dbl_h_tot_serv_chg = 0;
+
+      EXEC SQL FETCH A1
+      INTO :dbl_h_tot_serv_chg,
+            :chr_h_instr_ccy,
+				:h_dealclass:i_dealclass,
+				:h_dealcd:i_dealcd;
+
+      if(APL_ZERO_RESULT_SET)
+         break;
+
+		if (dbl_h_tot_serv_chg == 0 )
+			continue;
+
+		int_retstat = IV_SUCCESS;
+      if ( APL_FAILURE == IV_Proc_TransactionFn(h_dealclass, &int_retstat, l_debug_info_ptr) )
+      {
+         if(int_retstat == IV_CRITCAL_ERROR_IND)
+         {
+            fprintf(fp,"Error in accessing table for client %s. Please contact support\n",h_dl_client);
+            fprintf(fp, "File: %s, Line: %d\n", __FILE__, __LINE__);
+            fflush(fp);
+            int_bl_err_level = 1;
+            if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+            {
+               CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+               CO_FreeErrLst(l_debug_info_ptr);
+            }
+            *int_p_retstat = int_retstat;
+         }
+		}
+		else
+		{
+			continue;
+		}	
+
+      l_exchg_rt = 1.0;
+      if( strcmp(chr_g_fee_ccycode,chr_h_instr_ccy) != 0)  
+
+      {
+         int_retstat = IV_SUCCESS;
+         if(APL_FAILURE == IV_Rtv_ExchRate(chr_h_instr_ccy,chr_g_fee_ccycode,chr_g_bl_upto_dt,&l_exchg_rt,&int_retstat,l_debug_info_ptr)) 
+         {
+            fprintf(fp,"Error : Exchange Rate not found for currency %s %s\n",chr_h_instr_ccy,chr_g_fee_ccycode);  
+            fflush(fp);
+				int_bl_err_level = 1;
+            *int_p_retstat = int_retstat;
+         }
+      }
+
+		l_round_val = 0.0;
+      CO_Round(dbl_h_tot_serv_chg * l_exchg_rt, int_g_ccy_decimallen, &l_round_val);
+		dbl_h_countervalue = l_round_val;
+
+		if (chr_g_bl_gen == 'M')
+		{	
+			
+			l_exchg_rt = 1.0;
+      	if( strcmp(chr_mst_fee_ccycode,chr_h_instr_ccy) != 0)
+
+	      {
+   	      int_retstat = IV_SUCCESS;
+      	   if(APL_FAILURE == IV_Rtv_ExchRate(chr_h_instr_ccy,chr_mst_fee_ccycode,chr_g_bl_upto_dt,&l_exchg_rt,&int_retstat,l_debug_info_ptr))
+         	{
+            	fprintf(fp,"Error : Exchange Rate not found for currency %s %s\n",chr_h_instr_ccy,chr_mst_fee_ccycode);
+  	   	       fflush(fp);
+   	         int_bl_err_level = 1;
+         	   *int_p_retstat = int_retstat;
+         	}
+      	}
+
+ 		     l_round_val = 0.0;
+   	   CO_Round(dbl_h_tot_serv_chg * l_exchg_rt, int_h_mst_fee_decimallen , &l_round_val);
+      	dbl_h_mstcountervalue = l_round_val;
+		}
+
+			
+		if (int_grp_cnt == 0)
+		{
+			srv_charge = 0.0;
+			strcpy(chr_h_txnsrvind,APL_NULL_STRING);
+      	memset(&l_iv_data_struct_h_dladmgrp, NULL, sizeof(IV_DATA_STRUCT_H));
+
+			if(APL_FAILURE == IV_Proc_CalcFee("O",p_cltt_str, ADM_TXN_FEE_IND, chr_h_param_str, APL_NULL_STRING, chr_p_param_code, dbl_h_countervalue, dbl_h_countervalue, p_charge_type, p_fee_type,&srv_charge,l_iv_data_struct_h_dladmgrp,p_cons_ind,p_mstclt_a,p_charge_basis,p_fee_basis,chr_h_txnsrvind,&int_retstat,l_debug_info_ptr))
+			{
+               if(int_retstat == IV_CRITCAL_ERROR_IND)
+               {
+                  fprintf(fp,"Error in accessing table for client %s. Please contact support\n",h_dl_client);
+                  fprintf(fp, "File: %s, Line: %d\n", __FILE__, __LINE__);
+                  fflush(fp);
+                  int_bl_err_level = 1;
+                  if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+                  {
+                     CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+                     CO_FreeErrLst(l_debug_info_ptr);
+                  }
+                  *int_p_retstat = int_retstat;
+               }
+      	}
+		
+				
+			if (chr_g_bl_gen == 'M')
+			{
+				
+				srv_cons_charge = 0.0;
+         	strcpy(chr_h_txnsrvconsind,APL_NULL_STRING);
+         	memset(&l_iv_data_struct_h_dladmgrpcon, NULL, sizeof(IV_DATA_STRUCT_H));
+
+         	if(APL_FAILURE == IV_Proc_CalcFee("O",chr_mstacctstr, ADM_TXN_FEE_IND, chr_h_param_str, APL_NULL_STRING, chr_p_param_code, dbl_h_mstcountervalue,
+					dbl_h_mstcountervalue, p_charge_type, p_fee_type,&srv_cons_charge,l_iv_data_struct_h_dladmgrpcon,'C',p_mstclt_a,
+					p_charge_basis,p_fee_basis, chr_h_txnsrvconsind,&int_retstat,l_debug_info_ptr))
+				{
+					if(int_retstat == IV_CRITCAL_ERROR_IND)
+               {
+                  fprintf(fp,"Error in accessing table for client %s. Please contact support\n",h_dl_client);
+                  fprintf(fp, "File: %s, Line: %d\n", __FILE__, __LINE__);
+                  fflush(fp);
+                  int_bl_err_level = 1;
+                  if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+                  {
+                     CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+                     CO_FreeErrLst(l_debug_info_ptr);
+                  }
+                  *int_p_retstat = int_retstat;
+               }
+         	}
+			}
+		}
+		
+		int_i_cnt = 0;
+      if (strlen((l_iv_data_struct_h_dladmgrp+int_i_cnt)->proc_data) > 0)
+   	{ 
+           
+         strcpy(chr_h_txnsrvind,APL_NULL_STRING);
+         srv_charge = 0.0;
+
+        if(APL_FAILURE == IV_Proc_CalcFee("O",p_cltt_str,ADM_TXN_FEE_IND,(l_iv_data_struct_h_dladmgrp+int_i_cnt)->proc_data,
+        APL_NULL_STRING,  chr_p_param_code, dbl_h_countervalue, dbl_h_countervalue,p_charge_type, p_fee_type,
+        &srv_charge,l_iv_data_struct_h_dladmgrp,'I',p_mstclt_a,p_charge_basis,p_fee_basis,
+        chr_h_txnsrvind,&int_retstat,l_debug_info_ptr))
+        {
+				if(int_retstat == IV_CRITCAL_ERROR_IND)
+            {
+                fprintf(fp,"Error in accessing table for client %s. Please contact support\n",h_dl_client);
+               fprintf(fp, "File: %s, Line: %d\n", __FILE__, __LINE__);
+                 fflush(fp);
+                 int_bl_err_level = 1;
+               if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+               {
+                   CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+                   CO_FreeErrLst(l_debug_info_ptr);
+               }
+               *int_p_retstat = int_retstat;
+            }
+        }
+        int_grp_cnt = 0;
+        int_new_grp = 0;
+
+			while(strlen((l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->proc_data) > 0)
+         {
+             if(strcmp((l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->proc_data,(l_iv_data_struct_h_dladmgrp+int_i_cnt)->proc_data) == 0)
+             {
+               int_new_grp=1;
+               break;
+             }
+             ++int_grp_cnt;
+         }
+         if (int_new_grp == 0)
+         {
+             memset((l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->proc_data,'\0',100);
+            strcpy((l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->proc_data,(l_iv_data_struct_h_dladmgrp+int_i_cnt)->proc_data);
+             memset((l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->param_flag,'\0',50);
+             strcpy((l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->param_flag,(l_iv_data_struct_h_dladmgrp+int_i_cnt)->param_flag);
+             (l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->chrg_quant = dbl_h_countervalue;
+             (l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->fees_qty = dbl_h_countervalue;
+             (l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->h_chrg = srv_charge;
+             if(int_grp_cnt < 49)
+             {
+                 memset((l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt+1)->proc_data,'\0',100);
+                 strcpy((l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt+1)->proc_data,APL_NULL_STRING);
+                 memset((l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt+1)->param_flag,'\0',50);
+                strcpy((l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt+1)->param_flag,APL_NULL_STRING);
+                (l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt+1)->chrg_quant = 0;
+                (l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt+1)->fees_qty = 0;
+             }
+
+         }
+         else
+         {
+            (l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->chrg_quant += dbl_h_countervalue;
+            (l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->fees_qty += dbl_h_countervalue;
+            (l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->h_chrg += srv_charge;
+         }
+		}
+		else
+		{
+    		tot_charge_quantity += dbl_h_countervalue;
+			tot_fee_quantity += dbl_h_countervalue;
+			if(srv_charge > 0)
+         {
+				tot_serv_chg += srv_charge;
+			}
+		}
+
+		
+		int_i_cnt = 0;
+      if (strlen((l_iv_data_struct_h_dladmgrpcon+int_i_cnt)->proc_data) > 0)
+      {
+           
+         strcpy(chr_h_txnsrvconsind,APL_NULL_STRING);
+         srv_cons_charge = 0.0;
+
+        if(APL_FAILURE == IV_Proc_CalcFee("O",chr_mstacctstr,ADM_TXN_FEE_IND,(l_iv_data_struct_h_dladmgrpcon+int_i_cnt)->proc_data,
+			APL_NULL_STRING,  chr_p_param_code, dbl_h_mstcountervalue, dbl_h_mstcountervalue, p_charge_type, p_fee_type,
+			&srv_cons_charge,l_iv_data_struct_h_dladmgrpcon,'C',p_mstclt_a,p_charge_basis,p_fee_basis,chr_h_txnsrvconsind, &int_retstat,l_debug_info_ptr))
+			{
+				if(int_retstat == IV_CRITCAL_ERROR_IND)
+            {
+                fprintf(fp,"Error in accessing table for client %s. Please contact support\n",h_dl_client);
+               fprintf(fp, "File: %s, Line: %d\n", __FILE__, __LINE__);
+                 fflush(fp);
+                 int_bl_err_level = 1;
+               if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+               {
+                   CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+                   CO_FreeErrLst(l_debug_info_ptr);
+               }
+               *int_p_retstat = int_retstat;
+            }
+        }
+
+			
+        srv_cons_charge = srv_cons_charge * l_subbl_mstbl_rt;
+
+        int_grp_cnt = 0;
+        int_new_grp = 0;
+
+			while(strlen((l_iv_deal_data_struct_h_dladmgrpcon+int_grp_cnt)->proc_data) > 0)
+         {
+             if(strcmp((l_iv_deal_data_struct_h_dladmgrpcon+int_grp_cnt)->proc_data,(l_iv_data_struct_h_dladmgrpcon+int_i_cnt)->proc_data) == 0)
+             {
+               int_new_grp=1;
+               break;
+             }
+             ++int_grp_cnt;
+         }
+
+			if (int_new_grp == 0)
+         {
+             memset((l_iv_deal_data_struct_h_dladmgrpcon+int_grp_cnt)->proc_data,'\0',100);
+            strcpy((l_iv_deal_data_struct_h_dladmgrpcon+int_grp_cnt)->proc_data,(l_iv_data_struct_h_dladmgrpcon+int_i_cnt)->proc_data);
+             memset((l_iv_deal_data_struct_h_dladmgrpcon+int_grp_cnt)->param_flag,'\0',50);
+             strcpy((l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->param_flag,(l_iv_data_struct_h_dladmgrpcon+int_i_cnt)->param_flag);
+             (l_iv_deal_data_struct_h_dladmgrpcon+int_grp_cnt)->chrg_quant = dbl_h_mstcountervalue;
+             (l_iv_deal_data_struct_h_dladmgrpcon+int_grp_cnt)->fees_qty = dbl_h_mstcountervalue;
+             (l_iv_deal_data_struct_h_dladmgrpcon+int_grp_cnt)->h_chrg = srv_cons_charge;
+             if(int_grp_cnt < 49)
+             {
+                 memset((l_iv_deal_data_struct_h_dladmgrpcon+int_grp_cnt+1)->proc_data,'\0',100);
+                 strcpy((l_iv_deal_data_struct_h_dladmgrpcon+int_grp_cnt+1)->proc_data,APL_NULL_STRING);
+                 memset((l_iv_deal_data_struct_h_dladmgrpcon+int_grp_cnt+1)->param_flag,'\0',50);
+                strcpy((l_iv_deal_data_struct_h_dladmgrpcon+int_grp_cnt+1)->param_flag,APL_NULL_STRING);
+                (l_iv_deal_data_struct_h_dladmgrpcon+int_grp_cnt+1)->chrg_quant = 0;
+                (l_iv_deal_data_struct_h_dladmgrpcon+int_grp_cnt+1)->fees_qty = 0;
+             }
+
+         }
+         else
+			{
+            (l_iv_deal_data_struct_h_dladmgrpcon+int_grp_cnt)->chrg_quant += dbl_h_mstcountervalue;
+            (l_iv_deal_data_struct_h_dladmgrpcon+int_grp_cnt)->fees_qty += dbl_h_mstcountervalue;
+            (l_iv_deal_data_struct_h_dladmgrpcon+int_grp_cnt)->h_chrg += srv_cons_charge;
+         }
+      }
+      else
+      {
+         tot_charge_cons_quantity += dbl_h_mstcountervalue;
+         tot_fee_cons_quantity += dbl_h_mstcountervalue;
+			if(srv_cons_charge > 0)
+         {
+            tot_serv_cons_chg += srv_cons_charge;
+         }
+      }
+   }
+
+   EXEC SQL CLOSE A1;
+
+		
+   int_i_cnt = 0;
+
+   while (strlen((l_iv_deal_data_struct_h_dladmgrp+int_i_cnt)->proc_data)> 0)
+   {
+		strcpy(chr_h_param_str,APL_NULL_STRING);
+		strcpy(chr_h_param_str, (l_iv_deal_data_struct_h_dladmgrp+int_i_cnt)->proc_data);
+		tot_charge_quantity += (l_iv_deal_data_struct_h_dladmgrp+int_i_cnt)->chrg_quant;
+		tot_fee_quantity += (l_iv_deal_data_struct_h_dladmgrp+int_i_cnt)->fees_qty;
+		tot_serv_chg += (l_iv_deal_data_struct_h_dladmgrp+int_i_cnt)->h_chrg;
+		++int_i_cnt;
+	}
+
+	int_i_cnt = 0;
+	while (strlen((l_iv_deal_data_struct_h_dladmgrpcon+int_i_cnt)->proc_data)> 0)
+   {
+		strcpy(chr_h_param_cons_str, APL_NULL_STRING);
+		strcpy(chr_h_param_cons_str, (l_iv_deal_data_struct_h_dladmgrpcon+int_i_cnt)->proc_data);
+      tot_charge_cons_quantity += (l_iv_deal_data_struct_h_dladmgrpcon+int_i_cnt)->chrg_quant;
+      tot_fee_cons_quantity += (l_iv_deal_data_struct_h_dladmgrpcon+int_i_cnt)->fees_qty;
+      tot_serv_cons_chg += (l_iv_deal_data_struct_h_dladmgrpcon+int_i_cnt)->h_chrg;
+      ++int_i_cnt;
+   }
+
+	if (tot_serv_chg >0 )
+	{
+
+		if ((strcmp(p_fee_basis,"PORTFOLIO VALUE") == 0) || (strcmp(p_fee_basis,"COUNTERVALUE") == 0) || (strcmp(p_fee_basis, "COUNTERVALUE PER TXN") == 0 ))
+         tot_fee_quantity = tot_fee_quantity * g_exchg_rt_fee_bl;
+
+      if ((strcmp(p_charge_basis,"PORTFOLIO VALUE") == 0) || (strcmp(p_charge_basis,"COUNTERVALUE") == 0) || (strcmp(p_fee_basis, "COUNTERVALUE PER TXN") == 0 ))
+         tot_charge_quantity = tot_charge_quantity * g_exchg_rt_fee_bl;
+
+	
+
+        l_round_val = 0.0;
+		CO_Round(tot_fee_quantity , int_g_blccy_decimallen, &l_round_val);
+            tot_fee_quantity = l_round_val;
+         l_round_val = 0.0;
+		CO_Round(tot_charge_quantity , int_g_blccy_decimallen, &l_round_val);
+            tot_charge_quantity = l_round_val;
+         l_round_val = 0.0;
+		CO_Round(tot_serv_chg , int_g_blccy_decimallen, &l_round_val);
+            tot_serv_chg = l_round_val;
+         l_round_val = 0.0;
+
+	
+		EXEC SQL SELECT 1
+   	INTO :int_h_count
+   	FROM DUAL
+   	WHERE EXISTS (SELECT 1 FROM IV_DEAL WHERE
+   	dateof_billing = :chr_g_bl_upto_dt
+   	and client = :h_dl_client
+   	and service_cd = 4
+   	and cons_flag = :p_cons_ind
+ 	  and proc_data_val =:chr_h_param_str);
+
+	   IS_ANY_ORA_ERROR
+
+  		if ( int_h_count >0 )
+    	{
+      	 EXEC SQL UPDATE IV_DEAL
+       	SET comm_amt = comm_amt + :tot_serv_chg,
+           chrg_quant = chrg_quant + :tot_charge_quantity,
+           fees_qty = fees_qty + :tot_fee_quantity
+        	WHERE dateof_billing =:chr_g_bl_upto_dt
+            and client = :h_dl_client
+            and service_cd = 4
+            and cons_flag = :p_cons_ind
+            and proc_data_val =:chr_h_param_str;
+
+            if(sqlca.sqlcode < 0)
+            *int_p_retstat = IV_CRITCAL_ERROR_IND;	
+				IS_ANY_ORA_ERROR;
+
+            *int_p_retstat = IV_SUCCESS;
+
+            APL_GOBACK_SUCCESS;
+
+   	}
+  		else
+		{
+			int_i_cnt = 0;
+			if(APL_FAILURE == IV_Mod_NewIVTRANSAC(h_dl_client,ADM_TXN_FEE_IND,p_cons_ind,chr_p_param_code,chr_h_param_str,tot_serv_chg,tot_charge_quantity,chr_g_bl_ccycode, tot_fee_quantity,p_mstclt_a,chr_h_txnsrvind,&int_retstat,l_debug_info_ptr))
+      	{
+         	int_bl_err_level = 1;
+         	if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+         	{
+            	CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+            	CO_FreeErrLst(l_debug_info_ptr);
+         	}
+         	*int_p_retstat = int_retstat;
+				APL_GOBACK_FAIL;
+      	}
+			
+			if (strcmp(h_dl_client, p_mstclt_a) == 0)
+			{
+				if(APL_FAILURE == IV_Mod_NewIVTRANSAC(p_mstclt_a, ADM_TXN_FEE_IND,'S',chr_p_param_code,chr_h_param_str,tot_serv_chg,
+					tot_charge_quantity,chr_g_bl_ccycode, tot_fee_quantity,p_mstclt_a,chr_h_txnsrvind,&int_retstat,l_debug_info_ptr))
+				{
+					int_bl_err_level = 1;
+					if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+            	{
+               	CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+               	CO_FreeErrLst(l_debug_info_ptr);
+            	}
+            	*int_p_retstat = int_retstat;
+            	APL_GOBACK_FAIL;	
+				}
+			}	
+		}	
+	}
+
+	
+
+	if (chr_g_bl_gen == 'M')
+	{
+
+      if ((strcmp(p_fee_basis,"PORTFOLIO VALUE") == 0) || (strcmp(p_fee_basis,"COUNTERVALUE") == 0) || 
+				(strcmp(p_fee_basis, "COUNTERVALUE PER TXN") == 0 ))
+         tot_fee_cons_quantity = tot_fee_cons_quantity * h_exchg_rt_mstfee_bl;
+		 if ((strcmp(p_charge_basis,"PORTFOLIO VALUE") == 0) || (strcmp(p_charge_basis,"COUNTERVALUE") == 0) || 
+				(strcmp(p_charge_basis,"COUNTERVALUE PER TXN") == 0 ))
+ 			tot_charge_cons_quantity = tot_charge_cons_quantity *  h_exchg_rt_mstfee_bl;
+		
+		
+		l_round_val = 0.0;
+      CO_Round(tot_fee_cons_quantity , int_h_mst_bl_decimallen, &l_round_val);
+            tot_fee_cons_quantity = l_round_val;
+         l_round_val = 0.0;
+      CO_Round(tot_charge_cons_quantity , int_h_mst_bl_decimallen, &l_round_val);
+            tot_charge_cons_quantity = l_round_val;
+         l_round_val = 0.0;
+      CO_Round(tot_serv_cons_chg , int_h_mst_bl_decimallen, &l_round_val);
+            tot_serv_cons_chg = l_round_val;
+         l_round_val = 0.0;
+
+			EXEC SQL SELECT 1
+      INTO :int_h_count
+      FROM DUAL
+      WHERE EXISTS (SELECT 1 FROM IV_DEAL WHERE
+      dateof_billing = :chr_g_bl_upto_dt
+      and client = :h_dl_client
+      and service_cd = 4
+		and cons_flag = 'S'
+		and proc_data_val =:chr_h_param_cons_str);
+
+		IS_ANY_ORA_ERROR
+
+      if ( int_h_count >0 )
+      {
+          EXEC SQL UPDATE IV_DEAL
+         SET comm_amt = comm_amt + :tot_serv_cons_chg,
+           chrg_quant = chrg_quant + :tot_charge_cons_quantity,
+           fees_qty = fees_qty + :tot_fee_cons_quantity
+         WHERE dateof_billing =:chr_g_bl_upto_dt
+            and client = :h_dl_client
+            and service_cd = 4
+            and cons_flag = 'S'
+            and proc_data_val =:chr_h_param_cons_str;
+
+            if(sqlca.sqlcode < 0)
+            *int_p_retstat = IV_CRITCAL_ERROR_IND;
+            IS_ANY_ORA_ERROR;
+
+            *int_p_retstat = IV_SUCCESS;
+
+            APL_GOBACK_SUCCESS;
+
+      }
+      else
+      {
+			int_i_cnt = 0;
+			if(APL_FAILURE == IV_Mod_NewIVTRANSAC(h_dl_client,ADM_TXN_FEE_IND,'S',chr_p_param_code,
+				chr_h_param_cons_str,tot_serv_cons_chg,
+				tot_charge_cons_quantity ,chr_mst_bl_ccycode, tot_fee_cons_quantity,p_mstclt_a,chr_h_txnsrvconsind,&int_retstat,l_debug_info_ptr))
+         {
+            int_bl_err_level = 1;
+            if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+            {
+               CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+               CO_FreeErrLst(l_debug_info_ptr);
+            }
+            *int_p_retstat = int_retstat;
+            APL_GOBACK_FAIL;
+         }
+
+      }
+	}
+
+		
+   EXEC SQL CLOSE A;
+   int_is_a_open = 0;
+   *p_tot_serv_chg = tot_serv_chg;
+   APL_GOBACK_SUCCESS;
+
+RETURN_SUCCESS:
+   if(int_is_a_open == 1)
+   {
+      EXEC SQL CLOSE A;
+   }
+   APL_IF_DEBUG
+   {
+      CO_ProcMonitor(APL_OUT_FILE,
+          "Exiting Successfully Out Of IV_Proc_CalcPerTxnServChrg\n",
+          NULL, NULL);
+   }
+   return APL_SUCCESS;
+
+RETURN_FAILURE:
+   if(int_is_a_open == 1)
+   {
+      EXEC SQL CLOSE A;
+   }
+   APL_IF_DEBUG
+   {
+      CO_ProcMonitor(APL_OUT_FILE,
+          "Exiting Unsuccessfully Out Of IV_Proc_CalcPerTxnServChrg\n",
+          NULL, NULL);
+   }
+	return APL_FAILURE;
+}
+
+
+
+int IV_Proc_CalcNoMsgSent(char *chr_p_client,int msg, double *p_no_of_trades,int *int_p_retstat,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+
+	char h_dl_client[APL_CLIENT_LENGTH];
+	char chr_h_bl_upto_dt[APL_DATE_LEN];
+	char chr_h_bl_prv_dt[APL_DATE_LEN];
+	struct sqlca sqlca;
+	EXEC SQL VAR h_dl_client  IS STRING;
+	EXEC SQL VAR chr_h_bl_upto_dt  IS STRING;
+	EXEC SQL VAR chr_h_bl_prv_dt  IS STRING;
+
+	EXEC SQL END DECLARE SECTION;
+
+	double int_h_count = 0;
+   char *int_pos= NULL;	
+   sqlca.sqlcode       = 0;	
+	
+	memset(h_dl_client, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+	memset(chr_h_bl_upto_dt, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(chr_h_bl_prv_dt, APL_NULL_CHAR, APL_DATE_LEN);
+
+	strcpy(h_dl_client,chr_p_client);
+	strcpy(chr_h_bl_upto_dt,chr_g_bl_upto_dt);
+	strcpy(chr_h_bl_upto_dt,strtok_r(chr_h_bl_upto_dt," ",&int_pos));
+	strcat(chr_h_bl_upto_dt," 23:59:59");
+	strcpy(chr_h_bl_prv_dt,chr_g_bl_prv_dt);
+
+   if (msg == SETTALGEFEE)
+   {
+
+  		CO_ProcMonitor(APL_OUT_FILE,"Calculating no of 578 Sent",NULL,NULL);
+     EXEC SQL SELECT NVL(COUNT(*),0)
+              INTO :int_h_count
+              FROM DL_MSGLINK
+             WHERE CLIENT = :h_dl_client
+               AND DATE_OF_INPUT > :chr_h_bl_prv_dt
+               AND DATE_OF_INPUT <= :chr_h_bl_upto_dt
+               AND SWIFT_MSG_NO like '578%'
+					AND EXISTS ( SELECT 1 FROM MT_MSGADDRESS_VEW 
+									  WHERE CLN_CODE = DL_MSGLINK.CLIENT
+										 AND MSG_IDENT_NO = 21);
+
+      IS_ANY_ORA_ERROR
+   }
+   if (msg ==BOG_MSG_FEE)
+   {
+
+  		CO_ProcMonitor(APL_OUT_FILE,"Calculating no of 54B Sent",NULL,NULL);
+     
+     EXEC SQL SELECT NVL(COUNT(*),0)
+              INTO :int_h_count
+              FROM DL_DEAL A ,DL_MSGLINK B
+             WHERE A.CLIENT  =  B.CLIENT 
+             AND    A.IDENTIY_NO    =  B.IDENTIY_NO
+             AND    B.SWIFT_MSG_NO   =  '54B'
+             AND    B.MSG_IN_OUT_IND   =  'O'
+             AND    A.CLIENT = :h_dl_client
+				 AND	 A.DEAL_STAT = 'CS';
+
+      IS_ANY_ORA_ERROR
+   }
+	   *p_no_of_trades = int_h_count;
+	   APL_GOBACK_SUCCESS
+
+RETURN_SUCCESS:
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,
+			 "Exiting Successfully Out Of IV_Proc_CalcNoMsgSent\n",
+			 NULL, NULL);
+	}
+	return APL_SUCCESS;
+
+RETURN_FAILURE:
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,
+			 "Exiting Unsuccessfully Out Of IV_Proc_CalcNoMsgSent\n",
+			 NULL, NULL);
+	}
+	return APL_FAILURE;
+}
+
+/* HDFCIV_004 */
+int Cdlylocmktprc(char *p_secode, int p_hlbsday,double *p_mktprc,char *p_mktdate,int *int_p_retstat,
+          DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+   EXEC SQL BEGIN DECLARE SECTION;
+
+   char h_secode[APL_INSTRUMENTCODE_LEN],h_bl_proc_dt[APL_DATE_LEN],h_bl_prv_dt[APL_DATE_LEN],h_bl_tprv_dt[APL_DATE_LEN];
+   char l_buf[BUFFER_LEN];
+   double h_closprc=0;
+	int h_hlbsday;
+   short i_closprc;
+   EXEC SQL VAR h_secode IS STRING;
+   EXEC SQL VAR h_bl_proc_dt IS STRING;
+   EXEC SQL VAR h_bl_prv_dt IS STRING;
+	EXEC SQL VAR h_bl_tprv_dt IS STRING;
+   EXEC SQL END DECLARE SECTION;
+
+   int retstat = IV_SUCCESS;
+
+   struct sqlca sqlca;
+   sqlca.sqlcode = 0;
+
+   memset(h_secode, APL_NULL_CHAR, APL_INSTRUMENTCODE_LEN);
+   memset(h_bl_proc_dt, APL_NULL_CHAR, APL_DATE_LEN);
+   memset(h_bl_prv_dt, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(h_bl_tprv_dt, APL_NULL_CHAR, APL_DATE_LEN);
+   memset(l_buf, APL_NULL_CHAR, BUFFER_LEN);
+
+   strcpy(h_bl_proc_dt,chr_g_bl_proc_dt);
+   strcpy(h_bl_prv_dt,chr_g_bl_prv_dt);
+   strcpy(h_secode,p_secode);
+	h_hlbsday = p_hlbsday;
+
+	if(h_hlbsday == 0)
+	{
+   	EXEC SQL SELECT nvl(closing_pr,0)
+   	INTO :h_closprc:i_closprc
+		FROM  MT_MKTPRC_GEN_VEW 
+		WHERE price_date = TO_DATE(:h_bl_prv_dt,'DD/MM/YYYY HH:MI:SS PM') 
+   	AND INSTR_CODE = :h_secode;
+
+   	IS_ANY_ORA_ERROR
+
+   	*int_p_retstat = IV_CRITCAL_ERROR_IND;
+		strcpy(p_mktdate,h_bl_prv_dt); 
+
+   	if(sqlca.sqlcode == 1403)
+   	{
+      	*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+
+      	APL_GOBACK_FAIL;
+   	}
+	}
+	else
+	{
+		strcpy(h_bl_tprv_dt, p_mktdate);
+  	
+	/*	EXEC SQL SELECT nvl(closing_pr,0)
+		INTO :h_closprc:i_closprc
+		FROM  MT_MKTPRC_GEN_VEW
+		WHERE price_date = (SELECT MAX(price_date)
+					 FROM  MT_MKTPRC_GEN_VEW
+					 WHERE TRUNC(price_date) <= TRUNC(TO_DATE(:h_bl_tprv_dt,'dd/mm/yyyy hh24:mi:ss'))
+						 AND instr_code = :h_secode)		
+		AND INSTR_CODE = :h_secode;*/
+		/*query commented and  modified by shruthi kumbla for bill optimization on 29/03/2017*/
+		EXEC SQL 
+		SELECT nvl(closing_pr,0)
+		INTO :h_closprc:i_closprc
+		FROM  MT_DLYMKTPRC
+		WHERE INSTR_CODE = :h_secode AND price_date = (SELECT MAX(price_date)
+					FROM  mt_dlymktprc
+					WHERE   instr_code = :h_secode 
+					AND price_date <= TO_DATE(:h_bl_tprv_dt,'dd/mm/yyyy hh24:mi:ss'))
+			AND   rownum=1 order by price_Date desc;
+
+   	IS_ANY_ORA_ERROR
+
+   	*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+   	if(sqlca.sqlcode == 1403)
+   	{
+      	*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+			APL_GOBACK_FAIL
+   	}
+	}
+
+   if(i_closprc == -1)
+   {
+      h_closprc = 0;
+      *p_mktprc = h_closprc;
+      *int_p_retstat = IV_COLUMN_NULL_ERR;
+		APL_GOBACK_FAIL
+		
+   }
+
+   *int_p_retstat = IV_SUCCESS;
+
+   *p_mktprc = h_closprc;
+
+	APL_GOBACK_SUCCESS
+	
+RETURN_SUCCESS:
+   APL_IF_DEBUG
+   {
+      CO_ProcMonitor(APL_OUT_FILE,
+          "Exiting Successfully Out Of Cdlylocmktprc\n",
+          NULL, NULL);
+   }
+   return APL_SUCCESS;
+
+RETURN_FAILURE:
+   APL_IF_DEBUG
+   {
+      CO_ProcMonitor(APL_OUT_FILE,
+          "Exiting Unsuccessfully Out Of Cdlylocmktprc\n",
+          NULL, NULL);
+   }
+   return APL_FAILURE;
+}
+
+/* HDFCIV_004 Rohit Calculate Fee for Bucket Transaction Fee */
+
+int IV_Proc_CalcBuckTxnNo(char *chr_p_client, double *p_no_of_trades, int *int_p_retstat,
+			DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+
+	double int_h_btrans_cnt=0;
+	double int_h_deal_cnt=0;
+	short int_i_deal_cnt = 0;
+	double int_h_hisdeal_cnt=0;
+	short int_i_hisdeal_cnt = 0;
+	char h_dl_client[APL_CLIENT_LENGTH];
+	char chr_h_bl_upto_dt[APL_DATE_LEN];/* ASP Billing Retro - 240807*/
+	char *int_pos= NULL;/* ASP Billing Retro - 240807*/
+	struct sqlca sqlca;
+
+	EXEC SQL VAR h_dl_client IS STRING;
+	EXEC SQL VAR chr_h_bl_upto_dt  IS STRING;/* ASP Billing Retro - 240807*/
+
+	EXEC SQL END DECLARE SECTION;
+
+	sqlca.sqlcode = 0;
+
+	memset(h_dl_client, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+	strcpy(h_dl_client,chr_p_client);
+
+	/* ASP Billing Retro - 240807*/
+	memset(chr_h_bl_upto_dt,APL_NULL_CHAR,APL_DATE_LEN);
+	strcpy(chr_h_bl_upto_dt,chr_g_bl_upto_dt);
+	strcpy(chr_h_bl_upto_dt,strtok_r(chr_h_bl_upto_dt," ",&int_pos));
+	strcat(chr_h_bl_upto_dt," 23:59:59");
+	/* ASP Billing Retro - 240807*/
+
+	/*	ISKB-1929	Exclude Takeover Deals for Bucket Transation	*/
+	EXEC SQL SELECT NVL(COUNT(DISTINCT INFORMATON),0) 
+	INTO :int_h_deal_cnt:int_i_deal_cnt
+	FROM DL_DEAL
+	WHERE CLIENT = :h_dl_client
+			AND (DATEOFBILLING is null OR DATEOFBILLING = :chr_g_bl_upto_dt OR 
+			(  DATEOFBILLING != :chr_g_bl_upto_dt and AMEND_COUNT != NUMBER_A)) 
+			AND DATEOF_INPUT > :chr_g_bl_prv_dt
+			/*AND DATEOF_INPUT <= :chr_g_bl_upto_dt*/
+			AND DATEOF_INPUT <= :chr_h_bl_upto_dt
+			AND INFORMATON IS NOT NULL 
+			AND INFORMATON != 'TAKEOVER' 
+			AND DEAL_STAT != 'DU' /* ISKB-2247 Not to pick DU and DD deals */
+			AND DL_CLASS !='19';/* vinay kalaskar */
+
+	printf("IV_Proc_CalcBuckTxnNo SQL CODE :|%d|\n",sqlca.sqlcode);
+	printf("IV_Proc_CalcBuckTxnNo chr_g_bl_prv_dt :|%s|\n",chr_g_bl_prv_dt);
+	printf("IV_Proc_CalcBuckTxnNo chr_h_bl_upto_dt:|%s|\n",chr_h_bl_upto_dt);
+	if( sqlca.sqlcode < 0 )
+	*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+	IS_ANY_ORA_ERROR;
+
+	EXEC SQL SELECT NVL(COUNT(DISTINCT INFORMATON),0) 
+	INTO :int_h_hisdeal_cnt:int_i_hisdeal_cnt
+	FROM DL_HISDEAL
+	WHERE CLIENT = :h_dl_client
+			AND (DATEOFBILLING is null OR DATEOFBILLING = :chr_g_bl_upto_dt OR 
+			(  DATEOFBILLING != :chr_g_bl_upto_dt and AMEND_COUNT != NUMBER_A)) 
+			AND DATEOF_INPUT > :chr_g_bl_prv_dt
+			/*AND DATEOF_INPUT <= :chr_g_bl_upto_dt*/
+			AND DATEOF_INPUT <= :chr_h_bl_upto_dt
+			AND INFORMATON IS NOT NULL
+			AND DEAL_STAT != 'DD' /* ISKB-2247 Not to pick DU and DD deals */
+			AND DL_CLASS !='19';/* vinay kalaskar */
+
+	printf("IV_Proc_CalcBuckTxnNo SQL CODE :|%d|\n",sqlca.sqlcode);
+	if( sqlca.sqlcode < 0 )
+	*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+	IS_ANY_ORA_ERROR;
+
+	int_h_btrans_cnt = int_h_deal_cnt + int_h_hisdeal_cnt;
+	printf("Deal Buck Txn:|%f|\n",int_h_deal_cnt);
+	printf("HisDeal Buck Txn:|%f|\n",int_h_hisdeal_cnt);
+	printf("Total Buck Txn:|%f|\n",int_h_btrans_cnt);
+
+	
+	*p_no_of_trades = int_h_btrans_cnt;
+	/* PJ UT Fix */
+	if(int_h_btrans_cnt > 0)
+	{
+		*int_p_retstat = IV_SUCCESS;
+	}
+	else
+	{
+		*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+	}
+		APL_GOBACK_SUCCESS
+
+RETURN_SUCCESS:
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,
+					"Exiting Successfully Out Of IV_Proc_CalcBuckTxnNo\n",
+					NULL, NULL);
+	}
+	return APL_SUCCESS;
+ 
+RETURN_FAILURE:
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,
+					"Exiting Unsuccessfully Out Of IV_Proc_CalcBuckTxnNo\n",
+					NULL, NULL);
+	}
+	return APL_FAILURE;
+}
+
+/*** To Calculate No of MutualFund Transactions ************** vinay kalaskar ****************/
+
+int IV_Proc_CalcMutualFundNo(char *p_chr_acct_str,char *p_mst_clt,char *chr_p_client,
+									  char *p_bill_dt,char *chr_p_bill_dep, int *int_p_retstat,
+										DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	char chr_l_bill_dep[4];			/* Bageshri HB_IV_001 */
+	
+	EXEC SQL BEGIN DECLARE SECTION;
+	struct sqlca sqlca;
+	EXEC SQL END DECLARE SECTION;
+	
+	char h_mstclt[APL_CLIENT_LENGTH];
+	char h_dl_client[APL_CLIENT_LENGTH];
+	char chr_acct_str[IV_CLT_LEN];
+	char chr_h_bl_upto_dt[APL_DATE_LEN];
+	double l_amount=0.0,l_total_amount=0.0,l_quantity=0.0,l_portfolio_amt=0.0;
+	char l_charge_base[IV_STRING_LEN],l_fee_base[IV_STRING_LEN];
+	char l_mf_seqno[6];
+	int int_retstat=0;
+	double l_no_of_trade=0.0;//shailesh 28-02-2008
+
+	memset(chr_acct_str,APL_NULL_CHAR,IV_CLT_LEN);
+	memset(h_mstclt,APL_NULL_CHAR,APL_CLIENT_LENGTH);
+	memset(h_dl_client,APL_NULL_CHAR,APL_CLIENT_LENGTH);
+	memset(chr_h_bl_upto_dt,APL_NULL_CHAR,APL_CLIENT_LENGTH);
+	memset(l_charge_base, APL_NULL_CHAR, IV_STRING_LEN);
+	memset(l_fee_base, APL_NULL_CHAR, IV_STRING_LEN);
+	memset(chr_l_bill_dep, APL_NULL_CHAR, 4);			/* Bageshri HB_IV_001 */
+	
+	strcpy(chr_acct_str,p_chr_acct_str);
+	strcpy(h_mstclt,p_mst_clt);
+	strcpy(h_dl_client,chr_p_client);
+	strcpy(chr_h_bl_upto_dt,p_bill_dt);
+	strcpy(chr_l_bill_dep,chr_p_bill_dep);			/* Bageshri HB_IV_001 */
+	
+	sqlca.sqlcode = 0;
+
+	
+	EXEC SQL DECLARE seq_curr CURSOR FOR 
+	SELECT DISTINCT MF_SEQNO FROM DL_DEAL WHERE  CLIENT=:h_dl_client
+	AND MF_SEQNO IS NOT NULL 
+	AND DATEOF_INPUT > :chr_g_bl_prv_dt 
+	AND DATEOF_INPUT <= :chr_h_bl_upto_dt
+	AND DEAL_STAT != 'DU' /* ISKB-2247 Not to pick DU and DD deals */
+	AND (DATEOFBILLING is null OR DATEOFBILLING = :chr_g_bl_upto_dt OR 
+	(DATEOFBILLING != :chr_g_bl_upto_dt and AMEND_COUNT != NUMBER_A)) 
+	UNION 
+	SELECT DISTINCT MF_SEQNO FROM DL_HISDEAL WHERE  CLIENT=:h_dl_client
+	AND MF_SEQNO IS NOT NULL 
+	AND DATEOF_INPUT > :chr_g_bl_prv_dt 
+	AND DATEOF_INPUT <= :chr_h_bl_upto_dt 
+	AND DEAL_STAT != 'DD' /* ISKB-2247 Not to pick DU and DD deals */
+	AND (DATEOFBILLING is null OR DATEOFBILLING = :chr_g_bl_upto_dt OR 
+	(DATEOFBILLING != :chr_g_bl_upto_dt and AMEND_COUNT != NUMBER_A)) 
+	ORDER BY MF_SEQNO;
+	
+
+	EXEC SQL OPEN seq_curr;
+	printf("\n After Mutual Fund Sequence Fetch -- Ora Error :|%d|\n",sqlca.sqlcode);
+
+	IS_ANY_ORA_ERROR
+
+	for(;;)
+	{
+		
+		EXEC SQL FETCH seq_curr
+			INTO :l_mf_seqno;
+
+
+		if( sqlca.sqlcode < 0 )
+			*int_p_retstat = IV_CRITCAL_ERROR_IND;
+		if(sqlca.sqlcode==1403)
+			break;
+
+		  EXEC SQL SELECT SUM(NO_OF_TRADES_1) INTO :l_no_of_trade FROM 
+			(SELECT COUNT(*) AS NO_OF_TRADES_1 
+			  FROM DL_DEAL A, MT_CLIENT B 
+			  WHERE A.MF_SEQNO=:l_mf_seqno  
+			  AND A.CLIENT=B.CLN_CODE 
+			  AND B.CLN_MASTER = :h_mstclt 
+				AND DEAL_STAT != 'DU' /* ISKB-2247 Not to pick DU and DD deals */
+			  UNION    
+			  SELECT COUNT(*) AS NO_OF_TRADES_1 
+			  FROM DL_HISDEAL A, MT_CLIENT B 
+			  WHERE A.MF_SEQNO=:l_mf_seqno  
+			  AND A.CLIENT=B.CLN_CODE 
+			  AND B.CLN_MASTER = :h_mstclt 
+				AND DEAL_STAT != 'DD' /* ISKB-2247 Not to pick DU and DD deals */
+			  );
+
+		printf("\n After Mutual Fund l_no_of_trade Fetch -- Ora Error :|%d|\n",sqlca.sqlcode);
+		IS_ANY_ORA_ERROR
+                
+
+		printf("\n MF No Of Trades = |%lf|",l_no_of_trade);
+
+		if(!strcmp(chr_l_bill_dep,"INP"))
+		{
+			EXEC SQL SELECT NVL(SUM(( (A.SAFEKEEP_POS + A.NVALRECEIVE + A.VAL_REC + A.DP_REC) - 
+			(A.NVALDELIVER - A.VAL_DEL - A.DP_DEL ) ) * C.CLOSING_PR ),0) 
+			INTO :l_portfolio_amt
+			FROM DL_SAFEK A,MT_INSTRUMENT B,MT_DLYMKTPRC C,MT_CLIENT D
+			WHERE A.CLIENT = D.CLN_CODE
+			AND D.CLN_MASTER = :h_mstclt  
+			AND C.PRICE_DATE = (SELECT MAX(PRICE_DATE) FROM MT_DLYMKTPRC D WHERE D.INSTR_CODE = B.INSTR_CODE)
+			AND A.INSTR_CODE = B.INSTR_CODE 
+			AND A.INSTR_CODE = C.INSTR_CODE
+			AND A.INSTR_CODE IN 
+			(SELECT INSTR_CODE FROM DL_DEAL,MT_CLIENT
+			WHERE MF_SEQNO =:l_mf_seqno 
+			AND CLIENT = CLN_CODE  
+			AND CLN_MASTER = :h_mstclt
+			AND DEAL_STAT != 'DU' /* ISKB-2247 Not to pick DU and DD deals */
+			UNION 
+			SELECT INSTR_CODE FROM DL_HISDEAL,MT_CLIENT  
+			WHERE MF_SEQNO =:l_mf_seqno 
+			AND CLIENT = CLN_CODE  
+			AND DEAL_STAT != 'DD' /* ISKB-2247 Not to pick DU and DD deals */
+			AND CLN_MASTER = :h_mstclt); /****** Consider HisDeal Records Also : Vinay Kalaskar : 28/02/2008 ****/
+		}
+		else if(!strcmp(chr_l_bill_dep,"ASD"))
+		{
+			EXEC SQL SELECT NVL(SUM(A.SAFEKEEP_POS * C.CLOSING_PR),0) INTO :l_portfolio_amt
+			FROM DL_SAFEK A,MT_INSTRUMENT B,MT_DLYMKTPRC C,MT_CLIENT D 
+			WHERE A.CLIENT = D.CLN_CODE  
+			AND D.CLN_MASTER = :h_mstclt 
+			AND C.PRICE_DATE = (SELECT MAX(PRICE_DATE) FROM MT_DLYMKTPRC D WHERE D.INSTR_CODE = B.INSTR_CODE)
+			AND A.INSTR_CODE = B.INSTR_CODE 
+			AND A.INSTR_CODE = C.INSTR_CODE 
+			AND A.INSTR_CODE IN 
+			(SELECT INSTR_CODE FROM DL_DEAL,MT_CLIENT
+			WHERE MF_SEQNO =:l_mf_seqno 
+			AND CLIENT = CLN_CODE  
+			AND CLN_MASTER = :h_mstclt
+			AND DEAL_STAT != 'DU' /* ISKB-2247 Not to pick DU and DD deals */
+			UNION 
+			SELECT INSTR_CODE FROM DL_HISDEAL,MT_CLIENT  
+			WHERE MF_SEQNO =:l_mf_seqno 
+			AND CLIENT = CLN_CODE  
+			AND DEAL_STAT != 'DD' /* ISKB-2247 Not to pick DU and DD deals */
+			AND CLN_MASTER = :h_mstclt); /****** Consider HisDeal Records Also : Vinay Kalaskar 28/02/2008  ****/
+		}
+
+		
+		printf("\n After Mutual Fund l_portfolio_amt Fetch -- Ora Error :|%d|\n",sqlca.sqlcode);
+		IS_ANY_ORA_ERROR
+
+		
+		printf("\nMF Portfolio Amount :|%lf|\n\n",l_portfolio_amt);
+
+		Alert("Entering IV_Proc_CalcMFTxnFee :|%s||%lf||%lf|",chr_acct_str,l_portfolio_amt,l_no_of_trade);
+
+		if(APL_FAILURE == IV_Proc_CalcMFTxnFee(chr_acct_str,MUTUALFUND_TXN_FEE,l_portfolio_amt,
+					l_no_of_trade,l_mf_seqno,h_mstclt,&int_retstat,l_debug_info_ptr))
+		{
+			*int_p_retstat = int_retstat;
+			int_bl_err_level = 1;
+			if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+			{
+					CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+					CO_FreeErrLst(l_debug_info_ptr);
+				}
+
+				if(int_retstat == IV_CRITCAL_ERROR_IND)
+				APL_GOBACK_FAIL;
+			}
+ 			else
+	        {
+				EXEC SQL UPDATE IV_CLIENTSETUP SET LST_BILL_DT = :chr_h_bl_upto_dt
+											          WHERE CLIENT = :h_dl_client;
+			    IS_ANY_ORA_ERROR
+
+				EXEC SQL UPDATE IV_CLIENT_SERV_BASIS SET LST_BILL_DT = :chr_h_bl_upto_dt
+									                      WHERE CLIENT = :h_dl_client
+		                                           AND SERVICE_CD = 29;
+				IS_ANY_ORA_ERROR
+
+			}
+			
+	}				
+	EXEC SQL CLOSE seq_curr;
+	
+		APL_GOBACK_SUCCESS
+
+RETURN_SUCCESS:
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Exiting Successfully Out Of IV_Proc_CalcMutualFundNo\n",NULL, NULL);
+	}
+	return APL_SUCCESS;
+
+RETURN_FAILURE:
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Exiting Unsuccessfully Out Of IV_Proc_CalcMutualFundNo\n",NULL, NULL);
+	}
+	return APL_FAILURE;
+}
+/***************************************************************************************************/

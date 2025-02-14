@@ -1,0 +1,254 @@
+/*
+ *    COPYRIGHT NOTICE
+ *
+ *   Copyright 2005 Polaris Software Lab Limited. All rights reserved.
+ *
+ *   These materials are confidential and proprietary to
+ *    Polaris Software Lab Limited and no part of these materials should
+ *    be reproduced, published, transmitted or distributed in any form or
+ *    by any means, electronic, mechanical, photocopying, recording or
+ *    otherwise, or stored in any information storage or retrieval system
+ *    of any nature nor should the materials be disclosed to third parties
+ *    or used in any other manner for which this is not authorized, without
+ *    the prior express written authorization of Polaris Software Lab Limited.
+ */
+/*************************************************************************************
+ *
+ * Module Name         :      All
+ *
+ * File Name           :      ChkAudSystemOnline.pc
+ *
+ * Description         :      Contains Functions required for audit trial functionality
+ *
+ *
+ *            Version Control Block
+ *
+ * Date        Version     Author         Description          				RFS No.
+ * ---------   --------  ---------------  ----------------    				 ---------
+ * 03/10/2005     1.0      Sonali         New File       					   HDFCGN_001
+ * 08/12/2005     1.3      Sonali         Commented Code properly 			HDFCGN_001
+ * 14/12/2005     1.4      Sonali         Commented Commit   		 			HDFCGN_001
+ *
+ **************************************************************************************/
+
+#include "CR_Common.h"
+EXEC SQL INCLUDE SQLCA.H;
+
+int  CO_Upd_AudLog_Chk_SysOnline( INTL_ENV_DATA_STRUCT_H *p_intlenv_data_struct_h,
+				char *p_audit_data,
+				char *p_key_value,
+                                char *p_comments,	
+                            DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+   char chr_h_eod_flg[APL_FLAG_LENGTH]=APL_NULL_STRING;
+	char chr_sys_date_time[APL_DATE_LEN]=APL_NULL_STRING;
+	struct sqlca sqlca;
+
+   #ifdef APL_THREADS
+   APL_SET_CONTEXT
+   EXEC SQL CONTEXT USE :my_ctx_local;
+   #endif
+
+	
+	
+	
+
+	if ( CO_RtvSysDtTime(chr_sys_date_time,l_debug_info_ptr)
+			== APL_FAILURE
+		)
+	{
+      CO_InsertErr(l_debug_info_ptr,
+                     ERR_DB_CANT_LOG_AUDITTIME,
+                     p_intlenv_data_struct_h->usr,
+                     APL_NULL_STRING, 
+                     APL_NULL_STRING, 
+							__LINE__,
+                     __FILE__);
+		APL_GOBACK_FAIL	
+	}
+/*	APL_IF_DEBUG
+	{
+		printf("\n Just before inserting into audit...\n");
+		printf(" usr is |%s|",p_intlenv_data_struct_h->usr);
+		printf(" h_mode is |%s|",p_intlenv_data_struct_h->h_mode);
+		printf(" processtion is |%s|",p_intlenv_data_struct_h->processtion);
+		printf(" authreq is |%s|",p_intlenv_data_struct_h->auth_req);
+		printf(" subprocess is |%s|",p_intlenv_data_struct_h->subprocess);
+		printf(" h_process is |%s|",p_intlenv_data_struct_h->h_process);
+		printf(" sysdatetime is |%s|",chr_sys_date_time);
+	}
+	EXEC SQL INSERT INTO AUDIT_LOG
+	VALUES ( :p_intlenv_data_struct_h->usr,
+				:p_intlenv_data_struct_h->h_mode,
+				:p_intlenv_data_struct_h->processtion,
+				:p_intlenv_data_struct_h->auth_req,
+				:p_intlenv_data_struct_h->subprocess,
+				:p_intlenv_data_struct_h->h_process,
+				:chr_sys_date_time,
+				NULL
+			);*/
+/* Added by Sonali for audit, HDFCGN_001*/
+	APL_IF_DEBUG
+	{
+		printf("\n\n user=|%s|\n", p_intlenv_data_struct_h->usr);
+		printf("mode=|%s|\n",p_intlenv_data_struct_h->h_mode);
+		printf("process=|%s|\n", p_intlenv_data_struct_h->processtion);
+		printf("key=%s\n", p_key_value);
+		printf("data=%s\n",p_audit_data);
+		printf("date=%s\n",chr_sys_date_time);
+		printf("comm=%s", p_comments);
+	}
+
+	/* Addition of audit date & key value condition to avoid entry into Audit log - Rohit HDFC_GN */
+	if((strcmp(p_audit_data,APL_NULL_STRING)!=0) && (strcmp(p_key_value,APL_NULL_STRING)!=0))
+	{
+ 		EXEC SQL INSERT INTO GN_AUDIT_LOG
+      	VALUES ( :p_intlenv_data_struct_h->usr,
+                                :p_intlenv_data_struct_h->h_mode,
+                                :p_intlenv_data_struct_h->processtion,
+                                :p_key_value,
+                                :p_audit_data,
+                                :chr_sys_date_time,
+                                :p_comments
+		);
+		IS_ANY_ORA_ERROR_AUDIT
+	}
+	
+		/*Sonali, HDFCGN_001, not required as there is a commit in the daemon from where this fn would be called
+	EXEC SQL COMMIT;
+	IS_ANY_ORA_ERROR_AUDIT*/
+				  
+	
+   EXEC SQL SELECT EOD_IND
+   INTO :chr_h_eod_flg
+   FROM PRO_SYS_DATE;
+
+   IS_ANY_ORA_ERROR
+
+   if ( !strcmp(chr_h_eod_flg,APL_ONLINE_IND) )
+   {
+      APL_GOBACK_SUCCESS
+   }
+   else if ( !strcmp(chr_h_eod_flg,APL_EOD_IND) )
+   {
+      APL_INSERT_ERROR_EOD_STARTED
+      APL_GOBACK_FAIL
+   }
+   else if ( !strcmp(chr_h_eod_flg,APL_BOD_IND) )
+   {
+      APL_INSERT_ERROR_BOD_NOT_OVER
+      APL_GOBACK_FAIL
+   }
+	else
+	{
+		APL_INSERT_ERROR_DATA_INTG("System in Undefined ","State,Check EOD flg","in SYS_DATE table")
+		APL_GOBACK_FAIL	
+	}
+	
+   
+   APL_GOBACK_SUCCESS
+   RETURN_SUCCESS  :
+   {
+      CO_ProcMonitor(APL_OUT_FILE,"Leaving CO_Upd_AudLog_Chk_SysOnline() successfully\n",NULL,p_intlenv_data_struct_h);
+      return (APL_SUCCESS);
+   }
+   RETURN_FAILURE  :
+   {
+      CO_ProcMonitor(APL_OUT_FILE,"Leaving CO_Upd_AudLog_Chk_SysOnline() with failure\n",NULL,p_intlenv_data_struct_h);
+      return (APL_FAILURE);
+   }
+}
+
+/*	ISKB_1870	Updation of Current Audit Trail with New Value	*/
+int  CO_Update_AudLog( char *p_entity_name, 
+				char *p_key_value,
+				char *p_control_id,
+                                char *p_control_val,	
+                            DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	struct sqlca sqlca;
+      	int	int_l_num_data_key	=       0;
+        int     int_l_key               =       0;
+	char **temp_data_key;
+	char l_key_value[4000]          =  APL_NULL_STRING;
+	char chr_l_datavalue[4000]          =  APL_NULL_STRING;
+	char chr_l_data_value[4000]          =  APL_NULL_STRING;
+	int l_cnt_audit = 0;
+
+	EXEC SQL BEGIN DECLARE SECTION;
+	char chr_h_data_key[4000]            =  APL_NULL_STRING;
+	char h_entity_name[100] = APL_NULL_STRING;
+	EXEC SQL END DECLARE SECTION;
+
+	strcpy(l_key_value,p_key_value);
+	strcat(l_key_value,AUDIT_DATA_FIELD_SEPRTR);
+	strcat(l_key_value,AUDIT_DATA_FIELD_SEPRTR);
+
+	printf("Key Value |%s|\n",l_key_value);
+
+	EXEC SQL SELECT key_data,entity_name
+	INTO :chr_h_data_key,:h_entity_name
+	FROM GN_AUDIT_MAP
+	WHERE ENTITY_NAME=:p_entity_name;
+
+	IS_ANY_ORA_ERROR
+
+	if (APL_FAILURE == CO_SplitStr( chr_h_data_key,
+					',',
+					&int_l_num_data_key,
+					&temp_data_key
+					))
+															           {
+		APL_GOBACK_FAIL;
+	}
+
+	for (int_l_key=0;int_l_key<int_l_num_data_key;++int_l_key)
+   {
+		strcpy(chr_l_data_value,APL_NULL_STRING);
+		CO_Rtv_DataString(l_key_value,temp_data_key[int_l_key],chr_l_data_value);
+
+		if (strcmp(temp_data_key[int_l_key],p_control_id) == 0)
+			strcpy(chr_l_data_value,p_control_val);
+
+		strcat(chr_l_datavalue,AUDIT_DATA_FIELD_SEPRTR);
+		strcat(chr_l_datavalue,temp_data_key[int_l_key]);
+		strcat(chr_l_datavalue,AUDIT_DATA_VALUE_SEPRTR);
+		strcat(chr_l_datavalue,chr_l_data_value);
+		printf("l_key_value |%s|\n",l_key_value);
+		printf("chr_l_data_value |%s|\n",chr_l_data_value);
+		printf("chr_l_datavalue |%s|\n",chr_l_datavalue);
+		fflush(stdout);
+
+	}		
+	
+	strcat(chr_l_datavalue,APL_NULL_STRING);
+	printf("Update Value |%s|\n",chr_l_datavalue);
+
+	EXEC SQL SELECT COUNT(*) INTO :l_cnt_audit
+	from GN_AUDIT_LOG	
+	WHERE ENTITY_NAME =: p_entity_name
+	AND KEY_VALUE =:p_key_value;
+
+	printf("Audit Select  SqlCode |%d| Count|%d|\n",sqlca.sqlcode,l_cnt_audit);
+	IS_ANY_ORA_ERROR
+
+	EXEC SQL UPDATE GN_AUDIT_LOG 
+	SET KEY_VALUE =:chr_l_datavalue
+	WHERE ENTITY_NAME =: p_entity_name
+	AND KEY_VALUE =:p_key_value;
+
+	printf("Audit Update SqlCode |%d|\n",sqlca.sqlcode);
+	IS_ANY_ORA_ERROR
+  	 
+   APL_GOBACK_SUCCESS
+   RETURN_SUCCESS  :
+   {
+      CO_ProcMonitor(APL_OUT_FILE,"Leaving CO_Update_AudLog() successfully\n",NULL,NULL);
+      return (APL_SUCCESS);
+   }
+   RETURN_FAILURE  :
+   {
+      CO_ProcMonitor(APL_OUT_FILE,"Leaving CO_Update_AudLog() with failure\n",NULL,NULL);
+      return (APL_FAILURE);
+   }
+}

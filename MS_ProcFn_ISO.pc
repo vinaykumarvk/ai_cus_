@@ -1,0 +1,305 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ 
+#include "stdio_64.h"
+#include "MS_Swift.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+
+
+fpos_t g_cur_pos;
+fpos_t g_prev_pos;
+int int_fnoopen=0,int_clsstat=0;
+fpos_t g_curr_rec_start;                  
+fpos_t g_prev_rec_start;                  
+int    int_g_curr_rec_no=0;                   
+int main(int argc,char **argv) //AIX - Warnings Removal
+{
+
+
+extern int MS_Proc_MsgMain(char *,FILE *,FILE *,FILE *,DEBUG_INFO_STRUCT_H **);
+
+EXEC SQL BEGIN DECLARE SECTION;
+char            chr_h_restart_data[50],chr_h_eod_flg;
+char            h_ora_rowid[APL_ROWID_LEN];
+EXEC SQL VAR chr_h_restart_data IS STRING;
+EXEC SQL VAR h_ora_rowid IS STRING;
+short   i_ora_rowid=0,i_restart=0,i_eod_flg=0;
+
+EXEC SQL END DECLARE SECTION;
+
+struct sqlca sqlca;
+
+FILE *chr_finifile = NULL;
+FILE *l_errfile = NULL;
+FILE *l_techfile = NULL;
+char chr_inifile[PATH_LENGTH],chr_l_uname[APL_USERID_LEN],chr_l_passwd[APL_PASSWD_LEN],chr_custody_id_b[APL_USERID_LEN],chr_buffer[KEY_LENGTH];
+DEBUG_INFO_STRUCT_H *l_debuginfo = (DEBUG_INFO_STRUCT_H *)NULL;
+DEBUG_INFO_STRUCT_H **l_debug_info_ptr = NULL;
+INTL_ENV_DATA_STRUCT_H p_intl_envdatastruct_h;
+int int_p_funcreturnstate = 0;
+char chr_l_sys_date_time[APL_DATE_LEN] = {APL_NULL_STRING};
+char chr_l_statinfo[61] = {APL_NULL_STRING};
+char l_sleep_time[5] = APL_NULL_STRING; /* Retrofit done by Gaurang on 07.09.2017 - Performance Optimization - ISKB_7759*/
+
+memset(chr_inifile,APL_NULL_CHAR,PATH_LENGTH);
+memset(chr_buffer,APL_NULL_CHAR,KEY_LENGTH);
+memset(chr_l_uname,APL_NULL_CHAR,40);
+memset(chr_l_passwd,APL_NULL_CHAR,40);
+
+strcpy(p_intl_envdatastruct_h.usr,"SYSTEM");
+strcpy(p_intl_envdatastruct_h.h_mode,APL_NULL_STRING);
+strcpy(p_intl_envdatastruct_h.processtion,"ISO 15022 MESSAGE FORMATTER DAEMON");
+strcpy(p_intl_envdatastruct_h.auth_req,APL_NULL_STRING);
+strcpy(p_intl_envdatastruct_h.subprocess,APL_NULL_STRING);
+strcpy(p_intl_envdatastruct_h.h_process,APL_NULL_STRING);
+
+
+strcpy(chr_inifile,getenv("INTL_ROOT_PATH"));
+strcat(chr_inifile,"/intl_sun.cfg");
+if ( (chr_finifile = fopen(chr_inifile,"r") ) == NULL)
+        APL_GOBACK_FAIL;
+
+   /* SIT Issue Fix for Enc/Dec APL_FETCH_DB_LOGIN_DETAILS(chr_finifile, chr_custody_id_b, chr_l_uname, chr_l_passwd , APL_OUT_FILE , &l_debuginfo)
+   EXEC SQL CONNECT :chr_l_uname IDENTIFIED BY :chr_l_passwd; */
+   if(CO_Get_DBConnect(l_debug_info_ptr) == APL_FAILURE)
+        {
+                APL_GOBACK_FAIL
+        }
+
+   if(sqlca.sqlcode < 0)
+   {
+     ltoa_r(sqlca.sqlcode,chr_buffer,KEY_LENGTH-1);
+     CO_InsertErr(&l_debuginfo,DB_ERR_NO,chr_buffer,
+                 APL_NULL_STRING,APL_NULL_STRING,
+                 __LINE__,__FILE__);
+     APL_GOBACK_FAIL
+
+   }
+	if (argc ==1 )
+	{
+		/* PJ Linux File closing issue fix */
+		  /* if (APL_FAILURE == CO_Rtv_RptFileName("6B", APL_LOGFILE_DESC, 100, "ISO15022 MESSAGE FORMATTER DAEMON",NULL, &l_errfile, &l_debuginfo) )
+					 {
+								exit(-1);
+					 }
+
+		  if (APL_FAILURE == CO_Rtv_RptFileName("6b",APL_LOGFILE_DESC,100, "ISO15022 MESSAGE FORMATTER DAEMON", NULL, &l_techfile, &l_debuginfo) )
+					 {
+								exit(-1);
+					 } */
+  }
+  else
+  {
+		  if (APL_FAILURE == CO_Rtv_RptFileName("6B", APL_LOGFILE_DESC, 100, 
+												argv[5] ,argv, &l_errfile, &l_debuginfo) )
+					 {
+								exit(-1);
+					 }
+
+		  if (APL_FAILURE == CO_Rtv_RptFileName("6b",APL_LOGFILE_DESC,100, 
+										argv[5], argv, &l_techfile, &l_debuginfo) )
+					 {
+								exit(-1);
+					 }
+	}
+        EXEC SQL COMMIT WORK;
+   if(sqlca.sqlcode < 0)
+   {
+     ltoa_r(sqlca.sqlcode,chr_buffer,KEY_LENGTH-1);
+     CO_InsertErr(&l_debuginfo,DB_ERR_NO,chr_buffer,
+                 APL_NULL_STRING,APL_NULL_STRING,
+                 __LINE__,__FILE__);
+     APL_GOBACK_FAIL
+
+   }
+       if(argc != 1)
+       {
+               EXEC SQL SELECT PROCESSING_STATUS , ROWID
+                                INTO :chr_h_restart_data:i_restart, :h_ora_rowid:i_ora_rowid
+
+                                FROM SYS_BATCHPROC
+                                WHERE ( PROCESS_NAME = :argv[0]
+                                AND PROC_INIT = :argv[1]
+                                AND STARTDATE = :argv[2]
+                                AND STATUS = 'started' )
+                                FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+
+               if (sqlca.sqlcode <0)
+               {
+                    fprintf(l_errfile,"Batch In Proc Table cannot be locked");
+                    APL_GOBACK_FAIL
+               }
+          }
+          else
+          {
+               if(APL_SUCCESS ==  EI_Proc_BatchRestart(argv[0],
+                                                  argv[0],
+                                                  APL_NULL_STRING,
+                                                  &int_p_funcreturnstate,
+                                                  &l_debuginfo,
+                                                  &p_intl_envdatastruct_h))  // AIX - change
+                {
+                      if(int_p_funcreturnstate == 11 || int_p_funcreturnstate == 10)
+                      {
+                                EXEC SQL SELECT PROCESSING_STATUS , ROWID
+                                INTO :chr_h_restart_data:i_restart, :h_ora_rowid:i_ora_rowid
+
+                                FROM SYS_BATCHPROC
+                                WHERE ( PROCESS_NAME = :argv[0]
+                                AND STATUS = 'started' )
+                                FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+
+                                if (sqlca.sqlcode <0)
+                                {
+                                   fprintf(l_errfile,"Batch In Proc Table cannot be locked");
+                                    APL_GOBACK_FAIL
+                                 }
+                       }
+		       else
+		       {
+			 APL_GOBACK_FAIL
+		       }
+
+                }
+                else
+                {
+                        fprintf(l_errfile,"Batch In Proc Table cannot be locked");
+                        APL_GOBACK_FAIL
+                }
+       }
+	/***** Retrofit done by Gaurang on 07.09.2017 - Performance Optimization - ISKB_7759
+	Sleep time defined in PRO_SGENSTAT to be used
+	Start ***/
+	EXEC SQL
+	SELECT  MAP_VAL INTO :l_sleep_time
+	FROM    PRO_SGENSTAT
+	WHERE   MAP_TYPE = 'ISOFORMAT_SLEEP_TIME'
+					AND NATION_CODE = 'XX';
+	IS_ANY_ORA_ERROR
+
+	if(APL_ZERO_RESULT_SET)
+	{
+		strcpy(l_sleep_time, "60");
+	}
+	/* Retrofit done by Gaurang on 07.09.2017 - Performance Optimization - ISKB_7759 - End */
+	Alert("\n in while loop 182 \n");
+  while(1)
+  {
+	EXEC SQL UPDATE MS_MSGENT SET STATUS ='P' WHERE STATUS ='D';
+	IS_ANY_ORA_ERROR;
+     
+
+     EXEC SQL DELETE MS_MSGLOG 
+	      WHERE status = 'Y';
+
+   if(sqlca.sqlcode < 0)
+   {
+     ltoa_r(sqlca.sqlcode,chr_buffer,KEY_LENGTH-1);
+     CO_InsertErr(&l_debuginfo,DB_ERR_NO,chr_buffer,
+                 APL_NULL_STRING,APL_NULL_STRING,
+                 __LINE__,__FILE__);
+     APL_GOBACK_FAIL
+
+   }
+
+   EXEC SQL COMMIT WORK;
+	if( argc == 1)
+	{
+			  EXEC SQL SELECT PROCESSING_STATUS , ROWID
+						  INTO :chr_h_restart_data:i_restart, :h_ora_rowid:i_ora_rowid
+
+						  FROM SYS_BATCHPROC
+						  WHERE ( PROCESS_NAME = :argv[0]
+									 AND STATUS = 'started' )
+									 FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+	            
+
+				 if( APL_FAILURE == CO_RtvSysDtTime(chr_l_sys_date_time, l_debug_info_ptr))
+							APL_GOBACK_FAIL;
+	   	    memset(chr_l_statinfo,APL_NULL_CHAR,61);
+				 strcpy(chr_l_statinfo, "sleeping : ");
+	   	    strcat(chr_l_statinfo, chr_l_sys_date_time);
+
+    EXEC SQL UPDATE SYS_BATCHPROC
+                                SET STAT_DET           = :chr_l_statinfo
+                                WHERE   ROWID           = :h_ora_rowid;
+	}
+	else
+	{
+               EXEC SQL SELECT PROCESSING_STATUS , ROWID
+                                INTO :chr_h_restart_data:i_restart, :h_ora_rowid:i_ora_rowid
+                                FROM SYS_BATCHPROC
+                                WHERE ( PROCESS_NAME = :argv[0]
+                                AND PROC_INIT = :argv[1]
+                                AND STARTDATE = :argv[2]
+                                AND STATUS = 'started' )
+                                FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+	}
+
+    if (sqlca.sqlcode <0)
+    {
+        fprintf(l_errfile,"Batch In Proc Table cannot be locked");
+        APL_GOBACK_FAIL
+    }
+    printf("\n calling MS_Proc_MsgMain \n"); 
+     if(APL_FAILURE == MS_Proc_MsgMain(h_ora_rowid,chr_finifile,l_errfile,l_techfile,&l_debuginfo))
+	  {
+			APL_GOBACK_FAIL;
+	  }
+     if (argc != 1)
+         break;
+     Alert("sleeping");
+
+    // sleep(5);
+	Alert("JC::: Sleeping for %d seconds...\n", atoi(l_sleep_time));
+	sleep(atoi(l_sleep_time)); /* Retrofit done by Gaurang on 07.09.2017 - Performance Optimization - ISKB_7759 */
+  }
+    EXEC SQL UPDATE SYS_BATCHPROC
+                                SET STATUS              ='completed'
+                                WHERE   ROWID           = :h_ora_rowid;
+
+        IS_ANY_ORA_ERROR
+
+        if (sqlca.sqlcode == 1403)
+   {
+      fprintf(l_errfile,"Failed to Update batch_in_proc because row_id could not be int_found \n");
+      APL_GOBACK_FAIL
+   }
+   APL_GOBACK_SUCCESS;
+
+RETURN_SUCCESS:
+
+   EXEC SQL COMMIT ;
+        CO_ProcMonitor(APL_OUT_FILE,"Exiting successfully  out of Message Formatter main processtion\n",NULL,NULL);
+        fclose(chr_finifile);
+        /* PJ Linux log file closing issue fix
+        fclose(l_errfile);
+        fclose(l_techfile); */
+        exit(0);
+
+RETURN_FAILURE:
+   EXEC SQL ROLLBACK;
+        CO_ProcMonitor(APL_OUT_FILE,"Exiting unsuccesfully out of Message Formatter main processtion n\n",NULL,NULL);
+        fclose(chr_finifile);
+        /* PJ Linux log file closing issue fix fclose(l_errfile);
+        fclose(l_techfile); */
+        exit(-1);
+}

@@ -1,0 +1,678 @@
+
+
+
+
+
+#include <unistd.h>
+
+#include "Intellect_Interface.h"
+#include "MS_Swift.h"
+#include "IV_Control_A.h"
+#include <fcntl.h> /*Added for Linux Mig -Kotubabu*/
+
+EXEC SQL INCLUDE SQLCA.H;
+
+#define S_CONSOLIDATED_CLIENT 'C'
+#define S_INDIVIDUAL_CLIENT 'I'
+#define S_CURRENT_PROCEEDS "CURRENT PROCEEDS"
+#define MAX_LEN_SIZE 100
+
+static int MAX_TELEX_LENGTH; 
+static char chr_sesamoutdir[PATH_LENGTH];
+
+
+static int IV_Proc_BillFn(FILE *p_file_bill_printout,
+										char *p_str_client, 
+										char *p_str_refer,
+										char *p_str_telex_no,
+										char *p_str_gcn,
+										char *p_str_current_date,
+										DEBUG_INFO_STRUCT_H **l_debug_info_ptr) 
+{
+	struct sqlca sqlca;
+	int int_l_int_not_found;
+	int int_l_int_current_page_no;
+	int int_l_int_word_counter;
+	long int_l_local_point;
+	short i_short_msg_seq_no;
+	char chr_l_str_line_buffer[MAX_LEN_SIZE+1];
+	char chr_l_str_message_file_name[PATH_LENGTH];
+	char chr_l_str_message_file_name_temp[PATH_LENGTH];
+	FILE *l_file_message_file_ptr=NULL;
+	char chr_l_str_msg_seq_no[11];
+	char chr_l_str_baseno[7];
+	short i_str_baseno = 0; 
+	int int_l_seqno = 0; 
+	PRO_GSEQNUM_STRUCT_H l_pro_gseqnum_struct; 
+	int_l_int_not_found=1;
+	int_l_int_current_page_no=1;
+	EXEC SQL VAR chr_l_str_message_file_name IS STRING;
+	EXEC SQL VAR chr_l_str_message_file_name_temp IS STRING;
+	EXEC SQL VAR p_str_client IS STRING;
+	EXEC SQL VAR chr_l_str_baseno IS STRING;
+	EXEC SQL VAR chr_l_str_msg_seq_no IS STRING;
+	EXEC SQL VAR p_str_refer IS STRING;
+	EXEC SQL VAR p_str_telex_no IS STRING;
+	EXEC SQL VAR p_str_gcn IS STRING; 
+	EXEC SQL VAR p_str_current_date IS STRING;
+	
+	 
+	memset(chr_l_str_line_buffer,APL_NULL_CHAR,MAX_LEN_SIZE+1);
+	memset(chr_l_str_message_file_name,APL_NULL_CHAR,PATH_LENGTH);
+	memset(chr_l_str_message_file_name_temp,APL_NULL_CHAR,PATH_LENGTH);
+	memset(chr_l_str_msg_seq_no,APL_NULL_CHAR,11);
+	memset(chr_l_str_baseno,APL_NULL_CHAR,7);
+	 
+	
+	if(IV_Rtv_MsgFileName(chr_l_str_message_file_name_temp,
+							 l_debug_info_ptr)==APL_FAILURE) 
+	{
+		APL_GOBACK_FAIL
+	}
+	sprintf(chr_l_str_message_file_name,"%s/%s",chr_sesamoutdir,
+														 chr_l_str_message_file_name_temp);
+	
+	printf("The name of the msg h_file is %s\n",chr_l_str_message_file_name);
+	
+	if((l_file_message_file_ptr=
+				fopen(chr_l_str_message_file_name,"w"))==(FILE *)NULL)
+	{
+		APL_GOBACK_FAIL
+	}
+	
+	
+
+	fprintf(l_file_message_file_ptr,"TLX        %s\n",p_str_telex_no);
+	fprintf(l_file_message_file_ptr,"ATTN   :   %s\n",p_str_refer);
+	fflush(l_file_message_file_ptr);
+	int_l_int_word_counter=24+strlen(p_str_telex_no)+strlen(p_str_refer);
+	int_l_int_not_found=1;
+	
+	while((int_l_int_not_found==1) &&
+			(fgets(chr_l_str_line_buffer,MAX_LEN_SIZE,p_file_bill_printout)
+			!=(char *)NULL))
+	{
+		fprintf(l_file_message_file_ptr,"%s",chr_l_str_line_buffer);
+		int_l_int_word_counter+=strlen(chr_l_str_line_buffer);
+		if(strstr(chr_l_str_line_buffer,S_CURRENT_PROCEEDS)
+			!=(char *)NULL)
+		{
+			int_l_int_not_found=0;
+		}
+	}
+	
+	if(int_l_int_not_found==1) 
+	{
+		APL_GOBACK_FAIL
+	}
+	
+	
+	while(((int_l_int_word_counter+10)<MAX_TELEX_LENGTH)
+			&&(fgets(chr_l_str_line_buffer,MAX_LEN_SIZE,p_file_bill_printout)))
+	{
+		if(chr_l_str_line_buffer[0]=='\f') continue;
+		if((int_l_int_word_counter+strlen(chr_l_str_line_buffer)+10)<MAX_TELEX_LENGTH)
+		{
+			int_l_int_word_counter=int_l_int_word_counter+strlen(chr_l_str_line_buffer);
+			fprintf(l_file_message_file_ptr,"%s",chr_l_str_line_buffer); 
+		}
+		else
+		{
+			char chr_templine[100];
+			strcpy(chr_templine,chr_l_str_line_buffer);
+			fprintf(l_file_message_file_ptr,"Page %d\n",int_l_int_current_page_no);
+			int_l_int_current_page_no=int_l_int_current_page_no+1;
+			fflush(l_file_message_file_ptr);
+			fclose(l_file_message_file_ptr);
+			l_file_message_file_ptr=NULL;
+			
+
+			
+
+
+			memset(&l_pro_gseqnum_struct, NULL, sizeof(PRO_GSEQNUM_STRUCT_H));
+			strcpy(l_pro_gseqnum_struct.sequencename, "MSGDAT");
+			l_pro_gseqnum_struct.last_usednum = 0L;
+			l_pro_gseqnum_struct.recycle_ind = NULL;
+			l_pro_gseqnum_struct.seq_stepby = 1;
+			l_pro_gseqnum_struct.seq_start = 1;
+			l_pro_gseqnum_struct.last_seqnum = 0L;
+
+			int_l_seqno = CO_RtvNxtSeqNum(&l_pro_gseqnum_struct, l_debug_info_ptr);
+
+			if ( int_l_seqno == APL_FAILURE )
+			{
+				APL_GOBACK_FAIL
+			}
+
+			sprintf(chr_l_str_msg_seq_no, "%d", int_l_seqno);
+
+			EXEC SQL INSERT INTO MS_MSGENT (SWIFT_MSG_NO,SWIFT_MSG_SEQNO,INFO_FILE,AUTO_TRAN_IND,
+													STATUS)
+				VALUES('BLTLX',:chr_l_str_msg_seq_no,'NONE','Y','G');
+			IS_ANY_ORA_ERROR
+			EXEC SQL INSERT INTO MS_MSGSTAT(PROC_INIT,SWIFT_MSG_REP,CLIENT,GENERATE_DT)
+				VALUES('DUMMY','BLTLX',:p_str_client,:p_str_current_date);
+			
+			IS_ANY_ORA_ERROR
+			
+			EXEC SQL SELECT BASEID INTO :chr_l_str_baseno:i_str_baseno
+				FROM MS_BASE
+				WHERE CONTACT_DETAILS=:p_str_telex_no
+				AND	SWIFT_TLX_GCN='T';
+			IS_ANY_ORA_ERROR
+	
+			if(i_str_baseno == -1 || APL_ZERO_RESULT_SET) 
+				memset(chr_l_str_baseno,APL_NULL_CHAR,7);
+
+			
+
+			
+			EXEC SQL INSERT INTO MS_MSGLOG(CLIENT,MESSAGE_IND,SWIFT_MSG_NO,MAKER,MAKER_DT,
+					STATUS,MSG_IN_OUT_IND,MSG,CONTACT_DETAILS,CONTACT_DETAILS1, BASEID,MESSAGE_CLASS)
+				VALUES(:p_str_client,:chr_l_str_msg_seq_no,'BLTLX','SYSTEM',
+						 :p_str_current_date,'P','O',:chr_l_str_message_file_name_temp,
+						 :p_str_telex_no,:p_str_gcn, :chr_l_str_baseno,'T');
+			IS_ANY_ORA_ERROR
+			
+			fclose(l_file_message_file_ptr);
+			l_file_message_file_ptr=(FILE *)NULL;
+			if(IV_Rtv_MsgFileName(chr_l_str_message_file_name_temp,
+							 l_debug_info_ptr)==APL_FAILURE) 
+			{
+				APL_GOBACK_FAIL
+			}
+			sprintf(chr_l_str_message_file_name,"%s/%s",chr_sesamoutdir,
+														 chr_l_str_message_file_name_temp);
+			if((l_file_message_file_ptr=
+						fopen(chr_l_str_message_file_name,"w"))==(FILE *)NULL)
+			{
+				APL_GOBACK_FAIL
+			}
+
+			
+
+			fprintf(l_file_message_file_ptr,"TLX        %s\n",p_str_telex_no);
+			fprintf(l_file_message_file_ptr,"ATTN   :   %s\n",p_str_refer);
+			fflush(l_file_message_file_ptr);
+			int_l_int_word_counter=24+strlen(p_str_telex_no)+strlen(p_str_refer);
+			int_l_local_point=ftell(p_file_bill_printout);
+			rewind(p_file_bill_printout);
+			int_l_int_not_found=1;
+			while((int_l_int_not_found==1) &&
+					(fgets(chr_l_str_line_buffer,MAX_LEN_SIZE,p_file_bill_printout)
+					!=(char *)NULL))
+			{
+				fprintf(l_file_message_file_ptr,"%s",chr_l_str_line_buffer);
+				int_l_int_word_counter+=strlen(chr_l_str_line_buffer);
+				if(strstr(chr_l_str_line_buffer,S_CURRENT_PROCEEDS)
+					!=(char *)NULL)
+				{
+					int_l_int_not_found=0;
+				}
+			}
+			if(int_l_int_not_found==1) 
+			{
+				APL_GOBACK_FAIL
+			}
+			int_l_int_word_counter+=strlen(chr_templine);
+			fprintf(l_file_message_file_ptr,"%s",chr_templine); 
+			fseek(p_file_bill_printout,int_l_local_point,SEEK_SET);
+		}
+	}
+	fprintf(l_file_message_file_ptr,"Page Last\n");
+	fflush(l_file_message_file_ptr);
+	
+
+	
+
+
+	memset(&l_pro_gseqnum_struct, NULL, sizeof(PRO_GSEQNUM_STRUCT_H));
+	strcpy(l_pro_gseqnum_struct.sequencename, "MSGDAT");
+	l_pro_gseqnum_struct.last_usednum = 0L;
+	l_pro_gseqnum_struct.recycle_ind = NULL;
+	l_pro_gseqnum_struct.seq_stepby = 1;
+	l_pro_gseqnum_struct.seq_start = 1;
+	l_pro_gseqnum_struct.last_seqnum = 0L;
+
+	int_l_seqno = CO_RtvNxtSeqNum(&l_pro_gseqnum_struct, l_debug_info_ptr);
+
+	if ( int_l_seqno == APL_FAILURE )
+	{
+		APL_GOBACK_FAIL
+	}
+
+	sprintf(chr_l_str_msg_seq_no, "%d", int_l_seqno);
+
+	EXEC SQL INSERT INTO MS_MSGENT (SWIFT_MSG_NO,SWIFT_MSG_SEQNO,INFO_FILE,AUTO_TRAN_IND,
+											STATUS)
+		VALUES('BLTLX',:chr_l_str_msg_seq_no,'NONE','Y','G');
+	IS_ANY_ORA_ERROR
+	EXEC SQL INSERT INTO MS_MSGSTAT(PROC_INIT,SWIFT_MSG_REP,CLIENT,GENERATE_DT)
+		VALUES('DUMMY','BLTLX',:p_str_client,:p_str_current_date);
+	
+	IS_ANY_ORA_ERROR
+	
+	EXEC SQL SELECT BASEID INTO :chr_l_str_baseno:i_str_baseno
+		FROM MS_BASE
+		WHERE CONTACT_DETAILS=:p_str_telex_no
+		AND	SWIFT_TLX_GCN='T';
+	IS_ANY_ORA_ERROR
+
+	if(i_str_baseno == -1 || APL_ZERO_RESULT_SET) 
+		memset(chr_l_str_baseno,APL_NULL_CHAR,7);
+
+	 
+
+	EXEC SQL INSERT INTO MS_MSGLOG(CLIENT,MESSAGE_IND,SWIFT_MSG_NO,MAKER,MAKER_DT,
+			STATUS,MSG_IN_OUT_IND,MSG,CONTACT_DETAILS,CONTACT_DETAILS1,BASEID,MESSAGE_CLASS)
+		VALUES(:p_str_client,:chr_l_str_msg_seq_no,'BLTLX','SYSTEM',
+			    :p_str_current_date,'P','O',:chr_l_str_message_file_name_temp,
+				 :p_str_telex_no,:p_str_gcn, :chr_l_str_baseno,'T');
+	IS_ANY_ORA_ERROR
+	fclose(l_file_message_file_ptr);
+	l_file_message_file_ptr=NULL;
+
+	RETURN_SUCCESS:
+	{
+		fclose(l_file_message_file_ptr);
+		return APL_SUCCESS;
+	}
+	RETURN_FAILURE:
+	{
+		fclose(l_file_message_file_ptr);
+		return APL_FAILURE;
+	}
+} 
+
+int IV_Proc_Tlx(char *p_str_client,
+				char *p_str_bill_date,
+				FILE **p_file_bill_printout,
+				FILE *p_file_logfile,
+				FILE *p_file_user_logfile,
+				DEBUG_INFO_STRUCT_H **l_debug_info_ptr) 
+{
+	long int int_l_local_point;
+	struct sqlca sqlca;
+	SYS_IVCONTROLPARAM_STRUCT l_sys_ivcontrolparamstruct;
+	IV_CLIENTSETUP_STRUCT l_iv_client_setup_struct;
+	int int_l_int_func_return_value;
+	char chr_temptelexlength[7];
+	short l_i_short_notelex,l_i_short_refer;
+	short l_i_short_gcn = 0; 
+	char chr_h_l_str_notelex[201];
+	char chr_h_l_str_gcn[6]; 
+	char chr_h_l_str_refer[41];
+	char nameof_file_a[PATH_LENGTH];
+	/* Added by kotubabu for Linux Migration -Start*/
+    #ifdef OS_LINUX
+	FILE *chr_inifile;
+    #else
+    FILE *chr_inifile = APL_OUT_FILE;
+    #endif
+   /* Added by kotubabu for Linux Migration-End*/
+	char chr_finifile[PATH_LENGTH];
+	
+	FILE *l_file_bill_printout = *p_file_bill_printout;
+	FILE *l_file_logfile = p_file_logfile;
+	FILE *l_file_user_logfile = p_file_user_logfile;
+	char chr_sesamlogdir[PATH_LENGTH];
+	char chr_tempsesamlogdir[PATH_LENGTH];
+	char *chr_l_str_func_desc;
+	char chr_h_l_str_current_date[APL_DATE_LEN];
+	char chr_h_l_str_mastacc[11];
+	char chr_h_acc_for_bltlx[APL_CLIENT_LENGTH]; 
+	l_i_short_notelex=0;
+	l_i_short_refer=0;
+	chr_l_str_func_desc="BlTlx";
+	EXEC SQL VAR chr_h_l_str_mastacc IS STRING;
+	EXEC SQL VAR chr_h_l_str_current_date IS STRING;
+	EXEC SQL VAR chr_h_l_str_notelex IS STRING;
+	EXEC SQL VAR chr_h_l_str_gcn IS STRING; 
+	EXEC SQL VAR chr_h_l_str_refer IS STRING;
+	EXEC SQL VAR p_str_client IS STRING;
+	EXEC SQL VAR p_str_bill_date IS STRING;
+	EXEC SQL VAR l_sys_ivcontrolparamstruct.b_prev_date IS STRING;
+	EXEC SQL VAR l_sys_ivcontrolparamstruct.b_upto_date IS STRING;
+	EXEC SQL VAR l_sys_ivcontrolparamstruct.b_processdt IS STRING;
+	EXEC SQL VAR l_sys_ivcontrolparamstruct.b_dlv_date IS STRING;
+	EXEC SQL VAR l_sys_ivcontrolparamstruct.last_dlv_date IS STRING;
+	EXEC SQL VAR l_sys_ivcontrolparamstruct.archival_dt IS STRING;
+	EXEC SQL VAR l_sys_ivcontrolparamstruct.last_rpt_date IS STRING;
+	EXEC SQL VAR chr_h_acc_for_bltlx IS STRING; 
+
+	chr_inifile=fopen(strcat(strcpy(chr_finifile,getenv("INTL_ROOT_PATH")),"/intl_sun.cfg"),
+					"r");
+	if(CO_ReadToken(chr_inifile,"INTL_LOG_PATH",chr_sesamlogdir,l_debug_info_ptr)==APL_FAILURE)
+		APL_GOBACK_FAIL
+	
+	if(CO_ReadToken(chr_inifile,"INTL_MS_SND_PATH",chr_sesamoutdir,l_debug_info_ptr)==APL_FAILURE)
+		APL_GOBACK_FAIL
+	fclose(chr_inifile);
+	chr_inifile=NULL;
+	if(CO_RtvSysDt(chr_h_l_str_current_date,
+							  l_debug_info_ptr)==APL_FAILURE)
+	{
+		APL_GOBACK_FAIL
+	}
+
+	EXEC SQL VAR chr_temptelexlength IS STRING;
+	EXEC SQL SELECT ALLOWED_TLX_LEN INTO :chr_temptelexlength
+		FROM MT_MESSAGE_SYS_PARAMS;
+	IS_ANY_ORA_ERROR
+	sscanf(chr_temptelexlength," %d",&MAX_TELEX_LENGTH);
+	printf("Telex Length is %d\n",MAX_TELEX_LENGTH);
+
+	if(IV_Rtv_IVCNTLPARAM(&l_sys_ivcontrolparamstruct,
+							  &int_l_int_func_return_value,
+							  l_debug_info_ptr)==APL_FAILURE) 
+	 {
+
+		if(int_l_int_func_return_value==IV_NO_DATA_FOUND_ERR) 
+		{
+			APL_GOBACK_FAIL
+		}
+
+		if(int_l_int_func_return_value==IV_CRITCAL_ERROR_IND) 
+		{
+			APL_GOBACK_FAIL
+		}
+	}
+
+		
+	EXEC SQL VAR l_iv_client_setup_struct.default_feeclt IS STRING;
+	EXEC SQL VAR l_iv_client_setup_struct.client IS STRING;
+	EXEC SQL VAR l_iv_client_setup_struct.comm_clt IS STRING;
+	EXEC SQL VAR l_iv_client_setup_struct.rec_clt IS STRING;
+	EXEC SQL VAR l_iv_client_setup_struct.information IS STRING;
+	EXEC SQL VAR l_iv_client_setup_struct.b_ccycd IS STRING;
+	EXEC SQL VAR l_iv_client_setup_struct.last_pymt_ccy IS STRING;
+	EXEC SQL VAR l_iv_client_setup_struct.maker IS STRING;
+	EXEC SQL VAR l_iv_client_setup_struct.checker IS STRING;
+	EXEC SQL VAR l_iv_client_setup_struct.checker_dt IS STRING;
+	EXEC SQL VAR l_iv_client_setup_struct.maker_dt IS STRING;
+	EXEC SQL VAR l_iv_client_setup_struct.spl_clt_cd IS STRING;
+	EXEC SQL VAR l_iv_client_setup_struct.access_stamp IS STRING;
+	EXEC SQL VAR l_iv_client_setup_struct.date_of_input IS STRING;
+
+	if(IV_Rtv_IVCUSTSETUP(p_str_client,
+								&l_iv_client_setup_struct,
+								&int_l_int_func_return_value,
+								l_debug_info_ptr)
+								==APL_FAILURE) 
+	{
+		if(int_l_int_func_return_value!=IV_COLUMN_NULL_ERR)
+		{
+			APL_GOBACK_FAIL
+		}
+	}
+
+	EXEC SQL SELECT CLN_MASTER INTO :chr_h_l_str_mastacc
+		FROM MT_CLIENT
+		WHERE CLN_CODE=:p_str_client;
+	IS_ANY_ORA_ERROR
+
+	
+
+	memset(chr_h_acc_for_bltlx, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+
+	if ( l_iv_client_setup_struct.send_to_master_ind == 'S' )
+	{
+		strcpy(chr_h_acc_for_bltlx, p_str_client);
+	}
+	else
+	{
+		strcpy(chr_h_acc_for_bltlx, chr_h_l_str_mastacc);
+	}
+
+	
+	
+	EXEC SQL DECLARE cursor_addresses CURSOR FOR
+		SELECT TELEX_ADDR,GCN_ADDR, IDENTIFY
+		FROM MT_MSGADDRESS_VEW
+		WHERE CLN_CODE= :chr_h_acc_for_bltlx
+		AND 	MSG_IDENT_NO='15'
+		AND	PRIORITY_IND != '9';
+	IS_ANY_ORA_ERROR
+
+	EXEC SQL OPEN cursor_addresses;
+	IS_ANY_ORA_ERROR
+
+	if(CO_Rtv_FileNm_From_Pointer(l_file_bill_printout,chr_sesamlogdir,nameof_file_a)
+			==APL_FAILURE)
+			APL_GOBACK_FAIL
+	sprintf(chr_tempsesamlogdir,"%s/%s",chr_sesamlogdir,nameof_file_a);
+	strcpy(nameof_file_a,chr_tempsesamlogdir);
+	while(1) 
+	{
+		
+		memset(chr_h_l_str_notelex, APL_NULL_CHAR, 12);
+		memset(chr_h_l_str_gcn, APL_NULL_CHAR, 6);
+		memset(chr_h_l_str_refer, APL_NULL_CHAR, 41);
+
+		EXEC SQL FETCH  cursor_addresses INTO :chr_h_l_str_notelex :l_i_short_notelex,
+														  :chr_h_l_str_gcn :l_i_short_gcn,
+														  :chr_h_l_str_refer :l_i_short_refer;
+		IS_ANY_ORA_ERROR
+		if(APL_ZERO_RESULT_SET)
+		{
+			CO_ProcMonitor(l_file_logfile,"T:Completed processing",NULL,NULL);
+			break;
+		}
+
+		
+		fprintf(l_file_logfile, "Processing Telex Message for Tlx. Addr.: %s, GCN Addr.: %s, Refer: %s\n", chr_h_l_str_notelex, chr_h_l_str_gcn, chr_h_l_str_refer);
+
+		fflush(l_file_logfile);
+
+
+		if(l_i_short_notelex==-1)
+			strcpy(chr_h_l_str_notelex,APL_NULL_STRING);
+		if(l_i_short_gcn == -1) 
+			strcpy(chr_h_l_str_gcn, APL_NULL_STRING);
+		if(l_i_short_refer==-1)
+			strcpy(chr_h_l_str_refer,APL_NULL_STRING);
+
+		if(!strcmp(chr_h_l_str_mastacc,p_str_client)) 
+		{
+			if(IV_Proc_Prnbills(l_file_bill_printout,
+							  l_file_logfile,
+							  l_file_user_logfile,
+							  p_str_bill_date,
+							  p_str_client,
+							  l_sys_ivcontrolparamstruct,
+							  l_iv_client_setup_struct,
+							  S_CONSOLIDATED_CLIENT,
+							  l_debug_info_ptr)==APL_FAILURE)
+			{
+				APL_GOBACK_FAIL
+			}
+			fclose(l_file_bill_printout);
+			l_file_bill_printout=fopen(nameof_file_a,"r+");
+			if(IV_Proc_BillFn(l_file_bill_printout,
+										 p_str_client,
+										 chr_h_l_str_refer,
+										 chr_h_l_str_notelex,
+										 chr_h_l_str_gcn,
+										 chr_h_l_str_current_date,
+										 l_debug_info_ptr)==APL_FAILURE)  
+			{
+				APL_GOBACK_FAIL
+			}
+			fflush(l_file_bill_printout);
+			#ifdef OS_SUN
+			if(ftruncate(l_file_bill_printout->_file,0)==-1)
+			{
+				fprintf(l_file_user_logfile,"E:Error in truncation\n");
+				APL_GOBACK_FAIL
+			}
+			#else
+               #ifdef OS_LINUX          /*Added by kotubabu for Linux Migration-Start*/                                
+				if(ftruncate(open(l_file_bill_printout,O_WRONLY),0)==-1)
+				{
+					fprintf(l_file_user_logfile,"E:Error in truncation\n");
+					APL_GOBACK_FAIL
+				}
+				#else                    /*Added by kotubabu for Linux Migration-End*/
+			if(ftruncate(l_file_bill_printout->__fileL,0)==-1)
+			{
+				fprintf(l_file_user_logfile,"E:Error in truncation\n");
+				APL_GOBACK_FAIL
+			}
+                #endif           /*Added by kotubabu for Linux Migration*/
+			#endif
+			fflush(l_file_bill_printout);
+			if(IV_Proc_Prnbills(l_file_bill_printout,
+							  l_file_logfile,
+							  l_file_user_logfile,
+							  p_str_bill_date,
+							  p_str_client,
+							  l_sys_ivcontrolparamstruct,
+							  l_iv_client_setup_struct,
+							  S_INDIVIDUAL_CLIENT,
+							  l_debug_info_ptr)==APL_FAILURE)
+			{
+				APL_GOBACK_FAIL
+			}
+			fclose(l_file_bill_printout);
+			l_file_bill_printout=fopen(nameof_file_a,"r+");
+			if(IV_Proc_BillFn(l_file_bill_printout,
+										 p_str_client,
+										 chr_h_l_str_refer,
+										 chr_h_l_str_notelex,
+										 chr_h_l_str_gcn,
+										 chr_h_l_str_current_date,
+										 l_debug_info_ptr)==APL_FAILURE)  
+			{
+				APL_GOBACK_FAIL
+			}
+			fflush(l_file_bill_printout);
+			#ifdef OS_SUN
+			if(ftruncate(l_file_bill_printout->_file,0)==-1)
+			{
+				fprintf(l_file_user_logfile,"E:Error in truncation\n");
+				APL_GOBACK_FAIL
+			}
+			#else
+                #ifdef OS_LINUX       /*Added by kotubabu for Linux Migration- Start*/
+				if(ftruncate(open(l_file_bill_printout,O_WRONLY),0)==-1)
+				{
+					fprintf(l_file_user_logfile,"E:Error in truncation\n");
+					APL_GOBACK_FAIL
+				}
+				#else                /*Added by kotubabu for Linux Migration- End*/
+			if(ftruncate(l_file_bill_printout->__fileL,0)==-1)
+			{
+				fprintf(l_file_user_logfile,"E:Error in truncation\n");
+				APL_GOBACK_FAIL
+			}
+			   #endif        /*Added by kotubabu for Linux Migration*/
+			#endif
+			fflush(l_file_bill_printout);
+		}
+		else
+		{
+			fflush(l_file_bill_printout);
+			if(IV_Proc_Prnbills(l_file_bill_printout,
+							  l_file_logfile,
+							  l_file_user_logfile,
+							  p_str_bill_date,
+							  p_str_client,
+							  l_sys_ivcontrolparamstruct,
+							  l_iv_client_setup_struct,
+							  S_INDIVIDUAL_CLIENT,
+							  l_debug_info_ptr)==APL_FAILURE)
+			{
+				APL_GOBACK_FAIL
+			}
+			fclose(l_file_bill_printout);
+			l_file_bill_printout=fopen(nameof_file_a,"r+");
+			fflush(l_file_bill_printout);
+			if(IV_Proc_BillFn(l_file_bill_printout,
+										 p_str_client,
+										 chr_h_l_str_refer,
+										 chr_h_l_str_notelex,
+										 chr_h_l_str_gcn,
+										 chr_h_l_str_current_date,
+										 l_debug_info_ptr)==APL_FAILURE)  
+			{
+				APL_GOBACK_FAIL
+			}
+			fflush(l_file_bill_printout);
+			#ifdef OS_SUN
+			if(ftruncate(l_file_bill_printout->_file,0)==-1)
+			{
+				fprintf(l_file_user_logfile,"Error in truncation\n");
+				APL_GOBACK_FAIL
+			}
+			#else
+                #ifdef OS_LINUX  /*Added by kotubabu for Linux Migration-Start*/
+				if(ftruncate(open(l_file_bill_printout,O_WRONLY),0)==-1)
+				{
+					fprintf(l_file_user_logfile,"Error in truncation\n");
+					APL_GOBACK_FAIL
+				}
+				#else            /*Added by kotubabu for Linux Migration-End*/
+			if(ftruncate(l_file_bill_printout->__fileL,0)==-1)
+			{
+				fprintf(l_file_user_logfile,"Error in truncation\n");
+				APL_GOBACK_FAIL
+			}
+			    #endif         //Added by kotubabu for Linux Migration
+			#endif
+			fflush(l_file_bill_printout);
+
+		}
+	}
+	
+	APL_GOBACK_SUCCESS
+	RETURN_SUCCESS:
+	{
+	   *p_file_bill_printout=l_file_bill_printout; 
+		return APL_SUCCESS;
+	}
+	RETURN_FAILURE:
+	{
+	   *p_file_bill_printout=l_file_bill_printout;
+		return APL_FAILURE;
+	}
+}
+
+
+
+
+int IV_Rtv_MsgFileName(char *chr_p_filename,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	PRO_GSEQNUM_STRUCT_H l_pro_gseqnum_struct_h_msg;
+	int int_returnval=0;
+
+	l_pro_gseqnum_struct_h_msg.recycle_ind = NULL; 
+	strcpy(l_pro_gseqnum_struct_h_msg.sequencename,"BLMSGFILE");
+	strcpy(l_pro_gseqnum_struct_h_msg.seq_attrb_a,APL_NULL_STRING);
+	strcpy(l_pro_gseqnum_struct_h_msg.seq_attrb_b,APL_NULL_STRING);
+	strcpy(l_pro_gseqnum_struct_h_msg.seq_attrb_c,APL_NULL_STRING);
+
+	l_pro_gseqnum_struct_h_msg.seq_stepby = 1;
+	l_pro_gseqnum_struct_h_msg.seq_start = ST_BLDLV_MSG;
+	l_pro_gseqnum_struct_h_msg.last_seqnum = EN_BLDLV_MSG;
+
+	int_returnval = CO_RtvNxtSeqNum(&l_pro_gseqnum_struct_h_msg,l_debug_info_ptr);
+
+	if(int_returnval != APL_FAILURE)
+	{
+		strcpy(chr_p_filename,"T"); 
+		strcat(chr_p_filename,ltoa(int_returnval));
+		strcat(chr_p_filename,".TBS");
+		APL_GOBACK_SUCCESS;
+	}
+	else
+		APL_GOBACK_FAIL;
+
+RETURN_SUCCESS:
+	CO_ProcMonitor(APL_OUT_FILE,"Exiting successfully  out of BGenMsgFilename\n",NULL,NULL);
+	return APL_SUCCESS;
+
+RETURN_FAILURE:
+	CO_ProcMonitor(APL_OUT_FILE,"Exiting unsuccesfully out of BGenMsgFilename\n",NULL,NULL);
+	return APL_FAILURE;
+}

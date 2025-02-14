@@ -1,0 +1,589 @@
+/*
+ *    COPYRIGHT NOTICE
+ *
+ *   Copyright 2008 Polaris Software Lab Limited. All rights reserved.
+ *
+ *   These materials are confidential and proprietary to
+ *    Polaris Software Lab Limited and no part of these materials should
+ *    be reproduced, published, transmitted or distributed in any form or
+ *    by any means, electronic, mechanical, photocopying, recording or
+ *    otherwise, or stored in any information storage or retrieval system
+ *    of any nature nor should the materials be disclosed to third parties
+ *    or used in any other manner for which this is not authorized, without
+ *    the prior express written authorization of Polaris Software Lab Limited.
+ */
+/*********************************************************************
+ *
+ * Module Name         :      DEAL
+ *
+ * File Name           :      DL_SLBReversal.pc
+ *
+ * Description         :      Contains Functions Related to Reversal of 
+ *                            SLB Trades as Part of T+8 Processing.
+ *
+ *
+ *            Version Control Block
+ *
+ * Date        Version     Author           Description        RFS No.
+ * ---------   --------  ---------------  ------------------   ---------
+ * 28/04/2008   1.0        Vijay Gupta        New File          Base Version
+ * 29/03/2022    1.1       kotubabu            Linux Migration  Kotak Implementaion
+ *					  
+ *************************************************************************/
+
+#include "DL_Interface.h"
+#include "CO_HostStructdef.h"
+#include <unistd.h>
+EXEC SQL INCLUDE SQLCA;
+
+/* Added by kotubabu for Linux Migration -Start*/
+#ifdef OS_LINUX
+FILE*           g_inifile;
+FILE*           g_logfile;
+FILE*           g_reptfile;
+#else
+FILE *g_inifile = APL_OUT_FILE;
+FILE *g_logfile = APL_OUT_FILE;
+FILE *g_reptfile = APL_OUT_FILE;
+#endif
+/* Added by kotubabu  for Linux Migration -END*/
+
+int main(int argc, char ** argv) //AIX- Warnings Removal
+{
+  /* Added by kotubabu for Linux Migration -Start*/
+  #ifdef OS_LINUX
+  g_inifile = APL_OUT_FILE;
+  g_logfile = APL_OUT_FILE;
+  g_reptfile = APL_OUT_FILE;
+  #endif
+  /* Added by kotubabu  for Linux Migration -END*/
+  struct sqlca sqlca;
+  DEBUG_INFO_STRUCT_H **l_debug_info_ptr = NULL; 
+  INTL_ENV_DATA_STRUCT_H *l_intlenv_data_struct_h  = NULL;
+  char chr_inifile[PATH_LENGTH]                    = APL_NULL_STRING;
+  char chr_logfile[PATH_LENGTH]                    = APL_NULL_STRING;
+  char chr_custody_id[APL_USERID_LEN]              = APL_NULL_STRING;
+  char chr_l_sysdate[APL_DATE_LEN]                 = APL_NULL_STRING;
+  char l_sysdate[APL_DATE_LEN]                     = APL_NULL_STRING;
+  char l_sysdate1[APL_DATE_LEN]                    = APL_NULL_STRING;
+  char h_rev_leg_date[APL_DATE_LEN]                = APL_NULL_STRING;
+  char l_access_stamp[APL_DATE_LEN]                = APL_NULL_STRING;
+  char buff[BUFFER_LEN]                                   = APL_NULL_STRING;
+  short i_rev_leg_date                             = 0;
+  /*SYS_DL_DEAL_REV_STRUCT_H *l_deal_rev             = NULL;
+  SYS_DL_DEAL_REV_STRUCT_I *i_deal_rev             = NULL;*/
+  SYS_DL_DEAL_STRUCT_H *l_deal                     = NULL;
+  SYS_DL_DEAL_STRUCT_I *i_deal                     = NULL;
+  char h_str_refno[17]                             = APL_NULL_STRING;
+  char chr_uniq_ident_no[15]                       = APL_NULL_STRING;
+  char  int_l_txn_type[10]                         = APL_NULL_STRING;
+  int int_h_trdrepseqnum                           = 0;
+  char chr_g_progname[APL_BATCH_PROGNAME_LEN]      = APL_NULL_STRING;
+  char chr_g_key[APL_BATCH_KEY_LEN]                = APL_NULL_STRING;
+  char l_srno[5]                                   = APL_NULL_STRING;
+  int l_count                                      = 0;
+  char chr_l_repdate[11]                            = APL_NULL_STRING;
+  double l_seqno                                   = 0;
+  DEBUG_INFO_STRUCT_H *l_debuginfo_struct_h;
+
+  EXEC SQL BEGIN DECLARE SECTION;
+      char chr_uname[APL_USERID_LEN];
+      char chr_passwd[APL_PASSWD_LEN];
+  EXEC SQL END DECLARE SECTION;
+  
+  EXEC SQL VAR chr_uname IS STRING;
+  EXEC SQL VAR chr_passwd IS STRING;
+  EXEC SQL VAR chr_l_sysdate IS STRING;
+  EXEC SQL VAR l_access_stamp IS STRING;
+
+
+  /*l_debug_info_ptr = &l_debug_info_struct;*/
+
+  l_intlenv_data_struct_h = (INTL_ENV_DATA_STRUCT_H *) calloc(1,sizeof(INTL_ENV_DATA_STRUCT_H));
+  APL_MALLOC_FAIL(l_intlenv_data_struct_h);
+
+  l_debug_info_ptr = (DEBUG_INFO_STRUCT_H **)calloc(1,sizeof(DEBUG_INFO_STRUCT_H *));
+  APL_MALLOC_FAIL(l_debug_info_ptr);
+
+  /*l_deal_rev = (SYS_DL_DEAL_REV_STRUCT_H *) calloc(1,sizeof(SYS_DL_DEAL_REV_STRUCT_H));
+  APL_MALLOC_FAIL(l_deal_rev);
+
+  i_deal_rev = (SYS_DL_DEAL_REV_STRUCT_I *) calloc(1,sizeof(SYS_DL_DEAL_REV_STRUCT_I));
+  APL_MALLOC_FAIL(i_deal_rev);*/
+
+  l_deal = (SYS_DL_DEAL_STRUCT_H *) calloc(1,sizeof(SYS_DL_DEAL_STRUCT_H));
+  APL_MALLOC_FAIL(l_deal);
+
+  i_deal = (SYS_DL_DEAL_STRUCT_I *) calloc(1,sizeof(SYS_DL_DEAL_STRUCT_I));
+  APL_MALLOC_FAIL(i_deal);
+
+  EXEC SQL VAR l_deal->h_dl_client IS STRING;
+  EXEC SQL VAR l_deal->h_indentity_no IS STRING;
+  EXEC SQL VAR l_deal->h_dlt IS STRING;
+  EXEC SQL VAR l_deal->h_setldt IS STRING;
+  EXEC SQL VAR l_deal->h_ex_arena IS STRING;
+  EXEC SQL VAR l_deal->h_instrdate IS STRING;
+  EXEC SQL VAR l_deal->h_moneydate IS STRING;
+  EXEC SQL VAR l_deal->h_domcpclt_cd IS STRING;
+  EXEC SQL VAR l_deal->h_isspotdl  IS STRING;
+  EXEC SQL VAR l_deal->h_dlfromord  IS STRING;
+  EXEC SQL VAR l_deal->h_entry  IS STRING;
+  EXEC SQL VAR l_deal->h_reapired_ind  IS STRING;
+  EXEC SQL VAR l_deal->h_domcp_custodyclt IS STRING;
+  EXEC SQL VAR l_deal->h_countclt IS STRING;
+  EXEC SQL VAR l_deal->h_countcltnm IS STRING;
+  EXEC SQL VAR l_deal->h_clientof IS STRING;
+  EXEC SQL VAR l_deal->h_custinfo IS STRING;
+  EXEC SQL VAR l_deal->h_fx_reqd  IS STRING;
+  EXEC SQL VAR l_deal->h_ispymtlocal  IS STRING;
+  EXEC SQL VAR l_deal->h_verfied_with  IS STRING;
+  EXEC SQL VAR l_deal->h_brkrno IS STRING;
+  EXEC SQL VAR l_deal->h_fail_cd IS STRING;
+  EXEC SQL VAR l_deal->h_failinfo IS STRING;
+  EXEC SQL VAR l_deal->h_ispart_  IS STRING;
+  EXEC SQL VAR l_deal->h_report_at_eom_ind  IS STRING;
+  EXEC SQL VAR l_deal->h_billdate IS STRING;
+  EXEC SQL VAR l_deal->h_locindentity_no IS STRING;
+  EXEC SQL VAR l_deal->h_instruct_person IS STRING;
+  EXEC SQL VAR l_deal->h_dealcd  IS STRING;
+  EXEC SQL VAR l_deal->h_instr_code IS STRING;
+  EXEC SQL VAR l_deal->h_currencycode IS STRING;
+  EXEC SQL VAR l_deal->h_classofdl IS STRING;
+  EXEC SQL VAR l_deal->h_origindentity_no IS STRING;
+  EXEC SQL VAR l_deal->h_newdt IS STRING;
+  EXEC SQL VAR l_deal->h_maker IS STRING;
+  EXEC SQL VAR l_deal->h_maker_dt IS STRING;
+  EXEC SQL VAR l_deal->h_deal_status IS STRING;
+  EXEC SQL VAR l_deal->h_access_stamp IS STRING;
+  EXEC SQL VAR l_deal->h_info1  IS STRING;
+  EXEC SQL VAR l_deal->h_loccode IS STRING;
+  EXEC SQL VAR l_deal->h_reginstr_ind  IS STRING;
+  EXEC SQL VAR l_deal->h_pos_stat IS STRING;
+  EXEC SQL VAR l_deal->h_status_reg  IS STRING;
+  EXEC SQL VAR l_deal->h_confdate IS STRING;
+  EXEC SQL VAR l_deal->h_matchindentity_no IS STRING;
+  EXEC SQL VAR l_deal->h_markfaildate IS STRING;
+  EXEC SQL VAR l_deal->h_candropdate IS STRING;
+  EXEC SQL VAR l_deal->h_checker IS STRING;
+  EXEC SQL VAR l_deal->h_checker_dt IS STRING;
+  EXEC SQL VAR l_deal->h_instrconv_ind  IS STRING;
+  EXEC SQL VAR l_deal->h_ndsbldate IS STRING;
+  EXEC SQL VAR l_deal->h_lrdltype IS STRING;
+  EXEC SQL VAR l_deal->h_ndsdate IS STRING;
+  EXEC SQL VAR l_deal->h_ublckdate IS STRING;
+  EXEC SQL VAR l_deal->h_delrecdate IS STRING;
+  EXEC SQL VAR l_deal->h_lastregdate IS STRING;
+  EXEC SQL VAR l_deal->h_lr_chkdate IS STRING;
+  EXEC SQL VAR l_deal->h_lr_confdate IS STRING;
+  EXEC SQL VAR l_deal->h_lr_instrdate IS STRING;
+  EXEC SQL VAR l_deal->h_tmpoutdate IS STRING;
+  EXEC SQL VAR l_deal->h_tmpretdate IS STRING;
+  EXEC SQL VAR l_deal->h_transmitdate IS STRING;
+  EXEC SQL VAR l_deal->h_hostdate IS STRING;
+  EXEC SQL VAR l_deal->h_lr_ndsbldate IS STRING;
+  EXEC SQL VAR l_deal->h_lr_ndsdate IS STRING;
+  EXEC SQL VAR l_deal->h_lr_ublckdate IS STRING;
+  EXEC SQL VAR l_deal->h_clt_reqdel_flag  IS STRING;
+  EXEC SQL VAR l_deal->h_mod_hispos_ind  IS STRING;
+  EXEC SQL VAR l_deal->h_updhispos_date IS STRING;
+  EXEC SQL VAR l_deal->h_cash_client IS STRING;
+  EXEC SQL VAR l_deal->h_msg_stat IS STRING;
+  EXEC SQL VAR l_deal->h_allow_part_s  IS STRING;
+  EXEC SQL VAR l_deal->h_locchng_flg  IS STRING;
+  EXEC SQL VAR l_deal->h_comm_indentity_no IS STRING;
+  EXEC SQL VAR l_deal->h_instruct_personnm IS STRING;
+  EXEC SQL VAR l_deal->h_clientofcode IS STRING;
+  EXEC SQL VAR l_deal->h_inter_med_person IS STRING;
+  EXEC SQL VAR l_deal->h_inter_med_personnm IS STRING;
+  EXEC SQL VAR l_deal->h_fxccy IS STRING;
+  EXEC SQL VAR l_deal->h_uniq_ident_no IS STRING;
+  EXEC SQL VAR l_deal->h_exp_setl_date IS STRING;
+  EXEC SQL VAR l_deal->h_related_indentity_no  IS STRING;
+  EXEC SQL VAR l_deal->h_misinfo IS STRING;
+  EXEC SQL VAR l_deal->h_settlement_no IS STRING;
+  EXEC SQL VAR l_deal->h_mkt_type IS STRING;
+  EXEC SQL VAR l_deal->h_clh_flg IS STRING;
+  EXEC SQL VAR l_deal->h_payin_dt IS STRING;
+  EXEC SQL VAR l_deal->h_payout_dt IS STRING;
+  EXEC SQL VAR l_deal->h_contract_req IS STRING;
+  EXEC SQL VAR l_deal->h_excum_flg IS STRING;
+  EXEC SQL VAR l_deal->h_crn_no IS STRING;
+  EXEC SQL VAR l_deal->h_interfii_flg IS STRING;
+  EXEC SQL VAR l_deal->h_pay_mode IS STRING;
+  EXEC SQL VAR l_deal->h_dl_secstatus IS STRING;
+  EXEC SQL VAR l_deal->h_dl_mnystatus IS STRING;
+  EXEC SQL VAR l_deal->h_cln_depoacc IS STRING;
+  EXEC SQL VAR l_deal->h_pltopl_flg IS STRING;
+  EXEC SQL VAR l_deal->h_orig_status IS STRING;
+  EXEC SQL VAR l_deal->h_map_failcode IS STRING;
+  EXEC SQL VAR l_deal->h_match_failcode IS STRING;
+  EXEC SQL VAR l_deal->h_is_matched IS STRING;
+  EXEC SQL VAR l_deal->h_exch_code IS STRING;
+  EXEC SQL VAR l_deal->h_contract_cd IS STRING;
+  EXEC SQL VAR l_deal-> h_r_delay  IS STRING;
+  EXEC SQL VAR l_deal-> h_sebi_reported  IS STRING;
+  EXEC SQL VAR l_deal-> h_r_sett_code  IS STRING;
+  EXEC SQL VAR l_deal-> h_r_trans_code IS STRING;
+  EXEC SQL VAR l_deal-> h_r_type IS STRING;
+  EXEC SQL VAR l_deal-> h_repo_date IS STRING;
+  EXEC SQL VAR l_deal->h_mf_seqno IS STRING;
+  EXEC SQL VAR l_sysdate1 IS STRING;
+  EXEC SQL VAR h_str_refno IS STRING;
+
+   strcpy(chr_g_progname,argv[0]);
+   strcpy(chr_g_key,argv[1]);
+
+   strcpy(chr_inifile,getenv("INTL_ROOT_PATH"));
+   strcat(chr_inifile,"intl_sun.cfg");
+
+   if ( ( g_inifile=fopen(chr_inifile,"r") ) == NULL)
+      exit(-1);
+
+   APL_FETCH_DB_LOGIN_DETAILS(g_inifile,chr_custody_id,chr_uname,chr_passwd,APL_OUT_FILE,l_debug_info_ptr)
+   EXEC SQL CONNECT :chr_uname IDENTIFIED BY :chr_passwd;
+   IS_ANY_ORA_ERROR
+
+   if ( CO_Rtv_RptFileName("SL",
+                           APL_LOGFILE_DESC,
+                           100,
+                           argv[5],
+                           argv,
+                           &g_logfile,
+                           l_debug_info_ptr) ==APL_FAILURE)
+   {
+     APL_GOBACK_FAIL 
+   }
+
+   if ( CO_Rtv_RptFileName("SLB",
+                           "SLB Reverse Leg Trades List",
+                           100,
+                           argv[5],
+                           argv,
+                           &g_reptfile,
+                           l_debug_info_ptr) ==APL_FAILURE)
+   {
+     APL_GOBACK_FAIL 
+   }
+
+   EXEC SQL COMMIT;
+   IS_ANY_ORA_ERROR
+
+  CO_ProcMonitor(g_logfile, 
+                 "SLB TRADE REVERSAL STARTED.\n",
+                 NULL,
+                 NULL);
+
+
+  memset(chr_l_sysdate,APL_NULL_CHAR,APL_DATE_LEN);
+  memset(l_sysdate1,APL_NULL_CHAR,APL_DATE_LEN);
+
+  if ( CO_RtvSysParams(l_debug_info_ptr) == APL_FAILURE)
+  {
+			 CO_ProcMonitor(g_logfile, "Returned Failure from CO_RtvSysParams()", NULL, NULL);
+			 APL_GOBACK_FAIL
+  }
+
+
+
+  EXEC SQL SELECT SYS_DATE,TO_CHAR(SYS_DATE,'DDMMYY')
+           INTO :l_sysdate,:l_sysdate1
+           FROM PRO_SYS_DATE;
+  
+  IS_ANY_ORA_ERROR
+
+  strncpy(chr_l_sysdate,l_sysdate,10);
+  fprintf(g_reptfile,"SLB REVERSE LEG TRADE LIST --%s\n",chr_l_sysdate);
+  fprintf(g_reptfile,
+          "----------------------------------------------------------------------------------------------------------------\n");
+  fprintf(g_reptfile,"%-5s %-17s %-10s %-11s %-14s %-17s %-30s\n","Sr.no","Reference No.","Client",
+          "Deal Date","Exchange Code","Reverse Ref.No.","Comment");
+  fprintf(g_reptfile,
+          "----------------------------------------------------------------------------------------------------------------\n\n");
+
+
+  printf("System date is --------------|%s|\n",chr_l_sysdate);
+  sprintf(buff,"System date is --------------|%s|\n",chr_l_sysdate);
+  CO_ProcMonitor(g_logfile,buff,NULL,NULL);
+
+  /***** Updating The Environment Structure *****/
+  strcpy(l_intlenv_data_struct_h->usr,"SYSTEM");
+  strcpy(l_intlenv_data_struct_h->h_mode,APL_FUNC_INPUT);
+  strcpy(l_intlenv_data_struct_h->processtion,"SLB DEAL REVERSAL");
+  strcpy(l_intlenv_data_struct_h->auth_req,APL_NULL_STRING);
+  strcpy(l_intlenv_data_struct_h->subprocess,"SLB");
+  strcpy(l_intlenv_data_struct_h->h_process,APL_NULL_STRING);
+  /***** Updating The Environment Structure -- Ends *****/
+
+
+  EXEC SQL DECLARE SLB_REV CURSOR FOR 
+           SELECT DL_DEAL_REV.* 
+           FROM DL_DEAL_REV
+           WHERE  DL_DEAL_REV.DEAL_STAT = 'CS'
+           AND TO_CHAR(DL_DEAL_REV.REV_LEG_DATE,'DD/MM/YYYY') = :chr_l_sysdate;
+
+  IS_ANY_ORA_ERROR
+
+/*  CO_ProcMonitor(g_logfile, "After Cursor SLB TRADE REVERSAL STARTED.....\n",NULL,NULL); */
+
+
+  EXEC SQL OPEN SLB_REV;
+  IS_ANY_ORA_ERROR
+
+  for(;;)
+  {
+    /*memset(l_deal_rev, NULL, sizeof(SYS_DL_DEAL_REV_STRUCT_H));
+    memset(i_deal_rev, NULL, sizeof(SYS_DL_DEAL_REV_STRUCT_I));*/
+    memset(l_deal, NULL, sizeof(SYS_DL_DEAL_STRUCT_H));
+    memset(i_deal, NULL, sizeof(SYS_DL_DEAL_STRUCT_I));
+    memset(h_str_refno,APL_NULL_CHAR,17);
+    
+    /*CO_ProcMonitor(g_logfile, "Before Fetch SLB TRADE REVERSAL STARTED.....\n",NULL,NULL);*/
+
+    EXEC SQL FETCH SLB_REV INTO :l_deal:i_deal,:h_rev_leg_date:i_rev_leg_date;
+    printf("*********SQLCA.SQLCODE ------|%d|\n",sqlca.sqlcode);
+    IS_ANY_ORA_ERROR_CURSOR
+
+    /*CO_ProcMonitor(g_logfile, "After Fetch SLB TRADE REVERSAL STARTED.....\n",NULL,NULL);*/
+
+    if(APL_ZERO_RESULT_SET)
+    {
+      CO_ProcMonitor(g_logfile,"No more SLB Transactions to be Reversed\n",NULL,NULL);
+      break;
+    }
+
+    
+/*    memset(buff,APL_NULL_CHAR,200);
+    sprintf(buff,"SLB DEAL TO BE REVERSED ---------------|%s|\n",l_deal->h_indentity_no);
+    CO_ProcMonitor(g_logfile,buff ,NULL,NULL);*/
+
+    memset(l_srno,APL_NULL_CHAR,5);
+    memset(chr_l_repdate,APL_NULL_CHAR,11);
+    sprintf(l_srno,"%d",l_count+1);
+    strncpy(chr_l_repdate,l_deal->h_dlt,10);
+    fprintf(g_reptfile,"%-5s %-17s %-10s %-11s %-14s ",l_srno,l_deal->h_indentity_no,l_deal->h_dl_client,chr_l_repdate,
+                       l_deal->h_exch_code);
+
+
+    /******* Storing First Leg Deal Reference No *******/
+    strcpy(h_str_refno,l_deal->h_indentity_no);
+    /***************************************************/
+
+    /******************************************************************************/
+    memset(l_deal->h_instrdate,APL_NULL_CHAR,20);
+    memset(l_deal->h_moneydate,APL_NULL_CHAR,20);
+    memset(l_deal->h_ndsbldate,APL_NULL_CHAR,20);
+    memset(l_deal->h_hostdate,APL_NULL_CHAR,20);
+    memset(l_deal->h_ndsbldate,APL_NULL_CHAR,20);
+    memset(l_deal->h_ublckdate,APL_NULL_CHAR,20);
+    memset(l_deal->h_candropdate,APL_NULL_CHAR,20);
+    memset(l_deal->h_confdate,APL_NULL_CHAR,20);
+    memset(l_deal->h_locindentity_no,APL_NULL_CHAR,17);
+    memset(l_deal->h_origindentity_no,APL_NULL_CHAR,17);
+    memset(l_deal->h_comm_indentity_no,APL_NULL_CHAR,17);
+    /******************************************************************************/
+
+    /**** Reversing the Market Type ****/
+    if(!strcmp(l_deal->h_exch_code,"BSE"))
+    {
+		memset(l_deal->h_mkt_type,APL_NULL_CHAR,DL_MKT_TYPE_LEN);
+		strcpy(l_deal->h_mkt_type,"19");
+    }
+    else if(!strcmp(l_deal->h_exch_code,"NSE"))
+	 {
+		memset(l_deal->h_mkt_type,APL_NULL_CHAR,DL_MKT_TYPE_LEN);
+		strcpy(l_deal->h_mkt_type,"24");
+	 }
+    /**** Reversing the Market Type -- Ends ****/
+
+    strcpy(l_deal->h_origindentity_no,l_deal->h_indentity_no);
+/*
+  	 memset(l_deal->h_indentity_no,APL_NULL_CHAR,17);
+    sprintf(l_deal->h_indentity_no,"SLB%s%d",l_sysdate1,l_count+1);
+
+    printf("*****Reference Number Of Reversed Deal ---------|%s|\n",l_deal->h_indentity_no);
+    memset(buff,APL_NULL_CHAR,200);
+    sprintf(buff,"*****Reference Number Of Reversed Deal ---------|%s|\n",l_deal->h_indentity_no);
+    CO_ProcMonitor(g_logfile,buff ,NULL,NULL);
+	*/
+	 EXEC SQL SELECT SLBREV_DL_REFNO.NEXTVAL
+               INTO :l_seqno
+             FROM DUAL;
+
+    IS_ANY_ORA_ERROR
+
+         memset(l_deal->h_indentity_no,APL_NULL_CHAR,17);
+    sprintf(l_deal->h_indentity_no,"SLB%s%.lf",l_sysdate1,l_seqno);
+
+	 /****** Changing Orignal Reference No of Reversed Deal to New Reference No ******/
+	 strcpy(l_deal->h_origindentity_no,l_deal->h_indentity_no);
+    /********************************************************************************/
+
+    printf("*****Reference Number Of Reversed Deal ---------|%s|\n",l_deal->h_indentity_no);
+/*    memset(buff,APL_NULL_CHAR,200);
+    sprintf(buff,"*****Reference Number Of Reversed Deal ---------|%s|\n",l_deal->h_indentity_no);
+    CO_ProcMonitor(g_logfile,buff ,NULL,NULL);
+*/
+    memset(l_deal->h_contract_cd,APL_NULL_CHAR,17);
+
+    /** Deal Reversal **/
+	 if(!strcmp(l_deal->h_dealcd,"3"))
+ 	 {
+		strcpy(l_deal->h_dealcd,"4");
+		strcpy(l_deal->h_r_trans_code,"01");
+	 }
+	 else if(!strcmp(l_deal->h_dealcd,"4"))
+	 {
+		strcpy(l_deal->h_dealcd,"3");
+		strcpy(l_deal->h_r_trans_code,"04");
+	 }
+    /** Deal Reversal Ends **/
+
+	 memset(l_deal->h_sebi_reported,APL_NULL_CHAR,2);
+    strcpy(l_deal->h_sebi_reported,"N");
+    memset(l_deal->h_repo_date,APL_NULL_CHAR,APL_DATE_LEN);
+
+    strcpy(l_deal->h_dlt,l_sysdate);
+
+
+    memset(l_deal->h_maker,APL_NULL_CHAR,15);
+    memset(l_deal->h_maker_dt,APL_NULL_CHAR,APL_DATE_LEN);
+    strcpy(l_deal->h_maker,"SYSTEM");
+    strcpy(l_deal->h_maker_dt,l_sysdate);
+    strcpy(l_deal->h_confdate,l_sysdate);
+    
+   
+    memset(l_deal->h_checker,APL_NULL_CHAR,15);
+    memset(l_deal->h_checker_dt,APL_NULL_CHAR,APL_DATE_LEN);
+    strcpy(l_deal->h_checker,"SYSTEM");
+    strcpy(l_deal->h_checker_dt,l_sysdate);
+
+    memset(l_access_stamp,APL_NULL_CHAR,APL_DATE_LEN);
+    if(CO_RtvSysDtTime(l_access_stamp,l_debug_info_ptr) !=APL_SUCCESS)
+    {
+		APL_GOBACK_FAIL;
+    }
+    memset(l_deal->h_access_stamp,APL_NULL_CHAR,APL_DATE_LEN);
+    strcpy(l_deal->h_access_stamp,l_access_stamp);
+
+    strcpy(l_deal->h_deal_status,STATUS_CONF);
+
+	 strcpy(l_deal->h_entry,"G");
+
+
+  /*  memset(l_deal->h_settlement_no,APL_NULL_CHAR,DL_SETTLEMENT_NO_LEN); */
+    memset(l_deal->h_payin_dt,APL_NULL_CHAR,APL_DATE_LEN);
+    memset(l_deal->h_payout_dt,APL_NULL_CHAR,APL_DATE_LEN);
+
+    EXEC SQL SELECT A.PAY_IN_DT,A.PAY_OUT_DT
+             INTO :l_deal->h_payin_dt:i_deal->i_payin_dt,:l_deal->h_payout_dt:i_deal->i_payin_dt
+             FROM MT_SETTL_CAL A
+             WHERE A.SETTL_NO = :l_deal->h_settlement_no
+					AND A.SETTL_TYPE = :l_deal->h_mkt_type
+               AND A.EXCH_CODE = :l_deal->h_exch_code
+               AND A.STATUS = 'AA';
+
+    IS_ANY_ORA_ERROR
+   
+    strcpy(l_deal->h_setldt,l_deal->h_payin_dt);
+
+	/* CO_ProcMonitor(g_logfile,"Calling MS_Rtv_RefNo_A to get the Unique Reference no", NULL, NULL); */
+ 	 
+	 memset(chr_uniq_ident_no,APL_NULL_CHAR,15);
+
+    if (MS_Rtv_RefNo_A(int_l_txn_type,chr_uniq_ident_no,l_debug_info_ptr) == APL_FAILURE)
+    {
+      CO_ProcMonitor(g_logfile,"Failure from GenUniqRefNum", NULL, NULL);
+      /*APL_GOBACK_FAIL;*/
+    }
+
+    strcpy(l_deal->h_uniq_ident_no,chr_uniq_ident_no);
+
+/*	 CO_ProcMonitor(g_logfile,"Calling DL_Proc_Trd to input the Trade", NULL, NULL); */
+	
+    /**** Putting the Reversed Deal Reference No in Report File ***/ 
+    fprintf(g_reptfile,"%-17s ",l_deal->h_indentity_no);
+    /**************************************************************/
+
+    if(APL_FAILURE == DL_Proc_Trd(l_deal,&int_h_trdrepseqnum,l_intlenv_data_struct_h,l_debug_info_ptr))
+	 {
+	   fprintf(g_reptfile,"%-30s\n","Failure"); 
+	   memset(buff, NULL, BUFFER_LEN);
+	   sprintf(buff, "\nFAILED FOR TRADE  %s, %s", l_deal->h_dl_client, l_deal->h_indentity_no);
+	   CO_ProcMonitor(g_logfile, buff, l_debug_info_ptr, l_intlenv_data_struct_h);
+
+		/*  CO_ProcMonitor(g_logfile, "Failure from DL_Proc_Trd", l_debug_info_ptr, l_intlenv_data_struct_h); */
+		CO_FreeErrLst(l_debug_info_ptr);
+		
+      /*APL_GOBACK_FAIL;*/
+	 }
+    else
+	 {
+			fprintf(g_reptfile,"%-30s\n","Success");
+		/*      CO_ProcMonitor(g_logfile,"Updating First Leg Deal in DL_SLB_REV Status to----|RV|\n", NULL, NULL); */
+		printf("\nUpdating First Leg Deal in DL_SLB_REV Status to----|RV| |%s|,|%s|\n" ,l_deal->h_dl_client,l_deal->h_origindentity_no);
+
+         EXEC SQL UPDATE DL_DEAL_REV A 
+                  SET A.DEAL_STAT = 'RV',
+                      A.ORIG_REFNO = :l_deal->h_indentity_no 
+                  WHERE A.CLIENT = :l_deal->h_dl_client
+                  AND A.IDENTIY_NO = :h_str_refno;
+         IS_ANY_ORA_ERROR
+    
+	 }
+
+    l_count++;
+ 	 
+  }
+
+  EXEC SQL CLOSE SLB_REV;
+  IS_ANY_ORA_ERROR
+
+  memset(buff,APL_NULL_CHAR,200);
+  sprintf(buff,"*****Total Deal Reversed ---------|%d|\n",l_count);
+  printf("*****Total Deal Reversed ---------|%d|\n",l_count);
+  CO_ProcMonitor(g_logfile,buff ,NULL,NULL);
+
+  EXEC SQL UPDATE SYS_BATCHPROC
+  SET status        = 'completed',
+  PROCESS_DESC = TRIM(PROCESS_DESC) || ':' || :l_sysdate
+  WHERE process_name      =  RTRIM(:argv[0])
+  AND   proc_init         =  RTRIM(:argv[1])
+  AND   STARTDATE   = :argv[2]
+  AND   status      =  'started';
+  printf("SQLCA.SQLCODE FOR SYS_BATCHPROC---|%d|\n",sqlca.sqlcode);
+  IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"BATCH_IN_PROC",chr_g_progname,chr_g_key)
+
+
+  EXEC SQL COMMIT WORK RELEASE;
+  IS_ANY_ORA_ERROR
+
+  RETURN_SUCCESS:
+  {
+     CO_ProcMonitor(g_logfile, "Successfully completed SLB Reversal\n",NULL,NULL);
+     CO_FreeErrLst(l_debug_info_ptr);
+     APL_FREE(l_intlenv_data_struct_h);
+     APL_FREE(l_deal);
+     APL_FREE(i_deal);
+     fclose(g_inifile);
+     fclose(g_logfile);
+     fclose(g_reptfile);
+     exit(0);
+  }
+  RETURN_FAILURE:
+  {
+     CO_ProcMonitor(g_logfile, "UnSuccessfully completed SLB Reversal\n",NULL,NULL);
+     EXEC SQL ROLLBACK WORK RELEASE;
+     CO_FreeErrLst(l_debug_info_ptr);
+     APL_FREE(l_intlenv_data_struct_h);
+     APL_FREE(l_deal);
+     APL_FREE(i_deal);
+     fclose(g_inifile);
+     fclose(g_logfile);
+     fclose(g_reptfile);
+     exit(-1);
+  }
+
+
+
+
+}

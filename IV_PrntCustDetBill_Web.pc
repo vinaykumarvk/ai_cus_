@@ -1,0 +1,1239 @@
+
+
+
+#include "IV_Control_A.h"
+EXEC SQL INCLUDE SQLCA.H;
+
+int IV_PrntCustDetBill_Web(FILE *bill,
+			 FILE *fl_techlog,	
+			 FILE *fl_userlog,	
+			 char *chr_p_billdt,
+			 char *chr_p_client,
+			 char *p_instr_type,
+			 SYS_IVCONTROLPARAM_STRUCT l_sys_ivcntl_param_struct,
+			 IV_CLIENTSETUP_STRUCT l_iv_clt_setup_struct,			
+			 char p_mastsub,
+			 DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	extern int IV_PrntCustDetailRound(FILE *,FILE *,FILE *,char *,char *,
+			SYS_IVCONTROLPARAM_STRUCT,IV_CLIENTSETUP_STRUCT,char *,char *,char *,
+			double ,double ,double ,char *,DEBUG_INFO_STRUCT_H **);
+
+    extern int IV_Prnt_CalcTax(FILE *,char *,long ,double ,double ,char ,char ,double *,
+							   char *,char *,char *,char *,int *,DEBUG_INFO_STRUCT_H **);
+
+	char chr_l_buf[BUFFER_LEN];
+
+	char l_client_code[20] = APL_NULL_STRING;
+	char l_client_name[200] = APL_NULL_STRING;
+	char b_ccycd[10] = APL_NULL_STRING;
+
+	char l_instr_code[12] = APL_NULL_STRING;
+	char l_instr_name[200] = APL_NULL_STRING, l_prev_instr_name[200] = APL_NULL_STRING, l_instr_name_temp[200] = APL_NULL_STRING;
+	char l_bill_from[20] = APL_NULL_STRING;
+	char l_bill_to[20] = APL_NULL_STRING;
+	char l_daily_portfolio = APL_NULL_CHAR;
+
+	char l_instr_type[10] = APL_NULL_STRING;
+
+	double l_qty = 0.0;
+	double l_qty_final = 0.0;
+	double l_avg_mkt_prc = 0.0;
+	double l_cust_chrg = 0.0;
+	
+	int l_instr_count = 0;
+	int l_break_flag = 0,int_l_count = 0;
+
+
+	int l_qty_counter = 0;
+	int l_daily_display_flag = 0;
+
+	double l_avg_mkt_prc_total = 0.0;
+	double l_cust_chrg_total = 0.0;
+
+	double l_qty_prev = 0.0;
+	double l_avg_mkt_prc_prev = 0.0;
+	double l_cust_chrg_prev = 0.0;
+
+	char l_bill_from_prev[20] = APL_NULL_STRING;
+	char l_bill_from_temp[20] = APL_NULL_STRING;
+	char l_bill_to_temp[20] = APL_NULL_STRING;
+	char l_bill_to_prev[20] = APL_NULL_STRING;
+
+	char l_style_class[10] = APL_NULL_STRING;
+	int l_fetch_count = 0,int_l_diff = 0;
+
+	double g_final_charges =0.0;
+	char g_chr_final_charges[100] = APL_NULL_STRING;
+
+	char l_err_desc[200] = APL_NULL_STRING;
+
+	double l_service_tax = 0.0;
+	double l_edu_cess = 0.0;
+
+	char chr_acct_str[200] = APL_NULL_STRING;
+	char h_mstclt[20] = APL_NULL_STRING;
+	double srv_charge = 0.0;
+	double g_service_tax = 0.0;
+	double l_exchg_rate = 0.0;
+	double l_exchg_rate_print = 0.0;
+	int edurate = 0;
+	char service_tax[20] = APL_NULL_STRING;
+
+	int int_retstat=0;
+
+	double g_tot_cust_chrg = 0.0;
+
+	char l_instr_type1[4] = APL_NULL_STRING;
+	char l_instr_type2[4] = APL_NULL_STRING;
+	char l_instr_type3[4] = APL_NULL_STRING;
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+	EXEC SQL VAR l_client_code IS STRING;
+	EXEC SQL VAR l_client_name IS STRING;
+
+	EXEC SQL VAR l_instr_type1 IS STRING;
+	EXEC SQL VAR l_instr_type2 IS STRING;
+	EXEC SQL VAR l_instr_type3 IS STRING;
+	
+	EXEC SQL END DECLARE SECTION;
+
+
+	APL_IF_DEBUG
+	{
+		memset(chr_l_buf,NULL,BUFFER_LEN);
+		sprintf(chr_l_buf,"The billdt is %s",chr_p_billdt);	
+		CO_ProcMonitor(APL_OUT_FILE,chr_l_buf,NULL,NULL);
+
+		memset(chr_l_buf,NULL,BUFFER_LEN);
+		sprintf(chr_l_buf,"The client is  %s",chr_p_client);	
+		CO_ProcMonitor(APL_OUT_FILE,chr_l_buf,NULL,NULL);
+
+		memset(chr_l_buf,NULL,BUFFER_LEN);
+		sprintf(chr_l_buf,"The MastSub is %c",p_mastsub);	
+		CO_ProcMonitor(APL_OUT_FILE,chr_l_buf,NULL,NULL);
+	}
+
+
+	strcpy(b_ccycd,l_iv_clt_setup_struct.b_ccycd);
+	strcpy(l_client_code,chr_p_client);
+	strcpy(l_instr_type,p_instr_type);
+
+	strcpy(l_style_class,"tablerecord");
+
+	if(!strcmp(l_instr_type,"SHS"))
+	{
+		strcpy(l_instr_type1,l_instr_type);
+		strcpy(l_instr_type2,"");
+		strcpy(l_instr_type3,"");
+	}
+	else
+	{
+		strcpy(l_instr_type1,l_instr_type);
+		strcpy(l_instr_type2,"RTS");
+		strcpy(l_instr_type3,"WTS");
+	}
+
+			
+	EXEC SQL SELECT CLN_NAME,CLN_MASTER INTO :l_client_name ,:h_mstclt
+		FROM MT_CLIENT 
+		WHERE CLN_CODE=:l_client_code;
+
+	printf("After CLN_NAME sqlca.sqlcode :|%d|\n",sqlca.sqlcode);
+
+	if(sqlca.sqlcode < 0)
+	{
+		fprintf(fl_userlog, "ORA Error for selecting Cln details -- [%d]\n", sqlca.sqlcode);
+		fprintf(fl_techlog, "Client details do not exist ");
+	}
+
+	EXEC SQL SELECT PORTFOLIO_EVAL INTO :l_daily_portfolio 
+		FROM IV_CLIENTSETUP
+		WHERE CLIENT=:l_client_code;
+
+	printf(" After PORTFOLIO_EVAL  sqlca.sqlcode :|%d|\n",sqlca.sqlcode);
+
+	if(sqlca.sqlcode < 0)
+	{
+		fprintf(fl_userlog, "ORA Error for selecting Portfolio Eval from IV Cln setup -- [%d]\n", sqlca.sqlcode);
+		fprintf(fl_techlog, "Details do not exist in IV Cln Setup");
+	}
+
+	if(l_daily_portfolio == 'M')
+	{
+		printf("l_client_code |%s| chr_p_billdt |%s| l_instr_type |%s|",l_client_code,chr_p_billdt,l_instr_type);
+
+		EXEC SQL SELECT COUNT(*) INTO :int_l_count
+			FROM IV_CUST_PRINT A, MT_INSTRUMENT B 
+			WHERE A.INSTR_CODE=B.INSTR_CODE
+			AND A.CLIENT = :l_client_code
+			AND A.BILLING_DT = :chr_p_billdt
+			AND A.PORTFOLIO_IND = 'M' 
+			AND B.INSTR_TYPE IN ( :l_instr_type1,:l_instr_type2,:l_instr_type3 )
+			AND A.QTY <> 0
+			AND A.CUST_CHRG <> 0
+			AND A.SERVICE_CD <> 11;
+
+		fprintf(fl_userlog, "Count for IV_CUST_PRINT - [%d] \n", int_l_count);
+
+		if(int_l_count > 0)
+		{
+
+			fprintf(bill,"<TABLE id=\'Table3\' borderColor=\'#000000\' cellSpacing=\'0\' cellPadding=\'1\' width='100%%' border=\'1\'><tr><td borderColor='#ffffff' border='0'>&nbsp;</td><td borderColor='#ffffff' border=\'0\'><BR>\n\n");
+
+			fprintf(bill,"<table class='normal' cellSpacing='0' cellPadding='0' width='100%%' border='0'><tr><td class='lableblue' width='15%%'>Client Code</td><td class='normalbold' width='85%%' align='LEFT' >%s</td></tr><tr><td class='lableblue' width='15%%'>Client Name</td><td class='normalbold' width='85%%' align='LEFT' >%s</td></tr></table><br>\n",l_client_code,l_client_name);
+
+			fprintf(bill,"<table  width='100%%' border='1' cellSpacing='0' cellPadding='1'>\n");
+
+			fprintf(bill,"<tr><td align=\"CENTER\" class=\'ez4\'>Instrument Name</td><td align=\"CENTER\" class=\'ez4\'>Bill From</td><td align=\"CENTER\" class=\'ez4\'>Bill To</td><td align=\"CENTER\" class=\'ez4\'>Qty</td><td align=\"CENTER\" class=\'ez4\'>Avg Mkt Rate</td><td align=\"CENTER\" class=\'ez4\'>Custody Charge (%s)</td></tr>\n",b_ccycd);
+			
+
+			/********** Custody Monthly Charges Calculation ***************************/
+
+			printf("Entering cust_m_curr Cursor :|%s||%s||%s|\n",l_client_code,chr_p_billdt,l_instr_type);
+
+
+			EXEC SQL DECLARE cust_m_curr CURSOR FOR 
+				SELECT B.INSTR_NAME,
+				TO_CHAR(A.B_FROM_DATE,'DD/MM/YYYY'),
+				TO_CHAR(A.B_TO_DATE,'DD/MM/YYYY'),
+				SUM(NVL(A.QTY,0)),AVG(NVL(A.MKT_PRC,0)),SUM(NVL(A.CUST_CHRG,0)) 
+				FROM IV_CUST_PRINT A, MT_INSTRUMENT B 
+				WHERE A.INSTR_CODE=B.INSTR_CODE
+				AND A.CLIENT = :l_client_code
+				AND A.BILLING_DT = :chr_p_billdt
+				AND A.PORTFOLIO_IND = 'M' 
+				AND B.INSTR_TYPE IN ( :l_instr_type1,:l_instr_type2,:l_instr_type3 )
+				AND A.QTY <> 0
+				AND A.CUST_CHRG <> 0
+				AND A.SERVICE_CD <> 11
+				GROUP BY B.INSTR_NAME,A.B_FROM_DATE,A.B_TO_DATE 
+				ORDER BY B.INSTR_NAME,A.B_FROM_DATE,A.B_TO_DATE;
+
+
+			EXEC SQL OPEN cust_m_curr;
+
+			printf("After Cursor cust_m_curr Open :|%d|\n",sqlca.sqlcode);
+
+			for(;;)
+			{
+				memset(l_instr_name,APL_NULL_CHAR,200);
+				memset(l_bill_from,APL_NULL_CHAR,20);
+				memset(l_bill_to,APL_NULL_CHAR,20);
+				
+				l_qty = 0.0;
+				l_avg_mkt_prc = 0.0;
+				l_cust_chrg = 0.0;
+
+				EXEC SQL FETCH cust_m_curr 
+					 INTO :l_instr_name,:l_bill_from,
+						  :l_bill_to,:l_qty,
+						  :l_avg_mkt_prc,:l_cust_chrg;
+
+				printf("After Cursor cust_m_curr Fetch :|%d|\n",sqlca.sqlcode);
+
+
+				   if(sqlca.sqlcode == 1403)
+				   break;
+
+				   if((sqlca.sqlcode < 0)&&(sqlca.sqlcode != -1405))
+				   {
+				printf("Error :Critical Error in cust_m_curr Fetch ORA Error :|%d|\n",sqlca.sqlcode);
+				break;
+				   }
+
+				
+				printf("Entering IV_PrntCustDetailRound :|%s||%s|\n",chr_p_client,chr_p_billdt);
+
+				fprintf(fl_userlog, "Calling IV_PrntCustDetailRound for Cln |%s| n Bill dt |%s|", chr_p_client, chr_p_billdt);
+				if (APL_FAILURE == IV_PrntCustDetailRound(bill,
+								fl_techlog,
+								fl_userlog,
+								chr_p_billdt,
+								chr_p_client,
+								l_sys_ivcntl_param_struct,
+								l_iv_clt_setup_struct,
+								l_instr_name,
+								l_bill_from,
+								l_bill_to,
+								l_qty,
+								l_avg_mkt_prc,
+								l_cust_chrg,
+								l_style_class,
+								l_debug_info_ptr))
+				{
+					fprintf(fl_userlog,"Failure From IV_PrntCustDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+					fprintf(fl_techlog,"Failure From IV_PrntCustDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+					APL_GOBACK_FAIL
+				}
+				else
+				{
+					fprintf(fl_userlog, "Succes From IV_PrntCustDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+					g_final_charges=g_final_charges+l_cust_chrg;
+				}
+
+
+				l_fetch_count ++;
+
+			}
+			EXEC SQL CLOSE cust_m_curr;
+
+			printf("Calling SP_PRINT_FORMATTING For :|%lf|\n",g_final_charges);
+
+			EXEC SQL CALL SP_PRINT_FORMATTING(:g_final_charges,:g_chr_final_charges,:l_err_desc);
+
+			printf("After SP_PRINT_FORMATTING -- ORA Error :|%d|\n",sqlca.sqlcode);
+
+			printf("g_chr_final_charges :|%s|\n",g_chr_final_charges);
+
+			printf("l_fetch_count :|%d|\n",l_fetch_count);
+			
+			if(l_fetch_count == 0)
+			{
+				fprintf(bill,"<tr><td colspan=\'6\' class=\'normal\' >NO RECORDS FOUND </td</tr>\n");
+			}
+			else
+			{
+				fprintf(bill,"<tr><td colspan=\'5\' ALIGN=\"RIGHT\" class=\'lableredbg\' >Total (%s) </td>\n",b_ccycd);
+				fprintf(bill,"<td ALIGN=\"RIGHT\" class=\'lableredbg\' >%s</td></tr></table>\n",g_chr_final_charges);
+			}
+
+
+			/************ Service Tax Calculation Part  : Vinay Kalaskar ****************/
+
+			EXEC SQL SELECT A.CLIENT||';'||A.DEFAULT_FEECLT||';'||B.CUSTODY_CLT_CD||';'  
+				     INTO :chr_acct_str 
+					 FROM IV_CLIENTSETUP A,MT_CORE_SYS_PARAMS B 
+					 WHERE A.CLIENT=:chr_p_client;
+	
+			printf("chr_acct_str :|%s| g_final_charges :|%lf|\n",chr_acct_str,g_final_charges);
+
+			 if(APL_FAILURE == IV_Prnt_CalcTax(fl_userlog,chr_acct_str,TAXFEE,g_final_charges,
+										g_final_charges,'T','T',&srv_charge,h_mstclt,
+										 ";"," "," ",&int_retstat,l_debug_info_ptr))
+			 {
+				 fprintf(fl_userlog,"Failure From IV_Prnt_CalcTax Function \n");
+				 fprintf(fl_techlog,"Error : Failure From IV_Prnt_CalcTax Function \n");
+				 srv_charge = 0.0;
+			 }
+
+			printf("g_final_charges :|%lf| srv_charge :|%lf|\n",g_final_charges,srv_charge);
+			l_service_tax = ( g_final_charges * (srv_charge/100) );
+
+			
+			printf("Currency Check :|%s||%s|\n",b_ccycd,g_mt_commonsys_params_struct_h.dom_ccy);
+
+			if (strcmp(b_ccycd,g_mt_commonsys_params_struct_h.dom_ccy) != 0)
+			{
+			  if (APL_FAILURE == IV_Proc_ConvToFxFn(b_ccycd,
+						  g_mt_commonsys_params_struct_h.dom_ccy,
+						  g_mt_commonsys_params_struct_h.dom_ccy,
+						  chr_p_billdt,
+						  &l_exchg_rate,
+						  &int_retstat,
+						  l_debug_info_ptr) )
+			   {
+				 fprintf(fl_userlog,"Failed To Fetch Exchange Rate Between %s and %s \n",b_ccycd, g_mt_commonsys_params_struct_h.dom_ccy);
+				 fprintf(fl_userlog, "Error: No Exchange Rate found between [%s] and [%s] \n", b_ccycd, g_mt_commonsys_params_struct_h.dom_ccy);
+				 APL_GOBACK_FAIL
+			   }
+
+				l_exchg_rate_print = 0.0;
+
+				printf("dir_indir_fxqt_ind :|%s|\n",l_mt_core_sys_params_struct_h.dir_indir_fxqt_ind);
+				if ( !strcmp(l_mt_core_sys_params_struct_h.dir_indir_fxqt_ind, "D" ) )
+					l_exchg_rate_print = l_exchg_rate;
+				else
+					l_exchg_rate_print = 1.0/ l_exchg_rate;
+
+				printf("l_exchg_rate_print :|%lf|\n",l_exchg_rate_print);
+
+				g_service_tax= (l_exchg_rate_print * l_service_tax);
+
+			}
+			else
+				g_service_tax = l_service_tax;
+
+			EXEC SQL SELECT FIELD_VAL INTO :edurate FROM PRO_GSSPLVAL 
+				     WHERE MAIN_FUN = 'BILLING_TAX' 
+				     AND SUB_PROCESS = 'EDUCATION_CESS';
+
+			IS_ANY_ORA_ERROR
+				
+			if(sqlca.sqlcode != 0)
+			{
+				fprintf(fl_userlog,"No Records for EDUCATION_CESS in PRO_GSSPLVAL \n");
+				fprintf(fl_techlog,"Error: No Records for EDUCATION_CESS in PRO_GSSPLVAL \n");
+				APL_GOBACK_FAIL
+			}
+
+			printf("g_service_tax :|%lf| edurate :|%d|\n",g_service_tax,edurate); //AIX - Warnings Removal
+			l_edu_cess =  (g_service_tax * edurate) /100 ;
+
+			/*****************************************************************************************/
+
+			/************ Service Tax Printing Part  : Vinay Kalaskar  ********************/
+
+			fprintf(fl_userlog, "Service tax - [%lf] \n Education cess - [%lf] \n", g_service_tax, l_edu_cess);
+			//printf("g_service_tax :|%lf| l_edu_cess :|%lf|\n",g_service_tax,l_edu_cess);
+
+			if(g_service_tax > 0 && l_edu_cess > 0)
+			{
+	
+				fprintf(bill,"<table class=\'normal\' width=\"100%%\" cellSpacing=\'0\' cellPadding=\'0\' border=\'0\'><tr><td >&nbsp;</td></tr>\n");
+
+				printf("Calling SP_PRINT_FORMATTING For :|%lf|\n",g_service_tax);
+
+				EXEC SQL CALL SP_PRINT_FORMATTING(:g_service_tax,:g_chr_final_charges,:l_err_desc);
+
+				printf("After SP_PRINT_FORMATTING -- ORA Error :|%d|\n",sqlca.sqlcode);
+
+				EXEC SQL SELECT ROUND(:srv_charge) INTO :service_tax FROM DUAL;
+
+				fprintf(bill,"<tr><td class=\'ez1\' align=\"RIGHT\">Add Service Tax <b>@%s\%%&nbsp; :&nbsp;(%s)</b> </td>\n",service_tax,b_ccycd);
+				fprintf(bill,"<td class=\'ez1\' align=\"RIGHT\"><b>%s</b></td></tr>\n",g_chr_final_charges);
+
+
+				printf("Calling SP_PRINT_FORMATTING For :|%lf|\n",l_edu_cess);
+
+				EXEC SQL CALL SP_PRINT_FORMATTING(:l_edu_cess,:g_chr_final_charges,:l_err_desc);
+
+				printf("After SP_PRINT_FORMATTING -- ORA Error :|%d|\n",sqlca.sqlcode);
+
+				//AIX - Warnings Removal
+				fprintf(bill,"<tr><td class=\'ez1\' align=\"RIGHT\">Add Education Cess Tax <b>@%d\%%</b> On Service Tax &nbsp;<b>:&nbsp;(%s)</b></td>\n",edurate,b_ccycd);
+
+				fprintf(bill,"<td class=\'ez1\' align=\"RIGHT\"> <b>%s</b></td></tr>\n",g_chr_final_charges);
+
+				fprintf(bill,"<tr><td>&nbsp;</td></tr>\n");
+
+				g_tot_cust_chrg = g_final_charges + g_service_tax + l_edu_cess;
+
+				printf("Calling SP_PRINT_FORMATTING For :|%lf|\n",g_tot_cust_chrg);
+
+				EXEC SQL CALL SP_PRINT_FORMATTING(:g_tot_cust_chrg,:g_chr_final_charges,:l_err_desc);
+
+				printf("After SP_PRINT_FORMATTING -- ORA Error :|%d|\n",sqlca.sqlcode);
+
+				
+				fprintf(bill,"<tr><td class=\'lableredbg\' align=\"RIGHT\">Grand Total </b>&nbsp;<b>:&nbsp;(%s)</b></td>\n",b_ccycd);
+
+				fprintf(bill,"<td class=\'lableredbg\' align=\"RIGHT\" ><b>%s</b></td></tr>\n",g_chr_final_charges);
+
+
+				fprintf(bill,"<tr><td>&nbsp;</td></tr></table>\n");			
+			}
+			else
+			{
+				fprintf(fl_userlog,"Service Tax Is Not Defined, Hence No Need To Display\n");
+			}
+
+
+			/****************************************************************************************/
+
+
+			fprintf(bill,"</table><br></table><br><br>\n");
+		}
+	
+	}
+	else
+	{
+		printf("l_client_code |%s| chr_p_billdt |%s| l_instr_type |%s|",l_client_code,chr_p_billdt,l_instr_type);
+
+		EXEC SQL SELECT COUNT(*) INTO :int_l_count
+			FROM IV_CUST_PRINT A, MT_INSTRUMENT B 
+			WHERE A.INSTR_CODE=B.INSTR_CODE
+			AND A.CLIENT = :l_client_code
+			AND A.BILLING_DT = :chr_p_billdt
+			AND A.PORTFOLIO_IND = 'D' 
+			AND B.INSTR_TYPE IN ( :l_instr_type1,:l_instr_type2,:l_instr_type3 )
+			AND A.QTY <> 0
+			AND A.CUST_CHRG <> 0
+			AND A.SERVICE_CD <> 11;
+
+		fprintf(fl_userlog, "Count for IV_CUST_PRINT - [%d] \n", int_l_count);
+
+		if(int_l_count > 0)
+		{
+			fprintf(bill,"<TABLE id=\'Table3\' borderColor=\'#000000\' cellSpacing=\'0\' cellPadding=\'1\' width='100%%' border=\'1\'><tr><td borderColor='#ffffff' border='0'>&nbsp;</td><td borderColor='#ffffff' border=\'0\'><BR>\n\n");
+
+			fprintf(bill,"<table class='normal' cellSpacing='0' cellPadding='0' width='100%%' border='0'><tr><td class='lableblue' width='15%%'>Client Code</td><td class='normalbold' width='85%%' align='LEFT' >%s</td></tr><tr><td class='lableblue' width='15%%'>Client Name</td><td class='normalbold' width='85%%' align='LEFT' >%s</td></tr></table><br>\n",l_client_code,l_client_name);
+
+			fprintf(bill,"<table  width='100%%' border='1' cellSpacing='0' cellPadding='1' >\n");
+			
+			fprintf(bill,"<tr><td align=\"CENTER\" class=\'ez4\'>Instrument Name</td><td align=\"CENTER\" class=\'ez4\'>Bill From</td><td align=\"CENTER\" class=\'ez4\'>Bill To</td><td align=\"CENTER\" class=\'ez4\'>Qty</td><td align=\"CENTER\" class=\'ez4\'>Avg Mkt Rate</td><td align=\"CENTER\" class=\'ez4\'>Custody Charge (%s)</td></tr>\n\n",b_ccycd);
+
+
+			/********** Custody Daily Charges Calculation ***************************/
+
+			l_fetch_count = 0;
+
+			printf("Entering cust_m_curr Cursor :|%s||%s||%s|\n",l_client_code,chr_p_billdt,l_instr_type);
+
+			EXEC SQL DECLARE cust_curr CURSOR FOR 
+				SELECT DISTINCT A.INSTR_CODE,B.INSTR_NAME
+				FROM IV_CUST_PRINT A, MT_INSTRUMENT B 
+				WHERE A.INSTR_CODE=B.INSTR_CODE
+				AND A.CLIENT = :l_client_code
+				AND A.BILLING_DT = :chr_p_billdt
+				AND A.PORTFOLIO_IND = 'D' 
+				AND B.INSTR_TYPE IN ( :l_instr_type1,:l_instr_type2,:l_instr_type3 )
+				AND A.QTY <> 0
+				AND A.CUST_CHRG <> 0
+				AND A.SERVICE_CD <> 11
+				ORDER BY B.INSTR_NAME;
+
+			EXEC SQL OPEN cust_curr;
+
+			fprintf(fl_userlog, "After Open cust_curr - [%d] \n", sqlca.sqlcode);
+
+			for(;;)
+			{
+				memset(l_instr_name,APL_NULL_CHAR,200);
+				memset(l_prev_instr_name,APL_NULL_CHAR,200);
+				memset(l_instr_name_temp,APL_NULL_CHAR,200);
+
+				EXEC SQL FETCH cust_curr INTO :l_instr_code,:l_instr_name;
+
+					printf("After Cursor cust_curr Fetch :|%d|\n",sqlca.sqlcode);
+
+					if(sqlca.sqlcode == 1403)
+					break;
+
+					if((sqlca.sqlcode < 0)&&(sqlca.sqlcode != -1405))
+					{
+						fprintf(fl_userlog, "ORA for fetch of cust_curr - [%d] \n ", sqlca.sqlcode);
+						fprintf(fl_techlog, "Error: Failed to fetch from Cursor cust_curr \n");
+						break;
+					}
+
+
+				EXEC SQL DECLARE cust_sub_curr CURSOR FOR
+				SELECT TO_CHAR(B_FROM_DATE,'DD/MM/YYYY'),TO_CHAR(B_TO_DATE,'DD/MM/YYYY'),
+				SUM(NVL(QTY,0)),AVG(NVL(MKT_PRC,0)),SUM(NVL(CUST_CHRG,0)) 
+				FROM IV_CUST_PRINT 
+				WHERE CLIENT = :l_client_code 
+				AND INSTR_CODE = :l_instr_code
+				AND BILLING_DT = :chr_p_billdt
+				AND PORTFOLIO_IND = 'D'
+				AND QTY <> 0
+				AND CUST_CHRG <> 0
+				AND SERVICE_CD <> 11
+				GROUP BY B_FROM_DATE,B_TO_DATE 
+				ORDER BY B_FROM_DATE,B_TO_DATE;
+
+				EXEC SQL OPEN cust_sub_curr;
+
+				printf("After Cursor cust_sub_curr Open :|%d|\n",sqlca.sqlcode);
+
+				l_qty_counter = 0;
+				l_fetch_count = 0;
+				l_avg_mkt_prc_total = 0;
+				l_cust_chrg_total = 0;
+
+				l_qty_prev = 0;
+				l_avg_mkt_prc_prev = 0;
+				l_cust_chrg_prev = 0;
+				l_break_flag = 0;
+
+				for(;;)
+				{
+					memset(l_bill_from,APL_NULL_CHAR,20);
+					memset(l_bill_to,APL_NULL_CHAR,20);
+					
+					EXEC SQL FETCH cust_sub_curr 
+						 INTO :l_bill_from,:l_bill_to,
+							  :l_qty,:l_avg_mkt_prc,
+							  :l_cust_chrg;
+
+					   printf("After Cursor cust_sub_curr Fetch :|%d|\n",sqlca.sqlcode);
+
+					   if(sqlca.sqlcode == 1403)
+					l_break_flag = 1;
+
+
+					   if((sqlca.sqlcode < 0)&&(sqlca.sqlcode != -1405))
+					   {
+							fprintf(fl_userlog, "ORA for fetch of cust_sub_curr - [%d] \n ", sqlca.sqlcode);
+							fprintf(fl_techlog, "Error: Failed to fetch from Cursor cust_sub_curr \n");
+							break;
+					   }
+
+					/********** Grouping Part *************************************/
+
+					printf("l_break_flag :|%d|\n",l_break_flag);
+
+					if(l_break_flag == 0)
+					{
+
+					printf(" -- l_qty_counter :|%d|\n",l_qty_counter);
+
+					if(l_qty_counter == 0)
+					{	
+						printf("l_fetch_count :|%d|\n",l_fetch_count);
+
+						if(l_fetch_count == 0)
+						{
+							strcpy(l_bill_from_prev,l_bill_from);
+							strcpy(l_bill_to_prev,l_bill_to);
+
+							l_qty_prev = l_qty;
+							l_avg_mkt_prc_prev = l_avg_mkt_prc;
+							l_cust_chrg_prev = l_cust_chrg;
+
+							l_avg_mkt_prc_total = l_avg_mkt_prc_prev;
+							l_cust_chrg_total = l_cust_chrg_prev;
+
+							l_daily_display_flag = 0;
+
+							l_qty_counter ++;
+						}
+					}
+					else
+					{	
+						if((l_fetch_count > 0)&&(l_qty_counter == 1))
+						{
+							l_avg_mkt_prc_total = l_avg_mkt_prc_prev;
+							l_cust_chrg_total = l_cust_chrg_prev;
+
+							strcpy(l_instr_name,"&nbsp;");
+
+						}
+
+						printf("l_qty :|%lf| l_qty_prev |%lf|\n",l_qty,l_qty_prev);
+						printf("l_bill_to :|%s| l_bill_to_prev |%s|\n",l_bill_to,l_bill_to_prev);
+
+						if ( APL_FAILURE == CO_Pro_DateComp(l_bill_to_prev, l_bill_to,
+														 &int_l_diff, l_debug_info_ptr) )
+								APL_GOBACK_FAIL
+
+
+						printf("int_l_diff :|%d|\n",int_l_diff);
+
+						if((l_qty == l_qty_prev)&&(int_l_diff == 1))
+						{
+							l_avg_mkt_prc_total = l_avg_mkt_prc_total + l_avg_mkt_prc;
+							l_cust_chrg_total = l_cust_chrg_total + l_cust_chrg;
+
+							l_qty_counter ++;
+
+							l_qty_prev = l_qty;
+
+							strcpy(l_bill_to_prev,l_bill_to);
+
+							printf("l_qty_prev :|%lf|\n",l_qty_prev);
+							printf("l_avg_mkt_prc_total :|%lf|\n",l_avg_mkt_prc_total);
+							printf("l_cust_chrg_total :|%lf|\n",l_cust_chrg_total);
+
+						}
+						else
+						{					
+							strcpy(l_bill_from_temp,l_bill_from);
+							strcpy(l_bill_from,l_bill_from_prev);
+							strcpy(l_bill_from_prev,l_bill_from_temp);
+
+							strcpy(l_bill_to_temp,l_bill_to);
+							strcpy(l_bill_to,l_bill_to_prev);
+							strcpy(l_bill_to_prev,l_bill_to_temp);
+							
+							l_daily_display_flag = 1;
+
+							l_qty_final = l_qty_prev;
+
+							l_avg_mkt_prc_total = (l_avg_mkt_prc_total/l_qty_counter);
+
+							/* Bageshri 18/06/2007 : HDFC UAT Fix for detailed custody charges - START */
+							//l_cust_chrg_total = (l_cust_chrg_total/l_qty_counter);	
+
+							if(!strcmp(l_prev_instr_name,l_instr_name))
+							{
+								strcpy(l_instr_name_temp,l_instr_name);
+								strcpy(l_instr_name,"&nbsp;");
+								strcpy(l_prev_instr_name,l_instr_name_temp);
+							}
+							else
+								strcpy(l_prev_instr_name,l_instr_name);
+
+							/* Bageshri 18/06/2007 : HDFC UAT Fix for detailed custody charges - END */
+
+							l_qty_prev = l_qty;
+							l_avg_mkt_prc_prev = l_avg_mkt_prc;
+							l_cust_chrg_prev = l_cust_chrg;
+						
+							l_qty_counter = 1;
+
+							printf("l_bill_from :|%s|\n",l_bill_from);
+							printf("l_bill_to :|%s|\n",l_bill_to);
+							
+							printf("l_qty_final :|%lf|\n",l_qty_final);
+							printf("l_avg_mkt_prc_total :|%lf|\n",l_avg_mkt_prc_total);
+							printf("l_cust_chrg_total :|%lf|\n",l_cust_chrg_total);
+
+						}
+					}
+
+					}
+					else
+					{
+						strcpy(l_bill_from_temp,l_bill_from);
+						strcpy(l_bill_from,l_bill_from_prev);
+
+						strcpy(l_bill_to,l_bill_to_prev);
+
+						l_daily_display_flag = 1;
+
+						l_qty_final = l_qty_prev;
+
+						printf(" ** l_qty_counter :|%d|\n",l_qty_counter);
+
+						l_avg_mkt_prc_total = (l_avg_mkt_prc_total/l_qty_counter);
+
+						/* Bageshri 18/06/2007 : HDFC UAT Fix for detailed custody charges - START */
+
+						//l_cust_chrg_total = (l_cust_chrg_total/l_qty_counter);	
+
+						if(!strcmp(l_prev_instr_name,l_instr_name))
+						{
+							strcpy(l_instr_name_temp,l_instr_name);
+							strcpy(l_instr_name,"&nbsp;");
+							strcpy(l_prev_instr_name,l_instr_name_temp);
+						}
+						else
+							strcpy(l_prev_instr_name,l_instr_name);
+
+						/* Bageshri 18/06/2007 : HDFC UAT Fix for detailed custody charges - END */
+
+						printf("l_bill_from :|%s|\n",l_bill_from);
+						printf("l_bill_to :|%s|\n",l_bill_to);
+						
+						printf("l_qty_final :|%lf|\n",l_qty_final);
+						printf("l_avg_mkt_prc_total :|%lf|\n",l_avg_mkt_prc_total);
+						printf("l_cust_chrg_total :|%lf|\n",l_cust_chrg_total);
+					}
+
+					/**************************************************************/
+
+					printf("l_daily_display_flag :|%d|\n",l_daily_display_flag);
+					
+					if(l_daily_display_flag == 1)
+					{
+					
+						printf("Entering IV_PrntCustDetailRound :|%s||%s|\n",chr_p_client,chr_p_billdt);
+
+						if (APL_FAILURE == IV_PrntCustDetailRound(bill,
+										fl_techlog,
+										fl_userlog,
+										chr_p_billdt,
+										chr_p_client,
+										l_sys_ivcntl_param_struct,
+										l_iv_clt_setup_struct,
+										l_instr_name,
+										l_bill_from,
+										l_bill_to,
+										l_qty_final,
+										l_avg_mkt_prc_total,
+										l_cust_chrg_total,
+										l_style_class,
+										l_debug_info_ptr))
+						{
+							fprintf(fl_userlog,"Failure From IV_PrntCustDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+
+							APL_GOBACK_FAIL
+						}
+						else
+							g_final_charges=g_final_charges+l_cust_chrg_total;	/* Bageshri 12072007 */
+
+						if(l_break_flag == 1)
+						break;
+
+						l_daily_display_flag = 0;
+
+						l_fetch_count ++;
+						l_avg_mkt_prc_total = l_avg_mkt_prc;	/* Bageshri 18/06/2007 : HDFC UAT Fix for detailed custody charges */
+						l_cust_chrg_total = l_cust_chrg;	/* Bageshri 18/06/2007 : HDFC UAT Fix for detailed custody charges */
+
+
+
+					}
+				}
+				EXEC SQL CLOSE cust_sub_curr;
+
+
+				l_instr_count ++;
+			}
+			EXEC SQL CLOSE cust_curr;
+
+		
+			printf("Calling SP_PRINT_FORMATTING For :|%lf|\n",g_final_charges);
+
+			EXEC SQL CALL SP_PRINT_FORMATTING(:g_final_charges,:g_chr_final_charges,:l_err_desc);
+
+			printf("After SP_PRINT_FORMATTING -- ORA Error :|%d|\n",sqlca.sqlcode);
+
+			printf("g_chr_final_charges :|%s|\n",g_chr_final_charges);
+
+			printf("l_instr_count :|%d|\n",l_instr_count);
+			
+			if(l_instr_count == 0)
+			{
+				fprintf(bill,"<tr><td colspan=\'6\' class=\'normal\' >NO RECORDS FOUND </td></tr></table>\n");
+			}
+			else
+			{
+				fprintf(bill,"<tr><td colspan=\'5\' ALIGN=\"RIGHT\" class=\'lableredbg\' >Total (%s) </td>\n",b_ccycd);
+				fprintf(bill,"<td ALIGN=\"RIGHT\" class=\'lableredbg\' >%s</td></tr></table>\n",g_chr_final_charges);
+			}
+
+
+			/************ Service Tax Calculation Part  : Vinay Kalaskar ****************/
+
+			EXEC SQL SELECT A.CLIENT||';'||A.DEFAULT_FEECLT||';'||B.CUSTODY_CLT_CD||';'  
+				     INTO :chr_acct_str 
+					 FROM IV_CLIENTSETUP A,MT_CORE_SYS_PARAMS B 
+					 WHERE A.CLIENT=:chr_p_client;
+	
+			printf("chr_acct_str :|%s| g_final_charges :|%lf|\n",chr_acct_str,g_final_charges);
+
+			 if(APL_FAILURE == IV_Prnt_CalcTax(fl_userlog,chr_acct_str,TAXFEE,g_final_charges,
+										g_final_charges,'T','T',&srv_charge,h_mstclt,
+										 ";"," "," ",&int_retstat,l_debug_info_ptr))
+			 {
+				 fprintf(fl_userlog,"Error : Failure From IV_Prnt_CalcTax Function \n");
+				 srv_charge = 0.0;
+			 }
+
+			printf("g_final_charges :|%lf| srv_charge :|%lf|\n",g_final_charges,srv_charge);
+			l_service_tax = ( g_final_charges * (srv_charge/100) );
+
+			
+			printf("Currency Check :|%s||%s|\n",b_ccycd,g_mt_commonsys_params_struct_h.dom_ccy);
+
+			if (strcmp(b_ccycd,g_mt_commonsys_params_struct_h.dom_ccy) != 0)
+			{
+			  if (APL_FAILURE == IV_Proc_ConvToFxFn(b_ccycd,
+						  g_mt_commonsys_params_struct_h.dom_ccy,
+						  g_mt_commonsys_params_struct_h.dom_ccy,
+						  chr_p_billdt,
+						  &l_exchg_rate,
+						  &int_retstat,
+						  l_debug_info_ptr) )
+			   {
+				 fprintf(fl_userlog,"Failed To Fetch Exchange Rate Between %s and %s \n",b_ccycd, g_mt_commonsys_params_struct_h.dom_ccy);
+				 fprintf(fl_techlog,"Exchange Rate not found between %s and %s \n",b_ccycd, g_mt_commonsys_params_struct_h.dom_ccy);
+				 APL_GOBACK_FAIL
+			   }
+
+				l_exchg_rate_print = 0.0;
+
+				printf("dir_indir_fxqt_ind :|%s|\n",l_mt_core_sys_params_struct_h.dir_indir_fxqt_ind);
+				if ( !strcmp(l_mt_core_sys_params_struct_h.dir_indir_fxqt_ind, "D" ) )
+					l_exchg_rate_print = l_exchg_rate;
+				else
+					l_exchg_rate_print = 1.0/ l_exchg_rate;
+
+				printf("l_exchg_rate_print :|%lf|\n",l_exchg_rate_print);
+
+				g_service_tax= (l_exchg_rate_print * l_service_tax);
+
+			}
+			else
+				g_service_tax = l_service_tax;
+
+			EXEC SQL SELECT FIELD_VAL INTO :edurate FROM PRO_GSSPLVAL 
+				     WHERE MAIN_FUN = 'BILLING_TAX' 
+				     AND SUB_PROCESS = 'EDUCATION_CESS';
+
+			IS_ANY_ORA_ERROR
+				
+			if(sqlca.sqlcode != 0)
+			{
+				fprintf(fl_userlog,"No Records for EDUCATION_CESS in PRO_GSSPLVAL \n");
+				APL_GOBACK_FAIL
+			}
+
+			printf("g_service_tax :|%lf| edurate :|%d|\n",g_service_tax,edurate);
+			l_edu_cess =  (g_service_tax * edurate) /100 ;
+
+			/*****************************************************************************************/
+
+			/************ Service Tax Printing Part  : Vinay Kalaskar  ********************/
+
+			fprintf(fl_userlog,"g_service_tax :|%lf| l_edu_cess :|%lf|\n",g_service_tax,l_edu_cess);
+			printf("g_service_tax :|%lf| l_edu_cess :|%lf|\n",g_service_tax,l_edu_cess);
+
+			if(g_service_tax > 0 && l_edu_cess > 0)
+			{
+	
+				fprintf(bill,"<table class=\'normal\' width=\"100%%\" cellSpacing=\'0\' cellPadding=\'0\' border=\'0\'><tr><td >&nbsp;</td></tr>\n");
+
+				printf("Calling SP_PRINT_FORMATTING For :|%lf|\n",g_service_tax);
+
+				EXEC SQL CALL SP_PRINT_FORMATTING(:g_service_tax,:g_chr_final_charges,:l_err_desc);
+
+				printf("After SP_PRINT_FORMATTING -- ORA Error :|%d|\n",sqlca.sqlcode);
+
+				EXEC SQL SELECT ROUND(:srv_charge) INTO :service_tax FROM DUAL;
+
+				fprintf(bill,"<tr><td class=\'ez1\' align=\"LEFT\">Add Service Tax <b>@%s\%%&nbsp; :&nbsp;(%s)</b> </td>\n",service_tax,b_ccycd);
+				fprintf(bill,"<td class=\'ez1\' align=\"RIGHT\"><b>%s</b></td></tr>\n",g_chr_final_charges);
+
+
+				printf("Calling SP_PRINT_FORMATTING For :|%lf|\n",l_edu_cess);
+
+				EXEC SQL CALL SP_PRINT_FORMATTING(:l_edu_cess,:g_chr_final_charges,:l_err_desc);
+
+				printf("After SP_PRINT_FORMATTING -- ORA Error :|%d|\n",sqlca.sqlcode);
+
+				
+				fprintf(bill,"<tr><td class=\'ez1\' align=\"LEFT\">Add Education Cess Tax <b>@%d\%%</b> On Service Tax &nbsp;<b>:&nbsp;(%s)</b></td>\n",edurate,b_ccycd);
+
+				fprintf(bill,"<td class=\'ez1\' align=\"RIGHT\"> <b>%s</b></td></tr>\n",g_chr_final_charges);
+
+				fprintf(bill,"<tr><td>&nbsp;</td></tr>\n");
+
+				g_tot_cust_chrg = g_final_charges + g_service_tax + l_edu_cess;
+
+				printf("Calling SP_PRINT_FORMATTING For :|%lf|\n",g_tot_cust_chrg);
+
+				EXEC SQL CALL SP_PRINT_FORMATTING(:g_tot_cust_chrg,:g_chr_final_charges,:l_err_desc);
+
+				printf("After SP_PRINT_FORMATTING -- ORA Error :|%d|\n",sqlca.sqlcode);
+
+				
+				fprintf(bill,"<tr><td class=\'lableredbg\' align=\"LEFT\">Grand Total </b>&nbsp;<b>:&nbsp;(%s)</b></td>\n",b_ccycd);
+
+				fprintf(bill,"<td class=\'lableredbg\' align=\"RIGHT\" ><b>%s</b></td></tr>\n",g_chr_final_charges);
+
+
+				fprintf(bill,"<tr><td>&nbsp;</td></tr></table>\n");			
+			}
+			else
+			{
+				fprintf(fl_userlog,"Service Tax Is Not Defined, Hence No Need To Display\n");
+			}
+
+
+			/****************************************************************************************/
+
+			fprintf(bill,"</table><br></table><br><br>\n");
+		}
+	}
+
+	 
+	fflush(bill);	
+
+	RETURN_SUCCESS:
+		CO_ProcMonitor(APL_OUT_FILE,"Exiting out of IV_PrntCustDetBill_Web Successfully\n",NULL,NULL);
+                return APL_SUCCESS;
+
+        RETURN_FAILURE:
+		CO_ProcMonitor(APL_OUT_FILE,"Exiting out of IV_PrntCustDetBill_Web UnSuccessfully\n",NULL,NULL);
+		return APL_FAILURE;
+}
+
+int IV_PrntCustDetailRound(FILE *bill,
+		FILE *fl_techlog,
+		FILE *fl_userlog,
+		char *chr_p_billdt,
+		char *chr_p_client,
+		SYS_IVCONTROLPARAM_STRUCT l_sys_ivcntl_param_struct,
+		IV_CLIENTSETUP_STRUCT l_iv_clt_setup_struct,
+		char *p_instr_name,
+		char *p_bill_from,
+		char *p_bill_to,
+		double p_qty,
+		double p_mkt_prc,
+		double p_cust_chrg,
+		char *p_style_class,
+		DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+
+{
+	printf("Inside IV_PrntCustDetailRound \n");
+
+	struct sqlca sqlca;
+
+	int i_qty = 0;
+	int i_mkt_prc = 0;
+	int i_cust_chrg = 0;
+
+
+	char chr_l_qty[20] = APL_NULL_STRING;
+	char chr_l_mkt_prc[20] = APL_NULL_STRING;
+	char chr_l_cust_chrg[20] = APL_NULL_STRING;
+
+	char l_err_desc[200] =APL_NULL_STRING;
+	char p_final_value[500] = APL_NULL_STRING;
+
+
+	memset(chr_l_qty, APL_NULL_CHAR, 20);
+	memset(chr_l_mkt_prc, APL_NULL_CHAR, 20);
+	memset(chr_l_cust_chrg, APL_NULL_CHAR, 20);
+
+	printf("p_style_class :|%s|\n",p_style_class);
+	printf("p_instr_name :|%s|\n",p_instr_name);
+	printf("p_bill_from :|%s|\n",p_bill_from);
+	printf("p_bill_to :|%s|\n",p_bill_to);
+	printf("p_qty :|%lf|\n",p_qty);
+	printf("p_mkt_prc :|%lf|\n",p_mkt_prc);
+	printf("p_cust_chrg :|%lf|\n",p_cust_chrg);
+
+
+	if(!strcmp(p_instr_name,APL_NULL_STRING))
+		strcpy(p_instr_name,"&nbsp;");
+	else if(!strcmp(p_bill_from,APL_NULL_STRING))
+		strcpy(p_bill_from,"&nbsp;");
+	else if(!strcmp(p_bill_to,APL_NULL_STRING))
+		strcpy(p_bill_to,"&nbsp;");
+
+
+	fprintf(bill,"<tr><td class='%s' >%s</td><td class='%s' >%s</td><td class='%s' >%s</td>\n", p_style_class,p_instr_name,p_style_class,p_bill_from,p_style_class,p_bill_to);
+
+	printf("p_qty :|%lf|\n",p_qty);
+	printf("p_mkt_prc :|%lf|\n",p_mkt_prc);
+	printf("p_cust_chrg :|%lf|\n",p_cust_chrg);
+
+	printf(" *** 1 *** Before Qty Formatting :|%lf|\n",p_qty);
+
+    EXEC SQL SELECT TRIM(TO_CHAR(:p_qty,'999,999,999,999,999,999,990')) INTO :p_final_value FROM DUAL;
+
+	printf("After Qty Formatting -- ORA Error :|%d|\n",sqlca.sqlcode);
+
+	printf("p_final_value :|%s|\n",p_final_value);
+
+	fprintf(bill,"<td class='%s' align='RIGHT'>%s</td>\n",p_style_class,p_final_value);
+
+
+	printf(" *** 2 *** Calling SP_PRINT_FORMATTING For :|%lf|\n",p_mkt_prc);
+
+	EXEC SQL CALL SP_PRINT_FORMATTING(:p_mkt_prc,:p_final_value,:l_err_desc);
+
+	printf("After SP_PRINT_FORMATTING -- ORA Error :|%d|\n",sqlca.sqlcode);
+
+	printf("p_final_value :|%s|\n",p_final_value);
+		
+	fprintf(bill,"<td class='%s' align='RIGHT'>%s</td>\n",p_style_class,p_final_value);
+
+
+	
+	printf(" *** 3 *** Calling SP_PRINT_FORMATTING For :|%lf|\n",p_cust_chrg);
+
+	EXEC SQL CALL SP_PRINT_FORMATTING(:p_cust_chrg,:p_final_value,:l_err_desc);
+
+	printf("After SP_PRINT_FORMATTING -- ORA Error :|%d|\n",sqlca.sqlcode);
+
+	printf("p_final_value :|%s|\n",p_final_value);
+		
+	fprintf(bill,"<td class='%s' align='RIGHT'>%s</td>\n",p_style_class,p_final_value);
+	
+	
+	fprintf(bill,"</tr>\n\n");	
+
+	
+RETURN_SUCCESS:
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Exiting out of IV_PrntCustDetailRound succesfully\n",NULL,NULL);
+	}
+return(APL_SUCCESS);
+
+RETURN_FAILURE:
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Exiting out of IV_PrntCustDetailRound unsuccesfully\n",NULL,NULL);
+	}
+return (APL_FAILURE);
+
+
+}
+
+int IV_Prnt_CalcTax(FILE *fl_userlog,char *p_cltt_str,long p_serv_code,
+		double p_fee_qty,double p_charge_qty,char p_charge_type,char p_fee_type,
+		double *p_charge,
+		char *p_mstclt_a,char *chr_p_param_str,
+		char *p_charge_basis,char *p_fee_basis,
+		int *int_p_retstat,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+
+	char chr_h_fee_str[IV_PARAM_LEN],chr_h_actcode[APL_CLIENT_LENGTH];
+	char h_mstclt[APL_CLIENT_LENGTH],chr_h_group_ind[51];
+	double h_fee_quantity=0,h_charge_quantity=0,h_nfee_quantity=0,h_ncharge_quantity=0;
+	long int_h_serv_code=0;
+	double h_schdl_fee=0.0,h_frm_fbase=0.0,h_tof_base=0.0,h_toc_base=0.0,h_frm_cbase=0.0;
+	short i_schdl_fee,i_frm_fbase,i_tof_base,i_frm_cbase,i_toc_base,i_group_id;
+	  char h_apl_frm_date[9] = APL_NULL_STRING;  /* Added by monica for kotak ISKB_1737 */
+	  short i_apl_frm_date = 0;  /* Added by monica for kotak ISKB_1737 */
+	struct sqlca sqlca;
+
+	EXEC SQL VAR chr_h_fee_str   IS STRING;
+	EXEC SQL VAR chr_h_group_ind IS STRING;
+	EXEC SQL VAR chr_h_actcode   IS STRING;
+	EXEC SQL VAR h_mstclt    IS STRING;
+	EXEC SQL VAR h_apl_frm_date IS STRING;  /* Added by monica for kotak ISKB_1737 */
+
+	EXEC SQL END DECLARE SECTION;
+
+	char *s,*chr_actcode=NULL,*p,*chr_basis_act=NULL;
+	char chr_acct[IV_CLT_LEN],chr_basis_str[IV_CLT_LEN];
+	char chr_l_actcode[APL_CLIENT_LENGTH];
+	char chr_l_basis_str[IV_CLT_LEN];
+	char chr_l_buf[BUFFER_LEN];
+	double fees=0.0; 
+	int int_retstat=0,int_mismatch_flg=0,int_fee_found=0;
+
+	sqlca.sqlcode = 0;
+	
+	s=(char *) calloc(IV_CLT_LEN,sizeof(char));
+	p=(char *) calloc(IV_CLT_LEN,sizeof(char));
+	memset(chr_h_actcode, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+	memset(chr_h_fee_str, APL_NULL_CHAR, IV_PARAM_LEN);
+	memset(h_mstclt, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+
+	memset(chr_h_group_ind, APL_NULL_CHAR, 51);
+
+	memset(chr_acct,APL_NULL_CHAR,IV_CLT_LEN);
+	memset(chr_basis_str,APL_NULL_CHAR,IV_CLT_LEN);
+	memset(chr_l_basis_str,APL_NULL_CHAR,IV_CLT_LEN);
+	memset(chr_l_actcode,APL_NULL_CHAR,APL_CLIENT_LENGTH);
+	memset(chr_l_buf,APL_NULL_CHAR,BUFFER_LEN);
+
+
+	*int_p_retstat = IV_SUCCESS;
+
+	if (p_fee_qty == 0)
+		p_fee_qty = 1;
+
+     //AIX - Warnings Removal
+	printf("\n *** In calcfee :|%s||%ld||%s||%lf||%lf||%s||%s||%s|\n", p_cltt_str,p_serv_code,chr_p_param_str,p_fee_qty,*p_charge,p_mstclt_a,p_charge_basis,p_fee_basis);
+
+
+	h_fee_quantity = p_fee_qty;
+	h_charge_quantity = p_charge_qty;
+	int_h_serv_code = p_serv_code;
+
+	if(h_charge_quantity == 0)
+	{
+		*int_p_retstat = IV_SUCCESS;
+		APL_GOBACK_SUCCESS
+	}
+	strcpy(chr_h_fee_str,chr_p_param_str);
+
+	strcpy(chr_acct,p_cltt_str);
+	strcat(chr_acct,APL_NULL_STRING);
+	strcpy(chr_basis_str,p_cltt_str);
+	strcat(chr_basis_str,APL_NULL_STRING);
+	chr_actcode = strtok_r(chr_acct,";",&s);
+	strcpy(chr_l_actcode,chr_actcode);
+
+
+	printf("chr_actcode:|%s|",chr_actcode);
+
+	while((chr_actcode != (char *)NULL) && (strlen(chr_actcode) > 0))
+	{
+				
+		if ( strcmp(chr_actcode, " ") == 0  )
+		{
+			if(s == (char *)NULL)
+				strcpy(chr_actcode, APL_NULL_STRING);
+			else
+				chr_actcode = strtok_r(NULL, ";", &s);
+			continue;
+		}
+
+		memset(chr_h_actcode, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+		strcpy(chr_h_actcode,chr_actcode);
+
+	/* Added by monica for kotak ISKB_1737 starts */
+	EXEC SQL SELECT to_char(MAX(to_date(apl_frm_date,'MM/YYYY')),'MON-YYYY') into :h_apl_frm_date:i_apl_frm_date FROM IV_CLIENT_SERV_BASIS,SYS_IVCONTROLPARAM 
+	WHERE CLIENT = :chr_h_actcode AND service_cd = :int_h_serv_code AND  to_date(apl_frm_date,'MM/YYYY') <= B_UPTO_DATE;
+	IS_ANY_ORA_ERROR
+	printf("\n application from date |%s| \n",h_apl_frm_date);
+	/* Added by monica for kotak ISKB_1737 ends */
+
+
+		if((p_charge_type == 'T') && (p_fee_type == 'T'))
+		{
+			EXEC SQL SELECT SCHDL_FEE,FRM_CBASE,TOC_BASE,
+				  FRM_FBASE,TOF_BASE,GROUP_ID
+					  INTO  :h_schdl_fee:i_schdl_fee,
+				  :h_frm_cbase:i_frm_cbase,
+				  :h_toc_base:i_toc_base,
+				  :h_frm_fbase:i_frm_fbase,
+				  :h_tof_base:i_tof_base,
+				  :chr_h_group_ind:i_group_id
+					  FROM IV_CLIENTFEE
+					  WHERE CLIENT   = :chr_h_actcode
+					  AND SERVICE_CD   = :int_h_serv_code
+					  AND PROC_DATA_VAL   = :chr_h_fee_str
+					  AND FRM_FBASE < :h_fee_quantity
+					  AND TOF_BASE   >= :h_fee_quantity
+					  AND FRM_CBASE < :h_charge_quantity
+					  AND TOC_BASE   >= :h_charge_quantity
+					  AND APL_FRM_DATE = :h_apl_frm_date;  /* Added by monica for kotak ISKB_1737 */
+
+			if(sqlca.sqlcode < 0)
+			{
+				*int_p_retstat = IV_CRITCAL_ERROR_IND;
+			}
+
+			IS_ANY_ORA_ERROR;
+
+			if( APL_ZERO_RESULT_SET)
+			{	
+					int_retstat = IV_SUCCESS;
+					if(s == (char *)NULL)
+						strcpy(chr_actcode, APL_NULL_STRING);
+					else
+						chr_actcode = strtok_r(NULL,";",&s);
+				chr_basis_act = strtok_r(chr_basis_str,";",&p);
+				strcpy(chr_l_basis_str,APL_NULL_STRING);
+
+				while(chr_basis_act != (char *)NULL )
+				{
+					if(p == (char *)NULL)
+						strcpy(chr_basis_act, APL_NULL_STRING);
+					else
+						chr_basis_act = strtok_r(NULL,";",&p);
+					if (chr_basis_act == NULL) break; /* PJ */
+					if(strlen(chr_basis_act) > 0)
+					{
+						strcat(chr_l_basis_str,chr_basis_act);
+						strcat(chr_l_basis_str,";");
+					}
+				}
+				strcpy(chr_basis_str,chr_l_basis_str);
+			}			
+			else
+			{
+				int_fee_found = 1;
+				fees  = h_schdl_fee;
+				printf("fees **** chrg qty :|%lf| |%lf|",fees,h_charge_quantity);
+				*p_charge = fees;
+
+				break;
+			}
+		}
+
+		if(chr_actcode == (char *)NULL)
+			break;
+	}
+
+						
+	
+RETURN_SUCCESS:
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Exiting Successfully Out Of IV_Prnt_CalcTax \n",
+				NULL , NULL);
+	}
+	return APL_SUCCESS;
+
+RETURN_FAILURE:
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Exiting Unsuccessfully Out Of IV_Prnt_CalcTax \n",
+				NULL , NULL);
+	}
+	return APL_FAILURE;
+}

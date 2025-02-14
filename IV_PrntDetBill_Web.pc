@@ -1,0 +1,2933 @@
+
+#include "IV_Control_A.h"
+EXEC SQL INCLUDE SQLCA.H;
+
+extern FILE *fl_techlog;
+extern FILE *fl_userlog;
+
+char h_mstclt[11] = APL_NULL_STRING;
+char chr_acct_str[50] = APL_NULL_STRING;
+double l_disp_stax =0.0; //shailesh 26-12-2007 variable used for tax calcn
+
+int IV_PrntDetBill_Web(	 FILE *bill,
+			 char *chr_p_billdt,
+			 char *chr_p_client,
+			 char p_mastsub,
+			 char *b_ccycd,
+			 DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	extern int IV_PrntDetTrans(FILE *,char *,char *,char ,char *,double *,double *,double *,double *,DEBUG_INFO_STRUCT_H **);
+	extern int IV_PrntDetCust(FILE *,char *,char *,char, char *, double *,double *, double *, double *, DEBUG_INFO_STRUCT_H **);
+	extern int IV_PrntDetCA(FILE *,char *,char *,char, char *, double *,double *, double *, double *, DEBUG_INFO_STRUCT_H **);
+	extern int IV_Prnt_TaxCalculation( char *,double, double *,double *, char *, DEBUG_INFO_STRUCT_H **);
+	extern int IV_PrntDetailRound(FILE *,char *,char *,char, double, double, double, double, char *, DEBUG_INFO_STRUCT_H **);
+	extern int IV_PrntDetMisc(FILE *,char *,char *,char ,double *,double *,double *,double *,DEBUG_INFO_STRUCT_H **);
+	extern int IV_PrntDetAnnual(FILE *,char *,char *,char ,double *,double *,double *,double *,DEBUG_INFO_STRUCT_H **);
+	extern int IV_PrntDetOth(FILE *,char *,char *,char ,double *,double *,double *,double *,DEBUG_INFO_STRUCT_H **);
+	extern int IV_PrntDetDepo(FILE *, char *, char *, char , double *, double *, double *, double *, DEBUG_INFO_STRUCT_H **);
+
+	
+	char l_style_class[11] = APL_NULL_STRING;
+
+	double l_kotak_bnk_chrgs = 0.0;
+	double l_service_tax = 0.0;
+	double l_edu_cess = 0.0;
+	double l_grand_total = 0.0;
+   //double l_disp_stax =0.0; //shailesh 26-12-2007 variable used for tax calcn - Same is been declared globally bu Gouse
+	double l_dbl_othcharges =  0.0;
+	double l_dbl_depocharges = 0.0;
+   double l_oth_service_tax = 0.0;//shailesh 28-12-2007 tax to be considered for overbilling and underbilling part of other services
+   double l_oth_edu_cess = 0.0,l_depo_edu_cess=0.0,l_depo_service_tax=0.0;//shailesh 28-12-2007 
+	double l_outstanding_amt=0.0;	
+	double g_kotak_bnk_chrgs = 0.0;
+	double g_service_tax = 0.0;
+	double g_edu_cess = 0.0;
+	double g_grand_total = 0.0,l_minimumfee_adj=0.0,l_maximum_fee_adj=0.0,g_adj_chrgs=0.0;
+	int int_retstat=0;
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+	char l_client_name[131] = APL_NULL_STRING;
+	char chr_fee_ccy[4] = APL_NULL_STRING;
+
+	short i_chr_fee_ccy;
+	double l_minfee=0.0,l_maxfee=0.0,l_exchrate=0.0;
+	 char h_apl_frm_date[9] = APL_NULL_STRING;  /* Added by monica for kotak ISKB_1737 */
+	 short i_apl_frm_date = 0;  /* Added by monica for kotak ISKB_1737 */
+
+	EXEC SQL VAR chr_fee_ccy IS STRING;
+	EXEC SQL VAR h_apl_frm_date IS STRING;  /* Added by monica for kotak ISKB_1737 */
+
+	EXEC SQL END DECLARE SECTION;
+
+#ifdef APL_THREADS
+    APL_SET_CONTEXT
+    EXEC SQL CONTEXT USE :my_ctx_local;
+#endif
+
+	memset(l_style_class,APL_NULL_CHAR,sizeof(l_style_class));
+	strcpy(l_style_class,"lableredbg");
+
+	memset(h_mstclt,APL_NULL_CHAR,sizeof(h_mstclt));
+	memset(l_client_name,APL_NULL_CHAR,sizeof(l_client_name));
+
+	EXEC SQL SELECT CLN_NAME,CLN_MASTER INTO :l_client_name,:h_mstclt FROM MT_CLIENT WHERE CLN_CODE =:chr_p_client;
+
+	printf("sqlca.sqlcode:|%d|\n",sqlca.sqlcode);
+	IS_ANY_ORA_ERROR
+
+	if(sqlca.sqlcode == 1403)
+	{
+		fprintf(fl_techlog,"Client name not maintained for Client Code [%s] \n", chr_p_client);
+	}
+	
+
+	/*EXEC SQL SELECT CLN_MASTER INTO  :h_mstclt
+		FROM MT_CLIENT 
+		WHERE CLN_CODE=:chr_p_client;
+
+    IS_ANY_ORA_ERROR*/
+
+	printf("h_mstclt :|%s| \n",h_mstclt);
+
+	Alert("\n  chr_p_client |%s| \n",chr_p_client);
+
+	memset(chr_acct_str,APL_NULL_CHAR,sizeof(chr_acct_str));
+
+	EXEC SQL SELECT A.CLIENT||';'||A.DEFAULT_FEECLT||';'||B.CUSTODY_CLT_CD||';',
+				A.FEES_CCY,A.MINIMUMFEE, A.MAXIMUMFEE 
+		INTO :chr_acct_str,:chr_fee_ccy:i_chr_fee_ccy,:l_minfee,:l_maxfee 
+		FROM IV_CLIENTSETUP A,MT_CORE_SYS_PARAMS B 
+		WHERE A.CLIENT=:chr_p_client;
+
+    IS_ANY_ORA_ERROR
+	
+	printf("chr_acct_str :|%s| \n",chr_acct_str);
+
+	/* Added by monica for kotak ISKB_1737 starts */
+
+	
+		EXEC SQL SELECT to_char(MAX(to_date(apl_frm_date,'MM/YYYY')),'MON-YYYY') into :h_apl_frm_date:i_apl_frm_date 
+			FROM IV_CLIENT_SERV_BASIS,SYS_IVCONTROLPARAM 
+		   WHERE CLIENT = :chr_p_client AND service_cd = '16' AND  to_date(apl_frm_date,'MM/YYYY') <= B_UPTO_DATE;  
+		  
+		   IS_ANY_ORA_ERROR
+	
+	Alert("\n  client |%s| applicable from date |%s| \n",chr_p_client,h_apl_frm_date);
+	
+	/* Added by monica for kotak ISKB_1737 ends */
+
+	EXEC SQL SELECT SCHDL_FEE INTO :l_disp_stax FROM IV_CLIENTFEE WHERE CLIENT=:chr_p_client AND SERVICE_CD='16' AND APL_FRM_DATE =:h_apl_frm_date; //Added by Gouse - 12/02/2013  /* Added apl_frm_date by monica for kotak ISKB_1737 */
+	Alert("sqlca.sqlcode is |%d|",sqlca.sqlcode);
+	
+	Alert("l_disp_stax is |%f|",l_disp_stax);
+	
+	fprintf(bill,"<TABLE id='Table5' borderColor=\'#000000\' cellSpacing='0' cellPadding='1' width='100%%' border='1'><tr><td borderColor=\'#ffffff\' border='1'>&nbsp;</td><td borderColor=\'#ffffff\' border='1'>\n<BR>\n");
+	fprintf(bill,"<table class='normal' cellSpacing='0' cellPadding='0' width='100%%' border='0'><tr><td class=\'lablered\' width=\'15%%\'>Client Code : </td><td class=\'normalbold\' width=\'85%%\'>%s</td></tr>\n",chr_p_client);
+
+	fprintf(bill,"<tr><td class=\'lablered\' width=\'15%%\'>Client Name : </td><td class=\'normalbold\' width=\'85%%\'>%s</td></tr></table>\n<br>\n",l_client_name);
+/*Changes by Mrinal for ISKB_8060/ISKB_8558 to show SWACHH BHARAT CESS in the detail bill -Starts*/
+// (ISKB_9564) Below code changes done by Dimple Shah for GST
+			fprintf(bill,"<table class='normal' cellSpacing='0' cellPadding='0' width='100%%' border='0'><tr><td class=\'ez4\' width='25%%'>&nbsp;</td><td class=\'ez4\' ALIGN=\"RIGHT\"  width='27%%'>Charges (%s)</td><td class=\'ez4\' ALIGN=\"RIGHT\"  width='28%%'>GST @%.2lf%% (%s)</td><td class=\'ez4\' ALIGN=\"RIGHT\"  width='30%%'>Grand Total (%s)</td></tr><tr><td>&nbsp;</td></tr>\n\n", b_ccycd,l_disp_stax,b_ccycd,b_ccycd); 
+/*Changes by Mrinal for ISKB_8060/ISKB_8558 to show SWACHH BHARAT CESS in the detail bill -Ends*/
+	fprintf(fl_userlog,"Calling IV_PrntDetTrans for Client[%s] n Bill dt[%s] \n", chr_p_client, chr_p_billdt);
+
+	if(APL_FAILURE == IV_PrntDetTrans(bill,chr_p_client,chr_p_billdt,p_mastsub,b_ccycd,&l_kotak_bnk_chrgs,&l_service_tax,&l_edu_cess,&l_grand_total,l_debug_info_ptr))
+	{
+		fprintf(fl_userlog,"Could not Calculate IV_PrntDetTrans for client: %s and Dateof_billing :%s \n",chr_p_client,chr_p_billdt);
+		fprintf(fl_techlog,"Could not Calculate IV_PrntDetTrans for client: %s and Dateof_billing :%s \n",chr_p_client,chr_p_billdt);
+		APL_GOBACK_FAIL
+	}
+	else
+	{
+			fprintf(fl_userlog,"Success from IV_PrntDetTrans for Client[%s] n Bill dt[%s] \n", chr_p_client, chr_p_billdt);
+		 g_kotak_bnk_chrgs = g_kotak_bnk_chrgs + l_kotak_bnk_chrgs;
+		 g_service_tax = g_service_tax + l_service_tax;
+		 g_edu_cess = g_edu_cess + l_edu_cess;
+		 g_grand_total = g_grand_total + l_kotak_bnk_chrgs + l_service_tax + l_edu_cess ;
+		 fprintf(fl_userlog, "Total Transaction Charges -- |%lf| \n\n", g_grand_total);
+	}
+
+	fprintf(fl_userlog,"Calling IV_PrntDetCust for Client[%s] n Bill dt[%s] \n", chr_p_client, chr_p_billdt);
+	if(APL_FAILURE == IV_PrntDetCust(bill,
+					chr_p_client,
+					chr_p_billdt,
+					p_mastsub,
+					b_ccycd,
+					&l_kotak_bnk_chrgs,
+					&l_service_tax,
+					&l_edu_cess,
+					&l_grand_total,
+					l_debug_info_ptr))
+	{
+		fprintf(fl_userlog,"Could not Calculate IV_PrntDetCust for client: %s and Dateof_billing :%s \n",chr_p_client,chr_p_billdt);
+		fprintf(fl_techlog,"Could not Calculate IV_PrntDetCust for client: %s and Dateof_billing :%s \n",chr_p_client,chr_p_billdt);
+		APL_GOBACK_FAIL
+	}
+	else
+	{
+		fprintf(fl_userlog,"Success from IV_PrntDetCust for Client[%s] n Bill dt[%s] \n", chr_p_client, chr_p_billdt);
+		 g_kotak_bnk_chrgs = g_kotak_bnk_chrgs + l_kotak_bnk_chrgs;
+		 g_service_tax = g_service_tax + l_service_tax;
+		 g_edu_cess = g_edu_cess + l_edu_cess;
+		 g_grand_total = g_grand_total + l_kotak_bnk_chrgs + l_service_tax + l_edu_cess ;
+		 fprintf(fl_userlog, "Total Custody Charges -- |%lf| \n\n", g_grand_total);
+	}
+
+	fprintf(fl_userlog,"Calling IV_PrntDetCA for Client[%s] n Bill dt[%s] \n", chr_p_client, chr_p_billdt);
+	if(APL_FAILURE == IV_PrntDetCA(bill,
+					chr_p_client,
+					chr_p_billdt,
+					p_mastsub,
+					b_ccycd,
+					&l_kotak_bnk_chrgs,
+					&l_service_tax,
+					&l_edu_cess,
+					&l_grand_total,
+					l_debug_info_ptr))
+	{
+		fprintf(fl_userlog,"Could not Calculate IV_PrntDetCA for client: %s and Dateof_billing :%s \n",chr_p_client,chr_p_billdt);
+		fprintf(fl_techlog,"Could not Calculate IV_PrntDetCA for client: %s and Dateof_billing :%s \n",chr_p_client,chr_p_billdt);
+		APL_GOBACK_FAIL
+	}
+	else
+	{
+		fflush(fl_userlog);
+		fprintf(fl_userlog,"Success from IV_PrntDetCA for Client [%s] n Bill dt [%s] \n", chr_p_client, chr_p_billdt);
+		fflush(fl_userlog);
+		
+		Alert("Success from IV_PrntDetCA for Client |%s| and Bill Date |%s|",chr_p_client, chr_p_billdt);
+		fflush(stdout);
+		
+		 g_kotak_bnk_chrgs = g_kotak_bnk_chrgs + l_kotak_bnk_chrgs;
+		 g_service_tax = g_service_tax + l_service_tax;
+		 g_edu_cess = g_edu_cess + l_edu_cess;
+		 g_grand_total = g_grand_total + l_kotak_bnk_chrgs + l_service_tax + l_edu_cess ;
+		 fprintf(fl_userlog, "Total CA Charges -- |%lf| \n\n", g_grand_total);
+	}
+
+	/********* Final Adjustments Calculation *****************************************/
+
+if (strcmp( chr_fee_ccy, b_ccycd) != 0)
+        {
+           int_retstat = IV_SUCCESS;
+				l_exchrate = 0.0;
+           if(APL_FAILURE == IV_Proc_ConvToFxFn(chr_fee_ccy,b_ccycd,g_mt_commonsys_params_struct_h.dom_ccy,chr_p_billdt,&l_exchrate,&int_retstat,l_debug_info_ptr))
+           {
+			printf("Error : Exchange Rate not found for client [%s] having FEE_CCY [%s] and B_CCY [%s]\n",chr_p_client,chr_fee_ccy, b_ccycd);
+			fprintf(fl_techlog,"Error : Exchange Rate not found for currency %s %s\n",chr_fee_ccy, b_ccycd);
+			fflush(fl_techlog);
+           }
+		   else
+			   printf("\n l_exchrate is [%lf]",l_exchrate);
+         }
+         
+	l_maxfee = l_maxfee * l_exchrate;
+	l_minfee = l_minfee * l_exchrate; 
+	
+
+	if( (g_kotak_bnk_chrgs >= 0 ) || (l_minfee > 0) || (l_maxfee != 0) )
+	{
+		if((g_kotak_bnk_chrgs < l_minfee) && (g_kotak_bnk_chrgs >= 0))
+		{
+			l_minimumfee_adj = l_minfee - g_kotak_bnk_chrgs;
+			g_adj_chrgs=l_minimumfee_adj;
+		}
+		else
+		{
+			if((g_kotak_bnk_chrgs > l_maxfee) && (l_maxfee != 0))
+			{
+				l_maximum_fee_adj = l_maxfee - g_kotak_bnk_chrgs;
+				 g_adj_chrgs =l_maximum_fee_adj;
+			}
+			else
+			{
+				l_maximum_fee_adj = 0;
+				g_adj_chrgs = 0;
+			}
+		}
+	}
+
+	 if(l_disp_stax > 0)
+	 {
+	 if(APL_FAILURE == IV_Prnt_TaxCalculation(chr_acct_str,g_adj_chrgs, &l_service_tax,&l_edu_cess,h_mstclt,l_debug_info_ptr))
+	 {
+		 fprintf(fl_userlog,"Failure From IV_Prnt_TaxCalculation Function \n");
+		 fprintf(fl_techlog,"Error : Failure From IV_Prnt_TaxCalculation Function \n");
+	 }
+	}
+		else
+			fprintf(fl_userlog,"Skipping IV_Prnt_TaxCalculation\n");	
+
+
+	fprintf(bill,"<tr><td>&nbsp;</td></tr>\n");
+
+	fprintf(bill,"<tr class=\'lableredbg\'><td>Adjustments (%s)</td>", b_ccycd); 
+	
+	if (APL_FAILURE == IV_PrntDetailRound(bill,
+					chr_p_billdt,
+					chr_p_client,
+					p_mastsub,
+					g_adj_chrgs,
+					l_service_tax,
+					0,
+					g_adj_chrgs,
+					l_style_class,
+					l_debug_info_ptr))
+	{
+		fprintf(fl_userlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+		fprintf(fl_techlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+		APL_GOBACK_FAIL
+	}
+	else
+	{
+		 g_kotak_bnk_chrgs = g_kotak_bnk_chrgs + g_adj_chrgs;
+		 g_service_tax = g_service_tax + l_service_tax;
+		 g_edu_cess = g_edu_cess + l_edu_cess;
+		 g_grand_total = g_grand_total + g_adj_chrgs + l_service_tax;
+	}
+
+	fprintf(bill,"<tr><td>&nbsp;</td></tr>\n");
+	fprintf(bill,"<tr class=\'lableredbg\'><td>Total After Adjustments (%s)</td>\n",b_ccycd);
+	
+	if (APL_FAILURE == IV_PrntDetailRound(bill,
+				chr_p_billdt,
+				chr_p_client,
+				p_mastsub,
+				g_kotak_bnk_chrgs,
+				g_service_tax,
+				0,
+				g_grand_total,
+				l_style_class,
+				l_debug_info_ptr))
+	{
+		fprintf(fl_userlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s \n",chr_p_client,chr_p_billdt);
+		fprintf(fl_techlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s \n",chr_p_client,chr_p_billdt);
+		APL_GOBACK_FAIL
+	}
+
+	fprintf(bill,"<tr><td>&nbsp;</td></tr>\n");
+
+	fprintf(bill,"</TBODY></TABLE></TR></TBODY></TABLE>");
+	fprintf(bill,"<p class='Normal' align='Right'><o:p><B>Contd...</B></o:p></p>");//AIX Warning Removal
+	fprintf(bill,"<H3>&nbsp;</H3>\n");
+	fprintf(bill,"<TABLE id='Table6' borderColor=\'#000000\' cellSpacing='0' cellPadding='1' width='100%%' border='1'><tr><td borderColor=\'#ffffff\' border='1'>&nbsp;</td><td borderColor=\'#ffffff\' border='1'>\n<BR>\n");
+/*Changes by Mrinal for ISKB_8060/ISKB_8558 to show SWACHH BHARAT CESS in the detail bill -Starts*/
+	/*Changes done by Dimple Shah for GST ISKB_9564 Start*/
+	fprintf(bill,"<table class='normal' cellSpacing='0' cellPadding='0' width='100%%' border='0'><tr><td class=\'ez4\' width='25%%'>&nbsp;</td><td class=\'ez4\' ALIGN=\"RIGHT\"  width='27%%'>Charges (%s)</td><td class=\'ez4\' ALIGN=\"RIGHT\"  width='28%%'>GST @%.2lf%% (%s)</td><td class=\'ez4\' ALIGN=\"RIGHT\"  width='30%%'>Grand Total (%s)</td></tr><tr><td>&nbsp;</td></tr>\n\n", b_ccycd,l_disp_stax,b_ccycd,b_ccycd); 
+	/*Changes done by Dimple Shah for GST ISKB_9564 Ends*/
+/*Changes by Mrinal for ISKB_8060/ISKB_8558 to show SWACHH BHARAT CESS in the detail bill -Ends*/
+
+		if(APL_FAILURE == IV_PrntDetMisc(bill,
+					chr_p_client,
+					chr_p_billdt,
+					p_mastsub,
+					&l_kotak_bnk_chrgs,
+					&l_service_tax,
+					&l_edu_cess,
+					&l_grand_total,					
+					l_debug_info_ptr))
+	{
+		fprintf(fl_userlog,"Could not Calculate IV_PrntDetMisc for client: %s and Dateof_billing :%s \n",chr_p_client,chr_p_billdt);
+		fprintf(fl_techlog,"Could not Calculate IV_PrntDetMisc for client: %s and Dateof_billing :%s \n",chr_p_client,chr_p_billdt);
+		APL_GOBACK_FAIL
+	}
+	else
+	{
+		fprintf(fl_userlog,"Success from IV_PrntDetMisc for Client[%s] n Bill dt[%s] \n", chr_p_client, chr_p_billdt);
+		 g_kotak_bnk_chrgs = g_kotak_bnk_chrgs + l_kotak_bnk_chrgs;
+		 g_service_tax = g_service_tax + l_service_tax;
+		 g_edu_cess = g_edu_cess + l_edu_cess;
+		 g_grand_total = g_grand_total + l_kotak_bnk_chrgs + l_service_tax + l_edu_cess ;
+		 fprintf(fl_userlog, "Total IV_PrntDetMisc Charges -- |%lf| \n\n", g_grand_total);
+	}
+
+	fprintf(fl_userlog,"Calling IV_PrntDetAnnual for Client[%s] n Bill dt[%s] \n", chr_p_client, chr_p_billdt);
+	if(APL_FAILURE == IV_PrntDetAnnual(bill,
+									chr_p_client,
+									chr_p_billdt,
+									p_mastsub,
+									&l_kotak_bnk_chrgs,
+									&l_service_tax,
+									&l_edu_cess,
+									&l_grand_total,					
+									l_debug_info_ptr))
+	{
+			  fprintf(fl_userlog,"Could not Calculate IV_PrntDetAnnual for client: %s and Dateof_billing :%s \n",chr_p_client,chr_p_billdt);
+			  fprintf(fl_techlog,"Could not Calculate IV_PrntDetAnnual for client: %s and Dateof_billing :%s \n",chr_p_client,chr_p_billdt);
+			  APL_GOBACK_FAIL
+	}
+	else
+	{
+			  fprintf(fl_userlog,"Success from IV_PrntDetAnnual for Client[%s] n Bill dt[%s] \n", chr_p_client, chr_p_billdt);
+			  g_kotak_bnk_chrgs = g_kotak_bnk_chrgs + l_kotak_bnk_chrgs;
+			  g_service_tax = g_service_tax + l_service_tax;
+			  g_edu_cess = g_edu_cess + l_edu_cess;
+			  g_grand_total = g_grand_total + l_kotak_bnk_chrgs + l_service_tax + l_edu_cess ;
+			  fprintf(fl_userlog, "Total IV_PrntDetAnnual Charges -- |%lf| \n\n", g_grand_total);
+	}
+
+	fprintf(fl_userlog,"Calling IV_PrntDetOth for Client[%s] n Bill dt[%s] \n", chr_p_client, chr_p_billdt);
+	
+	fprintf(bill,"<tr class=\'lableblue\'><td>Other Service Charges</td><tr>");
+	
+	if(APL_FAILURE == IV_PrntDetOth(bill,
+					chr_p_client,
+					chr_p_billdt,
+					p_mastsub,
+					&l_kotak_bnk_chrgs,
+					&l_service_tax,
+					&l_edu_cess,
+					&l_grand_total,
+					l_debug_info_ptr))
+	{
+		fprintf(fl_userlog,"Could not Calculate IV_PrntDetOth for client: %s and Dateof_billing :%s \n",chr_p_client,chr_p_billdt);
+		fprintf(fl_techlog,"Could not Calculate IV_PrntDetOth for client: %s and Dateof_billing :%s \n",chr_p_client,chr_p_billdt);
+		APL_GOBACK_FAIL
+	}
+	else
+	{
+		fprintf(fl_userlog,"Success from IV_PrntDetOth for Client[%s] n Bill dt[%s] \n", chr_p_client, chr_p_billdt);
+		 g_kotak_bnk_chrgs = g_kotak_bnk_chrgs + l_kotak_bnk_chrgs;
+		 g_service_tax = g_service_tax + l_service_tax;
+		 g_edu_cess = g_edu_cess + l_edu_cess;
+		 g_grand_total = g_grand_total + l_kotak_bnk_chrgs + l_service_tax + l_edu_cess ;
+		 l_dbl_othcharges = l_kotak_bnk_chrgs;	
+		 l_oth_service_tax = l_service_tax;
+		 l_oth_edu_cess = l_edu_cess;
+	}
+	
+	fprintf(fl_techlog,"Calling IV_PrntDetDepo for Client[%s] n Bill dt[%s] \n", chr_p_client, chr_p_billdt);
+	if(APL_FAILURE == IV_PrntDetDepo(bill,
+					chr_p_client,
+					chr_p_billdt,
+					p_mastsub,
+					&l_kotak_bnk_chrgs,
+					&l_service_tax,
+					&l_edu_cess,
+					&l_grand_total,
+					l_debug_info_ptr))
+	{
+		fprintf(fl_userlog,"Could not Calculate IV_PrntDetDepo for client: %s and Dateof_billing :%s \n",chr_p_client,chr_p_billdt);
+		fprintf(fl_techlog,"Could not Calculate IV_PrntDetDepo for client: %s and Dateof_billing :%s \n",chr_p_client,chr_p_billdt);
+		APL_GOBACK_FAIL
+	}
+	else
+	{
+		fprintf(fl_userlog,"Success from IV_PrntDetDepo for Client[%s] n Bill dt[%s] \n", chr_p_client, chr_p_billdt);
+		 g_kotak_bnk_chrgs = g_kotak_bnk_chrgs + l_kotak_bnk_chrgs;
+		 g_service_tax = g_service_tax + l_service_tax;
+		 g_edu_cess = g_edu_cess + l_edu_cess;
+		 g_grand_total = g_grand_total + l_kotak_bnk_chrgs + l_service_tax + l_edu_cess ;
+		 l_dbl_depocharges = l_kotak_bnk_chrgs;//shailesh 26-12-2007 ISKB_430_12C
+		 l_depo_service_tax = l_service_tax;
+		 l_depo_edu_cess = l_edu_cess;
+		 fprintf(fl_userlog, "Total Depository Charges -- |%lf| \n\n", g_grand_total);
+		 fprintf(fl_userlog, "Total Other Service Charges -- |%lf| \n\n", g_grand_total);
+
+	}
+	
+	fprintf(bill,"<tr  class=\'ez4\'><td>Total Charges (%s)</td>\n",b_ccycd); 
+	Alert("\n Anjaneyulu - l_style_class=%s",l_style_class);//Added by Anjaneyulu for ISKB_1901 style
+	strcpy(l_style_class,"ez4");//Added by Anjaneyulu for ISKB_1901 style
+	if (APL_FAILURE == IV_PrntDetailRound(bill,
+					chr_p_billdt,
+					chr_p_client,
+					p_mastsub,
+					l_dbl_othcharges+l_dbl_depocharges,
+					l_oth_service_tax+l_depo_service_tax,
+					l_oth_edu_cess+l_depo_edu_cess,
+					l_dbl_othcharges+l_dbl_depocharges,
+					l_style_class,
+					l_debug_info_ptr))
+	{
+		fprintf(fl_userlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+		fprintf(fl_techlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+		APL_GOBACK_FAIL
+	}
+	
+   fprintf(bill,"</tr>"); 
+
+	fprintf(bill,"<tr><td>&nbsp;</td></tr>");
+	fprintf(bill,"<tr class=\'lableredbg\'><td>Grand Total Charges (%s)</td>\n",b_ccycd);
+	Alert("\n g_kotak_bnk_chrgs = [%lf]",g_kotak_bnk_chrgs);
+	Alert("\n g_service_tax = [%lf]",g_service_tax);
+	Alert("\n g_edu_cess = [%lf]",g_edu_cess);
+	Alert("\n g_grand_total = [%lf]",g_grand_total); 
+
+	strcpy(l_style_class,"lableredbg");//Added by Anjaneyulu for ISKB_1901 style
+	if (APL_FAILURE == IV_PrntDetailRound(bill,
+					chr_p_billdt,
+					chr_p_client,
+					p_mastsub,
+					g_kotak_bnk_chrgs,
+					g_service_tax,
+					0.0,
+					g_grand_total,
+					l_style_class,
+					l_debug_info_ptr))
+	{
+		fprintf(fl_userlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+		fprintf(fl_techlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+		APL_GOBACK_FAIL
+	}
+
+	/*********** Outstanding Amount Calculation ********************************************/
+
+       //shailesh 26-12-2007 ISKB_430_12C	
+		//PJ KOTAK AIX UAT changing query divide and rule !
+		// Dividing query setting CONS_FLAG='I' hardcoded
+		Alert(" client =|%s| ",chr_p_client);
+		Alert(" billdate=|%s| ",chr_p_billdt);
+	 /*	EXEC SQL SELECT NVL(SUM(OUTST_AMT),0) INTO :l_outstanding_amt FROM
+       ( SELECT NVL(SUM(OS_AMT),0) AS OUTST_AMT FROM IV_CHEQUE_A WHERE CLIENT = :chr_p_client  AND
+         TRUNC(BILL_DATE) < TO_DATE(SUBSTR(:chr_p_billdt,0,10),'DD/MM/YYYY')
+         UNION
+         SELECT  NVL(SUM(COMM_AMT+NIL_FEES_ADJ+MAXIMUM_FEE_ADJ+MINIMUMFEE_ADJ),0) AS OUTST_AMT
+         FROM IV_SERVICE_CHRG WHERE CLIENT = :chr_p_client 
+         AND CONS_FLAG = 'I'
+         AND TRUNC(DATEOF_BILLING)< TO_DATE(SUBSTR(:chr_p_billdt,0,10),'DD/MM/YYYY')
+         AND TO_CHAR(DATEOF_BILLING,'DD/MM/YYYY') NOT IN
+         (SELECT TO_CHAR(BILL_DATE,'DD/MM/YYYY') FROM IV_CHEQUE_A WHERE CLIENT= IV_SERVICE_CHRG.CLIENT) 
+      ); */ 
+
+/* Henceforth outstanding amount will be fetched from TOTAL_OSAMOUNT from billing client setup, query modified by Hardik on 29072015 for ISKB_7645 */	
+ EXEC SQL SELECT NVL(TOTAL_OSAMOUNT,0) INTO :l_outstanding_amt FROM IV_CLIENTSETUP WHERE CLIENT=:chr_p_client; 
+		IS_ANY_ORA_ERROR 
+
+/* If condition is commented and rewritten by Hardik for ISKB_7645 as it should equate l_outstanding_amt = 0.0 if value is negative */
+/*	if((l_outstanding_amt < 0) && (l_outstanding_amt > (-1))) */
+
+	if((l_outstanding_amt < 0) && (l_outstanding_amt < (-1.0)))
+			  l_outstanding_amt = 0.0;
+
+	if(sqlca.sqlcode !=0)
+	{
+		Alert("\n sqlca.sqlcode = [%d]",sqlca.sqlcode);
+		fprintf(fl_userlog,"Error while calculating Outstanding Amount.");
+		fprintf(fl_userlog," sqlca.sqlcode = [%d]",sqlca.sqlcode);
+		APL_GOBACK_FAIL
+	}
+
+	Alert("\n hardik l_outstanding_amt |%lf| ", l_outstanding_amt);
+	fprintf(fl_userlog,"Total Outstanding Amount For Client[%s] and Bill dt[%s] Is : |%lf| \n", chr_p_client, chr_p_billdt,l_outstanding_amt);
+	
+	fprintf(bill,"<tr><td>&nbsp;</td></tr>\n");
+	fprintf(bill,"<tr class=\'lableredbg\'><td>Outstanding Amount (%s)</td>",b_ccycd); 
+		
+	if (APL_FAILURE == IV_PrntDetailRound(bill,
+					chr_p_billdt,
+					chr_p_client,
+					p_mastsub,
+					l_outstanding_amt,
+					0.0,
+					0.0,
+					0.0,
+					l_style_class,
+					l_debug_info_ptr))
+	{
+		fprintf(fl_userlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+		fprintf(fl_techlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+		APL_GOBACK_FAIL
+	}
+	
+
+	 g_kotak_bnk_chrgs = g_kotak_bnk_chrgs + l_outstanding_amt;
+	 g_grand_total = g_grand_total + l_outstanding_amt;
+	
+	
+	fprintf(bill,"<tr><td>&nbsp;</td></tr>\n");
+	fprintf(bill,"<tr class=\'lableredbg\'><td>Net Payable Amount (%s)</td>\n",b_ccycd);
+
+	
+	if (APL_FAILURE == IV_PrntDetailRound(bill,
+				chr_p_billdt,
+				chr_p_client,
+				p_mastsub,
+				g_kotak_bnk_chrgs,
+				g_service_tax,
+				0.0,
+				g_grand_total,
+				l_style_class,
+				l_debug_info_ptr))
+	{
+		fprintf(fl_userlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s \n",chr_p_client,chr_p_billdt);
+		fprintf(fl_techlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s \n",chr_p_client,chr_p_billdt);
+		APL_GOBACK_FAIL
+	}
+	fprintf(bill,"<tr><td>&nbsp;</td></tr>\n");
+	fprintf(bill,"</table></table><br>\n\n");
+
+
+
+
+	fflush(bill);	
+
+APL_GOBACK_SUCCESS // AIX - Warning
+
+	RETURN_SUCCESS:
+		CO_ProcMonitor(APL_OUT_FILE,"Exiting out of IV_PrntDetBill_Web Successfully\n",NULL,NULL);
+                return APL_SUCCESS;
+
+        RETURN_FAILURE:
+		CO_ProcMonitor(APL_OUT_FILE,"Exiting out of IV_PrntDetBill_Web UnSuccessfully\n",NULL,NULL);
+		return APL_FAILURE;
+}
+
+int IV_PrntDetTrans(FILE *bill,char *chr_p_client,char *chr_p_billdt,char p_mastsub,char *b_ccycd,
+		double *p_kotak_bnk_chrgs,
+		double *p_service_tax,
+		double *p_edu_cess,
+		double *p_grand_total,
+		DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	extern int IV_PrntDetailRound(FILE *,char *,char *,char, double, double, double, double, char *, DEBUG_INFO_STRUCT_H **);
+	extern int IV_PrntDetCust(FILE *,char *,char *,char, char *, double *,double *, double *, double *, DEBUG_INFO_STRUCT_H **);
+	extern int IV_Prnt_TaxCalculation( char *,double, double *,double *, char *, DEBUG_INFO_STRUCT_H **);
+
+	double l_amenddealcode = AMEND_FEE_IND;
+	double l_repairfee = REPAIRFEE;
+	double l_deldealcode = DELV_TXN_FEE;
+	double l_dealcode = TXNFEE;
+	double l_latedealcode = LATETXNFEE;
+	double l_booktrfr_code = IV_BOOKTRF_FEE;
+	double l_trnarnfee = TURNAROUNDTXNFEE;
+	double l_settalgefee = SETTALGEFEE;
+	double l_bogmsgfee = BOG_MSG_FEE;
+	double l_baskettxn = BUCK_TXN_FEE; 
+	double l_mutualfund = MUTUALFUND_TXN_FEE; 
+	double l_kotak_bnk_chrgs = 0.0;
+	double l_adj_chrgs = 0.0;
+	int l_int_count = 0;
+	
+	double g_kotak_bnk_chrgs = 0.0;
+	double g_service_tax = 0.0;
+	double g_edu_cess = 0.0;
+	double g_grand_total = 0.0;
+	double g_adj_chrgs = 0.0;
+
+	double l_service_tax = 0.0;
+	double l_edu_cess = 0.0;
+	double l_grand_total = 0.0;
+	char l_style_class[10] = APL_NULL_STRING;
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+	char l_serv_code[6] = APL_NULL_STRING;
+	char l_service_desc[21] = APL_NULL_STRING;
+
+	EXEC SQL VAR l_service_desc IS STRING;
+
+	EXEC SQL END DECLARE SECTION;
+	
+	memset(l_service_desc,APL_NULL_CHAR,sizeof(l_service_desc));
+	memset(l_style_class,APL_NULL_CHAR,sizeof(l_style_class));
+	strcpy(l_style_class,"normal");
+	
+
+	Alert(" 117 |%s|%s|%c| ",chr_p_billdt,chr_p_client,p_mastsub);
+/* ISKB_8060 - Chnages by Mrinal- Replace INITCAP with UPPER For Bill Printing FSD*/
+/*	 	EXEC SQL DECLARE trans_curr CURSOR FOR 
+		 SELECT TO_CHAR(A.SERVICE_CD),SUM(A.COMM_AMT),
+		 SUM(A.NIL_FEES_ADJ)+SUM(A.MINIMUMFEE_ADJ)+SUM(A.MAXIMUM_FEE_ADJ),
+		 INITCAP(B.SERVICE_DET)
+		 FROM IV_SERVICE_CHRG A ,IV_SERV_MAST B
+			WHERE A.CLIENT = :chr_p_client 
+			AND A.DATEOF_BILLING= :chr_p_billdt 
+			AND A.CONS_FLAG = :p_mastsub
+			AND A.SERVICE_CD IN (:l_amenddealcode,:l_repairfee,:l_deldealcode,
+								 :l_dealcode,:l_latedealcode,:l_booktrfr_code,
+								 :l_trnarnfee,:l_settalgefee,:l_bogmsgfee,
+								 :l_baskettxn,:l_mutualfund)
+			AND A.SERVICE_CD = B.SERVICE_CD
+		 GROUP BY A.SERVICE_CD,B.SERVICE_DET
+		 ORDER BY A.SERVICE_CD; 
+*/
+EXEC SQL DECLARE trans_curr CURSOR FOR 
+		 SELECT TO_CHAR(A.SERVICE_CD),SUM(A.COMM_AMT),
+		 SUM(A.NIL_FEES_ADJ)+SUM(A.MINIMUMFEE_ADJ)+SUM(A.MAXIMUM_FEE_ADJ),
+		 UPPER(B.SERVICE_DET)
+		 FROM IV_SERVICE_CHRG A ,IV_SERV_MAST B
+			WHERE A.CLIENT = :chr_p_client 
+			AND A.DATEOF_BILLING= :chr_p_billdt 
+			AND A.CONS_FLAG = :p_mastsub
+			AND A.SERVICE_CD IN (:l_amenddealcode,:l_repairfee,:l_deldealcode,
+								 :l_dealcode,:l_latedealcode,:l_booktrfr_code,
+								 :l_trnarnfee,:l_settalgefee,:l_bogmsgfee,
+								 :l_baskettxn,:l_mutualfund)
+			AND A.SERVICE_CD = B.SERVICE_CD
+		 GROUP BY A.SERVICE_CD,B.SERVICE_DET
+		 ORDER BY A.SERVICE_CD; 
+	fprintf(fl_userlog, "ORA for declaration of cursor trans_curr - [%d] \n", sqlca.sqlcode);
+
+	EXEC SQL OPEN trans_curr;
+
+	if(sqlca.sqlcode < 0)
+	{
+		fprintf(fl_userlog,"IV_PrntDetBill_Web.pc:133 OPEN trans_curr ORA Error  - |%d|\n", sqlca.sqlcode);
+		fprintf(fl_techlog,"Error : Critical Error in OPEN trans_curr \n");
+		APL_GOBACK_FAIL
+	}
+
+
+	fprintf(bill,"<tr><td class=\'lableblue\'>Transaction Charges</td><tr>\n");
+
+	for(;;)
+	{
+		memset(l_serv_code,APL_NULL_CHAR,6);
+
+		EXEC SQL FETCH trans_curr 
+		INTO :l_serv_code,
+		     :l_kotak_bnk_chrgs,
+		     :l_adj_chrgs,
+			  :l_service_desc;
+
+		if(sqlca.sqlcode == 1403)
+		break;
+
+		if(sqlca.sqlcode < 0)
+		{
+			fprintf(fl_userlog, "Fetch of trans_curr ORA Error  - |%d|\n", sqlca.sqlcode);
+			fprintf(fl_techlog, "Error : Critical Error in Fetch of trans_curr \n");
+			APL_GOBACK_FAIL
+			break;
+		}
+	
+		if(l_disp_stax > 0)
+		{	
+		if(APL_FAILURE == IV_Prnt_TaxCalculation(chr_acct_str,l_kotak_bnk_chrgs, &l_service_tax,&l_edu_cess,h_mstclt,l_debug_info_ptr))
+		 	{
+			 fprintf(fl_userlog,"226 Failure From IV_Prnt_TaxCalculation Function \n");
+			 fprintf(fl_techlog,"Error : Failure From IV_Prnt_TaxCalculation Function \n");
+			}
+		}
+		else
+			fprintf(fl_userlog,"Skipping IV_Prnt_TaxCalculation\n");	
+
+		fprintf(bill,"<tr><td>%s</td>\n",l_service_desc);
+		
+		l_edu_cess =0 ;
+		if (APL_FAILURE == IV_PrntDetailRound(bill,
+						chr_p_billdt,
+						chr_p_client,
+						p_mastsub,
+						l_kotak_bnk_chrgs,
+						l_service_tax,
+						l_edu_cess,
+						l_grand_total,
+						l_style_class,
+						l_debug_info_ptr))
+		{
+			fprintf(fl_userlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+			fprintf(fl_techlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+			APL_GOBACK_FAIL
+		}
+		
+		fprintf(bill,"</tr>\n");
+
+		g_kotak_bnk_chrgs = g_kotak_bnk_chrgs + l_kotak_bnk_chrgs;
+		g_service_tax = g_service_tax + l_service_tax;
+		g_edu_cess = g_edu_cess + l_edu_cess;
+		g_grand_total = g_grand_total + l_grand_total;
+		g_adj_chrgs = g_adj_chrgs + l_adj_chrgs;
+
+		l_int_count++;
+	}
+	EXEC SQL CLOSE trans_curr;
+	
+	if(l_int_count > 0)
+	{
+		fprintf(bill,"<tr><td>Adjustments</td>\n");
+		if(l_disp_stax > 0)
+		{
+		if(APL_FAILURE == IV_Prnt_TaxCalculation(chr_acct_str,g_adj_chrgs,&l_service_tax,&l_edu_cess,h_mstclt,l_debug_info_ptr))
+		{
+			 fprintf(fl_userlog,"267 Failure From IV_Prnt_TaxCalculation Function \n");
+			 fprintf(fl_techlog,"Error : Failure From IV_Prnt_TaxCalculation Function \n");
+		}	
+		}	
+		else
+			fprintf(fl_userlog,"Skipping IV_Prnt_TaxCalculation\n");	
+
+		l_edu_cess =0; 
+		if (APL_FAILURE == IV_PrntDetailRound(bill,
+						chr_p_billdt,
+						chr_p_client,
+						p_mastsub,
+						g_adj_chrgs,
+						l_service_tax,
+						l_edu_cess,
+						g_adj_chrgs,
+						l_style_class,
+						l_debug_info_ptr))
+		{
+			fprintf(fl_userlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+			fprintf(fl_techlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+			APL_GOBACK_FAIL
+		}
+		else
+		{
+			g_kotak_bnk_chrgs = g_kotak_bnk_chrgs + g_adj_chrgs;
+			g_service_tax = g_service_tax + l_service_tax;
+			g_edu_cess = g_edu_cess + l_edu_cess;
+			g_grand_total = g_grand_total + l_grand_total;
+		}
+		fprintf(bill,"</tr>\n");
+		
+	} 
+
+	strcpy(l_style_class,"ez4");
+
+	fprintf(bill,"<tr><td class=\'ez4\'>Total Charges (%s)</td>\n",b_ccycd);
+
+	
+	if (APL_FAILURE == IV_PrntDetailRound(bill,
+					chr_p_billdt,
+					chr_p_client,
+					p_mastsub,
+					g_kotak_bnk_chrgs,
+					g_service_tax,
+					g_edu_cess,
+					g_grand_total,
+					l_style_class,
+					l_debug_info_ptr))
+	{
+		fprintf(fl_userlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+		fprintf(fl_techlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+		APL_GOBACK_FAIL
+	}
+
+
+	 fprintf(bill,"</tr>");
+
+	 *p_kotak_bnk_chrgs = g_kotak_bnk_chrgs;
+	 *p_service_tax = g_service_tax;
+	 *p_edu_cess = g_edu_cess;
+	 *p_grand_total = g_grand_total;
+
+	 fprintf(bill,"</tr><tr><td>&nbsp;</td></tr>\n");
+
+
+APL_GOBACK_SUCCESS
+
+
+RETURN_SUCCESS:
+	Alert("Exiting out of IV_PrntDetTrans succesfully");
+    return(APL_SUCCESS);
+
+RETURN_FAILURE:
+	Alert("Exiting out of IV_PrntDetTrans unsuccesfully");
+    return (APL_FAILURE);
+
+}
+
+/****** For Common Tax Calculation : By Vinay Kalaskar ******************************/
+
+int IV_Prnt_TaxCalculation( char *chr_acct_str,
+		  		   double p_taxable,
+				   double *p_service_tax,
+			  	   double *p_edu_cess,
+				   char *h_mstclt,
+				   DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	double srv_charge = 0.0; 
+	double l_service_tax = 0.0;
+	double l_edu_cess = 0.0;
+	double l_edurate=0.0;
+//shailesh 26-12-2007 made global	double g_edurate=0.0;
+	 
+	int int_retstat=0;//Added by Gouse - 12/02/2013
+	 
+
+	if(p_taxable > 0)
+	{
+		 fprintf(fl_userlog,"Calling IV_Prnt_CalcTax For :|%s|-|%lf|\n",chr_acct_str,p_taxable);
+
+		/* Uncommented by Gouse - 12/02/2013 - Start */
+
+		 if(APL_FAILURE == IV_Prnt_CalcTax(fl_userlog,chr_acct_str,TAXFEE,p_taxable,
+					p_taxable,'T','T',&srv_charge,h_mstclt,
+					 ";"," "," ",&int_retstat,l_debug_info_ptr))
+		 {
+			 fprintf(fl_userlog,"Failure From IV_Prnt_CalcTax Function \n");
+			 fprintf(fl_techlog,"Error : Failure From IV_Prnt_CalcTax Function \n");
+			 srv_charge = 0.0;
+		 }
+		/* Uncommented by Gouse - 12/02/2013 - End */
+
+		printf("p_taxable :|%lf| srv_charge :|%lf|\n",p_taxable,srv_charge);
+
+		l_service_tax = ( p_taxable * (srv_charge/100) );
+
+		printf("l_service_tax(( g_final_charges * (srv_charge/100) )) = :|%lf| \n",l_service_tax);
+
+		fprintf(fl_userlog,"l_service_tax :|%lf|\n",l_service_tax);
+	}
+	else
+	{
+     //	p_taxable = abs(p_taxable); 
+		p_taxable = p_taxable* (-1);//shailesh 03-06-2008 
+		fprintf(fl_userlog,"Calling IV_Prnt_CalcTax For :|%s|-|%lf|\n",chr_acct_str,p_taxable);
+
+		if(p_taxable > 0)
+		{
+			/* Uncommented by Gouse - 12/02/2013 - Start */
+			if(APL_FAILURE == IV_Prnt_CalcTax(fl_userlog,chr_acct_str,TAXFEE,p_taxable,
+						p_taxable,'T','T',&srv_charge,h_mstclt,
+						 ";"," "," ",&int_retstat,l_debug_info_ptr))
+			{
+				 fprintf(fl_userlog,"Failure From IV_Prnt_CalcTax Function \n");
+				 fprintf(fl_techlog,"Error : Failure From IV_Prnt_CalcTax Function \n");
+				 srv_charge = 0.0;
+			}
+			/* Uncommented by Gouse - 12/02/2013 - End */
+
+			printf("p_taxable :|%lf| srv_charge :|%lf|\n",p_taxable,srv_charge);
+
+			l_service_tax = ( p_taxable * (srv_charge/100) )*(-1);
+
+			printf("l_service_tax = :|%lf| \n",l_service_tax);
+
+			fprintf(fl_userlog,"l_service_tax :|%lf|\n",l_service_tax);
+		}
+		else
+		{
+			fprintf(fl_userlog,"p_taxable Is :|%lf| ... No Need To Calculate Tax \n",p_taxable);
+		}
+	}
+
+	/*	ISKB-1932	Education Cess from Client Fee Structure	*/
+	printf("Education p_taxable :|%lf| \n",p_taxable);
+		 
+	/* Commented by Gouse - 12/02/2013 - this service chrg would be included in TAXFEE		 
+	if(APL_FAILURE == IV_Prnt_CalcTax(fl_userlog,chr_acct_str,EDUCESSFEE,p_taxable,
+					p_taxable,'T','T',&l_edurate,h_mstclt,
+					 ";"," "," ",&int_retstat,l_debug_info_ptr))
+	{
+		fprintf(fl_userlog,"Failure From IV_Prnt_CalcTax Function \n");
+		fprintf(fl_techlog,"Error : Failure From IV_Prnt_CalcTax Function \n");
+		l_edurate = 0.0;
+	}
+	commented by Gouse - 12/02/2013 - End */
+
+	printf("g_edurate :|%lf|\n",l_edurate);
+	l_edu_cess =  (l_service_tax * l_edurate) /100 ;
+
+	fprintf(fl_userlog,"l_edu_cess :|%lf|\n",l_edu_cess);
+
+	*p_service_tax = l_service_tax*(1+l_edurate/100); //shailesh 26-12-2007 ISKB_430_12C
+	*p_edu_cess    = l_edu_cess;
+
+	
+
+APL_GOBACK_SUCCESS
+
+
+RETURN_SUCCESS:
+	APL_IF_DEBUG
+	{
+	CO_ProcMonitor(APL_OUT_FILE,"Exiting out of IV_Prnt_TaxCalculation succesfully\n",NULL,NULL);
+	}
+	printf("\n returning 1");
+	return (1);
+RETURN_FAILURE:
+	APL_IF_DEBUG
+	{
+	CO_ProcMonitor(APL_OUT_FILE,"Exiting out of IV_Prnt_TaxCalculation unsuccesfully\n",NULL,NULL);
+	}
+	printf("\n returning 0");
+	return (0);
+}
+
+int IV_PrntDetailRound(FILE *bill,
+		 char *chr_p_billdt,
+		 char *chr_p_client,
+		 char p_mastsub,
+		 double p_kotak_bnk_chrgs,
+		 double p_service_tax,
+		 double p_edu_cess,
+		 double p_grand_total,
+		 char *p_style_class,
+		 DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	struct sqlca sqlca;
+
+	char chr_kotak_bnk_chargs[20];
+	char chr_service_tax[20];
+	char chr_edu_cess[20];
+	char chr_grand_total[20];
+
+	char l_return_value[25] = APL_NULL_STRING;	/* JC - 25/07/2007 */
+	char l_err_desc[100] = APL_NULL_STRING;		/* JC - 25/07/2007 */
+	
+	memset(chr_kotak_bnk_chargs, APL_NULL_CHAR, 20);
+	memset(chr_service_tax, APL_NULL_CHAR, 20);
+	memset(chr_edu_cess, APL_NULL_CHAR, 20);
+	memset(chr_grand_total, APL_NULL_CHAR, 20);
+
+   
+	EXEC SQL CALL SP_PRINT_FORMATTING(:p_kotak_bnk_chrgs, :l_return_value, :l_err_desc);
+	if(strlen(l_err_desc) > 0)
+	{
+		printf("JC:::::Error in formatting for p_kotak_bnk_chrgs: l_err_desc -- %s\n", l_err_desc);
+	}
+	fprintf(bill,"<td class='%s' align='RIGHT'>%s</td>", p_style_class, l_return_value);
+
+
+	EXEC SQL CALL SP_PRINT_FORMATTING(:p_service_tax, :l_return_value, :l_err_desc);
+	if(strlen(l_err_desc) > 0)
+	{
+		printf("JC:::::Error in formatting for p_service_tax: l_err_desc -- %s\n", l_err_desc);
+	}
+	fprintf(bill,"<td class='%s' align='RIGHT'>%s</td>", p_style_class, l_return_value);
+
+
+	EXEC SQL CALL SP_PRINT_FORMATTING(:p_edu_cess, :l_return_value, :l_err_desc);
+	if(strlen(l_err_desc) > 0)
+	{
+		printf("JC:::::Error in formatting for p_edu_cess: l_err_desc -- %s\n", l_err_desc);
+	}
+	// shailesh 26-12-2007 ISKB_430_12C 
+        //fprintf(bill,"<td class='%s' align='RIGHT'>%s</td>", p_style_class, l_return_value);
+
+
+	
+	p_grand_total = p_kotak_bnk_chrgs + p_service_tax + p_edu_cess;
+
+	
+
+	EXEC SQL CALL SP_PRINT_FORMATTING(:p_grand_total, :l_return_value, :l_err_desc);
+	if(strlen(l_err_desc) > 0)
+	{
+		printf("JC:::::Error in formatting for p_grand_total: l_err_desc -- %s\n", l_err_desc);
+	}
+	fprintf(bill,"<td class='%s' align='RIGHT'>%s</td>", p_style_class, l_return_value);
+
+APL_GOBACK_SUCCESS // AIX - Warning
+	
+RETURN_SUCCESS:
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Exiting out of IV_PrntDetailRound succesfully\n",NULL,NULL);
+	}
+return(APL_SUCCESS);
+RETURN_FAILURE:
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Exiting out of IV_PrntDetailRound unsuccesfully\n",NULL,NULL); 
+	}
+	return (APL_FAILURE);
+}
+
+int IV_PrntDetCust(FILE *bill,
+		char *chr_p_client,
+		char *chr_p_billdt,
+		char p_mastsub,
+		char *b_ccycd,
+		double *p_kotak_bnk_chrgs,
+		double *p_service_tax,
+		double *p_edu_cess,
+		double *p_grand_total,
+		DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	extern int IV_PrntDetailRound(FILE *,char *,char *,char, double, double, double, double, char *, DEBUG_INFO_STRUCT_H **);
+
+	double l_custfee = CUSTODYFEE;
+	double l_sebiauc = SEBI_AUC;/*Added by chitrlekha for SEBI AUC charges -ISKB_1901 */
+
+	char l_mastsub = APL_NULL_CHAR;
+	char l_billdate[20] = APL_NULL_STRING;
+	char l_client[20] = APL_NULL_STRING;
+
+	char l_style_class[10] = APL_NULL_STRING;
+	char l_serv_code[6] = APL_NULL_STRING;
+	char l_cust_service[200] = APL_NULL_STRING;
+
+	char l_nav_ind[2] = APL_NULL_STRING;
+
+	double l_kotak_bnk_chrgs = 0.0;
+	double l_service_tax = 0.0;
+	double l_edu_cess = 0.0;
+	double l_grand_total = 0.0;
+
+	double g_kotak_bnk_chrgs = 0.0;
+	double g_service_tax = 0.0;
+	double g_edu_cess = 0.0;
+	double g_grand_total = 0.0;
+
+// shailesh 26-12-2007 made global	double g_edurate;
+	double l_adj_chrgs = 0.0;
+	double g_adj_chrgs = 0.0;
+	int l_int_count = 0;
+        //shailesh...170807
+	char l_service_desc[200] = APL_NULL_STRING;
+// shailesh 26-12-2007 made global	char chr_acct_str[200] = APL_NULL_STRING;
+// shailesh 26-12-2007 made global        char h_mstclt[20] = APL_NULL_STRING;
+         
+
+	EXEC SQL BEGIN DECLARE SECTION;
+	
+	EXEC SQL VAR l_client IS STRING;
+	EXEC SQL VAR l_billdate IS STRING;
+	EXEC SQL VAR l_serv_code IS STRING;
+	EXEC SQL VAR l_cust_service IS STRING;
+
+	EXEC SQL END DECLARE SECTION;
+
+
+	strcpy(l_client,chr_p_client);
+	strcpy(l_billdate,chr_p_billdt);
+	l_mastsub = p_mastsub;
+	strcpy(l_style_class,"normal");
+
+	/********** NAV Check Changes By Vinay Kalaskar ****************/
+	
+	printf("Before NAV Check -- Client :|%s|\n",l_client);
+	
+	EXEC SQL SELECT NAV_IND INTO :l_nav_ind FROM IV_CLIENTSETUP WHERE CLIENT=:l_client;
+
+	fprintf(fl_userlog, "After NAV Check ORA Error  -- |%d|\n", sqlca.sqlcode);
+
+	fprintf(fl_userlog, "NAV indicator -- |%s|\n", l_nav_ind);
+
+	/**************************************************************/
+
+	/*********** Safe Custody Charges *****************************/
+
+	if(!strcmp(l_nav_ind,"Y"))
+	{
+		//Alert("Inside NAV Check If Condition \n");
+	//SP 06-08-07 to remove join from iv_deal
+		EXEC SQL DECLARE cust_nav_curr CURSOR FOR 
+		 SELECT A.SERVICE_CD,SUM(A.COMM_AMT),
+		 SUM(A.NIL_FEES_ADJ)+SUM(A.MINIMUMFEE_ADJ)+SUM(A.MAXIMUM_FEE_ADJ)
+		 FROM IV_SERVICE_CHRG A
+		 WHERE  A.CLIENT = :l_client
+		 AND A.DATEOF_BILLING= :l_billdate
+		 AND A.CONS_FLAG = :l_mastsub
+		 AND A.SERVICE_CD IN (:l_custfee,:l_sebiauc)/*Added by chitrlekha for SEBI AUC charges -ISKB_1901 */
+		 GROUP BY A.CLIENT,A.SERVICE_CD,A.CONS_FLAG,A.DATEOF_BILLING;
+
+		fprintf(fl_userlog, "ORA for declaration of cursor cust_nav_curr -- [%d] \n", sqlca.sqlcode);
+	}
+	else
+	{
+		EXEC SQL DECLARE cust_curr CURSOR FOR  
+         SELECT A.SERVICE_CD,SUM(A.COMM_AMT),
+		 SUM(A.NIL_FEES_ADJ)+SUM(A.MINIMUMFEE_ADJ)+SUM(A.MAXIMUM_FEE_ADJ)
+		 FROM IV_SERVICE_CHRG A	
+         WHERE  A.CLIENT = :l_client
+	     AND A.DATEOF_BILLING= :l_billdate  
+		 AND A.CONS_FLAG = :l_mastsub
+	     AND A.SERVICE_CD IN (:l_custfee,:l_sebiauc) /*Added by chitrlekha for SEBI AUC charges -ISKB_1901*/ 
+         GROUP BY A.CLIENT,A.SERVICE_CD,A.CONS_FLAG,A.DATEOF_BILLING 
+         ORDER BY A.SERVICE_CD;
+
+ 		/*shailesh 210807 --above changes made for adjustment display in custody fee
+		SELECT SERVICE_CD, NVL(SUM(CUST_CHRG),0)
+		FROM IV_CUST_PRINT
+		WHERE 
+		CLIENT = :l_client
+		AND BILLING_DT = :l_billdate
+		GROUP BY SERVICE_CD
+		ORDER BY SERVICE_CD;*/
+
+    	 IS_ANY_ORA_ERROR;
+
+         fprintf(fl_userlog, "ORA for declaration of cursor cust_curr -- [%d] \n", sqlca.sqlcode);
+		
+		/* JC - 24-07-2007 -- End */
+	
+		/* Commented by JC - 24-07-2007 -- Query written above	
+		EXEC SQL DECLARE cust_curr CURSOR FOR 
+		 SELECT A.SERVICE_CD,SUM(B.COMM_AMT),
+		 SUM(A.NIL_FEES_ADJ)+SUM(A.MINIMUMFEE_ADJ)+SUM(A.MAXIMUM_FEE_ADJ)
+		 FROM IV_SERVICE_CHRG A,IV_DEAL_FEE B
+		 GROUP BY A.CLIENT,B.CLIENT,A.SERVICE_CD,B.SERVICE_CD,
+			     A.CONS_FLAG,B.CONS_FLAG,A.DATEOF_BILLING,B.DATEOF_BILLING,
+			     B.PROC_DATA_VAL
+		    HAVING A.CLIENT=B.CLIENT
+		    AND A.SERVICE_CD=B.SERVICE_CD
+		    AND A.DATEOF_BILLING=B.DATEOF_BILLING    
+		    AND A.CONS_FLAG=B.CONS_FLAG
+		    AND A.CLIENT = :l_client
+    		    AND A.DATEOF_BILLING= :l_billdate
+		    AND A.CONS_FLAG = :l_mastsub
+		    AND A.SERVICE_CD IN (:l_custfee,:l_ptcfee)
+		    ORDER BY A.SERVICE_CD;
+		*/
+
+        }		    
+
+	if(!strcmp(l_nav_ind,"Y"))
+	{
+		EXEC SQL OPEN cust_nav_curr;
+	}
+	else
+	{
+		EXEC SQL OPEN cust_curr;
+	}
+
+	if(sqlca.sqlcode < 0)
+	{
+		fprintf(fl_userlog,"OPEN cust_curr or cust_nav_curr ORA Error  - |%d|\n", sqlca.sqlcode);
+		fprintf(fl_techlog,"Error : Critical Error in OPEN cust_curr or cust_nav_curr \n");
+	}
+
+    /********* Service Tax Calculation *********************************************/
+/*	EXEC SQL SELECT CLN_MASTER 
+        INTO  :h_mstclt
+		FROM MT_CLIENT 
+		WHERE CLN_CODE=:l_client_code;
+
+          IS_ANY_ORA_ERROR
+
+         EXEC SQL SELECT A.CLIENT||';'||A.DEFAULT_FEECLT||';'||B.CUSTODY_CLT_CD||';'  
+         INTO :chr_acct_str 
+         FROM IV_CLIENTSETUP A,MT_CORE_SYS_PARAMS B 
+         WHERE A.CLIENT=:chr_p_client;
+
+          IS_ANY_ORA_ERROR
+shailesh 26-12-2007 ISKB_430_12C*/
+	
+
+	fprintf(bill,"<tr><td class=\'lableblue\'>Safe Custody Charges</td><tr>\n");
+
+	for(;;)
+	{
+		if(!strcmp(l_nav_ind,"Y"))
+		{
+			EXEC SQL FETCH cust_nav_curr 
+			INTO :l_serv_code,
+		     	:l_kotak_bnk_chrgs,
+		     	:l_adj_chrgs;
+		}
+		else
+		{
+			EXEC SQL FETCH cust_curr 
+			INTO :l_serv_code,
+		     	:l_kotak_bnk_chrgs,:l_adj_chrgs;
+				/*shailesh--l_adj_chrgs  added 210807*/
+				/* l_adj_chrgs removed by JC - 24-07-2007 */
+		}
+
+		printf("JC :::: ORA for cursor fetch  -- |%d|\n",sqlca.sqlcode);
+		printf("JC::::: l_serv_code -- |%s|\n", l_serv_code);
+		printf("JC::::: l_kotak_bnk_chrgs -- |%lf|\n", l_kotak_bnk_chrgs);
+		printf("210807::::: l_adj_chrgs -- |%lf|\n", l_adj_chrgs);
+
+
+		if(sqlca.sqlcode == 1403)
+		break;
+
+		if(sqlca.sqlcode < 0)
+		{
+			printf("Fetching of cust_curr ORA Error - |%d|\n", sqlca.sqlcode);
+			printf("Error: Failed in Fetching of cust_curr \n");
+			break;
+		}
+
+		printf("l_serv_code :|%s|\n",l_serv_code);
+		printf("l_kotak_bnk_chrgs :|%lf|\n",l_kotak_bnk_chrgs);
+/* ISKB_8060 - Chnages by Mrinal- Replace INITCAP with UPPER For Bill Printing FSD*/
+/*		EXEC SQL SELECT (REPLACE(INITCAP(SERVICE_DET),'Ptc','PTC')) 
+			 INTO :l_cust_service 
+			 FROM IV_SERV_MAST WHERE SERVICE_CD=:l_serv_code;
+*/
+		EXEC SQL SELECT (REPLACE(UPPER(SERVICE_DET),'PTC','PTC')) 
+			 INTO :l_cust_service 
+			 FROM IV_SERV_MAST WHERE SERVICE_CD=:l_serv_code;
+		fprintf(bill,"<tr><td>%s</td>\n",l_cust_service);
+
+		//17082007 shailesh --change for this function start.
+	/*	EXEC SQL SELECT CLN_MASTER INTO :h_mstclt
+		FROM MT_CLIENT 
+		WHERE CLN_CODE=:l_client_code;
+        */
+
+
+		printf("l_serv_code :|%s|\n",l_serv_code);
+		printf("l_service_desc :|%s|\n",l_service_desc);
+
+		/* Un-commented and re-written by Gouse - 12/02/2013 */
+		 /* if(APL_FAILURE == IV_Prnt_TaxCalculation(fl_techlog,fl_userlog,chr_acct_str,l_kotak_bnk_chrgs,
+										  &l_service_tax,&l_edu_cess,&h_mstclt,l_debug_info_ptr)); */
+		 if(l_disp_stax > 0)
+		 {
+		 	if(APL_FAILURE == IV_Prnt_TaxCalculation(chr_acct_str,l_kotak_bnk_chrgs,&l_service_tax,&l_edu_cess,h_mstclt,l_debug_info_ptr));
+		 {
+			 fprintf(fl_userlog,"Failure From IV_Prnt_TaxCalculation Function \n");
+			 fprintf(fl_techlog,"Error : Failure From IV_Prnt_TaxCalculation Function \n");
+		 	}
+		 }
+		else
+			fprintf(fl_userlog,"Skipping IV_Prnt_TaxCalculation\n");	
+
+		 l_edu_cess =0 ;//shailesh 26-12-2007 ISKB_430_11C-12C
+
+		if (APL_FAILURE == IV_PrntDetailRound(bill,
+						chr_p_billdt,
+						chr_p_client,
+						p_mastsub,
+						l_kotak_bnk_chrgs,
+						l_service_tax,
+						l_edu_cess,
+						l_grand_total,
+						l_style_class,
+						l_debug_info_ptr))
+		{
+			fprintf(fl_userlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+			fprintf(fl_techlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+			APL_GOBACK_FAIL
+		}
+		else
+		{
+
+		}
+
+		fprintf(bill,"</tr>\n");
+
+		g_kotak_bnk_chrgs = g_kotak_bnk_chrgs + l_kotak_bnk_chrgs;
+		g_service_tax = g_service_tax + l_service_tax;
+		g_edu_cess = g_edu_cess + l_edu_cess;
+		g_grand_total = g_grand_total + l_grand_total;
+		g_adj_chrgs = g_adj_chrgs + l_adj_chrgs;
+
+		l_int_count ++;
+
+	}
+
+	if(!strcmp(l_nav_ind,"Y"))
+	{
+		EXEC SQL CLOSE cust_nav_curr;
+	}
+	else
+	{
+		EXEC SQL CLOSE cust_curr;
+	}
+
+	
+	if(l_int_count > 0)
+	{
+		fprintf(bill,"<tr><td>Adjustments</td>\n");
+
+		/* Un-commented and rewritten by Gouse - 12/02/2013 */
+		/*if(APL_FAILURE == IV_Prnt_TaxCalculation(fl_techlog,fl_userlog,chr_acct_str,g_adj_chrgs,
+									  &l_service_tax,&l_edu_cess,h_mstclt,l_debug_info_ptr)); */
+		if(l_disp_stax > 0)
+		{
+			if(APL_FAILURE == IV_Prnt_TaxCalculation(chr_acct_str,g_adj_chrgs,&l_service_tax,&l_edu_cess,h_mstclt,l_debug_info_ptr));
+		{
+			 fprintf(fl_userlog,"Failure From IV_Prnt_TaxCalculation Function \n");
+			 fprintf(fl_techlog,"Error : Failure From IV_Prnt_TaxCalculation Function \n");
+			}
+		}
+		else
+			fprintf(fl_userlog,"Skipping IV_Prnt_TaxCalculation\n");	
+
+		l_edu_cess =0 ;//shailesh 26-12-2007 ISKB_430_12C
+
+		if (APL_FAILURE == IV_PrntDetailRound(bill,
+						chr_p_billdt,
+						chr_p_client,
+						p_mastsub,
+						g_adj_chrgs,
+						l_service_tax,
+						l_edu_cess,
+						g_adj_chrgs,
+						l_style_class,
+						l_debug_info_ptr))
+		{
+			fprintf(fl_userlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+			fprintf(fl_techlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+			APL_GOBACK_FAIL
+		}
+		else
+		{
+			g_kotak_bnk_chrgs = g_kotak_bnk_chrgs + g_adj_chrgs;
+			g_service_tax = g_service_tax + l_service_tax;
+			g_edu_cess = g_edu_cess + l_edu_cess;
+			g_grand_total = g_grand_total + l_grand_total;
+		}
+		fprintf(bill,"</tr>\n");
+		
+	}
+	else
+	{
+	/*	fprintf(bill,"<tr><td class=\'normal\'>No Records Found</td></tr>\n"); 03-06-2008*/
+	}
+
+	strcpy(l_style_class,"ez4");
+
+	fprintf(bill,"<tr><td class=\'ez4\'>Total Charges (%s)</td>\n",b_ccycd);
+
+
+	if (APL_FAILURE == IV_PrntDetailRound(bill,
+					chr_p_billdt,
+					chr_p_client,
+					p_mastsub,
+					g_kotak_bnk_chrgs,
+					g_service_tax,
+					g_edu_cess,
+					g_grand_total,
+					l_style_class,
+					l_debug_info_ptr))
+	{
+		fprintf(fl_userlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+		fprintf(fl_techlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+		APL_GOBACK_FAIL
+	}
+	else
+	{
+
+	}
+	
+	fprintf(bill,"</tr>\n");
+
+	 *p_kotak_bnk_chrgs = g_kotak_bnk_chrgs;
+	 *p_service_tax = g_service_tax;
+	 *p_edu_cess = g_edu_cess;
+	 *p_grand_total = g_grand_total;
+
+	 fprintf(bill,"</tr><tr><td>&nbsp;</td></tr>\n");
+
+APL_GOBACK_SUCCESS
+
+fprintf(bill,"<tr><td>&nbsp;</td></tr>\n");
+
+
+RETURN_SUCCESS:
+    APL_IF_DEBUG
+    { 
+	CO_ProcMonitor(APL_OUT_FILE,"Exiting out of IV_PrntDetCust succesfully\n",NULL,NULL);
+    }
+    return(APL_SUCCESS);
+
+RETURN_FAILURE:
+    APL_IF_DEBUG
+    {
+	CO_ProcMonitor(APL_OUT_FILE,"Exiting out of IV_PrntDetCust unsuccesfully\n",NULL,NULL);
+    }
+    return (APL_FAILURE);
+
+}
+
+int IV_PrntDetCA(FILE *bill,
+		char *chr_p_client,
+		char *chr_p_billdt,
+		char p_mastsub,
+		char *b_ccycd,
+		double *p_kotak_bnk_chrgs,
+		double *p_service_tax,
+		double *p_edu_cess,
+		double *p_grand_total,
+		DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	extern int IV_PrntDetailRound(FILE *,char *,char *,char, double, double, double, double, char *, DEBUG_INFO_STRUCT_H **);
+
+	double l_cdfee = CASH_DIV_FEE;
+	double l_bifee = IV_BONDINT_FEE ;
+	double l_freecacode = FREECAFEE;
+	double l_vpcacode = VPCAFEE;
+	double l_brfee = BOND_RDM_FEE; 
+	double l_pfee = PUT_FEE; 
+	double l_cfee = CALL_FEE; 
+	double l_putcallfee= PUT_CALL_FEE; //SP 13-08-2007
+	double l_ppfee = PART_PUT_FEE; 
+	double l_pcfee = PART_CALL_FEE; 
+	double l_pbrfee = PART_BOND_RDM_FEE; 
+	double l_pptcfee = PART_PTC_FEE; 
+	double l_mandcafee = MANDATORY_CA_FEE;//shailesh120208 CA changes
+	double l_volucafee = VOLUNTARY_CA_FEE; 
+
+	char l_mastsub = APL_NULL_CHAR;
+	char l_billdate[20] = APL_NULL_STRING;
+	char l_client[20] = APL_NULL_STRING;
+
+	char l_style_class[10] = APL_NULL_STRING;
+	char l_serv_code[6] = APL_NULL_STRING;
+	char l_ca_service[200] = APL_NULL_STRING;
+
+	double l_kotak_bnk_chrgs = 0.0;
+	double l_service_tax = 0.0;
+	double l_edu_cess = 0.0;
+	double l_grand_total = 0.0;
+
+	double g_kotak_bnk_chrgs = 0.0;
+	double g_service_tax = 0.0;
+	double g_edu_cess = 0.0;
+	double g_grand_total = 0.0;
+
+//shailesh 26-12-2007 made global	double g_edurate;
+	double l_adj_chrgs = 0.0;
+	double g_adj_chrgs = 0.0;
+	int l_int_count = 0;
+         //shailesh...170807
+//shailesh 26-12-2007 made global	char chr_acct_str[200] = APL_NULL_STRING;
+	char l_service_desc[200] = APL_NULL_STRING;
+//shailesh 26-12-2007 made global	char h_mstclt[20] = APL_NULL_STRING;
+        //shailesh--17082007
+
+	EXEC SQL BEGIN DECLARE SECTION;
+	
+	EXEC SQL VAR l_client IS STRING;
+	EXEC SQL VAR l_billdate IS STRING;
+	EXEC SQL VAR l_serv_code IS STRING;
+	EXEC SQL VAR l_ca_service IS STRING;
+
+	EXEC SQL END DECLARE SECTION;
+
+
+	strcpy(l_client,chr_p_client);
+	strcpy(l_billdate,chr_p_billdt);
+	l_mastsub = p_mastsub;
+	strcpy(l_style_class,"normal");
+
+
+	strcpy(l_client,chr_p_client);
+	strcpy(l_billdate,chr_p_billdt);
+	l_mastsub = p_mastsub;
+	strcpy(l_style_class,"normal");
+
+	/*********** CA Charges *****************************/
+	//SP --change for displaying putcall fee inside the bill and not displaying
+    //the partputfee as seen in the cursor below l_ppfee represents part put
+    //and l_putcallfee represents putcall fee--13-08-2007
+	
+	if(CO_Chk_CntryEnabled( "IV_TEST","PUTCALL" , &l_cond_exists, l_debug_info_ptr) == APL_FAILURE)
+	printf("Put Call Cond -%d",l_cond_exists);
+	
+	if(l_cond_exists<0)
+	{
+		 EXEC SQL DECLARE ca_curr CURSOR FOR 
+		 SELECT A.SERVICE_CD,SUM(A.COMM_AMT),
+		 SUM(A.NIL_FEES_ADJ)+SUM(A.MINIMUMFEE_ADJ)+SUM(A.MAXIMUM_FEE_ADJ)
+		 FROM IV_SERVICE_CHRG A
+		WHERE A.CLIENT = :l_client 
+		AND A.DATEOF_BILLING= :l_billdate 
+		AND A.CONS_FLAG = :l_mastsub  
+		AND A.SERVICE_CD IN (:l_cdfee,:l_bifee,:l_freecacode,	
+				 	 :l_vpcacode,:l_brfee,:l_pfee,
+					 :l_cfee,:l_ppfee,:l_pcfee,
+					 :l_pbrfee,:l_pptcfee)
+		 GROUP BY A.SERVICE_CD
+		 ORDER BY A.SERVICE_CD;
+
+     printf("\n\nSP-- kotak AFTER DECLARARATION -sqlca.sqlcode %d \n",sqlca.sqlcode);
+	fprintf(fl_userlog, "ORA for declaration of ca_curr - [%d] \n", sqlca.sqlcode);
+	EXEC SQL OPEN ca_curr;
+	printf("\n\nSP-- kotak AFTER OPENING CURSOR -sqlca.sqlcode %d \n",sqlca.sqlcode);
+
+	if(sqlca.sqlcode < 0)
+	{
+		fprintf(fl_userlog,"OPEN ca_curr ORA Error  - |%d|\n", sqlca.sqlcode);
+		fprintf(fl_techlog,"Error: Critical Error in OPEN ca_curr ORA Error \n");
+	}
+
+	/********* Service Tax Calculation *********************************************/
+
+	//17082007 shailesh.
+	/*	EXEC SQL SELECT CLN_MASTER 
+				INTO :h_mstclt
+		FROM MT_CLIENT 
+		WHERE CLN_CODE=:l_client_code;
+
+		EXEC SQL SELECT A.CLIENT||';'||A.DEFAULT_FEECLT||';'||B.CUSTODY_CLT_CD||';'  
+			INTO :chr_acct_str 
+		FROM IV_CLIENTSETUP A,MT_CORE_SYS_PARAMS B 
+		WHERE A.CLIENT=:chr_p_client;
+
+           shailesh 26-12-2007*/
+
+	fprintf(bill,"<tr><td class=\'lableblue\'>Corp Action Charges</td><tr>");
+
+	for(;;)
+	{
+      //  memset(l_serv_code,APL_NULL_CHAR,6);
+		strcpy(l_serv_code,APL_NULL_STRING); //SP-13-08-2007
+		l_kotak_bnk_chrgs=0.0;
+		EXEC SQL FETCH ca_curr
+		INTO :l_serv_code,
+		     :l_kotak_bnk_chrgs,
+		     :l_adj_chrgs;
+		printf("kotak 13-08-2007 line1337 sqlca.sqlcode is %d\n\n",sqlca.sqlcode);
+		if(sqlca.sqlcode == 1403)
+		break;
+
+		if(sqlca.sqlcode < 0)
+		{
+			printf("kotak 13-08-2007 --sqlca.sqlcode is %d\n\n",sqlca.sqlcode);
+			fprintf(fl_techlog, "Error : Critical Error in OPEN of ca_curr \n");
+			break;
+		}
+
+	
+		printf("l_serv_code :|%s|\n",l_serv_code);
+		printf("l_kotak_bnk_chrgs :|%lf|\n",l_kotak_bnk_chrgs);
+/* ISKB_8060 - Chnages by Mrinal- Replace INITCAP with UPPER For Bill Printing FSD*/
+/*		EXEC SQL SELECT REPLACE(REPLACE(REPLACE
+			 (INITCAP(SERVICE_DET),'Put','PUT'),'Call','CALL'),'Ptc','PTC') 
+			 INTO :l_ca_service 
+			 FROM IV_SERV_MAST WHERE SERVICE_CD=:l_serv_code;
+*/
+		EXEC SQL SELECT REPLACE(REPLACE(REPLACE
+			 (UPPER(SERVICE_DET),'PUT','PUT'),'CALL','CALL'),'PTC','PTC') 
+			 INTO :l_ca_service 
+			 FROM IV_SERV_MAST WHERE SERVICE_CD=:l_serv_code;
+		fprintf(bill,"<tr><td>%s</td>",l_ca_service);
+
+
+		//17082007 shailesh --change for this function start.
+	/*	EXEC SQL SELECT CLN_MASTER INTO  :h_mstclt
+		FROM MT_CLIENT 
+		WHERE CLN_CODE=:l_client_code;
+         shailesh 26-12-2007 */
+/* ISKB_8060 - Chnages by Mrinal- Replace INITCAP with UPPER For Bill Printing FSD*/
+/*		EXEC SQL SELECT INITCAP(SERVICE_DET) 
+		INTO :l_service_desc 
+		FROM IV_SERV_MAST WHERE SERVICE_CD=:l_serv_code;
+*/
+		EXEC SQL SELECT UPPER(SERVICE_DET) 
+		INTO :l_service_desc 
+		FROM IV_SERV_MAST WHERE SERVICE_CD=:l_serv_code;
+
+		printf("l_serv_code :|%s|\n",l_serv_code);
+		printf("l_service_desc :|%s|\n",l_service_desc);
+
+
+		/* Un-commented and rewritten by Gouse - 12/02/2013 */ 
+		/* if(APL_FAILURE == IV_Prnt_TaxCalculation(fl_techlog,fl_userlog,chr_acct_str,l_kotak_bnk_chrgs,
+										  &l_service_tax,&l_edu_cess,h_mstclt,l_debug_info_ptr)); */
+		if(l_disp_stax > 0)
+		{
+			if(APL_FAILURE == IV_Prnt_TaxCalculation(chr_acct_str,l_kotak_bnk_chrgs,&l_service_tax,&l_edu_cess,h_mstclt,l_debug_info_ptr));
+		 {
+			 fprintf(fl_userlog,"Failure From IV_Prnt_TaxCalculation Function \n");
+			 fprintf(fl_techlog,"Error : Failure From IV_Prnt_TaxCalculation Function \n");
+			 }
+		}
+		else
+			fprintf(fl_userlog,"Skipping IV_Prnt_TaxCalculation\n");	
+
+
+		l_edu_cess = 0;//shailesh 26-12-2007 ISKB_430_12C
+		if (APL_FAILURE == IV_PrntDetailRound(bill,
+						chr_p_billdt,
+						chr_p_client,
+						p_mastsub,
+						l_kotak_bnk_chrgs,
+						l_service_tax,
+						l_edu_cess,
+						l_grand_total,
+						l_style_class,
+						l_debug_info_ptr))
+		{
+			fprintf(fl_userlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+			fprintf(fl_techlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+			APL_GOBACK_FAIL
+		} 
+		
+		fprintf(bill,"</tr>");
+
+		g_kotak_bnk_chrgs = g_kotak_bnk_chrgs + l_kotak_bnk_chrgs;
+		g_service_tax = g_service_tax + l_service_tax;
+		g_edu_cess = g_edu_cess + l_edu_cess;
+		g_grand_total = g_grand_total + l_grand_total;
+		g_adj_chrgs = g_adj_chrgs + l_adj_chrgs;
+
+		l_int_count ++;
+
+	}
+	EXEC SQL CLOSE ca_curr;
+	}
+	else
+	{
+		printf("\nkotak l_putcallfee - |%lf|",l_putcallfee);
+		printf("\nkotak l_cdfee - |%lf|",l_cdfee);
+		printf("\nkotak l_bifee - |%lf|",l_bifee);
+		printf("\nkotak l_freecacode - |%lf|",l_freecacode);
+		printf("\nkotak l_vpcacode - |%lf|",l_vpcacode);
+		printf("\nkotak l_brfee - |%lf|",l_brfee);
+		printf("\nkotak l_pfee - |%lf|",l_pfee);
+		printf("\nkotak l_cfee - |%lf|",l_cfee);
+		printf("\nkotak l_pcfee - |%lf|",l_pcfee);
+		printf("\nkotak l_putcallfee - |%lf|",l_putcallfee);
+		printf("\nkotak l_pbrfee - |%lf|",l_pbrfee);
+		printf("\nkotak l_pptcfee - |%lf|",l_pptcfee);
+		printf("\nkotak l_mastsub  -|%c|",l_mastsub);
+		printf("\nkotak l_billdate -|%s|",l_billdate);
+		printf("\nkotak l_client -|%s|",l_client);
+
+		//SHould execute for KBN only
+		 EXEC SQL DECLARE ca_curr_kotak CURSOR FOR 
+		 SELECT A.SERVICE_CD,SUM(A.COMM_AMT),
+		 SUM(A.NIL_FEES_ADJ)+SUM(A.MINIMUMFEE_ADJ)+SUM(A.MAXIMUM_FEE_ADJ)
+		 FROM IV_SERVICE_CHRG A
+		 WHERE
+                A.CLIENT = :l_client  
+                AND A.DATEOF_BILLING= :l_billdate 
+                AND A.CONS_FLAG = :l_mastsub  
+                AND A.SERVICE_CD IN (:l_mandcafee,:l_volucafee)
+                GROUP BY  A.SERVICE_CD
+                ORDER BY A.SERVICE_CD;
+
+	printf("\n\nSP-- KOTAK AFTER DECLARARATION -sqlca.sqlcode %d \n",sqlca.sqlcode);
+
+	
+	fprintf(fl_userlog, "ORA for declaration of ca_curr_kotak - [%d] \n", sqlca.sqlcode);
+
+	EXEC SQL OPEN ca_curr_kotak;
+	printf("\n\nSP-- KOTAK AFTER OPENING CURSOR -sqlca.sqlcode %d \n",sqlca.sqlcode);
+
+	if(sqlca.sqlcode < 0)
+	{
+		fprintf(fl_userlog,"OPEN ca_curr ORA Error  - |%d|\n", sqlca.sqlcode);
+		fprintf(fl_techlog,"Error: Critical Error in OPEN ca_curr_kotak ORA Error \n");
+	}
+
+	/********* Service Tax Calculation *********************************************/
+
+	//17082007 shailesh.
+/*	EXEC SQL SELECT  CLN_MASTER INTO  :h_mstclt
+	FROM MT_CLIENT 
+	WHERE CLN_CODE=:l_client_code;
+
+	 EXEC SQL SELECT A.CLIENT||';'||A.DEFAULT_FEECLT||';'||B.CUSTODY_CLT_CD||';'  
+	 INTO :chr_acct_str 
+	 FROM IV_CLIENTSETUP A,MT_CORE_SYS_PARAMS B 
+	 WHERE A.CLIENT=:chr_p_client;
+
+       shailesh 26-12-2007 ISKB_430_12C  */
+	fprintf(bill,"<tr><td class=\'lableblue\'>Corp Action Charges</td></tr>");
+
+	for(;;)
+	{
+      	EXEC SQL FETCH ca_curr_kotak 
+			INTO :l_serv_code,
+		     :l_kotak_bnk_chrgs,
+		     :l_adj_chrgs;
+		printf("kotak 13-08-2007 line1337 sqlca.sqlcode is %d\n\n",sqlca.sqlcode);
+		if(sqlca.sqlcode == 1403)
+		break;
+
+		if(sqlca.sqlcode < 0)
+		{
+			printf("kotak 13-08-2007 --sqlca.sqlcode is %d\n\n",sqlca.sqlcode);
+			fprintf(fl_techlog, "Error : Critical Error in OPEN of ca_curr_kotak  \n");
+			break;
+		}
+	
+		printf("l_serv_code :|%s|\n",l_serv_code);
+		printf("l_kotak_bnk_chrgs :|%lf|\n",l_kotak_bnk_chrgs);
+
+		
+
+		//17082007 shailesh --change for this function start.
+	/*	EXEC SQL SELECT  CLN_MASTER 
+			INTO  :h_mstclt
+		FROM MT_CLIENT 	WHERE CLN_CODE=:l_client_code;
+          shailesh 26-12-2007 */
+/* ISKB_8060 - Chnages by Mrinal- Replace INITCAP with UPPER For Bill Printing FSD*/
+/*		EXEC SQL SELECT (REPLACE(INITCAP(SERVICE_DET),'Ca','CA')) 
+		INTO :l_service_desc 
+		FROM IV_SERV_MAST WHERE SERVICE_CD=:l_serv_code;
+*/
+		EXEC SQL SELECT (REPLACE(UPPER(SERVICE_DET),'CA','CA')) 
+		INTO :l_service_desc 
+		FROM IV_SERV_MAST WHERE SERVICE_CD=:l_serv_code;
+	
+	        if(sqlca.sqlcode!=0)
+		{
+				fprintf(fl_techlog, "Error :in selection of service desc from iv_serv_mast \n");
+				APL_GOBACK_FAIL
+		}
+		
+                fprintf(bill,"<tr><td>%s</td>",l_service_desc);
+		
+		printf("l_serv_code :|%s|\n",l_serv_code);
+		printf("l_service_desc :|%s|\n",l_service_desc);
+
+
+		/* Un-commented and rewritten by Gouse - 12/02/2013 */ 
+		 /* if(APL_FAILURE == IV_Prnt_TaxCalculation(fl_techlog,fl_userlog,chr_acct_str,l_kotak_bnk_chrgs,
+										  &l_service_tax,&l_edu_cess,h_mstclt,l_debug_info_ptr)); */
+		if(l_disp_stax > 0)
+		{
+		 	if(APL_FAILURE == IV_Prnt_TaxCalculation(chr_acct_str,l_kotak_bnk_chrgs,&l_service_tax,&l_edu_cess,h_mstclt,l_debug_info_ptr));
+		 {
+			 fprintf(fl_userlog,"Failure From IV_Prnt_TaxCalculation Function \n");
+			 fprintf(fl_techlog,"Error : Failure From IV_Prnt_TaxCalculation Function \n");
+			 }
+		}
+		else
+			fprintf(fl_userlog,"Skipping IV_Prnt_TaxCalculation\n");	
+
+		l_edu_cess =0 ;//shailesh 26-12-2007 ISKB_430_12C
+		if (APL_FAILURE == IV_PrntDetailRound(bill,
+						chr_p_billdt,
+						chr_p_client,
+						p_mastsub,
+						l_kotak_bnk_chrgs,
+						l_service_tax,
+						l_edu_cess,
+						l_grand_total,
+						l_style_class,
+						l_debug_info_ptr))
+		{
+			fprintf(fl_userlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+			fprintf(fl_techlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+			APL_GOBACK_FAIL
+		}
+
+		fprintf(bill,"</tr>");
+
+		g_kotak_bnk_chrgs = g_kotak_bnk_chrgs + l_kotak_bnk_chrgs;
+		g_service_tax = g_service_tax + l_service_tax;
+		g_edu_cess = g_edu_cess + l_edu_cess;
+		g_grand_total = g_grand_total + l_grand_total;
+		g_adj_chrgs = g_adj_chrgs + l_adj_chrgs;
+
+		l_int_count ++;
+
+	}
+	EXEC SQL CLOSE ca_curr_kotak;
+	}//end of else for cntry-specific condition
+
+	if(l_int_count > 0)
+	{
+		fprintf(bill,"<tr><td>Adjustments</td>");
+		
+		/* Un-commented and rewritten by Gouse - 12/02/2013 */
+		/* if(APL_FAILURE == IV_Prnt_TaxCalculation(fl_techlog,fl_userlog,chr_acct_str,g_adj_chrgs,
+									  &l_service_tax,&l_edu_cess,h_mstclt,l_debug_info_ptr));*/
+		if(l_disp_stax > 0)
+		{
+
+			if(APL_FAILURE == IV_Prnt_TaxCalculation(chr_acct_str,g_adj_chrgs,&l_service_tax,&l_edu_cess,h_mstclt,l_debug_info_ptr));
+		{
+			 fprintf(fl_userlog,"Failure From IV_Prnt_TaxCalculation Function \n");
+			 fprintf(fl_techlog,"Error : Failure From IV_Prnt_TaxCalculation Function \n");
+			}
+		}
+		else
+			fprintf(fl_userlog,"Skipping IV_Prnt_TaxCalculation\n");	
+
+		l_edu_cess =0 ;//shailesh 26-12-2007 ISKB_430_12C
+		if (APL_FAILURE == IV_PrntDetailRound(bill,
+						chr_p_billdt,
+						chr_p_client,
+						p_mastsub,
+						g_adj_chrgs,
+						l_service_tax,
+						l_edu_cess,
+						g_adj_chrgs,
+						l_style_class,
+						l_debug_info_ptr))
+		{
+			fprintf(fl_userlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+			fprintf(fl_techlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+			APL_GOBACK_FAIL
+		}
+		else
+		{
+			g_kotak_bnk_chrgs = g_kotak_bnk_chrgs + g_adj_chrgs;
+			g_service_tax = g_service_tax + l_service_tax;
+			g_edu_cess = g_edu_cess + l_edu_cess;
+			g_grand_total = g_grand_total + l_grand_total;
+		}
+		fprintf(bill,"</tr>");
+		
+	}
+
+	strcpy(l_style_class,"ez4");
+
+	fprintf(bill,"<tr><td class=\'ez4\'>Total Charges (%s)</td>",b_ccycd);
+
+
+	if (APL_FAILURE == IV_PrntDetailRound(bill,
+					chr_p_billdt,
+					chr_p_client,
+					p_mastsub,
+					g_kotak_bnk_chrgs,
+					g_service_tax,
+					g_edu_cess,
+					g_grand_total,
+					l_style_class,
+					l_debug_info_ptr))
+	{
+		fprintf(fl_userlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+		fprintf(fl_techlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+		APL_GOBACK_FAIL
+	}
+	
+	fprintf(bill,"</tr>");
+
+	 *p_kotak_bnk_chrgs = g_kotak_bnk_chrgs;
+	 *p_service_tax = g_service_tax;
+	 *p_edu_cess = g_edu_cess;
+	 *p_grand_total = g_grand_total;
+
+	 fprintf(bill,"</tr><tr><td>&nbsp;</td></tr>");
+
+
+APL_GOBACK_SUCCESS
+
+
+RETURN_SUCCESS:
+ 	APL_IF_DEBUG
+    {
+	CO_ProcMonitor(APL_OUT_FILE,"Exiting out of IV_PrntDetCA succesfully\n",NULL,NULL);
+	fflush(stdout);
+    }
+    return(APL_SUCCESS);
+
+RETURN_FAILURE:
+    APL_IF_DEBUG
+    {
+	CO_ProcMonitor(APL_OUT_FILE,"Exiting out of IV_PrntDetCA unsuccesfully\n",NULL,NULL); 
+	fflush(stdout);
+    }
+    return (APL_FAILURE);
+
+}
+
+int IV_PrntDetMisc(FILE *bill,
+		char *chr_p_client,
+		char *chr_p_billdt,
+		char p_mastsub,
+		double *p_kotak_bnk_chrgs,
+		double *p_service_tax,
+		double *p_edu_cess,
+		double *p_grand_total,
+		DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	extern int IV_PrntDetailRound(FILE *,char *,char *,char, double, double, double, double, char *, DEBUG_INFO_STRUCT_H **);
+	
+	long l_misc_fee = MANUALDEALFEE;
+	char h_mstclt[11] = APL_NULL_STRING;
+
+	char l_mastsub = APL_NULL_CHAR;
+	char l_billdate[20] = APL_NULL_STRING;
+	char l_client[20] = APL_NULL_STRING;
+
+	char l_style_class[10] = APL_NULL_STRING;
+	char l_serv_code[6] = APL_NULL_STRING;
+	char l_service_desc[21] = APL_NULL_STRING;
+
+	double l_kotak_bnk_chrgs = 0.0;
+	double l_service_tax = 0.0;
+	double l_edu_cess = 0.0;
+	double l_grand_total = 0.0;
+
+	double g_kotak_bnk_chrgs = 0.0;
+	double g_service_tax = 0.0;
+	double g_edu_cess = 0.0;
+	double g_grand_total = 0.0;
+
+	double l_adj_chrgs = 0.0;
+	double g_adj_chrgs = 0.0;
+	int l_int_count = 0;
+
+	
+	EXEC SQL BEGIN DECLARE SECTION;
+	
+	EXEC SQL VAR l_client IS STRING;
+	EXEC SQL VAR l_billdate IS STRING;
+	EXEC SQL VAR l_serv_code IS STRING;
+	EXEC SQL VAR l_service_desc IS STRING;
+
+	EXEC SQL END DECLARE SECTION;
+
+
+	strcpy(l_client,chr_p_client);
+	strcpy(l_billdate,chr_p_billdt);
+	l_mastsub = p_mastsub;
+	strcpy(l_style_class,"normal");
+
+
+	strcpy(l_client,chr_p_client);
+	strcpy(l_billdate,chr_p_billdt);
+	l_mastsub = p_mastsub;
+	strcpy(l_style_class,"normal");
+
+
+	/*********** Other Services Charges *****************************/
+/* ISKB_8060 - Chnages by Mrinal- Replace INITCAP with UPPER For Bill Printing FSD*/
+/*	EXEC SQL DECLARE misc_curr CURSOR FOR 
+		 SELECT TO_CHAR(A.SERVICE_CD),SUM(A.COMM_AMT),
+		 SUM(A.NIL_FEES_ADJ)+SUM(A.MINIMUMFEE_ADJ)+SUM(A.MAXIMUM_FEE_ADJ),
+		INITCAP(B.SERVICE_DET)
+		 FROM IV_SERVICE_CHRG A, IV_SERV_MAST B
+		 WHERE A.CLIENT = :l_client  
+		 AND A.DATEOF_BILLING= :l_billdate
+		 AND A.CONS_FLAG = :l_mastsub
+		 AND A.SERVICE_CD IN (:l_misc_fee) 
+    		GROUP BY A.SERVICE_CD,B.SERVICE_DET
+    		 ORDER BY A.SERVICE_CD;
+*/
+	EXEC SQL DECLARE misc_curr CURSOR FOR 
+		 SELECT TO_CHAR(A.SERVICE_CD),SUM(A.COMM_AMT),
+		 SUM(A.NIL_FEES_ADJ)+SUM(A.MINIMUMFEE_ADJ)+SUM(A.MAXIMUM_FEE_ADJ),
+		UPPER(B.SERVICE_DET)
+		 FROM IV_SERVICE_CHRG A, IV_SERV_MAST B
+		 WHERE A.CLIENT = :l_client  
+		 AND A.DATEOF_BILLING= :l_billdate
+		 AND A.CONS_FLAG = :l_mastsub
+		 AND A.SERVICE_CD IN (:l_misc_fee) 
+    		GROUP BY A.SERVICE_CD,B.SERVICE_DET
+    		 ORDER BY A.SERVICE_CD;
+	fprintf(fl_userlog,"ORA for declaration of misc_curr - |%d| \n", sqlca.sqlcode);
+
+	EXEC SQL OPEN misc_curr;
+
+	if(sqlca.sqlcode < 0)
+	{
+		fprintf(fl_userlog,"ORA for OPEN misc_curr - |%d| \n", sqlca.sqlcode);
+		fprintf(fl_techlog,"Error : Critical Error in OPEN misc_curr \n");
+	}
+	IS_ANY_ORA_ERROR
+
+     //shailesh 28-12-2007
+//Miscellaneous fees to be displayed in single row
+	fprintf(bill,"<tr  class=\'ez4\'><td>Miscellaneous Charges</td>");
+	strcpy(l_style_class,"ez4");
+
+	for(;;)
+	{
+		memset(l_service_desc,APL_NULL_CHAR,sizeof(l_service_desc));
+
+		EXEC SQL FETCH misc_curr 
+		INTO :l_serv_code,
+		     :l_kotak_bnk_chrgs,
+		     :l_adj_chrgs,
+				:l_service_desc;
+
+		IS_ANY_ORA_ERROR
+
+		if(sqlca.sqlcode == 1403)
+		break;
+
+		printf("l_serv_code :|%s|\n",l_serv_code);
+		printf("l_kotak_bnk_chrgs :|%lf|\n",l_kotak_bnk_chrgs);
+		printf("l_adj_chrgs :|%lf|\n",l_adj_chrgs);
+
+		/*EXEC SQL SELECT INITCAP(SERVICE_DET) 
+			 INTO :l_service_desc 
+			 FROM IV_SERV_MAST WHERE SERVICE_CD=:l_serv_code;*/
+
+		fprintf(bill,"<tr><td class=\'normalbold\'>%s</td>",l_service_desc);
+		
+		printf("l_serv_code :|%s|\n",l_serv_code);
+		printf("l_service_desc :|%s|\n",l_service_desc);
+		
+		/*	ISKB-1932	Tax Calculation for Misc	*/
+		if(l_disp_stax > 0)
+		{
+		 if(APL_FAILURE == IV_Prnt_TaxCalculation(chr_acct_str,l_kotak_bnk_chrgs,&l_service_tax,&l_edu_cess,h_mstclt,l_debug_info_ptr));
+		 {
+			 fprintf(fl_userlog,"Failure From IV_Prnt_TaxCalculation Function \n");
+			 fprintf(fl_techlog,"Error : Failure From IV_Prnt_TaxCalculation Function \n");
+		 }
+		}
+		else
+			fprintf(fl_userlog,"Skipping IV_Prnt_TaxCalculation\n");	
+		
+		l_edu_cess = 0.0;
+
+			if (APL_FAILURE == IV_PrntDetailRound(bill,
+						chr_p_billdt,
+						chr_p_client,
+						p_mastsub,
+						l_kotak_bnk_chrgs,
+						l_service_tax,
+						l_edu_cess,
+						l_grand_total,
+						l_style_class,
+						l_debug_info_ptr))
+		{
+			fprintf(fl_userlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+			fprintf(fl_techlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+			APL_GOBACK_FAIL
+		}
+
+		fprintf(bill,"</tr>");
+
+		g_kotak_bnk_chrgs = g_kotak_bnk_chrgs + l_kotak_bnk_chrgs;
+		g_service_tax = g_service_tax + l_service_tax;
+		g_edu_cess = g_edu_cess + l_edu_cess;
+		g_grand_total = g_grand_total + l_grand_total;
+		g_adj_chrgs = g_adj_chrgs + l_adj_chrgs;
+		l_int_count ++;
+
+	}
+
+	EXEC SQL CLOSE misc_curr;
+  		
+		if(l_int_count == 0)
+			{
+//shailesh 28-12-2007
+//Even If miscellaneous charges are 0,'NO RECORDS FOUND should not be displayed
+//zero should be displyed against the miscellaneous charge
+			if (APL_FAILURE == IV_PrntDetailRound(bill,
+					chr_p_billdt,
+					chr_p_client,
+					p_mastsub,
+					0.0,
+					0.0,
+					0.0,
+					0.0,
+					l_style_class,
+					l_debug_info_ptr))
+			{
+				fprintf(fl_userlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+				fprintf(fl_techlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+				APL_GOBACK_FAIL
+			}
+		fprintf(bill,"</tr>");
+			}
+
+	 *p_kotak_bnk_chrgs = g_kotak_bnk_chrgs;
+	 *p_service_tax = g_service_tax;
+	 *p_edu_cess = g_edu_cess;
+	 *p_grand_total = g_grand_total;
+
+	 fprintf(bill,"</tr><tr><td>&nbsp;</td></tr>");
+
+
+APL_GOBACK_SUCCESS
+
+
+RETURN_SUCCESS:
+    APL_IF_DEBUG
+    {
+	CO_ProcMonitor(APL_OUT_FILE,"Exiting out of IV_PrntDetMisc succesfully\n",NULL,NULL);
+    }
+    return(APL_SUCCESS);
+
+RETURN_FAILURE:
+    APL_IF_DEBUG
+    {
+	CO_ProcMonitor(APL_OUT_FILE,"Exiting out of IV_PrntDetMisc unsuccesfully\n",NULL,NULL);
+    }
+    return (APL_FAILURE);
+
+}
+
+int IV_PrntDetAnnual(FILE *bill,
+		char *chr_p_client,
+		char *chr_p_billdt,
+		char p_mastsub,
+		double *p_kotak_bnk_chrgs,
+		double *p_service_tax,
+		double *p_edu_cess,
+		double *p_grand_total,
+		DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	extern int IV_PrntDetailRound(FILE *,char *,char *,char, double, double, double, double, char *, DEBUG_INFO_STRUCT_H **);
+	
+	long l_annual_fee = ANNUALMNTFEE;
+
+	char l_mastsub = APL_NULL_CHAR;
+	char l_billdate[20] = APL_NULL_STRING;
+	char l_client[20] = APL_NULL_STRING;
+
+	char l_style_class[10] = APL_NULL_STRING;
+	char l_serv_code[6] = APL_NULL_STRING;
+
+	double l_kotak_bnk_chrgs = 0.0;
+	double l_service_tax = 0.0;
+	double l_edu_cess = 0.0;
+	double l_grand_total = 0.0;
+
+	double g_kotak_bnk_chrgs = 0.0;
+	double g_service_tax = 0.0;
+	double g_edu_cess = 0.0;
+	double g_grand_total = 0.0;
+
+	double l_adj_chrgs = 0.0;
+	double g_adj_chrgs = 0.0;
+	int l_int_count = 0;
+
+
+	EXEC SQL BEGIN DECLARE SECTION;
+	
+	EXEC SQL VAR l_client IS STRING;
+	EXEC SQL VAR l_billdate IS STRING;
+	EXEC SQL VAR l_serv_code IS STRING;
+
+	EXEC SQL END DECLARE SECTION;
+
+
+	strcpy(l_client,chr_p_client);
+	strcpy(l_billdate,chr_p_billdt);
+	l_mastsub = p_mastsub;
+	strcpy(l_style_class,"normal");
+
+
+	strcpy(l_client,chr_p_client);
+	strcpy(l_billdate,chr_p_billdt);
+	l_mastsub = p_mastsub;
+	strcpy(l_style_class,"normal");
+
+
+	/*********** Annual Maintenance Services Charges *****************************/
+
+	EXEC SQL DECLARE annual_curr CURSOR FOR 
+		 SELECT A.SERVICE_CD,SUM(A.COMM_AMT),
+		 SUM(A.NIL_FEES_ADJ)+SUM(A.MINIMUMFEE_ADJ)+SUM(A.MAXIMUM_FEE_ADJ)
+		 FROM IV_SERVICE_CHRG A
+		 WHERE A.CLIENT = :l_client  
+		 AND A.DATEOF_BILLING= :l_billdate
+		 AND A.CONS_FLAG = :l_mastsub
+		 AND A.SERVICE_CD IN (:l_annual_fee) 
+    		GROUP BY A.SERVICE_CD
+    		 ORDER BY A.SERVICE_CD;
+  
+	fprintf(fl_userlog,"ORA for declaration of annual_curr - |%d| \n", sqlca.sqlcode);
+
+	EXEC SQL OPEN annual_curr;
+
+	if(sqlca.sqlcode < 0)
+	{
+		fprintf(fl_userlog,"ORA for OPEN annual_curr - |%d| \n", sqlca.sqlcode);
+		fprintf(fl_techlog,"Error : Critical Error in OPEN annual_curr \n");
+	}
+
+     //shailesh 28-12-2007
+//Miscellaneous fees to be displayed in single row
+	fprintf(bill,"<tr  class=\'ez4\'><td>Annual Maintenance Charges</td>");
+	strcpy(l_style_class,"ez4");
+
+	for(;;)
+	{
+		EXEC SQL FETCH annual_curr 
+		INTO :l_serv_code,
+		     :l_kotak_bnk_chrgs,
+		     :l_adj_chrgs;
+
+		if(sqlca.sqlcode == 1403)
+		break;
+
+		if(sqlca.sqlcode < 0)
+		{
+			fprintf(fl_techlog, "Error : Critical Error for OPEN of annual_curr \n");
+			break;
+		}
+
+		printf("l_serv_code :|%s|\n",l_serv_code);
+		printf("l_kotak_bnk_chrgs :|%lf|\n",l_kotak_bnk_chrgs);
+		printf("l_adj_chrgs :|%lf|\n",l_adj_chrgs);
+
+
+		if(l_disp_stax > 0)
+		{	
+		 if(APL_FAILURE == IV_Prnt_TaxCalculation(chr_acct_str,l_kotak_bnk_chrgs,&l_service_tax,&l_edu_cess,h_mstclt,l_debug_info_ptr))
+		 {
+			 fprintf(fl_userlog,"Failure From IV_Prnt_TaxCalculation Function \n");
+			 fprintf(fl_techlog,"Error : Failure From IV_Prnt_TaxCalculation Function \n");
+		 }
+		}
+		else
+			fprintf(fl_userlog,"Skipping IV_Prnt_TaxCalculation\n");	
+		
+		l_edu_cess = 0.0;
+
+			if (APL_FAILURE == IV_PrntDetailRound(bill,
+						chr_p_billdt,
+						chr_p_client,
+						p_mastsub,
+						l_kotak_bnk_chrgs,
+						l_service_tax,
+						l_edu_cess,
+						l_grand_total,
+						l_style_class,
+						l_debug_info_ptr))
+		{
+			fprintf(fl_userlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+			fprintf(fl_techlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+			APL_GOBACK_FAIL
+		}
+		else
+		{
+
+		}
+
+		fprintf(bill,"</tr>");
+
+		g_kotak_bnk_chrgs = g_kotak_bnk_chrgs + l_kotak_bnk_chrgs;
+		g_service_tax = g_service_tax + l_service_tax;
+		g_edu_cess = g_edu_cess + l_edu_cess;
+		g_grand_total = g_grand_total + l_grand_total;
+		g_adj_chrgs = g_adj_chrgs + l_adj_chrgs;
+		l_int_count ++;
+
+	}
+
+	EXEC SQL CLOSE misc_curr;
+  		
+		if(l_int_count == 0)
+			{
+			if (APL_FAILURE == IV_PrntDetailRound(bill,
+					chr_p_billdt,
+					chr_p_client,
+					p_mastsub,
+					0.0,
+					0.0,
+					0.0,
+					0.0,
+					l_style_class,
+					l_debug_info_ptr))
+			{
+				fprintf(fl_userlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+				fprintf(fl_techlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+				APL_GOBACK_FAIL
+			}
+		fprintf(bill,"</tr>");
+			}
+
+	 *p_kotak_bnk_chrgs = g_kotak_bnk_chrgs;
+	 *p_service_tax = g_service_tax;
+	 *p_edu_cess = g_edu_cess;
+	 *p_grand_total = g_grand_total;
+
+	 fprintf(bill,"</tr><tr><td>&nbsp;</td></tr>");
+
+
+APL_GOBACK_SUCCESS
+
+
+RETURN_SUCCESS:
+    APL_IF_DEBUG
+    {
+	CO_ProcMonitor(APL_OUT_FILE,"Exiting out of IV_PrntDetAnnual succesfully\n",NULL,NULL);
+    }
+    return(APL_SUCCESS);
+
+RETURN_FAILURE:
+    APL_IF_DEBUG
+    {
+	CO_ProcMonitor(APL_OUT_FILE,"Exiting out of IV_PrntDetAnnual unsuccesfully\n",NULL,NULL);
+    }
+    return (APL_FAILURE);
+
+}
+
+int IV_PrntDetOth(FILE *bill,
+		char *chr_p_client,
+		char *chr_p_billdt,
+		char p_mastsub,
+		double *p_kotak_bnk_chrgs,
+		double *p_service_tax,
+		double *p_edu_cess,
+		double *p_grand_total,
+		DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	extern int IV_PrntDetailRound(FILE *,char *,char *,char, double, double, double, double, char *, DEBUG_INFO_STRUCT_H **);
+	
+	double l_spl_bill = SPECIALBILLING;
+	double l_under_bill = UNDERBILLING;
+	double l_over_bill = OVERBILLING;
+
+	char l_mastsub = APL_NULL_CHAR;
+	char l_billdate[20] = APL_NULL_STRING;
+	char l_client[20] = APL_NULL_STRING;
+
+	char l_style_class[10] = APL_NULL_STRING;
+	char l_serv_code[6] = APL_NULL_STRING;
+	char l_service_desc[200] = APL_NULL_STRING;
+
+	double l_kotak_bnk_chrgs = 0.0;
+	double l_service_tax = 0.0;
+	double l_edu_cess = 0.0;
+	double l_grand_total = 0.0;
+
+	double g_kotak_bnk_chrgs = 0.0;
+	double g_service_tax = 0.0;
+	double g_edu_cess = 0.0;
+	double g_grand_total = 0.0;
+
+// shailesh 26-12-2007 made global	double g_edurate;
+	double l_adj_chrgs = 0.0;
+	double g_adj_chrgs = 0.0;
+	int l_int_count = 0;
+
+// shailesh 26-12-2007 made global	char chr_acct_str[200] = APL_NULL_STRING;
+// shailesh 26-12-2007 made global	char h_mstclt[20] = APL_NULL_STRING;
+	
+	double l_custfee = CUSTODYFEE;
+	long l_misc_fee = MANUALDEALFEE; //shailesh 26-12-2007 ISKB_430_12C
+	long l_cashfee = CASH_ITEMS; //shailesh 26-12-2007 ISKB_430_12C
+	double l_annual_min_fee = ANNUALMINFEE;//Added by Anjaneyulu for ISKB_1737
+	double l_perline_sec = PERLINE_SECURITY;//Added by Anjaneyulu for ISKB_1737
+
+	EXEC SQL BEGIN DECLARE SECTION;
+	
+	EXEC SQL VAR l_client IS STRING;
+	EXEC SQL VAR l_billdate IS STRING;
+	EXEC SQL VAR l_serv_code IS STRING;
+	EXEC SQL VAR l_service_desc IS STRING;
+
+	EXEC SQL END DECLARE SECTION;
+
+
+	strcpy(l_client,chr_p_client);
+	strcpy(l_billdate,chr_p_billdt);
+	l_mastsub = p_mastsub;
+	strcpy(l_style_class,"normal");
+
+
+	strcpy(l_client,chr_p_client);
+	strcpy(l_billdate,chr_p_billdt);
+	l_mastsub = p_mastsub;
+	strcpy(l_style_class,"normal");
+
+
+	/*********** Other Services Charges *****************************/
+
+//shailesh 26-12-2007 ISKB_430_12C    
+	EXEC SQL DECLARE other_curr CURSOR FOR 
+		 SELECT A.SERVICE_CD,SUM(A.COMM_AMT),
+		 SUM(A.NIL_FEES_ADJ)+SUM(A.MINIMUMFEE_ADJ)+SUM(A.MAXIMUM_FEE_ADJ)
+		 FROM IV_SERVICE_CHRG A
+		 WHERE A.CLIENT = :l_client  
+		 AND A.DATEOF_BILLING= :l_billdate
+		 AND A.CONS_FLAG = :l_mastsub
+		 AND A.SERVICE_CD IN (SELECT DISTINCT SERVICE_CD FROM IV_SERV_OTH 
+										WHERE CLIENT =:l_client AND SERVICE_STAT='A' AND SERVICE_CD  NOT IN (:l_custfee,:l_misc_fee)
+										UNION SELECT DISTINCT SERVICE_CD FROM IV_SERVICE_CHRG 
+										WHERE SERVICE_CD IN (:l_spl_bill,:l_over_bill,:l_under_bill,:l_cashfee,:l_perline_sec,:l_annual_min_fee) AND CLIENT=:l_client)
+		 GROUP BY A.SERVICE_CD
+		 ORDER BY A.SERVICE_CD;//added annual min. charges,per line security for ISKB_1737
+
+	fprintf(fl_userlog,"ORA for declaration of other_curr - |%d| \n", sqlca.sqlcode);
+
+	EXEC SQL OPEN other_curr;
+
+	if(sqlca.sqlcode < 0)
+	{
+		fprintf(fl_userlog,"ORA for OPEN other_curr - |%d| \n", sqlca.sqlcode);
+		fprintf(fl_techlog,"Error : Critical Error in OPEN other_curr \n");
+	}
+
+
+// shailesh 26-12-2007 ISKB_430_12C	fprintf(bill,"<tr><td class=\'lableblue\'>Other Services Charges</td><tr>");
+
+	for(;;)
+	{
+		EXEC SQL FETCH other_curr 
+		INTO :l_serv_code,
+		     :l_kotak_bnk_chrgs,
+		     :l_adj_chrgs;
+
+		if(sqlca.sqlcode == 1403)
+		break;
+
+		if(sqlca.sqlcode < 0)
+		{
+			fprintf(fl_techlog, "Error : Critical Error for OPEN of other_curr \n");
+			break;
+		}
+
+		printf("l_serv_code :|%s|\n",l_serv_code);
+		printf("l_kotak_bnk_chrgs :|%lf|\n",l_kotak_bnk_chrgs);
+		printf("l_adj_chrgs :|%lf|\n",l_adj_chrgs);
+
+
+//shailesh 27-12-2007 
+//for special billing text description
+		if((atoi(l_serv_code) == l_spl_bill) || (atoi(l_serv_code) == l_cashfee))
+		{
+/* ISKB_8060 - Chnages by Mrinal- Replace INITCAP with UPPER For Bill Printing FSD*/
+/*		EXEC SQL SELECT INITCAP(SERVICE_DET) 
+			 INTO :l_service_desc 
+			 FROM IV_SERV_OTH WHERE SERVICE_CD=:l_serv_code AND CLIENT = :l_client AND 
+			 TO_CHAR(B_UPTO_DATE,'DD/MM/YYYY') = SUBSTR(:l_billdate,0,10);
+			IS_ANY_ORA_ERROR
+*/
+EXEC SQL SELECT UPPER(SERVICE_DET) 
+			 INTO :l_service_desc 
+			 FROM IV_SERV_OTH WHERE SERVICE_CD=:l_serv_code AND CLIENT = :l_client AND 
+			 TO_CHAR(B_UPTO_DATE,'DD/MM/YYYY') = SUBSTR(:l_billdate,0,10);
+			IS_ANY_ORA_ERROR
+		//shailesh 09-01-08 adding the billdate condition
+		}
+		else
+		{
+		/* ISKB_8060 - Chnages by Mrinal- Replace INITCAP with UPPER For Bill Printing FSD*/
+/*		
+		EXEC SQL SELECT INITCAP(SERVICE_DET) 
+			 INTO :l_service_desc 
+			 FROM IV_SERV_MAST WHERE SERVICE_CD=:l_serv_code;
+			IS_ANY_ORA_ERROR
+*/			
+		EXEC SQL SELECT UPPER(SERVICE_DET) 
+			 INTO :l_service_desc 
+			 FROM IV_SERV_MAST WHERE SERVICE_CD=:l_serv_code;
+			IS_ANY_ORA_ERROR
+		}
+
+		fprintf(bill,"<tr><td>%s</td>",l_service_desc);
+		
+
+		printf("l_serv_code :|%s|\n",l_serv_code);
+		printf("l_service_desc :|%s|\n",l_service_desc);
+
+      //shailesh 26-12-2007 ISKB_430_12C
+      /*	Tax Calculation for All Other Services	ISKB-1932	*/
+     if(l_disp_stax > 0)
+		{ 
+		 if(APL_FAILURE == IV_Prnt_TaxCalculation(chr_acct_str,l_kotak_bnk_chrgs, &l_service_tax,&l_edu_cess,h_mstclt,l_debug_info_ptr))
+		 {
+			 fprintf(fl_userlog,"Failure From IV_Prnt_TaxCalculation Function \n");
+			 fprintf(fl_techlog,"Error : Failure From IV_Prnt_TaxCalculation Function \n");
+		 }
+		}
+		else
+			fprintf(fl_userlog,"Skipping IV_Prnt_TaxCalculation\n");	
+		/*else
+		{
+		l_service_tax = 0;
+		l_edu_cess = 0;
+		}*/
+
+		l_edu_cess = 0.0;
+
+		if (APL_FAILURE == IV_PrntDetailRound(bill,
+						chr_p_billdt,
+						chr_p_client,
+						p_mastsub,
+						l_kotak_bnk_chrgs,
+						l_service_tax,
+						0.0,
+						l_grand_total,
+						l_style_class,
+						l_debug_info_ptr))
+		{
+			fprintf(fl_userlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+			fprintf(fl_techlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+			APL_GOBACK_FAIL
+		}
+		else
+		{
+
+		}
+		fprintf(bill,"</tr>");
+
+		g_kotak_bnk_chrgs = g_kotak_bnk_chrgs + l_kotak_bnk_chrgs;
+		g_service_tax = g_service_tax + l_service_tax;
+		g_edu_cess = g_edu_cess + l_edu_cess;
+		g_grand_total = g_grand_total + l_grand_total;
+		g_adj_chrgs = g_adj_chrgs + l_adj_chrgs;
+
+		l_int_count ++;
+
+	}
+	EXEC SQL CLOSE other_curr;
+
+	/*shailesh 26-12-2007 ISKB_430_12C
+	if(l_int_count > 0)
+	{
+		printf("Other Services Adjustments :|%lf|\n",g_adj_chrgs);
+
+		fprintf(bill,"<tr><td class=\'normalbold\'>Adjustments</td>");
+		
+		if(APL_FAILURE == IV_Prnt_TaxCalculation(fl_techlog,fl_userlog,chr_acct_str,g_adj_chrgs,
+									  &l_service_tax,&l_edu_cess,h_mstclt,l_debug_info_ptr));
+		{
+			 fprintf(fl_userlog,"Failure From IV_Prnt_TaxCalculation Function \n");
+			 fprintf(fl_techlog,"Error : Failure From IV_Prnt_TaxCalculation Function \n");
+		}
+
+
+		if (APL_FAILURE == IV_PrntDetailRound(bill,
+						fl_techlog,
+						fl_userlog,
+						chr_p_billdt,
+						chr_p_client,
+						l_sys_ivcntl_param_struct,
+						l_iv_clt_setup_struct,
+						p_mastsub,
+						g_adj_chrgs,
+						l_service_tax,
+						l_edu_cess,
+						g_adj_chrgs,
+						l_style_class,
+						l_debug_info_ptr))
+		{
+			fprintf(fl_userlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+			fprintf(fl_techlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+			APL_GOBACK_FAIL
+		}
+		else
+		{
+			g_kotak_bnk_chrgs = g_kotak_bnk_chrgs + g_adj_chrgs;
+			g_service_tax = g_service_tax + l_service_tax;
+			g_edu_cess = g_edu_cess + l_edu_cess;
+			g_grand_total = g_grand_total + l_grand_total;
+		}
+		fprintf(bill,"</tr>");
+		
+	}
+	else
+	{
+		fprintf(bill,"<tr><td class=\'normal\'>NO RECORDS FOUND</td></tr>");
+	}
+
+	strcpy(l_style_class,"ez4");
+
+	fprintf(bill,"<tr><td class=\'ez4\'>Total Charges (%s)</td>",b_ccycd);
+
+
+	if (APL_FAILURE == IV_PrntDetailRound(bill,
+					fl_techlog,
+					fl_userlog,
+					chr_p_billdt,
+					chr_p_client,
+					l_sys_ivcntl_param_struct,
+					l_iv_clt_setup_struct,
+					p_mastsub,
+					g_kotak_bnk_chrgs,
+					g_service_tax,
+					g_edu_cess,
+					g_grand_total,
+					l_style_class,
+					l_debug_info_ptr))
+	{
+		fprintf(fl_userlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+		fprintf(fl_techlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+		APL_GOBACK_FAIL
+	}
+	else
+	{
+
+	}
+	
+	fprintf(bill,"</tr>");
+ 	shailesh 26-12-2007 ISKB_430_12C  */
+	 *p_kotak_bnk_chrgs = g_kotak_bnk_chrgs;
+	 *p_service_tax = g_service_tax;
+	 *p_edu_cess = g_edu_cess;
+	 *p_grand_total = g_grand_total;
+
+	// shailesh 26-12-2007 ISKB_430_12C fprintf(bill,"</tr><tr><td>&nbsp;</td></tr>");
+
+
+APL_GOBACK_SUCCESS
+
+
+RETURN_SUCCESS:
+    APL_IF_DEBUG
+    {
+	CO_ProcMonitor(APL_OUT_FILE,"Exiting out of IV_PrntDetOth succesfully\n",NULL,NULL); 
+	fflush(stdout);
+    }
+    return(APL_SUCCESS);
+
+RETURN_FAILURE:
+     APL_IF_DEBUG
+    {
+	CO_ProcMonitor(APL_OUT_FILE,"Exiting out of IV_PrntDetOth unsuccesfully\n",NULL,NULL); 
+	fflush(stdout);
+    }
+    return (APL_FAILURE);
+
+}
+
+int IV_PrntDetDepo(FILE *bill,
+		char *chr_p_client,
+		char *chr_p_billdt,
+		char p_mastsub,
+		double *p_kotak_bnk_chrgs,
+		double *p_service_tax,
+		double *p_edu_cess,
+		double *p_grand_total,
+		DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	extern int IV_PrntDetailRound(FILE *,char *,char *,char, double, double, double, double, char *, DEBUG_INFO_STRUCT_H **);
+
+	double l_depofee = DEPOFEE ;
+
+	char l_mastsub = APL_NULL_CHAR;
+	char l_billdate[20] = APL_NULL_STRING;
+	char l_client[20] = APL_NULL_STRING;
+
+	char l_style_class[10] = APL_NULL_STRING;
+	char l_depo_code[100] = APL_NULL_STRING;
+
+	double l_kotak_bnk_chrgs = 0.0;
+	double l_service_tax = 0.0;
+	double l_edu_cess = 0.0;
+	double l_grand_total = 0.0;
+
+	double g_kotak_bnk_chrgs = 0.0;
+	double g_service_tax = 0.0;
+	double g_edu_cess = 0.0;
+	double g_grand_total = 0.0;
+
+// shailesh 26-12-2007 made global	double g_edurate;
+	double l_adj_chrgs = 0.0;
+	double g_adj_chrgs = 0.0;
+	int l_int_count = 0;
+
+	EXEC SQL BEGIN DECLARE SECTION;
+	
+	EXEC SQL VAR l_client IS STRING;
+	EXEC SQL VAR l_billdate IS STRING;
+
+	EXEC SQL END DECLARE SECTION;
+
+
+	strcpy(l_client,chr_p_client);
+	strcpy(l_billdate,chr_p_billdt);
+	l_mastsub = p_mastsub;
+	strcpy(l_style_class,"normal");
+
+	/*********** Depository Charges *****************************/
+//ISKB_430_04 shailesh 11-12-2007
+//change for allowing the deal code parameter to be selected alongwith location
+//was done in Billing client set up--dependency tab,so in accordance with that a change is required in printing also
+	 EXEC SQL DECLARE depo_curr CURSOR FOR
+//      SELECT DECODE(PROC_DATA_VAL,'NSDL','NSDL','CDSL','CDSL','Depository Group'),
+	  SELECT DECODE(PROC_DATA_VAL,'NSDL','NSDL','CDSL','CDSL','NSDL;3','NSDL Sale','NSDL;1','NSDL Sale','NSDL;2','NSDL Buy','NSDL;4','NSDL Buy','CDSL;3','CDSL Sale','CDSL;1','CDSL Sale','CDSL;2','CDSL Buy','CDSL;4','CDSL Buy','Depository Group'),
+                    SUM(B.COMM_AMT),
+                    SUM(A.NIL_FEES_ADJ)+SUM(A.MINIMUMFEE_ADJ)+SUM(A.MAXIMUM_FEE_ADJ)
+                    FROM IV_SERVICE_CHRG A,IV_DEAL_FEE B
+                    WHERE A.CLIENT=B.CLIENT
+                    AND A.SERVICE_CD=B.SERVICE_CD
+                    AND A.DATEOF_BILLING=B.DATEOF_BILLING
+                    AND A.CONS_FLAG=B.CONS_FLAG
+                    AND A.CLIENT = :l_client
+                    AND A.SERVICE_CD=:l_depofee
+                    AND A.DATEOF_BILLING= :l_billdate
+                    AND A.CONS_FLAG = :l_mastsub
+                    GROUP BY B.PROC_DATA_VAL
+                    ORDER BY B.PROC_DATA_VAL;
+
+	fprintf(fl_userlog, "ORA for declaration of depo_curr - [%d] \n", sqlca.sqlcode);
+
+	EXEC SQL OPEN depo_curr;
+
+	if(sqlca.sqlcode < 0)
+	{
+		fprintf(fl_userlog,"OPEN depo_curr ORA Error  - |%d|\n", sqlca.sqlcode);
+		fprintf(fl_techlog,"Error : Critical Error in OPEN depo_curr \n");
+	}
+
+
+	// shailesh 26-12-2007 ISKB_430_12C fprintf(bill,"<tr><td class=\'lableblue\'>Depository Charges</td><tr>\n");
+
+
+	for(;;)
+	{
+		EXEC SQL FETCH depo_curr 
+		INTO :l_depo_code,
+		     :l_kotak_bnk_chrgs,
+		     :l_adj_chrgs;
+
+		if(sqlca.sqlcode == 1403)
+		break;
+
+		if(sqlca.sqlcode < 0)
+		{
+			fprintf(fl_techlog, "Error : Critical Error in depo_curr \n");
+			break;
+		}
+		
+		printf("l_depo_code :|%s|\n",l_depo_code);
+		printf("l_kotak_bnk_chrgs :|%lf|\n",l_kotak_bnk_chrgs);
+		if(l_disp_stax > 0)
+		{
+		if(APL_FAILURE == IV_Prnt_TaxCalculation(chr_acct_str,l_kotak_bnk_chrgs, &l_service_tax,&l_edu_cess,h_mstclt,l_debug_info_ptr));
+		{
+			fprintf(fl_userlog,"Failure From IV_Prnt_TaxCalculation Function \n");
+			fprintf(fl_techlog,"Error : Failure From IV_Prnt_TaxCalculation Function \n");
+		}
+		}
+		else
+			fprintf(fl_userlog,"Skipping IV_Prnt_TaxCalculation\n");	
+		
+		l_edu_cess = 0.0;
+		/*      ISKB-1924       Single Entry of Depository Charges      Rohit 30Sept2008        */
+		
+		/* Commented to remove the detailed depository bill details such as NSDL Sale etc as on 19-06-2012 for KOTAK UAT
+			fprintf(bill,"<tr><td>%s</td>\n",l_depo_code); 
+
+		if (APL_FAILURE == IV_PrntDetailRound(bill,
+						chr_p_billdt,
+						chr_p_client,
+						p_mastsub,
+						l_kotak_bnk_chrgs,
+						l_service_tax,
+						l_edu_cess,
+						l_grand_total,
+						l_style_class,
+						l_debug_info_ptr))
+		{
+			fprintf(fl_userlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+			fprintf(fl_techlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+			APL_GOBACK_FAIL
+		}
+		else
+		{
+
+		}
+
+		fprintf(bill,"</tr>"); */
+		l_grand_total = l_kotak_bnk_chrgs + l_service_tax + l_edu_cess;		/** Added to calculate grand total calculation done by IV_PrntDetailRound as on 19-06-2012**/	
+
+		g_kotak_bnk_chrgs = g_kotak_bnk_chrgs + l_kotak_bnk_chrgs;
+		g_service_tax = g_service_tax + l_service_tax;
+		g_edu_cess = g_edu_cess + l_edu_cess;
+		g_grand_total = g_grand_total + l_grand_total;
+		g_adj_chrgs = g_adj_chrgs + l_adj_chrgs;
+
+		l_int_count ++;
+
+	}
+	EXEC SQL CLOSE depo_curr;
+
+     //shailesh 28-12-2007 
+	
+	/*      ISKB-1924       Single Entry of Depository Charges      Rohit 30Sept2008        */
+	printf("Total Depo Bill |%lf|\n",g_kotak_bnk_chrgs);
+	printf("Tax Depo Bill |%lf|\n",g_service_tax);
+	printf("Edu Depo Bill |%lf|\n",g_edu_cess);
+	/*Comments by Mrinal for ISKB_8060 */
+	fprintf(bill,"<tr><td>DEPOSITORY CHARGES</td>\n");
+		 
+
+		if (APL_FAILURE == IV_PrntDetailRound(bill,
+						chr_p_billdt,
+						chr_p_client,
+						p_mastsub,
+						g_kotak_bnk_chrgs,
+						g_service_tax,
+						g_edu_cess,
+						g_grand_total,
+						l_style_class,
+						l_debug_info_ptr))
+		{
+			fprintf(fl_userlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+			fprintf(fl_techlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+			APL_GOBACK_FAIL
+		}		
+
+	fprintf(bill,"</tr>");
+
+	/*if(l_int_count == 0)
+	{
+		fprintf(bill,"<tr><td class=\'normal\'>NO RECORDS FOUND</td></tr>\n");
+	}*/
+
+	/**** For Depository charges, Don't Consider Min/Max Adjustments ***********/
+
+	/*
+	shailesh 26-12-2007 ISKB_340_12C
+	
+	EXEC SQL SELECT  NVL(SUM(A.NIL_FEES_ADJ)+SUM(A.MINIMUMFEE_ADJ)+SUM(A.MAXIMUM_FEE_ADJ),0)
+		INTO :g_adj_chrgs  FROM IV_SERVICE_CHRG A 
+		WHERE A.CLIENT = :l_client 
+			AND A.SERVICE_CD=:l_depofee 
+			AND A.DATEOF_BILLING= :l_billdate
+			AND A.CONS_FLAG = :l_mastsub
+			GROUP BY A.SERVICE_CD
+			ORDER BY A.SERVICE_CD;
+	
+	IS_ANY_ORA_ERROR
+
+	if(l_int_count > 0)
+	{
+		fprintf(bill,"<tr><td class=\'normalbold\'>Adjustments</td>\n");
+
+		if (APL_FAILURE == IV_PrntDetailRound(bill,
+						fl_techlog,
+						fl_userlog,
+						chr_p_billdt,
+						chr_p_client,
+						l_sys_ivcntl_param_struct,
+						l_iv_clt_setup_struct,
+						p_mastsub,
+						g_adj_chrgs,
+						0.0,
+						0.0,
+						0.0,
+						l_style_class,
+						l_debug_info_ptr))
+		{
+			fprintf(fl_userlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+			fprintf(fl_techlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+			APL_GOBACK_FAIL
+		}
+		else
+		{
+		g_kotak_bnk_chrgs = g_kotak_bnk_chrgs + g_adj_chrgs;//shailesh 060907
+		g_grand_total = g_grand_total + g_adj_chrgs;       //shailesh 060907
+		}
+		fprintf(bill,"</tr>\n");
+		
+	} 
+
+
+	strcpy(l_style_class,"ez4");
+
+	fprintf(bill,"<tr><td class=\'ez4\'>Total Charges (%s)</td>\n",b_ccycd);
+
+	if (APL_FAILURE == IV_PrntDetailRound(bill,
+					fl_techlog,
+					fl_userlog,
+					chr_p_billdt,
+					chr_p_client,
+					l_sys_ivcntl_param_struct,
+					l_iv_clt_setup_struct,
+					p_mastsub,
+					g_kotak_bnk_chrgs,
+					g_service_tax,
+					g_edu_cess,
+					g_grand_total,
+					l_style_class,
+					l_debug_info_ptr))
+	{
+		fprintf(fl_userlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+		fprintf(fl_techlog,"Failure From IV_PrntDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+		APL_GOBACK_FAIL
+	}
+	else
+	{
+
+	}
+shailesh 26-12-2007 ISKB_430_12C	*/
+	fprintf(bill,"</tr>\n");
+
+	 *p_kotak_bnk_chrgs = g_kotak_bnk_chrgs;
+	 *p_service_tax = g_service_tax;
+	 *p_edu_cess = g_edu_cess;
+	 *p_grand_total = g_grand_total;
+
+	 //fprintf(bill,"<tr><td>&nbsp;</td></tr>\n"); //shailesh 26-12-2007 ISKB_430_12C
+
+APL_GOBACK_SUCCESS
+
+
+RETURN_SUCCESS:
+    APL_IF_DEBUG
+    { 
+	CO_ProcMonitor(APL_OUT_FILE,"Exiting out of IV_PrntDetDepo succesfully\n",NULL,NULL);
+    }
+    return(APL_SUCCESS);
+
+RETURN_FAILURE:
+    APL_IF_DEBUG
+    {
+	CO_ProcMonitor(APL_OUT_FILE,"Exiting out of IV_PrntDetDepo unsuccesfully\n",NULL,NULL);
+    }
+    return (APL_FAILURE);
+
+}

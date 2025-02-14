@@ -1,0 +1,3214 @@
+/*
+ *   COPYRIGHT NOTICE
+ *   Copyright 2005 Polaris Software Lab Limited. All rights reserved.
+ *   These materials are confidential and proprietary to
+ *   Polaris Software Lab Limited and no part of these materials should
+ *   be reproduced, published, transmitted or distributed in any form or
+ *   by any means, electronic, mechanical, photocopying, recording or
+ *   otherwise, or stored in any information storage or retrieval system
+ *   of any nature nor should the materials be disclosed to third parties
+ *   or used in any other manner for which this is not authorized, without
+ *   the prior express written authorization of Polaris Software Lab Limited.
+ */
+/*******************************************************************************
+ *    Module Name         :         Billing Module 
+ *    File Name           :         IV_GenAcc.pc
+ *                Version Control Block
+ *    Date        Version     Author              Description     RFS No.
+ *   ---------   --------  ---------------  ----------------------------------
+ *   08-Dec-2010  1.0.1.12   Siva Ganapathi	  Changes done for ISKB_2470 -- safekeeping charges of NAV based client
+ *******************************************************************************/
+
+#include "stdio_64.h"
+#include <math.h>
+#include "IV_Control_A.h"
+
+#define	APL_ACCTENT_BLACC_IND 	'B'
+#define	APL_ACCTENT_BPYMNT_IND	'P'
+
+#define	DR_CR_IND							'0'
+#define	CREDIT_IND_A							'1'
+#define	NORMENT						'2'
+#define  APL_STAT_INFO_LEN			71
+#define  IV_MAX_DIFF			10 
+EXEC SQL INCLUDE SQLCA;
+
+typedef struct{
+					char		h_clt_gl[APL_CLIENT_LENGTH_GL];
+					double	h_repser;
+					double   lamountser;
+					long int service_cd;
+					} IACCTENT_OTHSERV_STRUCT;
+
+//shailesh 031007,ISKB430 changes for narration in Billin AE Generation
+char nar_acc_date[APL_DATE_LEN] 			= APL_NULL_STRING;
+char	chr_h_system_date[APL_DATE_LEN] = APL_NULL_STRING;
+//shailsh 26-12-2007 to insert bill_date in YYYYMMDD format in VAL_DATE
+char l_str_valdate[9] = APL_NULL_STRING;
+int IV_AccGenBill(char						**argv,
+						FILE						*fl_techlog,
+						FILE						*fl_userlog,	
+						INTL_ENV_DATA_STRUCT_H	*p_intlenv_data_struct_h,
+						DEBUG_INFO_STRUCT_H			**l_debug_info_ptr
+						)
+{
+
+char						chr_l_buf[BUFFER_LEN]		= APL_NULL_STRING;
+int						int_retstat 					= 0;	
+int						int_h_runseq 				= 1;
+int						int_h_prv_runseq;  
+
+char						chr_l_blacc_empty      	= APL_NULL_CHAR;
+
+IV_CLIENTSETUP_STRUCT		l_iv_clt_setup_struct;
+IV_CLIENT_STRUCT			l_ivclientstruct;
+SYS_IVCONTROLPARAM_STRUCT		l_sys_ivcntl_param_struct;
+IV_SERV_MAST_STRUCT		l_ivservmast_struct;
+IV_SERVICE_CHRG_STRUCT	l_iv_service_chrg_struct;
+IV_CHEQUE_STRUCT		l_iv_cheque_structa_a;
+I_IV_CHEQUE_STRUCT		l_i_iv_cheque_struct;
+/****************** For Accounting Entries  vinay kalaskar HDFCIV_005 ********************/
+IV_CLIENT_SERV_BASIS_STRUCT l_iv_client_serv_basis_structa;
+IV_CLIENTGL_STRUCT_H l_ivclientgl_struct;
+
+char						h_module_ind				= APL_NULL_CHAR;
+char						h_proc_num[10]			= APL_NULL_STRING;
+char						h_sequence_num[11]			= APL_NULL_STRING;
+char						chr_h_prv_batch_no[10]		= APL_NULL_STRING;
+
+double 					dcredit_ind 						= 0.0;
+double					ccredit_ind 						= 0.0;
+double					prv_dcredit_ind 					= 0.0;
+double					prv_ccredit_ind 					= 0.0;
+
+
+int						int_l_paycommit_count    = 0;
+int						int_l_commit_count			= 0;
+int						int_l_othsrv_ctr 			= 0;
+int						int_l_prv_othsrv_ctr 		= 0;
+int						int_l_totothsrv 			= 0;
+int						int_l_prv_totothsrv 		= 0;
+int						int_l_genbatchno 			= 0;
+int						int_num						= 0;
+int						int_l_fetch_ctr 			= 0;
+int						int_l_retcmamt 			= 0;
+
+double					l_std_amount 				= 0.0;
+double					l_rec_amount 				= 0;
+double					l_tax_amount 				= 0.0;
+double 					l_prv_std_amount 			= 0.0;
+double 					l_prv_tax_amount 			= 0.0;
+double 					l_prv_rec_amount 			= 0.0;
+double 					l_othsrv_amount 			= 0.0;
+double 					l_prv_othsrv_amount 		= 0.0;
+
+char						chr_h_incltax[2]			= "F";
+char						chr_h_prv_incltax[2]		= APL_NULL_STRING;
+
+char						chr_l_isopenblaccent = 'N';
+char						chr_l_isopenbillpay = 'N';
+char						chr_l_isopenbillpay1 = 'N';
+char						**temp;
+
+char						chr_l_passpayae				= APL_NULL_CHAR;
+char						chr_l_directdb_flg			= APL_NULL_CHAR;
+int						int_l_pay_fetch_ctr		= 0;
+char						chr_h_pay_mod_ident		= APL_NULL_CHAR;
+int						int_l_paygenbatch			= 0;
+char						chr_h_pay_batch_no[5]		= APL_NULL_STRING;
+char						chr_h_pay_runseq[5]		= APL_NULL_STRING;
+char						chr_l_cod_cmamt[20]		= APL_NULL_STRING;
+int						int_l_pay_runseq			= 1;
+double					pay_dcredit_ind					= 0.0;
+double					pay_ccredit_ind					= 0.0;
+long int					int_pay_dact					= 0;
+long int					int_pay_cact					= 0;
+
+long int service_cd =0;
+IACCTENT_OTHSERV_STRUCT   *l_iacctent_othserv_struct 		= (IACCTENT_OTHSERV_STRUCT *)NULL;
+IACCTENT_OTHSERV_STRUCT   *l_prv_iacctent_othserv_struct = (IACCTENT_OTHSERV_STRUCT *)NULL;
+
+EXEC SQL BEGIN DECLARE SECTION;
+double					h_cm_amount										= 0.0;
+char						chr_h_batch_in_proc_rowid[APL_ROWID_LEN];
+char						h_dl_client[APL_CLIENT_LENGTH] 			= APL_NULL_STRING;
+char						chr_h_preclient[APL_CLIENT_LENGTH] 		= APL_NULL_STRING;
+char						chr_h_bill_dt[APL_DATE_LEN]    			= APL_NULL_STRING;
+char						chr_h_cons_ind									= APL_NULL_CHAR;
+long int					int_h_serv_code									= 0;
+char						chr_h_restart_data[50]						= APL_NULL_STRING;
+char						chr_l_stat_info[APL_STAT_INFO_LEN]		= APL_NULL_STRING;
+/****************** For Accounting Entries  vinay kalaskar HDFCIV_005 ****************/
+char                 h_service_acc[APL_CLIENT_LENGTH_GL]       = APL_NULL_STRING;
+char                 h_mstclt[APL_CLIENT_LENGTH]            = APL_NULL_STRING;
+char                 h_master[APL_CLIENT_LENGTH]            = APL_NULL_STRING;
+char                 h_nation_code[3]                       = APL_NULL_STRING;
+/*************************************************************************************/
+char						chr_h_restart_batch_no[5]						= APL_NULL_STRING;
+char						chr_h_restart_client[APL_CLIENT_LENGTH]		= APL_NULL_STRING;
+char						chr_h_batch_in_proc_status[16]	= APL_NULL_STRING;
+char						chr_h_batch_in_proc_progname[40]				= APL_NULL_STRING;
+char						chr_h_batch_in_proc_startdate[APL_DATE_LEN]= APL_NULL_STRING;
+
+int 						int_h_bselclients_count							= 0;
+int int_l_flg; 
+char 						l_narr_tmp[101];//Added by Gouse - ISKB_2470 - Duplicate accounting entries issue
+double 					l_exl_cmamount=0.0;//Added by Gouse - ISKB_2470 - Duplicate accounting entries issue
+  char h_apl_frm_date[9] = APL_NULL_STRING;  /* Added by monica for kotak ISKB_1737 */
+  short i_apl_frm_date = 0;  /* Added by monica for kotak ISKB_1737 */
+
+/****************** For Accounting Entries  vinay kalaskar HDFCIV_005 ****************/
+EXEC SQL VAR h_service_acc  IS STRING;
+EXEC SQL VAR h_mstclt IS STRING;
+EXEC SQL VAR h_master IS STRING;
+EXEC SQL VAR h_nation_code IS STRING;
+/*************************************************************************************/
+EXEC SQL VAR h_dl_client 						IS STRING;
+EXEC SQL VAR chr_h_preclient 					IS STRING;
+EXEC SQL VAR chr_h_bill_dt 						IS STRING;
+EXEC SQL VAR chr_h_batch_in_proc_rowid 		IS STRING;
+EXEC SQL VAR chr_h_batch_in_proc_status 	IS STRING;
+EXEC SQL VAR chr_h_batch_in_proc_progname 	IS STRING;
+EXEC SQL VAR chr_h_batch_in_proc_startdate IS STRING;
+EXEC SQL VAR chr_h_restart_data 				IS STRING;
+EXEC SQL VAR chr_h_restart_client 			IS STRING;
+EXEC SQL VAR chr_h_restart_batch_no 			IS STRING;
+
+EXEC SQL VAR l_iv_cheque_structa_a.client IS STRING;
+EXEC SQL VAR l_iv_cheque_structa_a.dateof_payment IS STRING;
+EXEC SQL VAR l_iv_cheque_structa_a.b_ccycd IS STRING;
+EXEC SQL VAR l_iv_cheque_structa_a.maker IS STRING;
+EXEC SQL VAR l_iv_cheque_structa_a.maker_dt IS STRING;
+EXEC SQL VAR l_iv_cheque_structa_a.access_stamp IS STRING;
+EXEC SQL VAR l_iv_cheque_structa_a.checker IS STRING;
+EXEC SQL VAR l_iv_cheque_structa_a.checker_dt IS STRING;
+EXEC SQL VAR l_iv_cheque_structa_a.pymt_clt IS STRING;
+EXEC SQL VAR l_iv_cheque_structa_a.ae_dt IS STRING;
+EXEC SQL VAR l_narr_tmp IS STRING;//Added by Gouse - ISKB_2470 - Duplicate accounting entries issue
+EXEC SQL VAR h_apl_frm_date IS STRING;  /* Added by monica for kotak ISKB_1737 */
+
+
+struct					sqlca sqlca;
+short						int_i_batch_in_proc_rowid 	=0;
+short						i_restart_info 			=0;
+EXEC SQL END DECLARE SECTION;
+
+APL_IF_DEBUG
+{
+	CO_ProcMonitor(APL_OUT_FILE,"\nInside IV_Proc_PayAccgenfn processtion\n",NULL,NULL);
+	memset(chr_l_buf,NULL,BUFFER_LEN);
+	sprintf(chr_l_buf,"The Accounting Entries Gen Flag is %s\n"," ");
+	CO_ProcMonitor(APL_OUT_FILE,chr_l_buf,NULL,NULL);
+}
+
+	strcpy(chr_h_batch_in_proc_progname,argv[0]);
+	strcpy(chr_h_batch_in_proc_startdate,argv[2]);
+
+	
+	EXEC SQL SELECT ROWID,PROCESSING_STATUS
+	INTO  :chr_h_batch_in_proc_rowid:int_i_batch_in_proc_rowid,:chr_h_restart_data:i_restart_info 
+	FROM SYS_BATCHPROC
+	WHERE PROCESS_NAME   = :chr_h_batch_in_proc_progname  
+	AND STARTDATE		=  :chr_h_batch_in_proc_startdate
+	AND STATUS			= 'started' 
+	FOR UPDATE OF PROCESSING_STATUS, STATUS;
+
+
+	if (sqlca.sqlcode <0)
+	{
+		fprintf(fl_userlog,"Batch_in_proc table cannot be locked.PLease run acouting entries again\n");
+		CO_InsertErr(l_debug_info_ptr,3,ltoa(sqlca.sqlcode),
+							APL_NULL_STRING,APL_NULL_STRING,__LINE__,__FILE__);
+		APL_GOBACK_FAIL;
+	}
+
+	if (sqlca.sqlcode == 1403)
+   {
+      fprintf(fl_userlog,"Record with process_name %s ,start_date %s and status_ind as started not int_found in the batch table \n",argv[0],argv[2] );
+      APL_GOBACK_FAIL;
+   }
+
+
+	if ( !strcmp(argv[9],APL_NULL_STRING))
+		APL_DATA_MISSING("AccountEntriesGenFlg",APL_NULL_STRING,APL_NULL_STRING);	
+
+
+	memset(&l_ivclientstruct, NULL, sizeof(IV_CLIENT_STRUCT));
+/****************** For Accounting Entries  vinay kalaskar HDFCIV_005 ****************/
+   memset(&l_ivclientgl_struct, NULL, sizeof(IV_CLIENTGL_STRUCT_H));
+	memset(&l_iv_client_serv_basis_structa,NULL,sizeof(IV_CLIENT_SERV_BASIS_STRUCT));
+/************************************************************************************/
+	memset(&l_sys_ivcntl_param_struct, NULL, sizeof(SYS_IVCONTROLPARAM_STRUCT));
+	memset(&l_ivservmast_struct, NULL, sizeof(IV_SERV_MAST_STRUCT));
+	memset(&l_iv_service_chrg_struct, NULL, sizeof(IV_SERVICE_CHRG_STRUCT));
+
+
+/****************** For Accounting Entries  vinay kalaskar HDFCIV_005 ****************/
+
+IF_COND_EXISTS("IV_ACC_CLIENT","FUND_ACC")
+{
+	if (APL_FAILURE == MT_UpdIV_CLIENTGL(&l_ivclientgl_struct,&int_retstat,l_debug_info_ptr) )
+	{
+		if (int_retstat == IV_CRITCAL_ERROR_IND)
+		{
+			fprintf(fl_userlog,"DB ERROR IN BLACC\n");
+			CO_InsertErr(l_debug_info_ptr,
+								DB_ERR_NO,
+								"BLACC",
+								APL_NULL_STRING,
+								APL_NULL_STRING,
+								__LINE__,
+								__FILE__);
+			APL_GOBACK_FAIL;
+		}
+		if (int_retstat == IV_NO_DATA_FOUND_ERR )
+		{
+			fprintf(fl_userlog,"Billing Accounts have not been input\n");	
+			CO_InsertErr(l_debug_info_ptr,
+								383,
+								APL_NULL_STRING,
+								APL_NULL_STRING,
+								APL_NULL_STRING,
+								__LINE__,
+								__FILE__);
+			APL_GOBACK_FAIL;
+		}
+		if (int_retstat == IV_COLUMN_NULL_ERR)
+		{
+			if (!strcmp(l_ivclientgl_struct.h_checker," ") )
+			{
+				CO_InsertErr(l_debug_info_ptr,
+									ERR_BILLACC_NOTAUTHORIZED,
+									APL_NULL_STRING,
+									APL_NULL_STRING,
+									APL_NULL_STRING,
+									__LINE__,
+									__FILE__);
+				fprintf(fl_userlog,"Billing Accounts not authorised \n");
+				APL_GOBACK_FAIL
+			}	
+		}
+	}
+}
+/**************************************************************************************************/
+else
+{
+	if (APL_FAILURE == IV_Rtv_IVACC(&l_ivclientstruct,&int_retstat,l_debug_info_ptr) )
+	{
+	   if (int_retstat == IV_CRITCAL_ERROR_IND)
+      {
+		   fprintf(fl_userlog,"DB ERROR IN BLACC\n");
+         CO_InsertErr(l_debug_info_ptr,
+                      DB_ERR_NO,
+					      "BLACC",
+			             APL_NULL_STRING,
+		                APL_NULL_STRING,
+				          __LINE__,
+			             __FILE__);
+					       APL_GOBACK_FAIL;
+	   }
+		if (int_retstat == IV_NO_DATA_FOUND_ERR )
+		{
+		   fprintf(fl_userlog,"Billing Accounts have not been input\n");
+	      CO_InsertErr(l_debug_info_ptr,
+		                383,
+					       APL_NULL_STRING,
+	                   APL_NULL_STRING,
+		                APL_NULL_STRING,
+		                __LINE__,
+		                __FILE__);
+	      APL_GOBACK_FAIL;
+		}
+	   if (int_retstat == IV_COLUMN_NULL_ERR)
+		{
+	      if (!strcmp(l_ivclientstruct.checker," ") )
+		   {
+		       CO_InsertErr(l_debug_info_ptr,
+	                       ERR_BILLACC_NOTAUTHORIZED,
+                          APL_NULL_STRING,
+								  APL_NULL_STRING,
+                          APL_NULL_STRING,
+                          __LINE__,
+                          __FILE__);
+	         fprintf(fl_userlog,"Billing Accounts not authorised \n");
+	         APL_GOBACK_FAIL
+			}
+		}
+   }
+}
+
+	if (APL_FAILURE == IV_Rtv_IVCNTLPARAM(&l_sys_ivcntl_param_struct, &int_retstat,
+													l_debug_info_ptr))
+	{
+		if (int_retstat == IV_NO_DATA_FOUND_ERR)
+		{
+			fprintf(fl_userlog,"Billing Control Parameters have not been set up\n");
+			CO_InsertErr(l_debug_info_ptr,
+								ERR_BILLCNTRL_PARAM_NOTFND,
+								APL_NULL_STRING,
+								APL_NULL_STRING,
+								APL_NULL_STRING,
+								__LINE__,
+								__FILE__);
+			APL_GOBACK_FAIL
+		}
+		if (int_retstat == IV_COLUMN_NULL_ERR)
+		{
+			if (l_sys_ivcntl_param_struct.generate_ind == ' ')
+			{
+				fprintf(fl_userlog,"Bills not generated .Cannot Run Accounting Entries \n");
+				CO_InsertErr(l_debug_info_ptr,
+									ERR_BILLS_NOT_GENERATED,APL_NULL_STRING,
+									APL_NULL_STRING,
+									APL_NULL_STRING,
+									__LINE__,
+									__FILE__);
+				APL_GOBACK_FAIL
+			}					
+			if ( l_sys_ivcntl_param_struct.ae_ind == ' ')  
+			{
+				fprintf(fl_userlog,"Accounting Entrie have already been generated\n");
+				CO_InsertErr(l_debug_info_ptr,
+									ERR_ACTGENTRY_GEN,
+									APL_NULL_STRING,
+									APL_NULL_STRING,
+									APL_NULL_STRING,
+									__LINE__,
+									__FILE__);
+				APL_GOBACK_FAIL
+			}
+		}
+	}
+
+	EXEC SQL SELECT NVL(COUNT(*), 0)
+	INTO :int_h_bselclients_count  
+	FROM IV_SELCLIENT;
+	
+	IS_ANY_ORA_ERROR
+	
+	if (l_sys_ivcntl_param_struct.generate_ind != 'Y')
+	{
+		fprintf(fl_userlog,"Bills Not Generated .Cannot Run Accounting Entries \n");
+		CO_InsertErr(l_debug_info_ptr,
+							ERR_BILLS_NOT_GENERATED,
+							APL_NULL_STRING,
+							APL_NULL_STRING,
+							APL_NULL_STRING,
+							__LINE__,
+							__FILE__);
+		APL_GOBACK_FAIL
+	}					
+
+	if ( 	(l_sys_ivcntl_param_struct.ae_ind  == 'Y' 
+			|| l_sys_ivcntl_param_struct.ae_ind == 'G' )	) 
+	{
+		fprintf(fl_userlog,"Accounting Entrie have already been generated\n");
+		CO_InsertErr(l_debug_info_ptr,
+							ERR_ACTGENTRY_GEN,
+							APL_NULL_STRING,
+							APL_NULL_STRING,
+							APL_NULL_STRING,
+							__LINE__,
+							__FILE__);
+		APL_GOBACK_FAIL
+	}
+
+	if (int_h_bselclients_count != 0) 
+	{
+		fprintf(fl_userlog,"Bill Regeneration Not Complete. Please Restart Bill Generation\n");
+		CO_InsertErr(l_debug_info_ptr,
+							ERR_BILLREGN_NOTCOMPLETE,
+							APL_NULL_STRING,
+							APL_NULL_STRING,
+							APL_NULL_STRING,
+							__LINE__,
+							__FILE__);
+		APL_GOBACK_FAIL
+	}
+
+	h_module_ind = APL_ACCTENT_BLACC_IND;
+
+	if (APL_FAILURE == CO_Rtv_NxtBatchSeq( h_module_ind,
+                                       h_proc_num,
+                                       h_sequence_num,
+                                       l_debug_info_ptr) )
+   {
+      fprintf(fl_userlog,"Failed to select the maximum batchnumber\n");
+      APL_GOBACK_FAIL
+   }
+
+   if (!strcmp(h_proc_num, APL_NULL_STRING))
+   {
+      int_l_genbatchno = 1;
+   }
+   else
+   {
+      sscanf(h_sequence_num,"%d",&int_h_runseq);
+		int_h_runseq = int_h_runseq + 1;
+      int_l_genbatchno = 0;
+   }
+
+
+	if (i_restart_info == -1)
+	{
+	
+		strcpy(chr_h_restart_data, " ");
+      strcpy(chr_h_restart_client,chr_h_restart_data);
+	}		
+	else
+	{
+		
+		strcpy(chr_h_restart_client,chr_h_restart_data);
+	}
+
+	
+
+		
+	//shailesh 031007,ISKB430 date pattern for description
+
+	if (APL_FAILURE == CO_RtvSysDt(chr_h_system_date,l_debug_info_ptr) )
+   	{
+		fprintf(fl_userlog,"Failed to Get system chr_date \n");
+      	APL_GOBACK_FAIL
+	}		
+		/* Added by Gouse - ISKB_2470 - Duplicate accounting entries issue - 10/04/2013 - Start */	
+		memset(l_narr_tmp,APL_NULL_CHAR,sizeof(l_narr_tmp));
+		EXEC SQL SELECT TO_CHAR(TO_DATE(:l_sys_ivcntl_param_struct.b_upto_date,'DD/MM/YYYY hh24:mi:ss'),'MON - YYYY') INTO :l_narr_tmp FROM DUAL;
+		Alert("sqlca.sqlcode is |%d|",sqlca.sqlcode);
+		IS_ANY_ORA_ERROR
+		Alert("l_narr_tmp is %s",l_narr_tmp);	
+		/* Added by Gouse - ISKB_2470 - Duplicate accounting entries issue - 10/04/2013 - End */	
+
+    /*shailesh 02-06-2008 changes for date pattern*/
+	 	EXEC SQL SELECT 
+			    CASE WHEN LAST_DAY(B_PREV_DATE)-B_PREV_DATE > ABS(B_UPTO_DATE-LAST_DAY(B_PREV_DATE))
+				THEN   TO_CHAR(ADD_MONTHS(B_PREV_DATE,0),'MON - YYYY') 
+				ELSE   TO_CHAR(ADD_MONTHS(B_UPTO_DATE,0),'MON - YYYY') 
+				END  INTO :nar_acc_date        
+				FROM      SYS_IVCONTROLPARAM;
+		 Alert("\n --nar_acc_date - = [%s]",nar_acc_date);
+                /*Modified by siva.ganapathi for ISKB_2470 on 07-Dec-2010 -- started*/
+                 fflush(stdout);
+		 printf("\n uptodate is %s",l_sys_ivcntl_param_struct.b_upto_date);
+		 printf("\n chr_h_restart_client is %s",chr_h_restart_client);
+		 fflush(stdout);
+
+		/* Added by Gouse - ISKB_2470 - Duplicate accounting entries issue - 10/04/2013 - Start */	
+		IF_COND_EXISTS("IV_BILLGEN","NAV_TAX_EXCL")
+		{
+			EXEC SQL DECLARE BLACCENT CURSOR FOR
+			SELECT DISTINCT(b.CLIENT),(b.COMM_AMT + b.NIL_FEES_ADJ + b.MINIMUMFEE_ADJ + b.MAXIMUM_FEE_ADJ),
+							 b.CONS_FLAG,b.DATEOF_BILLING,b.SERVICE_CD 
+			FROM IV_CLIENTSETUP a,IV_SERVICE_CHRG b  
+			WHERE (	a.CLIENT 		= b.CLIENT 
+				AND b.DATEOF_BILLING   	= :l_sys_ivcntl_param_struct.b_upto_date 
+				AND a.B_GEN_IND 		= 'S'
+				AND  ((b.MASTER_CLT 	<>  b.CLIENT) 
+					   OR (b.MASTER_CLT = b.CLIENT AND b.CONS_FLAG = 'C'))
+	   			AND b.CLIENT >  :chr_h_restart_client
+				 and B.CLIENT||'|'||B.SERVICE_CD NOT IN ( SELECT  DEAL_IDENT FROM PRO_ACCTENT
+                                                 WHERE MODULE_IND ='B' AND STATUS ='P'
+                                                 /* AND VAL_DATE = to_char(to_date(:l_sys_ivcntl_param_struct.b_upto_date,'DD/MM/YYYY hh24:mi:ss'),'YYYYMMDD')
+																	commented by Gouse - ISKB_2470 - Duplicate a/c entries issue */
+																	AND NARRATIVE LIKE '%'||:l_narr_tmp||'%' AND DEAL_IDENT NOT IN (B.CLIENT||'|'||'16')
+
+				))
+			ORDER BY b.DATEOF_BILLING,b.CLIENT,
+					b.CONS_FLAG,b.SERVICE_CD;
+		}/* Added by Gouse - ISKB_2470 - Duplicate accounting entries issue - 10/04/2013 - End */	
+		else
+		{
+		EXEC SQL DECLARE BLACCENT CURSOR FOR
+		SELECT DISTINCT(b.CLIENT),(b.COMM_AMT + b.NIL_FEES_ADJ + b.MINIMUMFEE_ADJ + b.MAXIMUM_FEE_ADJ),
+							 b.CONS_FLAG,b.DATEOF_BILLING,b.SERVICE_CD 
+		FROM IV_CLIENTSETUP a,IV_SERVICE_CHRG b  
+		WHERE (	a.CLIENT 		= b.CLIENT 
+				AND b.DATEOF_BILLING   	= :l_sys_ivcntl_param_struct.b_upto_date 
+				AND a.B_GEN_IND 		= 'S'
+				AND  ((b.MASTER_CLT 	<>  b.CLIENT) 
+					   OR (b.MASTER_CLT = b.CLIENT AND b.CONS_FLAG = 'C'))
+	   			AND b.CLIENT >  :chr_h_restart_client
+				 and B.CLIENT||'|'||B.SERVICE_CD NOT IN ( SELECT  DEAL_IDENT FROM PRO_ACCTENT
+                                                 WHERE MODULE_IND ='B' AND STATUS ='P'
+                                                 AND VAL_DATE = to_char(to_date(:l_sys_ivcntl_param_struct.b_upto_date,'DD/MM/YYYY hh24:mi:ss'),'YYYYMMDD')))
+		ORDER BY b.DATEOF_BILLING,b.CLIENT,
+					b.CONS_FLAG,b.SERVICE_CD;
+		}
+		
+		printf("\n sql error after declaring the cursor BLACCENT is %d",sqlca.sqlcode);
+		fflush(stdout);
+                /*Modified by siva.ganapathi for ISKB_2470 on 07-Dec-2010 -- Ended*/
+
+		EXEC SQL OPEN BLACCENT;
+		
+		printf("\n sql error after opening the cursor BLACCENT is %d",sqlca.sqlcode);                /*Modified by siva.ganapathi for ISKB_2470 on 07-Dec-2010*/
+		fflush(stdout); 
+		
+		IS_ANY_ORA_ERROR
+		
+		chr_l_isopenblaccent = 'Y';
+
+		for(;;)
+		{
+			memset(h_dl_client, APL_NULL_CHAR , APL_CLIENT_LENGTH);
+			h_cm_amount = 0;
+			chr_h_cons_ind = APL_NULL_CHAR;
+			int_h_serv_code = 0;
+			memset(chr_h_bill_dt , APL_NULL_CHAR , APL_DATE_LEN);
+
+			EXEC SQL FETCH BLACCENT 
+			INTO :h_dl_client,:h_cm_amount,:chr_h_cons_ind,:chr_h_bill_dt,:int_h_serv_code;
+			
+			IS_ANY_ORA_ERROR;
+			
+			printf("\nIV_GenAcc.pc:IV_AccGenBill: ** h_dl_client:|%s|h_cm_amount:|%lf|int_h_serv_code|%ld|",h_dl_client,h_cm_amount,int_h_serv_code);
+                        service_cd = int_h_serv_code;
+			printf("\nIV_GenAcc.pc:IV_AccGenBill:sqlca.sqlcode:|%d|",sqlca.sqlcode);
+			fflush(stdout);
+			if (sqlca.sqlcode == 1403)
+			{
+				if (int_l_fetch_ctr == 0)
+				{
+					fprintf(fl_userlog,"No Records For Which To Pass Billing Accounting Entries \n");
+				}
+				else
+				{
+					if (APL_FAILURE == BlAcPassNew(chr_h_preclient,
+															chr_h_prv_incltax,
+															&l_prv_std_amount,
+															&l_prv_tax_amount,
+															&l_prv_rec_amount,
+															&l_prv_othsrv_amount,
+															&l_ivclientstruct,
+															&l_prv_iacctent_othserv_struct,
+															&int_l_prv_othsrv_ctr,
+															&int_l_prv_totothsrv,
+															&int_h_prv_runseq,
+															&prv_dcredit_ind,
+															&prv_ccredit_ind,
+														 	chr_h_prv_batch_no,
+															chr_l_directdb_flg,
+															&int_l_genbatchno,
+														 	fl_userlog,
+															fl_techlog,
+															l_debug_info_ptr))
+					{
+				  		fprintf(fl_userlog,"Failed To Pass New Accounting Entries For Account %s\n",chr_h_preclient);
+				  		APL_GOBACK_FAIL
+					}
+
+					
+
+					int_l_paycommit_count++;
+
+					if (int_l_paycommit_count%IV_REC_COMMIT_CNT == 0)
+					{
+					  strcpy(chr_h_restart_client,chr_h_preclient);
+					
+					  sprintf(chr_l_stat_info,"Record %d Committed ",int_l_paycommit_count);	
+				
+ 					  EXEC SQL UPDATE SYS_BATCHPROC
+   	           SET STATUS  = 'started',
+					  STAT_DET   = :chr_l_stat_info,
+      	        PROCESSING_STATUS = :chr_h_restart_client
+         	     WHERE ROWID = :chr_h_batch_in_proc_rowid;
+
+						if (sqlca.sqlcode <0)
+      	  			{
+         	   		CO_InsertErr(l_debug_info_ptr,
+												DB_ERR_NO,
+												ltoa(sqlca.sqlcode),
+            	   		            APL_NULL_STRING,
+												APL_NULL_STRING,
+               	   		         __LINE__,
+												__FILE__);
+            			APL_GOBACK_FAIL;
+
+				      }
+						
+ 				      EXEC SQL COMMIT WORK;
+						IS_ANY_ORA_ERROR
+
+ 			  	     	fprintf(fl_userlog,"Record Commited\n"); 
+					}	
+
+					fprintf(fl_userlog,"The Last Account for which Accounting Entries were generated was %s\n",chr_h_preclient);
+					fprintf(fl_userlog,"No More records to select \n");
+				}
+				break;		
+			}
+			/* Added by Gouse - ISKB_2470 - Duplicate accounting entries issue for service code 16 - 10/04/2013 - Start */
+            IF_COND_EXISTS("IV_BILLGEN","NAV_TAX_EXCL")
+            {
+					if(int_h_serv_code==TAXFEE)
+					{
+               	l_exl_cmamount=0.0;
+               	memset(l_narr_tmp,APL_NULL_CHAR,sizeof(l_narr_tmp));
+
+               	EXEC SQL SELECT TO_CHAR(TO_DATE(:l_sys_ivcntl_param_struct.b_upto_date,'DD/MM/YYYY hh24:mi:ss'),'MON - YYYY') INTO :l_narr_tmp FROM DUAL;
+               	Alert("sqlca.sqlcode is |%d|",sqlca.sqlcode);
+               	IS_ANY_ORA_ERROR
+               	Alert("l_narr_tmp is %s",l_narr_tmp);
+
+               	EXEC SQL SELECT NVL(SUM(LCL_AMOUNT),0) INTO :l_exl_cmamount FROM PRO_ACCTENT WHERE MODULE_IND='B' AND STATUS='P' AND DEAL_IDENT = :h_dl_client||'|'||'16'
+                                                AND NARRATIVE = 'SERVICE TAX CHGS '||:l_narr_tmp||' '||:h_dl_client; //SERVICE TAX CHGS AUG - 2012 8002515002
+
+               	Alert("sqlca.sqlcode is |%d|",sqlca.sqlcode);
+               	IS_ANY_ORA_ERROR
+               	Alert("l_exl_cmamount is |%f|",l_exl_cmamount);
+
+               	h_cm_amount = h_cm_amount - l_exl_cmamount;
+
+               	Alert("h_cm_amount is |%f|",h_cm_amount);
+					}
+            }
+            /* Added by Gouse - ISKB_2470 - Duplicate accounting entries issue for service code 16 - 10/04/2013 - End */
+		
+	//shailesh 26-12-2007 insert val_date as billdate in YYYYMMDD format
+		EXEC SQL SELECT  TO_CHAR(TO_DATE(SUBSTR(:chr_h_bill_dt,0,10),'dd/mm/yyyy'),'YYYYMMDD')	INTO :l_str_valdate FROM DUAL;
+					int_l_fetch_ctr++ ;
+
+			printf("\nIV_GenAcc.pc:IV_AccGenBill: int_l_fetch_ctr:|%d|",int_l_fetch_ctr);
+
+			if (int_l_fetch_ctr == 1)
+			{
+				strcpy(chr_h_preclient,h_dl_client);
+			}
+
+			
+			printf("\nIV_GenAcc.pc:IV_AccGenBill:chr_h_preclient:|%s|h_dl_client:|%s|int_h_serv_code is %ld",chr_h_preclient,h_dl_client,int_h_serv_code);
+                        fflush(stdout);
+			if (strcmp(chr_h_preclient,h_dl_client))
+			{
+
+				if (APL_FAILURE == BlAcPassNew(chr_h_preclient,
+														chr_h_prv_incltax,
+														&l_prv_std_amount,
+														&l_prv_tax_amount,
+														&l_prv_rec_amount,
+														&l_prv_othsrv_amount,
+														&l_ivclientstruct,
+														&l_prv_iacctent_othserv_struct,
+														&int_l_prv_othsrv_ctr,
+														&int_l_prv_totothsrv,
+														&int_h_prv_runseq,
+														&prv_dcredit_ind,
+														&prv_ccredit_ind,
+													 	chr_h_prv_batch_no,
+														chr_l_directdb_flg,
+														&int_l_genbatchno,
+													 	fl_userlog,
+														fl_techlog,
+														l_debug_info_ptr))
+				{
+				  fprintf(fl_userlog,"Failed To Pass New Accounting Entries For Account %s\n",chr_h_preclient);
+				  APL_GOBACK_FAIL
+				}
+
+				printf("after passing for client %s ,the dct and cct amounts are %lf, %lf \n",chr_h_preclient, prv_dcredit_ind , prv_ccredit_ind); 
+			
+				
+
+				APL_FREE(l_prv_iacctent_othserv_struct);
+				l_prv_iacctent_othserv_struct = (IACCTENT_OTHSERV_STRUCT *)NULL;
+				APL_FREE(l_iacctent_othserv_struct);
+				l_iacctent_othserv_struct = (IACCTENT_OTHSERV_STRUCT *)NULL;
+				l_std_amount = 0;
+				l_rec_amount =0;
+				l_tax_amount =0;
+				int_l_totothsrv = 0;
+				int_l_othsrv_ctr = 0;
+				l_othsrv_amount = 0;
+				l_prv_othsrv_amount = 0.0;
+				int_l_prv_othsrv_ctr = 0;
+
+				int_l_paycommit_count++;
+
+				if (int_l_paycommit_count%IV_REC_COMMIT_CNT == 0)
+				{
+					strcpy(chr_h_restart_client,chr_h_preclient);
+					sprintf(chr_l_stat_info ,"%d", int_l_paycommit_count);
+
+ 					EXEC SQL UPDATE SYS_BATCHPROC
+      	      SET STATUS   = 'started',
+					STAT_DET	 = :chr_l_stat_info,
+         	   PROCESSING_STATUS = :chr_h_restart_client
+            	WHERE ROWID  = :chr_h_batch_in_proc_rowid;
+	
+					if (sqlca.sqlcode <0)
+      	  		{
+         	   	CO_InsertErr(l_debug_info_ptr,
+											DB_ERR_NO,
+											ltoa(sqlca.sqlcode),
+            	  		            APL_NULL_STRING,
+											APL_NULL_STRING,
+               	  		         __LINE__,
+											__FILE__);
+            		APL_GOBACK_FAIL;
+
+		      	}  
+
+ 				   EXEC SQL COMMIT WORK;
+					IS_ANY_ORA_ERROR
+
+					fprintf(fl_userlog,"Record Committed\n");			
+			
+ 		       	EXEC SQL SELECT ROWID,PROCESSING_STATUS
+   		     	INTO :chr_h_batch_in_proc_rowid :int_i_batch_in_proc_rowid, :chr_h_restart_data :i_restart_info
+      		   FROM SYS_BATCHPROC
+        			WHERE PROCESS_NAME   =  :argv[0]
+         		AND STARTDATE    =  :argv[2]
+         		AND STATUS       =  'started'
+         		FOR UPDATE OF PROCESSING_STATUS ,STATUS;
+
+			      IS_ANY_ORA_ERROR
+
+			
+					
+			}	
+			
+				
+				 
+
+				strcpy(chr_h_preclient, h_dl_client);
+				strcpy(h_proc_num,chr_h_prv_batch_no);
+				strcpy(chr_h_incltax, "F");
+				dcredit_ind = 0.0;
+				ccredit_ind = 0.0;
+				l_std_amount = 0.0;
+				l_rec_amount = 0;
+				l_tax_amount = 0.0;
+				l_othsrv_amount = 0.0;
+//AmitB				int_h_runseq = int_h_prv_runseq  + 1 ;
+				int_h_runseq = int_h_prv_runseq; //ISKB-430
+			}  
+
+			memset(&l_iv_clt_setup_struct, NULL, sizeof(IV_CLIENTSETUP_STRUCT));
+
+			
+			if (APL_FAILURE == IV_Rtv_IVCUSTSETUP(h_dl_client,
+															&l_iv_clt_setup_struct,
+															&int_retstat,
+															l_debug_info_ptr))
+			{
+				if (int_retstat == IV_CRITCAL_ERROR_IND)
+				{
+					fprintf(fl_userlog,"FATAL ERROR IN BCUSTSETUP TABLE\n");
+					CO_InsertErr(l_debug_info_ptr,
+										DB_ERR_NO,
+										"BCUSTSETUP",
+										APL_NULL_STRING,
+										APL_NULL_STRING,
+										__LINE__,
+										__FILE__);
+					APL_GOBACK_FAIL
+				}
+				if (int_retstat == IV_NO_DATA_FOUND_ERR)
+				{
+					fprintf(fl_userlog,"Account Not Defined In Billing Customer Setup \n");
+					CO_InsertErr(l_debug_info_ptr,
+										ERR_BILLPARAM_NOTFND,
+										h_dl_client,
+										APL_NULL_STRING,
+										APL_NULL_STRING,
+										__LINE__,
+										__FILE__);
+					APL_GOBACK_FAIL
+				}
+			}
+/******************** For Accounting Entries  vinay kalaskar  HDFCIV_005 **********************/		
+		 
+		/* Added by monica for kotak ISKB_1737 starts */
+	EXEC SQL SELECT to_char(MAX(to_date(apl_frm_date,'MM/YYYY')),'MON-YYYY') into :h_apl_frm_date:i_apl_frm_date FROM IV_CLIENT_SERV_BASIS,SYS_IVCONTROLPARAM 
+	WHERE CLIENT = :h_dl_client AND service_cd = :int_h_serv_code AND  to_date(apl_frm_date,'MM/YYYY') <= B_UPTO_DATE;
+	IS_ANY_ORA_ERROR
+	printf("\n applicable from date |%s| \n",h_apl_frm_date);
+	/* Added by monica for kotak ISKB_1737 ends */
+
+   		int_retstat = IV_SUCCESS;
+	 	 if(APL_FAILURE == IV_Rtv_IVSRVBasis(h_dl_client,int_h_serv_code,h_apl_frm_date,&l_iv_client_serv_basis_structa,&int_retstat,
+		                                     l_debug_info_ptr))       /* Added apl_frm_date by monica for kotak ISKB_1737 */
+		 {
+	        if (APL_FAILURE == IV_Rtv_GetMasterAcc(h_dl_client,h_mstclt,l_debug_info_ptr))
+	        {
+	          fprintf(fl_userlog,"Could not find master client for %s\n",h_dl_client);
+             APL_GOBACK_FAIL
+           }
+           if(APL_FAILURE == IV_Rtv_IVSRVBasis(h_mstclt,int_h_serv_code,h_apl_frm_date,&l_iv_client_serv_basis_structa,&int_retstat,
+			                                      l_debug_info_ptr))     /* Added apl_frm_date by monica for kotak ISKB_1737 */
+	        {
+		        strcpy(h_master,h_mstclt);
+	           //strcpy(h_dl_client,h_mstclt); ASP Com, 28 Aug 2007, Billing Retro, Mst Client not req for chrgs 
+		        if(APL_FAILURE == IV_Rtv_GetMasterAcc(h_master,h_mstclt,l_debug_info_ptr))
+	           {
+	              fprintf(fl_userlog,"Could not find master client for %s\n",h_master);
+ 					  APL_GOBACK_FAIL
+				  }
+	       if(APL_SUCCESS == IV_Rtv_IVSRVBasis(h_mstclt,int_h_serv_code,h_apl_frm_date,&l_iv_client_serv_basis_structa,&int_retstat,
+						                            l_debug_info_ptr))      /* Added apl_frm_date by monica for kotak ISKB_1737 */
+			 {
+		          strcpy(h_service_acc,l_iv_client_serv_basis_structa.bill_acc);
+		    }
+			 else
+			 {
+          		if(APL_SUCCESS == IV_Rtv_IVSRVBasis(l_mt_core_sys_params_struct_h.custody_clt_cd,int_h_serv_code,h_apl_frm_date,
+	                               &l_iv_client_serv_basis_structa,&int_retstat,l_debug_info_ptr))    /* Added apl_frm_date by monica for kotak ISKB_1737 */
+          		{
+	               strcpy(h_service_acc,l_iv_client_serv_basis_structa.bill_acc);
+			 }
+                         else
+                       {
+                        strcpy(h_service_acc,APL_NULL_STRING);  
+                       } 
+			 } 
+			 }
+	       else
+		    {
+		          //strcpy(h_service_acc,l_iv_client_serv_basis_structa.bill_acc);
+                            strcpy(h_service_acc,APL_NULL_STRING);  
+			 }
+		 }
+		 else
+		 {
+		        //strcpy(h_service_acc,l_iv_client_serv_basis_structa.bill_acc);
+                        strcpy(h_service_acc,APL_NULL_STRING);
+	         }
+		 
+	      
+/*************************************************************************************************/	 
+			
+			chr_l_passpayae = APL_NULL_CHAR;
+			chr_l_directdb_flg = APL_NULL_CHAR;
+
+			memset(&l_ivservmast_struct, NULL, sizeof(IV_SERV_MAST_STRUCT));
+			memset(&l_iv_service_chrg_struct, NULL, sizeof(IV_SERVICE_CHRG_STRUCT));
+			memset(chr_l_cod_cmamt, APL_NULL_CHAR, 20);
+
+			int_l_retcmamt = IV_Proc_Round(&h_cm_amount,
+									l_iv_clt_setup_struct.b_ccycd,
+									chr_l_cod_cmamt,
+									l_debug_info_ptr);
+			if (int_l_retcmamt == 1)
+			{
+				h_cm_amount = 0.0;
+				sscanf(chr_l_cod_cmamt, "%lf", &h_cm_amount);
+			}
+			else
+			{
+				APL_GOBACK_FAIL
+			}
+			
+			if (APL_FAILURE == IV_Rtv_IVSRVCHRGDel(int_h_serv_code, 
+															&l_ivservmast_struct,
+															&int_retstat,
+															l_debug_info_ptr) )
+			{
+				if (int_retstat == IV_CRITCAL_ERROR_IND)
+				{
+					fprintf(fl_userlog,"DB ERROR IN BSERVICES\n");
+	    			CO_InsertErr(l_debug_info_ptr,
+										DB_ERR_NO,
+										"BSERVICES",
+										APL_NULL_STRING,
+										APL_NULL_STRING,
+										__LINE__,
+										__FILE__);
+
+					APL_GOBACK_FAIL
+				}
+				if (int_retstat == IV_NO_DATA_FOUND_ERR)
+				{
+					fprintf(fl_userlog,"Serv_code %ld Not Defined .\n",int_h_serv_code);
+					CO_InsertErr(l_debug_info_ptr,
+										ERR_INVALID_SERVCODE,
+										APL_NULL_STRING,
+										APL_NULL_STRING,
+										APL_NULL_STRING,
+										__LINE__,
+										__FILE__);
+					APL_GOBACK_FAIL
+
+				}
+				if (int_retstat == IV_COLUMN_NULL_ERR)
+				{
+					if (!strcmp(l_ivservmast_struct.b_client," "))
+					{
+						chr_l_blacc_empty = 'T';
+					}
+					else
+						chr_l_blacc_empty = 'F';
+				}
+			} 	
+
+      	/* Bageshri HB_IV_005 : to get service account from Billing Services details if none of the above exist */
+
+	 printf("\nIV_GenAcc.pc:IV_AccGenBill: l_ivservmast_struct.b_client |%s|\n",l_ivservmast_struct.b_client);
+         if (!strcmp(h_service_acc,APL_NULL_STRING))
+	        strcpy(h_service_acc,l_ivservmast_struct.b_client);
+
+	 printf("\nIV_GenAcc.pc:IV_AccGenBill:h_service_acc :|%s|\n",h_service_acc);
+
+	/* Bageshri HB_IV_005 : END */
+
+       strcpy(h_nation_code,g_mt_commonsys_params_struct_h.nation_code);
+	    printf("\nIV_GenAcc.pc:IV_AccGenBill:h_nation_code :|%s|\n",h_nation_code);
+		printf("\nIV_GenAcc.pc:IV_AccGenBill:INSTALLED_AT_BANK :|%s|\n",g_mt_commonsys_params_struct_h.installed_at_bank);
+		
+      IF_COND_EXISTS("IV_ACC_CLIENT","FUND_ACC")
+		 {			 
+		  printf("\nIV_GenAcc.pc:IV_AccGenBill:Entering Inside IF_COND_EXISTS :|%s||%s|",h_dl_client,h_service_acc);
+		  
+        if (APL_FAILURE  == IV_ChkBOthServEntFn(h_dl_client,
+                                 		  h_proc_num,
+						  int_h_serv_code,	
+                                                  &l_iacctent_othserv_struct,
+                                                  h_service_acc,
+                                                  &h_cm_amount,
+                                                  &int_l_othsrv_ctr,
+                                                  &int_l_totothsrv,
+	                                               fl_userlog,
+                                                  fl_techlog,
+                                                  l_debug_info_ptr) )
+	       {
+		       fprintf(fl_userlog,"Failed To Populate Other Services Structure\n");
+	          APL_GOBACK_FAIL
+          }
+	          int_l_flg =1 ;
+       }		 
+		 else
+		 {
+		   if ((int_h_serv_code == SPECIALBILLING ) && (chr_l_blacc_empty == 'F'))
+			{
+				if (APL_FAILURE  == IV_ChkBOthServEntFn(h_dl_client, 
+															 h_proc_num,
+                                                                                                                         int_h_serv_code,      
+															 &l_iacctent_othserv_struct,
+															 h_service_acc,
+															 &h_cm_amount,
+															 &int_l_othsrv_ctr, 
+															 &int_l_totothsrv,
+															 fl_userlog,
+															 fl_techlog,
+															 l_debug_info_ptr) )
+				{
+					fprintf(fl_userlog,"Failed To Populate Other Services Structure\n"); 
+					APL_GOBACK_FAIL
+				}
+			int_l_flg =1 ;
+		   }
+		   else if ((l_ivservmast_struct.std_feeind == 'N' )  &&  (chr_l_blacc_empty == 'F'))
+			{
+				if (APL_FAILURE  == IV_ChkBOthServEntFn(	h_dl_client, 
+																h_proc_num, 
+                                                                                                                                int_h_serv_code,        
+																&l_iacctent_othserv_struct,
+															 	h_service_acc,
+																&h_cm_amount,
+																&int_l_othsrv_ctr,
+																&int_l_totothsrv,
+																fl_userlog,
+																fl_techlog,
+															 	l_debug_info_ptr) )
+				{
+					fprintf(fl_userlog,"Failed To Populate Other Services Structure\n");
+					APL_GOBACK_FAIL
+				}
+			int_l_flg =1 ;
+	 		}  
+			else if (int_h_serv_code == TAXFEE )
+			{
+				
+
+				strcpy(chr_h_incltax,"T");
+				l_tax_amount =  h_cm_amount;  
+			}		
+			else
+			{
+				l_std_amount =  l_std_amount + h_cm_amount; 
+			}
+		 }
+		
+			printf("\nIV_GenAcc.pc:IV_AccGenBill: Report Amount |%lf| Local Amount|%lf|\n",(l_iacctent_othserv_struct + (int_l_othsrv_ctr - 1))->h_repser,(l_iacctent_othserv_struct + (int_l_othsrv_ctr - 1))->lamountser );
+			if (int_l_prv_othsrv_ctr == int_l_othsrv_ctr)
+			{
+				l_prv_othsrv_amount = 0;			
+			}
+
+			if (	(int_l_othsrv_ctr != 0)     && (int_l_flg ==1))
+			{
+				l_othsrv_amount = l_prv_othsrv_amount + ((l_iacctent_othserv_struct + (int_l_othsrv_ctr - 1))->lamountser ) ; 
+			}
+			int_l_flg = 0;
+
+		printf("\nIV_GenAcc.pc:IV_AccGenBill:int_l_othsrv_ctr :|%d|\n",int_l_othsrv_ctr);
+		printf("\nIV_GenAcc.pc:IV_AccGenBill:l_std_amount:|%lf|",l_std_amount);
+
+
+		l_rec_amount =   l_std_amount + l_tax_amount ;	
+
+		strcpy(chr_h_prv_incltax ,chr_h_incltax);
+		l_prv_std_amount  	= l_std_amount;
+
+		l_prv_tax_amount  	= l_tax_amount;
+
+		l_prv_rec_amount  	= l_rec_amount;
+		l_prv_othsrv_amount	= l_othsrv_amount;
+		int_l_prv_othsrv_ctr 	= int_l_othsrv_ctr;
+		int_l_prv_totothsrv 	= int_l_totothsrv ;
+
+
+		if (int_l_othsrv_ctr > 0)
+		{
+			l_prv_iacctent_othserv_struct = 
+						(IACCTENT_OTHSERV_STRUCT *)realloc(l_prv_iacctent_othserv_struct, 
+																	int_l_othsrv_ctr * sizeof(IACCTENT_OTHSERV_STRUCT));
+			((l_prv_iacctent_othserv_struct + (int_l_prv_othsrv_ctr - 1) )->lamountser) = 
+													((l_iacctent_othserv_struct + (int_l_othsrv_ctr - 1))->lamountser);
+
+			((l_prv_iacctent_othserv_struct + (int_l_prv_othsrv_ctr - 1))->h_repser) = 
+													((l_iacctent_othserv_struct + (int_l_othsrv_ctr -1) )->h_repser);
+
+			strcpy(((l_prv_iacctent_othserv_struct + (int_l_prv_othsrv_ctr - 1) )->h_clt_gl), 
+													(l_iacctent_othserv_struct + (int_l_othsrv_ctr -1))->h_clt_gl);
+
+(l_prv_iacctent_othserv_struct + (int_l_prv_othsrv_ctr - 1) )->service_cd = 
+													(l_iacctent_othserv_struct + (int_l_othsrv_ctr -1))->service_cd;
+
+		}
+			printf("\nIV_GenAcc.pc:IV_AccGenBill: Previous Report Amount |%lf| Local Amount|%lf|\n",(l_prv_iacctent_othserv_struct + (int_l_othsrv_ctr - 1))->h_repser,(l_prv_iacctent_othserv_struct + (int_l_othsrv_ctr - 1))->lamountser );
+
+		int_h_prv_runseq 		= int_h_runseq;
+
+		strcpy(chr_h_prv_batch_no,h_proc_num);
+
+	
+	int_l_commit_count++;	
+		
+
+		
+
+	} 
+			
+	EXEC SQL CLOSE BLACCENT;
+
+	chr_l_isopenblaccent = 'N';
+	
+	/* Bageshri HB_IV_005 START : To generate GEFU file */
+	/* shailesh 031007 ISKB430
+	File not to be uploaded for KB
+
+                IF_COND_EXISTS("IV_AEGEN","GEFUFMT")
+                {
+                        if(APL_FAILURE == writeGEFU_File('B','G',h_proc_num,argv[0],argv[2],fl_techlog,p_intlenv_data_struct_h,l_debug_info_ptr))
+                        {
+                                Alert("Failure in Writing GEFU File !!!!!!!!!!!");
+                 		APL_GOBACK_FAIL
+                        }
+                }
+	*/
+
+	/* Bageshri HB_IV_005 END */
+
+	if (APL_FAILURE == IV_Mod_IVCNTLPARAMAccGenFlg(&int_retstat,
+															l_debug_info_ptr))
+	{
+		if (int_retstat == IV_CRITCAL_ERROR_IND)
+		{
+			fprintf(fl_userlog,"Fatal l_debuglist in BCNTLPARM\n");
+		}
+		APL_GOBACK_FAIL
+	}
+	sprintf(chr_l_stat_info ," Record %d Committed ", int_l_commit_count);
+
+ 	strcpy(chr_h_batch_in_proc_status,"completed");
+   strcpy(chr_h_restart_data,APL_NULL_STRING);
+   i_restart_info = -1;
+
+   EXEC SQL UPDATE SYS_BATCHPROC
+        SET STATUS =:chr_h_batch_in_proc_status,
+				STAT_DET = :chr_l_stat_info,
+            PROCESSING_STATUS = :chr_h_restart_data :i_restart_info
+        WHERE ROWID = :chr_h_batch_in_proc_rowid; 
+
+   IS_ANY_ORA_ERROR
+
+   if (sqlca.sqlcode == 1403)
+   {
+      fprintf(fl_userlog,"Failed to Update batch_in_proc because row_id could\
+not be int_found \n");
+      printf("no rowid int_found\n");
+      APL_GOBACK_FAIL;
+
+   }
+
+	APL_GOBACK_SUCCESS
+
+	
+
+
+	RETURN_SUCCESS:
+
+	if ( chr_l_isopenblaccent == 'Y' )
+	{
+		EXEC SQL CLOSE BLACCENT;
+	}
+	if ( chr_l_isopenbillpay == 'Y' )
+	{
+		EXEC SQL CLOSE BLACCENT;
+	}
+	if ( chr_l_isopenbillpay1 == 'Y' )
+	{
+		EXEC SQL CLOSE BLACCENT;
+	}
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Exiting out of IV_AccGenBill() Successfully\n",NULL,NULL);
+	}
+	return (APL_SUCCESS);
+	
+	RETURN_FAILURE:
+
+	if ( chr_l_isopenblaccent == 'Y' )
+	{
+		EXEC SQL CLOSE BLACCENT;
+	}
+	if ( chr_l_isopenbillpay == 'Y' )
+	{
+		EXEC SQL CLOSE BLACCENT;
+	}
+	if ( chr_l_isopenbillpay1 == 'Y' )
+	{
+		EXEC SQL CLOSE BLACCENT;
+	}
+	APL_FREE(l_prv_iacctent_othserv_struct);
+	APL_FREE(l_iacctent_othserv_struct);
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Exiting out of IV_AccGenBill() unsuccessfully\n",NULL,NULL);
+	}
+	return (APL_FAILURE);
+}
+
+
+
+
+
+
+
+int	IV_ChkBOthServEntFn( char							*chr_p_client,
+							char							*p_batch_no,
+							long int                         dbl_service_cd,
+							IACCTENT_OTHSERV_STRUCT	**p_cltent_othserv_struct,
+							char                    *h_service_acc_l,
+							double						*p_cm_amt,
+						  	int							*p_othsrv_ctr,
+							int							*p_totothsrv,
+							FILE							*fl_userlog,
+							FILE							*fl_techlog,
+							DEBUG_INFO_STRUCT_H				**l_debug_info_ptr)
+{	
+
+char					h_mstclt[APL_CLIENT_LENGTH] = APL_NULL_STRING;
+char					chr_recibacc[APL_CLIENT_LENGTH] = APL_NULL_STRING ;
+char              h_master[APL_CLIENT_LENGTH] = APL_NULL_STRING;
+
+IV_CLIENTSETUP_STRUCT	l_iv_clt_setup_struct;	
+IV_CLIENTSETUP_STRUCT	l_iv_clientsetup_struct;	
+
+int					int_retstat 										= 0; 
+int					int_ret 							  				= 0;
+int					int_l_bcustsetup_blccycode_decimallen   = 0;
+int					int_l_bill_params_decimallen  				= 0;
+
+double				l_tmp_famount					  = 0.0;	
+double 				h_ae_rate2 						  = 0.0;
+double 				h_ae_rate1 						  = 0.0;
+double 				h_ae_rate3 						  = 0.0;
+double 				h_ae_rate4 						  = 0.0;
+double 				l_exae_rate1 					  = 0.0;
+double 				l_exae_rate2 					  = 0.0;
+double 				l_exae_rate3 					  = 0.0;
+double 				l_exae_rate4 				     = 0.0;
+double				l_famountser 					  = 0.0;
+double				l_lamountser 					  = 0.0;
+double				l_RepSer  					  = 0.0;
+double				h_lamountser 					  = 0.0; 	
+double				dbl_h_repser  					  = 0.0; 	
+
+
+char			chr_l_bcustsetup_blccycode_glcode[APL_CCYCODE_LEN] = APL_NULL_STRING;
+char			chr_l_bill_params_glcode[APL_CCYCODE_LEN]   = APL_NULL_STRING;
+char			h_proc_num[5]										= APL_NULL_STRING;
+
+
+
+
+
+	if (APL_FAILURE == IV_Rtv_IVCUSTSETUP(chr_p_client,
+                                       &l_iv_clt_setup_struct,
+                                       &int_retstat,
+                                       l_debug_info_ptr) )
+   {
+		
+
+      if (int_retstat == IV_NO_DATA_FOUND_ERR)
+      {
+			CO_InsertErr(l_debug_info_ptr,
+								ERR_BILLPARAM_NOTFND,
+								chr_p_client,
+								APL_NULL_STRING,
+								APL_NULL_STRING,
+								__LINE__,
+								__FILE__); 
+         APL_GOBACK_FAIL
+      }
+		if (int_retstat == IV_CRITCAL_ERROR_IND)
+		{
+			fprintf(fl_userlog,"Fatal Error In BCUSTSETUP\n");	
+			APL_GOBACK_FAIL
+		}
+	
+      if (int_retstat == IV_COLUMN_NULL_ERR)
+      {
+			l_iv_clientsetup_struct = l_iv_clt_setup_struct;
+
+         if (!strcmp(l_iv_clt_setup_struct.rec_clt ," "))
+         {
+            
+            
+            if (APL_FAILURE == IV_Rtv_GetMasterAcc( chr_p_client,
+                                             h_mstclt,
+                                             l_debug_info_ptr))
+            {
+               fprintf(fl_userlog,"Could not find master client for %s\n",chr_p_client);
+               APL_GOBACK_FAIL
+            }
+
+            
+
+            memset(&l_iv_clt_setup_struct,NULL,sizeof(IV_CLIENTSETUP_STRUCT));
+
+            if (APL_FAILURE == IV_Rtv_IVCUSTSETUP(h_mstclt,
+                                                 &l_iv_clt_setup_struct,
+                                                 &int_retstat,
+                                                 l_debug_info_ptr) )
+            {
+					if (int_retstat == IV_CRITCAL_ERROR_IND)
+					{
+						fprintf(fl_userlog,"Fatal Error Encountered in BCUSTSETUP\n");
+						APL_GOBACK_FAIL
+					}
+
+					if ( int_retstat == IV_NO_DATA_FOUND_ERR ) 
+					{
+						memset(l_iv_clt_setup_struct.rec_clt, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+						strcpy(l_iv_clt_setup_struct.rec_clt, " ");
+					}
+  /************************ For Accounting Entries  vinay kalaskar  HDFCIV_005  ***************/
+					
+	          if ( (int_retstat == IV_COLUMN_NULL_ERR) || (int_retstat == IV_NO_DATA_FOUND_ERR) )
+	          {
+	   	        l_iv_clientsetup_struct = l_iv_clt_setup_struct;
+		           printf("******* Entering ********** :|%s|\n",l_iv_clt_setup_struct.rec_clt);
+		           if (!strcmp(l_iv_clt_setup_struct.rec_clt," "))
+		           {
+	                strcpy(h_master,h_mstclt);
+	                if (APL_FAILURE == IV_Rtv_GetMasterAcc(h_master,h_mstclt,l_debug_info_ptr))
+		             {
+	                   fprintf(fl_userlog,"Could not find master client for %s\n",h_master);
+		                APL_GOBACK_FAIL
+	                }
+				
+				       memset(&l_iv_clt_setup_struct,NULL,sizeof(IV_CLIENTSETUP_STRUCT));
+			
+			          if (APL_FAILURE == IV_Rtv_IVCUSTSETUP(h_mstclt,&l_iv_clt_setup_struct,
+			                                                &int_retstat,l_debug_info_ptr) )
+			          {
+			              if (int_retstat == IV_CRITCAL_ERROR_IND)
+		                 {
+				               fprintf(fl_userlog,"Fatal Error Encountered in BCUSTSETUP\n");
+		  							APL_GOBACK_FAIL
+							  }
+							  if ( int_retstat == IV_NO_DATA_FOUND_ERR )
+							  {
+								 memset(l_iv_clt_setup_struct.rec_clt, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+								 strcpy(l_iv_clt_setup_struct.rec_clt, " ");
+						     }
+/*********************************************************************************************/
+
+               if ( (int_retstat == IV_COLUMN_NULL_ERR) || (int_retstat == IV_NO_DATA_FOUND_ERR) )
+               {
+                  
+
+                  if (!strcmp(l_iv_clt_setup_struct.rec_clt," "))
+                  {
+                     memset(&l_iv_clt_setup_struct,NULL,sizeof(IV_CLIENTSETUP_STRUCT));
+							
+                     if (APL_FAILURE == IV_Rtv_IVCUSTSETUP(l_mt_core_sys_params_struct_h.custody_clt_cd,
+                                                          &l_iv_clt_setup_struct,
+                                                          &int_retstat ,
+                                                          l_debug_info_ptr) )
+                     {
+                        if (int_retstat == IV_NO_DATA_FOUND_ERR)
+                        {
+                           CO_InsertErr(l_debug_info_ptr,
+														ERR_BILLPARAM_NOTFND,
+                                          (char *)l_mt_core_sys_params_struct_h.custody_clt_cd, // AIX - Warnings removal
+														APL_NULL_STRING,
+                                          APL_NULL_STRING,
+														__LINE__,
+														__FILE__);
+                           APL_GOBACK_FAIL;
+                        }
+								if (int_retstat == IV_CRITCAL_ERROR_IND)
+								{
+									fprintf(fl_userlog,"Fatal Error Encountered in BCUSTSETUP\n");
+									APL_GOBACK_FAIL
+								}
+								
+                        if (int_retstat == IV_COLUMN_NULL_ERR)
+                        {
+                           if (!strcmp(l_iv_clt_setup_struct.rec_clt," "))
+                           {
+                              CO_InsertErr(l_debug_info_ptr,
+                                             ERR_INVALID_RECEABLEACC,
+															(char *)l_mt_core_sys_params_struct_h.custody_clt_cd, // AIX - Warnings removal
+															APL_NULL_STRING,
+                                             APL_NULL_STRING,
+															__LINE__,
+															__FILE__);
+                              fprintf(fl_userlog,"Receivable Account Cannot Be Null For %s\n", l_mt_core_sys_params_struct_h.custody_clt_cd);
+ 										APL_GOBACK_FAIL
+                           }
+                        }
+                     }
+                  }
+               }
+					}
+					}
+				   }  
+            } 
+         } 
+      } 
+   } 
+	else  
+	{
+		l_iv_clientsetup_struct = l_iv_clt_setup_struct;
+	}
+
+
+	
+
+	if (APL_FAILURE == CO_RtvSysDt(chr_h_system_date,l_debug_info_ptr) )
+	{
+		printf("failed to get system chr_date\n");
+		APL_GOBACK_FAIL
+	}
+
+
+	if (APL_FAILURE == IV_Proc_ConvToFxFn(l_iv_clientsetup_struct.b_ccycd,
+											l_iv_clt_setup_struct.b_ccycd,
+											g_mt_commonsys_params_struct_h.dom_ccy,
+											chr_h_system_date,
+											&h_ae_rate1,
+											&int_retstat,
+											l_debug_info_ptr) )
+	{
+		if (int_retstat == IV_CRITCAL_ERROR_IND)
+		{
+			fprintf(fl_userlog,"Exchange Rate Not Found For %s To %s\n",l_iv_clientsetup_struct.b_ccycd,l_iv_clt_setup_struct.b_ccycd);
+		}
+		APL_GOBACK_FAIL
+	}
+	l_exae_rate1 = h_ae_rate1;
+
+	
+	
+
+	if (APL_FAILURE == IV_Proc_ConvToFxFn(l_iv_clt_setup_struct.b_ccycd,
+											g_mt_commonsys_params_struct_h.dom_ccy,
+											g_mt_commonsys_params_struct_h.dom_ccy,
+											chr_h_system_date,
+											&h_ae_rate2,
+											&int_retstat,
+											l_debug_info_ptr) )
+	{
+		if (int_retstat == IV_CRITCAL_ERROR_IND)
+		{
+			fprintf(fl_userlog,"Exchange Rate Not Found For %s To %s\n",l_iv_clt_setup_struct.b_ccycd,g_mt_commonsys_params_struct_h.dom_ccy);
+		}
+		APL_GOBACK_FAIL
+	}
+	l_exae_rate2 = h_ae_rate2;
+
+
+	
+
+
+	if (APL_FAILURE == IV_Proc_ConvToFxFn(g_mt_commonsys_params_struct_h.dom_ccy, 
+											l_invoice_systemparam_struct_h.b_ccy,
+											g_mt_commonsys_params_struct_h.dom_ccy,
+											chr_h_system_date,
+											&h_ae_rate3,
+											&int_retstat,
+											l_debug_info_ptr) )
+	{
+		if (int_retstat == IV_CRITCAL_ERROR_IND)
+		{
+			fprintf(fl_userlog,"Exchange Rate Not Found For %s To %s\n",g_mt_commonsys_params_struct_h.dom_ccy,l_invoice_systemparam_struct_h.b_ccy);
+		}
+		APL_GOBACK_FAIL
+
+	}
+
+	l_exae_rate3 = h_ae_rate3;
+
+	
+
+	
+	if (APL_FAILURE == IV_Proc_ConvToFxFn(l_invoice_systemparam_struct_h.b_ccy, 
+											g_mt_commonsys_params_struct_h.dom_ccy,
+											g_mt_commonsys_params_struct_h.dom_ccy,
+											chr_h_system_date,
+											&h_ae_rate4,
+											&int_retstat,
+											l_debug_info_ptr) )
+	{
+		if (int_retstat == IV_CRITCAL_ERROR_IND)
+		{
+			fprintf(fl_userlog,"Exchange Rate Not Found For %s To %s\n",l_invoice_systemparam_struct_h.b_ccy,g_mt_commonsys_params_struct_h.dom_ccy);
+		}
+		APL_GOBACK_FAIL
+	}
+		
+	l_exae_rate4 = h_ae_rate4;
+
+
+	printf("\n IV_GenAcc.pc:IV_ChkBOthServEntFn:*p_cm_amt:|%lf|",*p_cm_amt);	
+	printf("\n l_exae_rate1:|%lf|",l_exae_rate1);	
+	l_famountser = (*p_cm_amt) * l_exae_rate1;
+	printf("\n l_famountser:|%lf|",l_famountser);	
+	printf("\n l_exae_rate2:|%lf|",l_exae_rate2);	
+	l_lamountser = l_famountser * l_exae_rate2;
+	/*	Change Report Amount Currency to Client Currency	ISKB_	*/
+	/*	
+	printf("\n l_lamountser:|%lf|",l_lamountser);	
+	printf("\n l_exae_rate3:|%lf|",l_exae_rate3);	
+	l_RepSer  = l_lamountser * l_exae_rate3;
+	*/
+	l_RepSer  = (*p_cm_amt) * l_exae_rate1;
+	printf("\n l_RepSer:|%lf|",l_RepSer);	
+
+
+	printf("\n IV_GenAcc.pc:IV_ChkBOthServEntFn:l_famountser:|%lf|l_lamountser:|%lf|l_RepSer:|%lf|",l_famountser,l_lamountser,l_RepSer);
+	
+		
+	if (APL_FAILURE == IV_Rtv_MTCurrency(	l_iv_clt_setup_struct.b_ccycd,
+														chr_l_bcustsetup_blccycode_glcode,
+														&int_l_bcustsetup_blccycode_decimallen,
+														&int_retstat,	
+														l_debug_info_ptr) )
+	{	
+		if (int_retstat == IV_CRITCAL_ERROR_IND)
+		{
+			fprintf(fl_userlog,"Fatal Error In The Currency Table\n"); 
+			APL_GOBACK_FAIL
+		}
+		else
+		{
+			CO_InsertErr(l_debug_info_ptr,ERR_CCY_NOTFND, l_iv_clt_setup_struct.b_ccycd,APL_NULL_STRING, APL_NULL_STRING,__LINE__,__FILE__);
+			APL_GOBACK_FAIL
+		}
+	}
+
+	if (APL_FAILURE == IV_Rtv_MTCurrency(	l_invoice_systemparam_struct_h.b_ccy,
+														chr_l_bill_params_glcode,
+														&int_l_bill_params_decimallen,
+														&int_retstat,
+														l_debug_info_ptr) )
+	{	
+		if (int_retstat == IV_CRITCAL_ERROR_IND)
+		{
+			fprintf(fl_userlog,"Fatal Error In The Currency Table\n"); 
+			APL_GOBACK_FAIL
+		}
+		else
+		{
+			CO_InsertErr(l_debug_info_ptr,
+								ERR_CCY_NOTFND, 
+								(char *)l_invoice_systemparam_struct_h.b_ccy, // AIX - Warnings removal
+								APL_NULL_STRING, 
+								APL_NULL_STRING,
+								__LINE__,
+								__FILE__);
+			APL_GOBACK_FAIL
+		}
+	}
+
+	if (APL_FAILURE == CO_Round(	l_lamountser,
+											int_l_bcustsetup_blccycode_decimallen,
+											&h_lamountser) )
+	{
+		APL_GOBACK_FAIL	
+	}
+
+	printf("\n l_RepSer = [%lf]",l_RepSer);
+	printf("\n dbl_h_repser = [%lf]",dbl_h_repser);
+	if (APL_FAILURE == CO_Round(	l_RepSer,
+											int_l_bill_params_decimallen,												
+											&dbl_h_repser) )
+	{
+		APL_GOBACK_FAIL	
+	}
+	printf("\n dbl_h_repser = [%lf]",dbl_h_repser);
+
+	*p_cltent_othserv_struct = (IACCTENT_OTHSERV_STRUCT *)realloc(*p_cltent_othserv_struct,(sizeof(IACCTENT_OTHSERV_STRUCT) * ((*p_othsrv_ctr) + 1)));
+
+	((*p_cltent_othserv_struct + (*p_othsrv_ctr))-> lamountser)	= h_lamountser;	
+	
+	((*p_cltent_othserv_struct + (*p_othsrv_ctr))-> h_repser)		= dbl_h_repser;		
+    
+        ((*p_cltent_othserv_struct + (*p_othsrv_ctr))->service_cd)		=  dbl_service_cd;
+
+	strcpy(((*p_cltent_othserv_struct + (*p_othsrv_ctr))->h_clt_gl), h_service_acc_l);
+	
+   printf("\n IV_GenAcc.pc:IV_ChkBOthServEntFn:h_clt_gl :|%s|\n",(*p_cltent_othserv_struct + (*p_othsrv_ctr))->h_clt_gl);
+
+	printf("\n IV_GenAcc.pc:IV_ChkBOthServEntFn:The chr_value of lamountser is %lf\n",((*p_cltent_othserv_struct + *p_othsrv_ctr)->lamountser));
+	printf("\n\n((*p_cltent_othserv_struct + (*p_othsrv_ctr))->h_repser) = [%lf]",((*p_cltent_othserv_struct + (*p_othsrv_ctr))-> h_repser));
+
+	
+	(*p_othsrv_ctr)++;
+
+	(*p_totothsrv)++;
+
+	APL_GOBACK_SUCCESS
+	
+	
+
+	RETURN_SUCCESS:
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Exiting out of IV_ChkBOthServEntFn() Successfully\n",NULL,NULL);
+	}
+	return (APL_SUCCESS);
+	
+	RETURN_FAILURE:
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Exiting out of IV_ChkBOthServEntFn() unsuccessfully\n",NULL,NULL);
+	}
+	return (APL_FAILURE);
+
+}
+
+
+
+
+int 	BlAcPassNew(char									*chr_p_client,
+						char									*p_incltax,
+						double 								*p_std_amt,
+						double								*p_tax_amt,
+						double  								*p_rec_amt,
+						double  								*p_othsrv_amt,
+						IV_CLIENT_STRUCT						*p_iv_client_struct_a,
+						IACCTENT_OTHSERV_STRUCT			**p_cltent_othserv_struct,
+						int									*p_othsrv_ctr,
+						int									*p_totothsrv,
+						int									*p_runseq,
+						double								*dcredit_ind,
+						double								*ccredit_ind,
+						char									*p_batch_no,
+						char									*p_directdb_flg,
+						int									*p_genbatchno,
+						FILE									*fl_userlog,
+						FILE									*fl_techlog,
+						DEBUG_INFO_STRUCT_H						**l_debug_info_ptr
+						)
+{
+
+	IV_CLIENTSETUP_STRUCT		l_iv_clientsetup_struct;
+	IV_CLIENTSETUP_STRUCT		l_iv_rclientsetup_struct;
+	IV_CLIENTSETUP_STRUCT		l_iv_clt_setup_struct;
+	PRO_ACCTENT_STRUCT_H		l_pro_recacctent_struct_h;
+	PRO_ACCTENT_STRUCT_H		l_pro_taxacctent_struct_h;
+	PRO_ACCTENT_STRUCT_H		l_pro_comacctent_struct_h;
+	PRO_ACCTENT_STRUCT_H		l_pro_seracctent_struct_h;
+
+	char		chr_g_bill_params_glcode[APL_CCYCODE_LEN]			  = APL_NULL_STRING;
+	char		chr_l_bcustsetup_blccycode_glcode[APL_CCYCODE_LEN] = APL_NULL_STRING;
+	char		chr_g_common_params_glcode[APL_CCYCODE_LEN]			 = APL_NULL_STRING;
+   char     h_master[APL_CLIENT_LENGTH] = APL_NULL_STRING;
+
+	int		int_retstat 										= 0;	
+	int		int_l_runseq 									= 0;
+	int		int_totothsrv 									= 0;
+	int		i 												= 0;
+
+
+	int		int_g_bill_params_decimallen				= 0;
+	int		int_g_common_params_decimallen				= 0;
+	int		int_l_bcustsetup_blccycode_decimallen	= 0;
+
+	char		chr_l_apacode[27]								= APL_NULL_STRING;
+	char		h_mstclt[APL_CLIENT_LENGTH] 				= APL_NULL_STRING;
+	char		h_sequence_num[11] 								= APL_NULL_STRING;
+	char		chr_l_fcyinclude 								= APL_NULL_CHAR;
+
+	double	dbl_fcyrec										= 0;
+	double	h_famountcus 									= 0.0;
+	double	h_lamountcus 									= 0.0;
+	double	dbl_h_famttax 									= 0.0;
+	double	dbl_h_lamttax 									= 0.0;
+	double	h_famountrec 									= 0.0;
+	double	h_lamountrec 									= 0.0;
+	double	dbl_h_reptax 									= 0.0;	
+	double	dbl_h_reprec 									= 0.0;
+	double	dbl_h_repcus 									= 0.0;
+	double	RepCus										= 0.0;
+	double	RepRec										= 0.0;
+	double	RepTax										= 0.0;
+	double	dbl_famountcus										= 0.0;
+	double	lamountcus										= 0.0;
+	double	dbl_famttax										= 0.0;
+	double	LamtTax										= 0.0;
+	double	dbl_famountrec										= 0.0;
+	double	lamountrec										= 0.0;
+	double	tot_dcredit_ind 										= 0.0;
+	double	tot_ccredit_ind 										= 0.0;
+
+	char		chr_l_comment_servac[50] 							= APL_NULL_STRING;
+	char		chr_l_comment_recac[50] 	                       = APL_NULL_STRING;
+
+	char		chr_l_blacc_ac_tax[APL_CLIENT_LENGTH] 		= APL_NULL_STRING;
+	char		chr_h_com_ac[APL_CLIENT_LENGTH]				= APL_NULL_STRING;
+	char		h_value_date[9] 							= APL_NULL_STRING;	
+	char		chr_h_rec_value_date[9] 						= APL_NULL_STRING;	
+	char		h_proc_num[10] 								= APL_NULL_STRING;	
+	char		chr_l_com_acc_empty							= APL_NULL_CHAR;
+
+
+	double		l_dcredit_ind										= 0.0;
+	double		l_ccredit_ind										= 0.0;
+	double		h_ae_rate1   								= 0.0;	
+	double		h_ae_rate2   								= 0.0;	
+	double		h_ae_rate3   								= 0.0;	
+	double		h_ae_rate4   								= 0.0;	
+	double		l_ae_rate2   								= 0.0;	
+	short       int_cond_exists								= 0;
+	short       l_taxCondExists						= 0;
+	short       l_tr_apa_code						   = 0;
+	char        chr_l_default_glcode[11]				   = APL_NULL_STRING;
+	char 			chr_l_spl_apacode[7]						= APL_NULL_STRING;
+
+         /*Addedby siva.ganapathi for ISKB_2470 on 07-Dec-2010 -- started*/
+ 	 //double  l_dbl_serv_cd = 0.0;
+ 	 long int  l_dbl_serv_cd = 0.0;
+	 long int l_tax_serv_cd = 0 ;
+         /*Addedby siva.ganapathi for ISKB_2470 on 07-Dec-2010 -- Ended*/
+
+
+EXEC SQL BEGIN DECLARE SECTION;
+
+
+
+EXEC SQL VAR l_pro_comacctent_struct_h.brnch_cd 		IS STRING;
+EXEC SQL VAR l_pro_comacctent_struct_h.inden_num 		IS STRING;
+EXEC SQL VAR l_pro_comacctent_struct_h.client 		IS STRING;
+EXEC SQL VAR l_pro_comacctent_struct_h.curr_cd 		IS STRING;
+EXEC SQL VAR l_pro_comacctent_struct_h.val_date 	IS STRING;
+EXEC SQL VAR l_pro_comacctent_struct_h.deal_cd 		IS STRING;
+EXEC SQL VAR l_pro_comacctent_struct_h.spl_clt_cd 		IS STRING;
+EXEC SQL VAR l_pro_comacctent_struct_h.description 		IS STRING;
+EXEC SQL VAR l_pro_comacctent_struct_h.proc_num 		IS STRING;
+EXEC SQL VAR l_pro_comacctent_struct_h.proc_dt 	IS STRING;
+EXEC SQL VAR l_pro_comacctent_struct_h.deal_ident 		IS STRING;
+
+
+EXEC SQL VAR l_pro_recacctent_struct_h.brnch_cd  	IS STRING;
+EXEC SQL VAR l_pro_recacctent_struct_h.inden_num 		IS STRING;
+EXEC SQL VAR l_pro_recacctent_struct_h.client 		IS STRING;
+EXEC SQL VAR l_pro_recacctent_struct_h.curr_cd 		IS STRING;
+EXEC SQL VAR l_pro_recacctent_struct_h.val_date 	IS STRING;
+EXEC SQL VAR l_pro_recacctent_struct_h.deal_cd 		IS STRING;
+EXEC SQL VAR l_pro_recacctent_struct_h.spl_clt_cd 		IS STRING;
+EXEC SQL VAR l_pro_recacctent_struct_h.description 		IS STRING;
+EXEC SQL VAR l_pro_recacctent_struct_h.proc_num 		IS STRING;
+EXEC SQL VAR l_pro_recacctent_struct_h.proc_dt 	IS STRING;
+EXEC SQL VAR l_pro_recacctent_struct_h.deal_ident    	IS STRING;
+/* Bageshri HB_IV_005 START */
+EXEC SQL VAR l_pro_recacctent_struct_h.leg_ind IS STRING;
+EXEC SQL VAR l_pro_recacctent_struct_h.acc_type IS STRING;
+/* Bageshri HB_IV_005 END */
+
+EXEC SQL VAR l_pro_seracctent_struct_h.brnch_cd 		IS STRING;
+EXEC SQL VAR l_pro_seracctent_struct_h.inden_num 		IS STRING;
+EXEC SQL VAR l_pro_seracctent_struct_h.client 		IS STRING;
+EXEC SQL VAR l_pro_seracctent_struct_h.curr_cd 		IS STRING;
+EXEC SQL VAR l_pro_seracctent_struct_h.val_date 	IS STRING;
+EXEC SQL VAR l_pro_seracctent_struct_h.deal_cd 		IS STRING;
+EXEC SQL VAR l_pro_seracctent_struct_h.spl_clt_cd 		IS STRING;
+EXEC SQL VAR l_pro_seracctent_struct_h.description 		IS STRING;
+EXEC SQL VAR l_pro_seracctent_struct_h.proc_num 		IS STRING;
+EXEC SQL VAR l_pro_seracctent_struct_h.proc_dt 	IS STRING;
+EXEC SQL VAR l_pro_seracctent_struct_h.deal_ident    	IS STRING;
+/* Bageshri HB_IV_005 START */
+EXEC SQL VAR l_pro_seracctent_struct_h.leg_ind IS STRING;
+EXEC SQL VAR l_pro_seracctent_struct_h.acc_type IS STRING;
+/* Bageshri HB_IV_005 END */
+
+EXEC SQL VAR l_pro_taxacctent_struct_h.brnch_cd 		IS STRING;
+EXEC SQL VAR l_pro_taxacctent_struct_h.inden_num	 		IS STRING;
+EXEC SQL VAR l_pro_taxacctent_struct_h.client 		IS STRING;
+EXEC SQL VAR l_pro_taxacctent_struct_h.curr_cd 		IS STRING;
+EXEC SQL VAR l_pro_taxacctent_struct_h.val_date 	IS STRING;
+EXEC SQL VAR l_pro_taxacctent_struct_h.deal_cd 		IS STRING;
+EXEC SQL VAR l_pro_taxacctent_struct_h.spl_clt_cd 		IS STRING;
+EXEC SQL VAR l_pro_taxacctent_struct_h.description 		IS STRING;
+EXEC SQL VAR l_pro_taxacctent_struct_h.proc_num 		IS STRING;
+EXEC SQL VAR l_pro_taxacctent_struct_h.proc_dt		IS STRING;
+EXEC SQL VAR l_pro_taxacctent_struct_h.deal_ident 		IS STRING;
+EXEC SQL VAR chr_l_spl_apacode								IS STRING;
+EXEC SQL VAR chr_l_default_glcode				 		IS STRING;
+
+struct	sqlca sqlca;
+
+EXEC SQL END DECLARE SECTION;
+
+
+
+	memset(&l_iv_clientsetup_struct,NULL,sizeof(IV_CLIENTSETUP_STRUCT));
+	memset(&l_iv_rclientsetup_struct,NULL,sizeof(IV_CLIENTSETUP_STRUCT));
+	memset(&l_iv_clt_setup_struct,NULL,sizeof(IV_CLIENTSETUP_STRUCT));
+	memset(&l_pro_recacctent_struct_h,NULL,sizeof(PRO_ACCTENT_STRUCT_H));	
+	memset(&l_pro_taxacctent_struct_h,NULL,sizeof(PRO_ACCTENT_STRUCT_H));	
+	memset(&l_pro_comacctent_struct_h,NULL,sizeof(PRO_ACCTENT_STRUCT_H));	
+	memset(&l_pro_seracctent_struct_h,NULL,sizeof(PRO_ACCTENT_STRUCT_H));	
+	memset(chr_l_spl_apacode,APL_NULL_CHAR,7);
+
+
+	
+	if ((*p_genbatchno) == 1)
+   {
+      if (APL_FAILURE == IV_Proc_GenBatchNoFn(h_proc_num,l_debug_info_ptr))
+      {
+         fprintf(fl_userlog,"Failed to generate batch number \n");
+         CO_ProcMonitor(APL_OUT_FILE,"Generation of Batch Number failed\n",NULL,NULL);
+         APL_GOBACK_FAIL
+      }
+
+		*p_genbatchno = 0;
+      strcpy(p_batch_no,h_proc_num);
+      printf("\nIV_GenAcc.pc:BlAcPassNew:The batch number returned is |%s|\n",p_batch_no);
+
+   }
+
+	printf("\nIV_GenAcc.pc:BlAcPassNew:The totalothsrvamt is |%lf|",*p_othsrv_amt);
+
+	//strcpy(chr_l_comment,"Custody Bill ");
+	//strcat(chr_l_comment, chr_p_client);
+
+	
+	if(APL_FAILURE == CO_Chk_CntryEnabled("BILL_ACC_ENTRIES",
+													"TAXENTRY_IN_PAYMENT",
+													&l_taxCondExists,
+													l_debug_info_ptr))
+	{	
+		APL_GOBACK_FAIL
+	}
+	
+	if(APL_FAILURE == CO_Chk_CntryEnabled("ACC_ENTRIES",
+													"TR_APA_CODE",
+													&l_tr_apa_code,
+													l_debug_info_ptr))
+	{	
+		APL_GOBACK_FAIL
+	}
+
+	
+	if (APL_FAILURE == IV_Rtv_IVCUSTSETUP(chr_p_client,&l_iv_rclientsetup_struct,&int_retstat,l_debug_info_ptr) )
+		{
+				l_iv_clt_setup_struct = l_iv_rclientsetup_struct;
+
+				if (int_retstat == IV_CRITCAL_ERROR_IND)
+				{
+					fprintf(fl_userlog,"Exchange Rate Not Found For %s To %s\n",g_mt_commonsys_params_struct_h.dom_ccy,l_invoice_systemparam_struct_h.b_ccy);
+
+					APL_GOBACK_FAIL
+				}
+
+				if (int_retstat == IV_NO_DATA_FOUND_ERR)
+				{
+                 CO_InsertErr( l_debug_info_ptr,
+											ERR_BILLPARAM_NOTFND,
+              							chr_p_client,
+											APL_NULL_STRING,
+            							APL_NULL_STRING,
+											__LINE__,
+											__FILE__);
+						APL_GOBACK_FAIL				
+				}
+
+				if (int_retstat == IV_COLUMN_NULL_ERR)
+				{
+
+					if (!strcmp(l_iv_rclientsetup_struct.spl_clt_cd ," "))
+					{
+						
+								
+								if(l_taxCondExists)
+								{
+								CO_InsertErr(l_debug_info_ptr,
+													ERR_INVALID_APACODE,
+                     	               l_iv_rclientsetup_struct.client,
+													APL_NULL_STRING,
+                                      	APL_NULL_STRING,
+													__LINE__,
+													__FILE__);
+                      	 fprintf(fl_userlog,"APA_CODE cannot be null for %s\n",l_iv_rclientsetup_struct.client);
+                       	 APL_GOBACK_FAIL
+								 /************** Bageshri : should get spl_clt_cd of custody client code only if tax cond exists
+								 }
+								 ****************************************/
+
+
+						memset(&l_iv_rclientsetup_struct,NULL,sizeof(IV_CLIENTSETUP_STRUCT));
+printf("\nIV_GenAcc.pc:BlAcPassNew:l_mt_core_sys_params_struct_h.custody_clt_cd =  [%s]",l_mt_core_sys_params_struct_h.custody_clt_cd);
+				    	if (APL_FAILURE == IV_Rtv_IVCUSTSETUP(l_mt_core_sys_params_struct_h.custody_clt_cd,
+																		 &l_iv_rclientsetup_struct,
+																		 &int_retstat,
+																		 l_debug_info_ptr))
+						{
+							if (int_retstat == IV_CRITCAL_ERROR_IND)
+							{
+								fprintf(fl_userlog,"Fatal Error in BCUSTSETUP Table\n");
+								APL_GOBACK_FAIL
+							}
+
+							if (int_retstat == IV_NO_DATA_FOUND_ERR)
+							{
+								 CO_InsertErr(l_debug_info_ptr,
+													ERR_BILLPARAM_NOTFND,
+													(char *)l_mt_core_sys_params_struct_h.custody_clt_cd,//AIX Warning Removal 
+                        	            APL_NULL_STRING,
+                           	         APL_NULL_STRING,
+													__LINE__,
+													__FILE__);
+                     	 APL_GOBACK_FAIL
+							}
+
+							if (int_retstat == IV_COLUMN_NULL_ERR)
+							{
+								if (!strcmp(l_iv_rclientsetup_struct.spl_clt_cd ," "))
+								{
+									CO_InsertErr(l_debug_info_ptr,
+														ERR_INVALID_APACODE,
+                     	               	(char *)l_mt_core_sys_params_struct_h.custody_clt_cd, // AIX - Warning removal
+														APL_NULL_STRING,
+                                      		APL_NULL_STRING,
+														__LINE__,
+														__FILE__);
+                      	  fprintf(fl_userlog,"APA_CODE cannot be null for %s\n",l_mt_core_sys_params_struct_h.custody_clt_cd);
+                       	 APL_GOBACK_FAIL
+								}
+							}	
+						}
+						}
+					}			
+			}	  
+		}		
+		else
+		{
+			l_iv_clt_setup_struct = l_iv_rclientsetup_struct;
+		}
+
+		
+	
+	printf("\nIV_GenAcc.pc:BlAcPassNew:l_iv_rclientsetup_struct.spl_clt_cd:|%s|",l_iv_rclientsetup_struct.spl_clt_cd);
+
+		strcpy(l_pro_comacctent_struct_h.spl_clt_cd,l_iv_rclientsetup_struct.spl_clt_cd);
+     
+	printf("\nIV_GenAcc.pc:BlAcPassNew:l_tr_apa_code:|%d|",l_tr_apa_code);
+      if (l_tr_apa_code)
+		{
+			
+			EXEC SQL SELECT CLN_GL_ACCOUNT INTO :chr_l_default_glcode 
+						FROM MT_CLIENT WHERE CLN_CODE=:chr_p_client;
+			IS_ANY_ORA_ERROR	
+        
+		strncpy(l_pro_recacctent_struct_h.spl_clt_cd,chr_l_default_glcode,7);
+      l_pro_recacctent_struct_h.spl_clt_cd[7]=APL_NULL_CHAR;	
+		strncpy(l_pro_seracctent_struct_h.spl_clt_cd,chr_l_default_glcode,7);
+      l_pro_seracctent_struct_h.spl_clt_cd[7]=APL_NULL_CHAR;	
+		strncpy(l_pro_taxacctent_struct_h.spl_clt_cd,chr_l_default_glcode,7);
+      l_pro_taxacctent_struct_h.spl_clt_cd[7]=APL_NULL_CHAR;	
+
+      }
+
+	
+	
+		
+	memset(&l_iv_clientsetup_struct,NULL,sizeof(IV_CLIENTSETUP_STRUCT));	
+		
+	if (APL_FAILURE == IV_Rtv_IVCUSTSETUP(chr_p_client,
+                                       &l_iv_clientsetup_struct,
+                                       &int_retstat,
+                                       l_debug_info_ptr) )
+   {
+      if (int_retstat == IV_NO_DATA_FOUND_ERR)
+      {
+			CO_InsertErr(l_debug_info_ptr,
+								ERR_BILLPARAM_NOTFND,
+								chr_p_client,
+         					APL_NULL_STRING,
+         					APL_NULL_STRING,
+								__LINE__,
+								__FILE__);
+         APL_GOBACK_FAIL
+      }
+
+		if (int_retstat == IV_CRITCAL_ERROR_IND)
+		{
+			fprintf(fl_userlog,"Fatal Error in BCUSTSETUP\n");
+			APL_GOBACK_FAIL
+		}
+
+      if (int_retstat == IV_COLUMN_NULL_ERR)
+      {
+         if (!strcmp(l_iv_clientsetup_struct.rec_clt ," "))
+         {
+            
+            
+
+            if (APL_FAILURE == IV_Rtv_GetMasterAcc( chr_p_client,
+                                             h_mstclt,
+                                             l_debug_info_ptr))
+            {
+               fprintf(fl_userlog,"Master Account Not Defined for %s\n",chr_p_client);
+               APL_GOBACK_FAIL
+            }
+
+
+				 memset(&l_iv_clientsetup_struct,NULL,sizeof(IV_CLIENTSETUP_STRUCT));
+
+            if (APL_FAILURE == IV_Rtv_IVCUSTSETUP(h_mstclt,
+                                                 &l_iv_clientsetup_struct,
+                                                 &int_retstat,
+                                                 l_debug_info_ptr) )
+            {
+					if (int_retstat == IV_CRITCAL_ERROR_IND)
+					{
+						fprintf(fl_userlog,"Fatal Error in BCUSTSETUP\n");
+						APL_GOBACK_FAIL
+					}
+
+					
+
+               if (int_retstat == IV_NO_DATA_FOUND_ERR)
+               {
+						memset(l_iv_clientsetup_struct.rec_clt, APL_NULL_CHAR, 
+								 APL_CLIENT_LENGTH);
+						strcpy(l_iv_clientsetup_struct.rec_clt, " ");
+               }
+
+               if ( (int_retstat == IV_COLUMN_NULL_ERR) || 
+						  (int_retstat == IV_NO_DATA_FOUND_ERR) )
+               {
+/*************************** For Accounting Entries  vinay kalaskar  HDFCIV_005 *******************/
+						if ( (int_retstat == IV_COLUMN_NULL_ERR) || (int_retstat == IV_NO_DATA_FOUND_ERR) )
+			         {
+				         l_iv_clientsetup_struct = l_iv_clt_setup_struct;
+					      printf(" ******* Inside ***** rec_clt :|%s|\n",l_iv_clt_setup_struct.rec_clt);
+				         if (!strcmp(l_iv_clt_setup_struct.rec_clt," "))
+			            {
+		                  strcpy(h_master,h_mstclt);
+                        printf(" Entering IV_Rtv_GetMasterAcc *****:|%s|\n",h_master);
+                        if (APL_FAILURE == IV_Rtv_GetMasterAcc(h_master,h_mstclt,l_debug_info_ptr))
+	                     {
+		                     fprintf(fl_userlog,"Could not find master client for %s\n",h_master);
+		                     APL_GOBACK_FAIL
+			               }
+	
+			               memset(&l_iv_clt_setup_struct,NULL,sizeof(IV_CLIENTSETUP_STRUCT));
+	
+			               printf(" Entering IV_Rtv_IVCUSTSETUP ********:|%s|\n",h_mstclt);
+		                  if (APL_FAILURE == IV_Rtv_IVCUSTSETUP(h_mstclt,&l_iv_clt_setup_struct,
+				                                                  &int_retstat,l_debug_info_ptr) )
+			               {
+		    	               if (int_retstat == IV_CRITCAL_ERROR_IND)
+                           {
+		                       fprintf(fl_userlog,"Fatal Error Encountered in BCUSTSETUP\n");
+				                 APL_GOBACK_FAIL
+		                     }
+				               if ( int_retstat == IV_NO_DATA_FOUND_ERR )
+			                  {
+					               memset(l_iv_clt_setup_struct.rec_clt, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+					               strcpy(l_iv_clt_setup_struct.rec_clt, " ");
+			                  }
+
+/****************************************************************************************************/	
+
+                  if (!strcmp(l_iv_clientsetup_struct.rec_clt," "))
+                  {
+                     memset(&l_iv_clientsetup_struct,NULL,sizeof(IV_CLIENTSETUP_STRUCT));
+                     if (APL_FAILURE == IV_Rtv_IVCUSTSETUP(l_mt_core_sys_params_struct_h.custody_clt_cd,
+                                                          &l_iv_clientsetup_struct,
+                                                          &int_retstat ,
+                                                          l_debug_info_ptr) )
+                     {
+								if (int_retstat == IV_CRITCAL_ERROR_IND)
+								{
+									fprintf(fl_userlog,"Fatal Error In BCUSTSETUP\n");
+									APL_GOBACK_FAIL
+								}
+								
+                        if (int_retstat == IV_NO_DATA_FOUND_ERR)
+                        {
+								 	CO_InsertErr(l_debug_info_ptr,
+														ERR_BILLPARAM_NOTFND,
+														(char *)l_mt_core_sys_params_struct_h.custody_clt_cd, // AIX - Warnings removal
+                        	      	      APL_NULL_STRING,
+                           	      	   APL_NULL_STRING,
+														__LINE__,
+														__FILE__);
+                           APL_GOBACK_FAIL
+                        }
+
+								 if (int_retstat == IV_COLUMN_NULL_ERR)
+   	                   {
+                           if (!strcmp(l_iv_clientsetup_struct.rec_clt," "))
+                           {
+								 		CO_InsertErr(l_debug_info_ptr,
+															ERR_BILLPARAM_NOTFND,
+															(char *)l_mt_core_sys_params_struct_h.custody_clt_cd, // AIX - Warnings removal
+                        	            		APL_NULL_STRING,
+                           	         		APL_NULL_STRING,
+															__LINE__,
+															__FILE__);
+                              fprintf(fl_userlog,"Receivable Account Cannot be null for %s\n",l_mt_core_sys_params_struct_h.custody_clt_cd);
+                              APL_GOBACK_FAIL
+                           }
+                        }
+                     }
+                  }
+						}
+						}
+						}
+               }  
+            } 
+         } 
+      } 
+   } 
+
+	strcpy(l_pro_recacctent_struct_h.client,l_iv_clientsetup_struct.rec_clt);
+  printf("\nIV_GenAcc.pc:BlAcPassNew:l_iv_clientsetup_struct.rec_clt :|%s|\n",l_iv_clientsetup_struct.rec_clt);
+	
+	
+
+IF_COND_EXISTS("IV_ACC_CLIENT","FUND_ACC")
+{
+	printf("\nIV_GenAcc.pc:BlAcPassNew:Inside **** |IV_ACC_CLIENT,FUND_ACC| **** ");
+}
+else
+{
+		printf("\nIV_GenAcc.pc:BlAcPassNew:Entering IV_Proc_DecodeCommAcc :|%s|",chr_p_client);
+		if (APL_FAILURE == IV_Proc_DecodeCommAcc(chr_p_client,
+														 chr_h_com_ac,
+														 &int_retstat,
+														 l_debug_info_ptr) )
+		{
+		   if (int_retstat == IV_CRITCAL_ERROR_IND)
+			{
+				fprintf(fl_userlog,"Fatal Error In BCUSTSETUP \n");
+				APL_GOBACK_FAIL
+			}
+		
+			if (int_retstat == IV_NO_DATA_FOUND_ERR)
+			{
+				
+				CO_InsertErr(l_debug_info_ptr,
+									ERR_BILLPARAM_NOTFND,
+									chr_p_client,	
+                  			APL_NULL_STRING,
+                  			APL_NULL_STRING,
+									__LINE__,
+									__FILE__);
+				APL_GOBACK_FAIL
+
+			}	
+			if (int_retstat == IV_COLUMN_NULL_ERR)
+			{
+				fprintf(fl_userlog,"Commission Account Is Not Defined For %s \n",chr_p_client);
+				CO_InsertErr(l_debug_info_ptr,
+									ERR_INVALID_COMMACC,
+									chr_p_client,	
+                  			APL_NULL_STRING,
+                  			APL_NULL_STRING,
+									__LINE__,
+									__FILE__);
+
+
+				APL_GOBACK_FAIL
+			}
+		}
+}
+		
+
+		strcpy(l_pro_comacctent_struct_h.client,chr_h_com_ac);		
+		printf("\nIV_GenAcc.pc:BlAcPassNew:l_pro_comacctent_struct_h.client :|%s|\n",l_pro_comacctent_struct_h.client);
+
+
+		
+
+		if (APL_FAILURE == CO_RtvSysDt(chr_h_system_date,
+														l_debug_info_ptr) )
+   	{
+			fprintf(fl_userlog,"Failed to Get system chr_date \n");
+      	APL_GOBACK_FAIL
+  		}		
+
+
+		strcpy(l_pro_recacctent_struct_h.proc_dt, chr_h_system_date);
+		strcpy(l_pro_comacctent_struct_h.proc_dt, chr_h_system_date);
+		
+
+		if (APL_FAILURE == IV_Proc_ConvToFxFn(l_iv_clt_setup_struct.b_ccycd,
+												l_iv_clientsetup_struct.b_ccycd,
+												g_mt_commonsys_params_struct_h.dom_ccy,
+												chr_h_system_date,
+												&h_ae_rate1,
+												&int_retstat, 
+												l_debug_info_ptr) )
+		{
+			if (int_retstat == IV_CRITCAL_ERROR_IND)
+			{
+				fprintf(fl_userlog,"Exchange Rate Not Found For %s To %s\n",l_iv_clt_setup_struct.b_ccycd,l_iv_clientsetup_struct.b_ccycd);
+			}
+			APL_GOBACK_FAIL
+		}
+	
+	
+
+		if (APL_FAILURE == IV_Proc_ConvToFxFn(l_iv_clientsetup_struct.b_ccycd,
+												g_mt_commonsys_params_struct_h.dom_ccy,
+												g_mt_commonsys_params_struct_h.dom_ccy,
+												chr_h_system_date,
+												&h_ae_rate2,
+												&int_retstat, 
+												l_debug_info_ptr) )
+		{
+			if (int_retstat == IV_CRITCAL_ERROR_IND)
+			{
+				fprintf(fl_userlog,"Exchange Rate Not Found For %s To %s\n",l_iv_clientsetup_struct.b_ccycd,g_mt_commonsys_params_struct_h.dom_ccy);
+			}
+			APL_GOBACK_FAIL
+		}
+
+
+		if (APL_FAILURE == IV_Proc_ConvToFxFn(g_mt_commonsys_params_struct_h.dom_ccy,
+												l_invoice_systemparam_struct_h.b_ccy,
+												g_mt_commonsys_params_struct_h.dom_ccy,
+												chr_h_system_date,
+												&h_ae_rate3,
+												&int_retstat, 
+												l_debug_info_ptr) )
+		{
+			if (int_retstat == IV_CRITCAL_ERROR_IND)
+			{
+				fprintf(fl_userlog,"Exchange Rate Not Found For %s To %s\n",g_mt_commonsys_params_struct_h.dom_ccy,l_invoice_systemparam_struct_h.b_ccy);
+			}
+			APL_GOBACK_FAIL
+		}
+	
+		if (APL_FAILURE == IV_Proc_ConvToFxFn(l_invoice_systemparam_struct_h.b_ccy,
+												g_mt_commonsys_params_struct_h.dom_ccy,
+												g_mt_commonsys_params_struct_h.dom_ccy,
+												chr_h_system_date,
+												&h_ae_rate4,
+												&int_retstat, 
+												l_debug_info_ptr) )
+		{
+			if (int_retstat == IV_CRITCAL_ERROR_IND)
+			{
+				fprintf(fl_userlog,"Exchange Rate Not Found For %s To %s\n",l_invoice_systemparam_struct_h.b_ccy,g_mt_commonsys_params_struct_h.dom_ccy);
+			}
+			APL_GOBACK_FAIL
+		}
+
+
+	l_ae_rate2 = h_ae_rate2 ;          
+
+	dbl_famountcus = *p_std_amt * h_ae_rate1;
+	lamountcus = dbl_famountcus    * h_ae_rate2;
+
+	printf("\nIV_GenAcc.pc:BlAcPassNew:lamountcus:|%lf|dbl_famountcus:|%lf|*p_std_amt:|%lf|",lamountcus,dbl_famountcus,*p_std_amt);
+	
+	dbl_famttax = *p_tax_amt * h_ae_rate1;
+	LamtTax = dbl_famttax    * h_ae_rate2;
+
+
+	dbl_famountrec = *p_rec_amt * h_ae_rate1;
+	lamountrec = dbl_famountrec    * h_ae_rate2; 
+
+
+	
+   lamountrec = lamountrec + (*p_othsrv_amt); 	
+
+	printf("\nIV_GenAcc.pc:BlAcPassNew:lamountrec:|%lf|*p_othsrv_amt:|%lf|dbl_famountrec:|%lf|*p_rec_amt:|%lf|",lamountrec,*p_othsrv_amt,dbl_famountrec,*p_rec_amt);	
+
+	dbl_famountrec = lamountrec / h_ae_rate2;
+	RepRec = lamountrec * h_ae_rate3;
+	RepCus = lamountcus * h_ae_rate3;
+	/*
+	RepTax = LamtTax * h_ae_rate3;
+	*/
+	RepTax = dbl_famttax;
+
+	
+	
+	if (APL_FAILURE == IV_Rtv_MTCurrency(l_iv_clientsetup_struct.b_ccycd,
+													chr_l_bcustsetup_blccycode_glcode,
+													&int_l_bcustsetup_blccycode_decimallen,
+													&int_retstat,
+													l_debug_info_ptr) )
+	{
+		if (int_retstat == IV_CRITCAL_ERROR_IND)
+		{
+			fprintf(fl_userlog,"Fatal Error In The Currency Table\n"); 
+			APL_GOBACK_FAIL
+		}
+		else
+		{
+			CO_InsertErr(l_debug_info_ptr,
+								ERR_CCY_NOTFND, 
+								l_iv_clientsetup_struct.b_ccycd,
+								APL_NULL_STRING, 
+								APL_NULL_STRING,
+								__LINE__,
+								__FILE__);
+			APL_GOBACK_FAIL
+		}
+	}
+
+
+	if (APL_FAILURE == IV_Rtv_MTCurrency(g_mt_commonsys_params_struct_h.dom_ccy,
+													chr_g_common_params_glcode,
+													&int_g_common_params_decimallen,
+													&int_retstat,
+													l_debug_info_ptr) )
+	{
+		if (int_retstat == IV_CRITCAL_ERROR_IND)
+		{
+			fprintf(fl_userlog,"Fatal Error In The Currency Table\n"); 
+			APL_GOBACK_FAIL
+		}
+		else
+		{
+			CO_InsertErr(l_debug_info_ptr,
+								ERR_CCY_NOTFND, 
+								(char*)g_mt_commonsys_params_struct_h.dom_ccy,//AIX Warning Removal 
+								APL_NULL_STRING, 
+								APL_NULL_STRING,
+								__LINE__,
+								__FILE__);
+			APL_GOBACK_FAIL
+		}
+	}
+
+
+	if (APL_FAILURE == IV_Rtv_MTCurrency(l_invoice_systemparam_struct_h.b_ccy,
+													chr_g_bill_params_glcode,
+													&int_g_bill_params_decimallen,
+													&int_retstat,
+													l_debug_info_ptr) )
+	{
+		if (int_retstat == IV_CRITCAL_ERROR_IND)
+		{
+			fprintf(fl_userlog,"Fatal Error In The Currency Table\n"); 
+			APL_GOBACK_FAIL
+		}
+		else
+		{
+			CO_InsertErr(l_debug_info_ptr,
+								ERR_CCY_NOTFND, 
+								(char *)l_invoice_systemparam_struct_h.b_ccy, // AIX - Warnings removal
+								APL_NULL_STRING, 
+								APL_NULL_STRING,
+								__LINE__,
+								__FILE__);
+			APL_GOBACK_FAIL
+		}
+	}
+
+
+	
+	
+	if (APL_FAILURE == CO_Round(dbl_famountcus,
+										int_l_bcustsetup_blccycode_decimallen,
+										&h_famountcus) )
+	{
+		APL_GOBACK_FAIL	
+	}
+
+	 
+
+	if (APL_FAILURE == CO_Round(lamountcus,
+										int_g_common_params_decimallen,
+										&h_lamountcus) )
+	{
+		APL_GOBACK_FAIL	
+	}
+
+	 
+
+
+	if (APL_FAILURE == CO_Round(dbl_famttax,
+										int_l_bcustsetup_blccycode_decimallen,
+										&dbl_h_famttax) )
+	{
+		APL_GOBACK_FAIL	
+	}
+
+	 
+
+	if (APL_FAILURE == CO_Round(LamtTax,
+										int_g_common_params_decimallen,
+										&dbl_h_lamttax) )
+	{
+		APL_GOBACK_FAIL	
+	}
+
+	
+
+	if (APL_FAILURE == CO_Round(dbl_famountrec,
+										int_l_bcustsetup_blccycode_decimallen,
+										&h_famountrec) )
+	{
+		APL_GOBACK_FAIL	
+	}
+
+	
+
+	if (APL_FAILURE == CO_Round(lamountrec,
+										int_g_common_params_decimallen,
+										&h_lamountrec) )
+	{
+		APL_GOBACK_FAIL	
+	}
+
+	
+
+	if (APL_FAILURE == CO_Round(RepTax,
+										int_g_bill_params_decimallen,		
+										&dbl_h_reptax) )
+	{
+		APL_GOBACK_FAIL	
+	}
+
+
+	if (APL_FAILURE == CO_Round(RepCus,
+										int_g_bill_params_decimallen,		
+										&dbl_h_repcus) )
+	{
+		APL_GOBACK_FAIL	
+	}
+
+	if (APL_FAILURE == CO_Round(RepRec,
+										int_g_bill_params_decimallen,		
+										&dbl_h_reprec) )
+	{
+		APL_GOBACK_FAIL	
+	}
+
+
+	
+		
+		if (!strcmp(l_iv_clientsetup_struct.b_ccycd,g_mt_commonsys_params_struct_h.dom_ccy))
+		{
+			chr_l_fcyinclude = 'F';
+
+		}
+		else
+		{	
+			chr_l_fcyinclude = 'T';
+		}
+
+		
+
+		if (chr_l_fcyinclude == 'T')
+		{
+			dbl_fcyrec	 = h_famountrec;  
+		}
+		else
+		{
+			dbl_fcyrec = 0;
+			h_ae_rate2 = 0;
+		}
+
+
+		
+		
+
+		strcpy(l_pro_recacctent_struct_h.curr_cd,chr_l_bcustsetup_blccycode_glcode);
+		//shailesh 031007, ISKB 430  receivable  amounts overwritten later for service wise entry
+		l_pro_recacctent_struct_h.fccy_amt 	= dbl_fcyrec;
+		l_pro_recacctent_struct_h.exchg_rt 	= h_ae_rate2;	
+		l_pro_recacctent_struct_h.lcl_amount	= h_lamountrec; 
+		l_pro_recacctent_struct_h.module_ind = 'B';
+
+		
+
+		l_pro_comacctent_struct_h.fccy_amt  = 0.0;
+		l_pro_comacctent_struct_h.exchg_rt 	= 0.0;
+		l_pro_comacctent_struct_h.lcl_amount  = h_lamountcus;
+		l_pro_comacctent_struct_h.module_ind ='B';
+		strcpy(l_pro_comacctent_struct_h.curr_cd,chr_g_common_params_glcode);
+
+
+		
+		strcpy(l_pro_comacctent_struct_h.brnch_cd,g_mt_commonsys_params_struct_h.brnch_cd);
+		strcpy(l_pro_recacctent_struct_h.brnch_cd,g_mt_commonsys_params_struct_h.brnch_cd);
+
+		int_l_runseq = *p_runseq;
+		sprintf(h_sequence_num,"%d",*p_runseq);
+		strcpy(l_pro_recacctent_struct_h.inden_num,h_sequence_num);
+
+		
+		if (h_lamountcus != 0)
+		{
+			*p_runseq = *p_runseq + 1;
+			printf("\n AMIT:Increment1=|%d| \n",*p_runseq);//ISKB-430
+		}
+
+		sprintf(h_sequence_num,"%d",(*p_runseq));
+		strcpy(l_pro_comacctent_struct_h.inden_num,h_sequence_num);
+		
+
+
+		if (APL_FAILURE == IV_Rtv_SysDate(h_value_date,
+													  l_debug_info_ptr) )
+		{
+			fprintf(fl_userlog,"Failed to Get System Date\n");
+			APL_GOBACK_FAIL
+		}	 
+
+		
+		//strcpy(l_pro_recacctent_struct_h.val_date,h_value_date);
+           // shailesh 26-12-2007 to insert valdate as billdaet in YYYYMMDD format
+		strcpy(l_pro_recacctent_struct_h.val_date,l_str_valdate);
+
+		//strcpy(l_pro_comacctent_struct_h.val_date,h_value_date);
+            // shailesh 26-12-2007 to insert valdate as billdaet in YYYYMMDD format
+               strcpy(l_pro_comacctent_struct_h.val_date,l_str_valdate);
+
+		l_pro_recacctent_struct_h.db_cr_ind = DR_CR_IND;
+		l_pro_comacctent_struct_h.db_cr_ind = CREDIT_IND_A;
+
+		
+		sprintf(l_pro_recacctent_struct_h.deal_cd, "%.3d", l_invoice_systemparam_struct_h.db_txnrcd); 
+		sprintf(l_pro_comacctent_struct_h.deal_cd, "%.3d", l_invoice_systemparam_struct_h.cred_txnrcd); 
+
+
+		l_pro_recacctent_struct_h.status_ind = 'G';
+		l_pro_comacctent_struct_h.status_ind = 'G';
+
+		strcpy(l_pro_recacctent_struct_h.proc_num,p_batch_no);
+		strcpy(l_pro_comacctent_struct_h.proc_num,p_batch_no);
+         /*Addedby siva.ganapathi for ISKB_2470 on 07-Dec-2010 -- started*/
+		strcpy(l_pro_comacctent_struct_h.deal_ident,chr_p_client);	
+		/*** strcpy(l_pro_recacctent_struct_h.deal_ident,chr_p_client);	***/
+         /*Addedby siva.ganapathi for ISKB_2470 on 07-Dec-2010 -- Ended*/
+
+		//shailesh 031007,ISKB430  receivable amounts overwritten later to show service wise amount
+		l_pro_recacctent_struct_h.report_clt 	= dbl_h_reprec;
+		/*	l_pro_recacctent_struct_h.report_amt	= h_lamountrec;	*/
+		l_pro_recacctent_struct_h.report_amt	= dbl_famountrec;
+		l_pro_recacctent_struct_h.report_ser	= 0;
+		l_pro_recacctent_struct_h.report_tax	= 0;
+		l_pro_recacctent_struct_h.rep_exg_rt	= h_ae_rate4;
+		l_pro_recacctent_struct_h.rec_refer = NORMENT;
+
+
+		l_pro_comacctent_struct_h.report_clt		= dbl_h_repcus;
+		/*	l_pro_comacctent_struct_h.report_amt		= h_lamountcus;	*/
+		l_pro_comacctent_struct_h.report_amt		= dbl_famountcus;
+		l_pro_comacctent_struct_h.report_ser		= 0;	
+		l_pro_comacctent_struct_h.report_tax		= 0;
+		l_pro_comacctent_struct_h.rep_exg_rt		= h_ae_rate4;
+		l_pro_comacctent_struct_h.rec_refer   = NORMENT ;
+
+        /* Bageshri HB_IV_005 : for client field to be Account Code only */
+
+ 	strcpy(l_pro_recacctent_struct_h.acc_type,"C");  /* as rec_clt is Clients acc */
+
+	
+	        if(APL_FAILURE == IV_Mod_ClientCode(&l_pro_recacctent_struct_h.client,fl_userlog,l_debug_info_ptr))
+		        {
+			       fprintf(fl_userlog,"\nCould not get the Account No. for debit entry");
+			       APL_GOBACK_FAIL
+		 }
+		
+     printf("\nIV_GenAcc.pc:BlAcPassNew: l_pro_recacctent_struct_h.client:|%s|",l_pro_recacctent_struct_h.client);
+
+//shailesh 110907	
+	strcpy(l_pro_recacctent_struct_h.leg_ind,l_pro_seracctent_struct_h.inden_num);
+	printf("\nIV_GenAcc.pc:BlAcPassNew:_l_pro_recacctent_struct_h.leg_ind =[%s] and  l_pro_seracctent_struct_h.inden_num = [%s]\n",l_pro_recacctent_struct_h.leg_ind,l_pro_comacctent_struct_h.inden_num);
+
+
+	/* Bageshri HB_IV_005 END ****************************************/
+
+	printf("\nIV_GenAcc.pc:BlAcPassNew:The h_lamountrec is |%lf|\n",h_lamountrec);
+
+			*dcredit_ind = (*dcredit_ind) + h_lamountrec ;
+
+	printf("\nIV_GenAcc.pc:BlAcPassNew:The  debit total till now *dcredit_ind is |%lf|\n",*dcredit_ind);	
+
+
+			if (h_lamountcus != 0)
+			{
+				*ccredit_ind = (*ccredit_ind) + h_lamountcus;
+				Alert("The standars *ccredit_ind is |%lf|\n",*ccredit_ind);
+			}
+
+			l_dcredit_ind	= *dcredit_ind;
+			l_ccredit_ind = *ccredit_ind;		
+
+		
+
+		if ((!strcmp(p_incltax,"T")) && (dbl_h_lamttax >0))
+		{
+			l_pro_taxacctent_struct_h.module_ind = 'B';
+			strcpy(l_pro_taxacctent_struct_h.brnch_cd,g_mt_commonsys_params_struct_h.brnch_cd);
+			strcpy(l_pro_taxacctent_struct_h.client,p_iv_client_struct_a->tax_acc);		
+			sprintf(l_pro_taxacctent_struct_h.deal_cd, "%.3d", l_invoice_systemparam_struct_h.cred_txnrcd); 
+
+		
+			*p_runseq = *p_runseq + 1;
+
+			printf("\n AMIT:Increment2=|%d| \n",*p_runseq);//ISKB-430
+
+			sprintf(h_sequence_num,"%d",(*p_runseq));
+			strcpy(l_pro_taxacctent_struct_h.inden_num,h_sequence_num);
+
+			strcpy(chr_l_blacc_ac_tax,p_iv_client_struct_a->tax_acc);  			
+			
+			if ( (chr_l_blacc_ac_tax[0] == '9') 
+					&& ((chr_l_blacc_ac_tax[1] == '3')  || (chr_l_blacc_ac_tax[1] == '4') )) 
+			{
+					strcpy(l_pro_taxacctent_struct_h.spl_clt_cd,l_pro_comacctent_struct_h.spl_clt_cd);
+			}
+			else
+			{
+					strcpy(l_pro_taxacctent_struct_h.spl_clt_cd,APL_NULL_STRING);	
+			}
+
+
+			strcpy(l_pro_taxacctent_struct_h.curr_cd,chr_g_common_params_glcode);
+
+
+			if(CO_Chk_CntryEnabled("BILL_ACCOUNTING",
+										"FCCY_AMT",
+										&int_cond_exists,
+										l_debug_info_ptr)==APL_FAILURE)
+			{
+				fprintf(fl_userlog,"Failed to do Cntry Cond Check\n");
+				APL_GOBACK_FAIL
+			}
+
+			if (int_cond_exists == 0) 
+			{
+				if ( strcmp(l_iv_clientsetup_struct.b_ccycd, g_mt_commonsys_params_struct_h.dom_ccy) )
+				{
+					l_pro_taxacctent_struct_h.fccy_amt = dbl_h_famttax;
+					l_pro_taxacctent_struct_h.exchg_rt  = h_ae_rate2;
+				}
+				else
+				{
+					l_pro_taxacctent_struct_h.fccy_amt = 0;
+					l_pro_taxacctent_struct_h.exchg_rt  = 0;
+				}
+			}
+			else
+			{
+				l_pro_taxacctent_struct_h.fccy_amt = 0;
+				l_pro_taxacctent_struct_h.exchg_rt  = 0;
+			}
+
+			
+			l_pro_taxacctent_struct_h.lcl_amount  = dbl_h_lamttax;
+
+			
+			//strcpy(l_pro_taxacctent_struct_h.val_date,h_value_date);
+                  // shailesh 26-12-2007 to insert valdate as billdaet in YYYYMMDD format
+                   strcpy(l_pro_taxacctent_struct_h.val_date,l_str_valdate);
+
+				
+			l_pro_taxacctent_struct_h.db_cr_ind = CREDIT_IND_A;
+			l_pro_taxacctent_struct_h.status_ind = 'G';
+			//strcpy(l_pro_taxacctent_struct_h.description,chr_l_comment);
+			strcpy(l_pro_taxacctent_struct_h.proc_num,p_batch_no);
+			strcpy(l_pro_taxacctent_struct_h.proc_dt,chr_h_system_date);
+			
+			 /*Addedby siva.ganapathi for ISKB_2470 on 07-Dec-2010 -- started*/
+			/*** strcpy(l_pro_taxacctent_struct_h.deal_ident,chr_p_client);  ****/ 
+			 l_tax_serv_cd =  TAXFEE;
+    		 sprintf(l_pro_taxacctent_struct_h.deal_ident, "%s|%ld", chr_p_client, l_tax_serv_cd);
+
+			 /*Addedby siva.ganapathi for ISKB_2470 on 07-Dec-2010 -- Ended*/	
+			
+			l_pro_taxacctent_struct_h.report_tax  = dbl_h_reptax;
+			l_pro_taxacctent_struct_h.rep_exg_rt	= h_ae_rate4;
+			l_pro_taxacctent_struct_h.report_amt	= dbl_h_lamttax;
+			l_pro_taxacctent_struct_h.report_ser  = 0;
+			l_pro_taxacctent_struct_h.report_clt  = 0;
+			l_pro_taxacctent_struct_h.rec_refer = NORMENT;
+
+			*ccredit_ind = (*ccredit_ind)  + l_pro_taxacctent_struct_h.lcl_amount;
+			l_ccredit_ind = *ccredit_ind;
+
+			
+			if ( l_taxCondExists )
+			{
+				
+				*p_runseq = *p_runseq - 1;
+			}
+			else
+			{
+      		if (l_tr_apa_code)
+				{
+					memset(l_pro_taxacctent_struct_h.spl_clt_cd,APL_NULL_CHAR,9);
+					strncpy(l_pro_taxacctent_struct_h.spl_clt_cd,chr_l_default_glcode,7);
+               l_pro_taxacctent_struct_h.spl_clt_cd[7]=APL_NULL_CHAR;
+			   }
+       //for negative values of amount rec a.c should be credited and serv ac should be debited
+	if(l_pro_taxacctent_struct_h.lcl_amount < 0)
+				{
+		l_pro_taxacctent_struct_h.lcl_amount=l_pro_taxacctent_struct_h.lcl_amount*(-1);
+		l_pro_taxacctent_struct_h.fccy_amt=l_pro_taxacctent_struct_h.fccy_amt*(-1);
+		l_pro_taxacctent_struct_h.report_amt=l_pro_taxacctent_struct_h.report_amt*(-1);
+		l_pro_taxacctent_struct_h.db_cr_ind = DR_CR_IND;
+		l_pro_recacctent_struct_h.db_cr_ind = CREDIT_IND_A;
+				}
+				else
+				{
+    	 l_pro_taxacctent_struct_h.db_cr_ind =  CREDIT_IND_A;
+	     l_pro_recacctent_struct_h.db_cr_ind = DR_CR_IND;
+				}
+			if (APL_FAILURE == IV_Mod_ActEntNew(&l_pro_taxacctent_struct_h,l_debug_info_ptr) )
+  			 {
+      		fprintf(fl_userlog,"Could not insert the credit tax clt entries structure  into the accounting entries table \n");
+
+		      APL_GOBACK_FAIL
+		   }
+
+    l_pro_recacctent_struct_h.fccy_amt   = l_pro_taxacctent_struct_h.fccy_amt;
+	l_pro_recacctent_struct_h.lcl_amount   = l_pro_taxacctent_struct_h.lcl_amount;
+	/*	Report Amount Currency change to Client Currency for Recievable Account	ISKB-1994	*/
+    /*l_pro_recacctent_struct_h.report_amt = l_pro_taxacctent_struct_h.report_amt;*/
+    l_pro_recacctent_struct_h.report_amt = dbl_h_reptax;
+	l_pro_recacctent_struct_h.report_clt = l_pro_recacctent_struct_h.lcl_amount * h_ae_rate3;
+
+
+	if (APL_FAILURE == CO_Round(l_pro_recacctent_struct_h.fccy_amt,
+										int_l_bcustsetup_blccycode_decimallen,
+										&l_pro_recacctent_struct_h.fccy_amt) )
+	{
+		APL_GOBACK_FAIL	
+	}
+
+
+	if (APL_FAILURE == CO_Round(l_pro_recacctent_struct_h.report_amt,
+										int_g_common_params_decimallen,
+										&l_pro_recacctent_struct_h.report_amt) )
+	{
+		APL_GOBACK_FAIL	
+	}
+
+
+	if (APL_FAILURE == CO_Round(l_pro_recacctent_struct_h.report_clt,
+										int_g_bill_params_decimallen,		
+										&l_pro_recacctent_struct_h.report_clt) )
+	{
+		APL_GOBACK_FAIL	
+	}
+	strcpy(l_pro_recacctent_struct_h.leg_ind,l_pro_taxacctent_struct_h.inden_num);
+	
+
+
+
+			if (APL_FAILURE == IV_Mod_ActEntNew(&l_pro_recacctent_struct_h,l_debug_info_ptr) )
+  			 {
+      		fprintf(fl_userlog,"Could not insert the debit tax clt entries structure  into the accounting entries table \n");
+
+		      APL_GOBACK_FAIL
+		   }
+
+			}
+
+		} 	
+
+	
+	Alert("\n\n***** Before For loop *****\n\n");
+		
+		Alert("\nh_sequence_num |%d|",(*p_runseq));
+	Alert("The *p_totothsrv is %d\n",*p_totothsrv);
+
+		/** Bageshri HB_IV_005 : to have common inden_num for all service wise acc ent of client */
+//ISKB-430
+/*		*p_runseq = *p_runseq + 1 ;
+		sprintf(h_sequence_num,"%d",(*p_runseq));
+		Alert("\nh_sequence_num |%d|",(*p_runseq));
+*/
+		/** Bageshri HB_IV_005 : END ***********************************************/
+
+	for(i = 0; i < (*p_totothsrv) ;  i++)
+	{
+/*		*p_runseq = *p_runseq + 1 ;//ISKB-430
+*/		sprintf(h_sequence_num,"%d",(*p_runseq));//ISKB-430
+		Alert("\nSTART ISKB-430:h_sequence_num |%d|",(*p_runseq));//ISKB-430
+
+	
+		printf("Client |%s| Service |%ld| h_repser |%lf| lamountser|%lf|\n",(*p_cltent_othserv_struct + i)->h_clt_gl,(*p_cltent_othserv_struct + i)->service_cd,(*p_cltent_othserv_struct + i)->h_repser,(*p_cltent_othserv_struct + i)->lamountser);
+	l_dbl_serv_cd = (*p_cltent_othserv_struct + i)->service_cd;
+	
+	//shailesh 15-02-2008EXEC  SQL SELECT MAP_DESC  INTO  :chr_l_comment_servac  FROM PRO_SGENSTAT
+	//WHERE  MAP_TYPE = 'IV_SERVDET_SERVAC'  AND MAP_VAL = :l_dbl_serv_cd;
+
+	EXEC SQL SELECT GET_NARRATION_CD(:l_dbl_serv_cd,'SERVICE'),
+			GET_NARRATION_CD(:l_dbl_serv_cd,'RECEIVABLE')
+			INTO :chr_l_comment_servac,:chr_l_comment_recac FROM DUAL;
+
+			if(sqlca.sqlcode !=0)
+			{
+				printf("\n  Error in  GET_NARRATION_CD function ::%d",sqlca.sqlcode);
+				fprintf(fl_userlog,"\n  Error in  GET_NARRATION_CD function ::%d",sqlca.sqlcode);;
+			}
+		printf("\n chr_l_comment_servac = [%s]",chr_l_comment_servac);
+		printf("\n chr_l_comment_recac = [%s]",chr_l_comment_recac);
+
+	fprintf(fl_userlog,"\nGot the description of service for service a/c");
+
+	//shailesh 15-02-2008EXEC  SQL SELECT MAP_DESC  INTO  :chr_l_comment_recac  FROM PRO_SGENSTAT 
+	//WHERE  MAP_TYPE = 'IV_SERVDET_RECAC'  AND MAP_VAL = :l_dbl_serv_cd;
+
+
+
+	fprintf(fl_userlog,"\nGot the description of service for receivable a/c");
+
+		strcpy(l_pro_recacctent_struct_h.description,chr_l_comment_recac);
+		//shailesh 150208strcpy(l_pro_recacctent_struct_h.description,chr_l_comment_recac);
+		strcat(l_pro_recacctent_struct_h.description," FOR ");	//ISKB-1975
+		strcat(l_pro_recacctent_struct_h.description,nar_acc_date);
+		strcpy(l_pro_comacctent_struct_h.description,chr_l_comment_servac);
+		strcat(l_pro_comacctent_struct_h.description," ");
+		strcat(l_pro_comacctent_struct_h.description,nar_acc_date);
+
+
+		
+		/**********Bageshri HB_IV_005 : to have common inden_num for all service wise acc ent of client	
+
+		*p_runseq = *p_runseq + 1 ;
+		sprintf(h_sequence_num,"%d",(*p_runseq));
+
+		**********************************************************/
+		Alert("\nh_sequence_num |%d|",(*p_runseq));
+
+		if (	((*p_cltent_othserv_struct + i)->h_clt_gl[0] == '9' )
+			  	&& (((*p_cltent_othserv_struct + i)->h_clt_gl[1] == '3' ) ||
+					 ((*p_cltent_othserv_struct + i)->h_clt_gl[1] == '4' ))	)//AIX Warning Removal 
+		{
+			strcpy(l_pro_seracctent_struct_h.spl_clt_cd , l_pro_comacctent_struct_h.spl_clt_cd) ;		
+			
+		}
+		else
+		{
+			strcpy(l_pro_seracctent_struct_h.spl_clt_cd ,APL_NULL_STRING);
+		}
+		
+		l_pro_seracctent_struct_h.module_ind = 'B';
+
+		strcpy(l_pro_seracctent_struct_h.brnch_cd,g_mt_commonsys_params_struct_h.brnch_cd);
+		sprintf(l_pro_seracctent_struct_h.deal_cd, "%.3d", l_invoice_systemparam_struct_h.cred_txnrcd); 
+	
+		strcpy(l_pro_seracctent_struct_h.inden_num ,h_sequence_num);
+		
+
+		strcpy(l_pro_seracctent_struct_h.client,(*p_cltent_othserv_struct + i)->h_clt_gl);
+
+		l_pro_seracctent_struct_h.fccy_amt 	= 0;
+
+		l_pro_seracctent_struct_h.exchg_rt 	= 0;
+
+		l_pro_seracctent_struct_h.lcl_amount = (*p_cltent_othserv_struct + i)->lamountser;
+
+		strcpy(l_pro_seracctent_struct_h.curr_cd,chr_g_common_params_glcode);
+             
+		//strcpy(l_pro_seracctent_struct_h.val_date,h_value_date);
+               // shailesh 26-12-2007 to insert valdate as billdaet in YYYYMMDD format
+                strcpy(l_pro_seracctent_struct_h.val_date,l_str_valdate);
+
+		l_pro_seracctent_struct_h.db_cr_ind = CREDIT_IND_A;
+		
+		l_pro_seracctent_struct_h.status_ind = 'G';
+
+		//strcpy(l_pro_seracctent_struct_h.description,chr_l_comment);
+                //shailesh 150208 strcpy(l_pro_seracctent_struct_h.description,chr_l_comment_servac);
+		strcpy(l_pro_seracctent_struct_h.description,chr_l_comment_servac);
+		strcat(l_pro_seracctent_struct_h.description," ");
+                strcat(l_pro_seracctent_struct_h.description,nar_acc_date);
+		strcat(l_pro_seracctent_struct_h.description," ");
+                strcat(l_pro_seracctent_struct_h.description,chr_p_client);
+                
+
+		strcpy(l_pro_seracctent_struct_h.proc_num,p_batch_no);		
+		
+		strcpy(l_pro_seracctent_struct_h.proc_dt,chr_h_system_date);		
+         /*Addedby siva.ganapathi for ISKB_2470 on 07-Dec-2010 -- started*/
+  /*** 		strcpy(l_pro_seracctent_struct_h.deal_ident,chr_p_client);	 *******/	
+		sprintf(l_pro_seracctent_struct_h.deal_ident, "%s|%ld", chr_p_client, l_dbl_serv_cd);
+         /*Addedby siva.ganapathi for ISKB_2470 on 07-Dec-2010 -- Ended*/
+	
+		l_pro_seracctent_struct_h.report_ser		= (*p_cltent_othserv_struct + i)->h_repser;
+
+		l_pro_seracctent_struct_h.rep_exg_rt		= h_ae_rate4;
+		
+		l_pro_seracctent_struct_h.report_amt	 	= (*p_cltent_othserv_struct + i)->lamountser;
+
+		l_pro_seracctent_struct_h.report_clt		= 0;
+
+		l_pro_seracctent_struct_h.report_tax		= 0;
+
+		l_pro_seracctent_struct_h.rec_refer 	= NORMENT;
+
+        /* Bageshri HB_IV_005 : for client field to be Account Code only */
+
+ 	strcpy(l_pro_seracctent_struct_h.acc_type,"G");  /* as rec_clt is Clients acc */
+
+		Alert("\n l_pro_seracctent_struct_h.client:|%s|",l_pro_seracctent_struct_h.client);
+	        if(APL_FAILURE == IV_Mod_ClientCode(&l_pro_seracctent_struct_h.client,fl_userlog,l_debug_info_ptr))
+		        {
+			       fprintf(fl_userlog,"\nCould not get the Account No. for credit entry");
+			       APL_GOBACK_FAIL
+		 }
+		
+        Alert("\n l_pro_seracctent_struct_h.client:|%s| Report Amount |%lf|\n",l_pro_seracctent_struct_h.client,l_pro_seracctent_struct_h.report_amt);
+
+//AmitB:311007:Increment receivable acc inden_num--ISKB-430
+	
+		*p_runseq = *p_runseq + 1 ;
+		sprintf(h_sequence_num,"%d",(*p_runseq));
+		Alert("\nISKB-430:h_sequence_num |%d|",(*p_runseq));
+		strcpy(l_pro_recacctent_struct_h.inden_num,h_sequence_num);
+
+//shailesh110907
+         strcpy(l_pro_seracctent_struct_h.leg_ind,l_pro_recacctent_struct_h.inden_num);
+	 Alert("\n_shailesh 110907_l_pro_recacctent_struct_h.leg_ind =[%s] and  l_pro_seracctent_struct_h.inden_num = [%s]\n",l_pro_recacctent_struct_h.leg_ind,l_pro_seracctent_struct_h.inden_num);
+	/* Bageshri HB_IV_005 END ****************************************/
+
+     	if (l_tr_apa_code)
+		{
+			memset(l_pro_seracctent_struct_h.spl_clt_cd,APL_NULL_CHAR,9);
+			strncpy(l_pro_seracctent_struct_h.spl_clt_cd,chr_l_default_glcode,7);
+         l_pro_seracctent_struct_h.spl_clt_cd[7]=APL_NULL_CHAR;
+		}
+
+		*ccredit_ind =  (*ccredit_ind)  + l_pro_seracctent_struct_h.lcl_amount; 
+		Alert("The chr_value of *ccredit_ind after |%d|th iteration is |%lf|\n",i,*ccredit_ind);
+
+		l_ccredit_ind = *ccredit_ind;
+		
+		Alert("l_pro_seracctent_struct_h.lcl_amount:|%lf|",l_pro_seracctent_struct_h.lcl_amount);
+
+//shailesh 031007,ISKB430 for negative amount
+if(l_pro_seracctent_struct_h.lcl_amount < 0)
+		{
+	l_pro_seracctent_struct_h.lcl_amount =l_pro_seracctent_struct_h.lcl_amount*(-1);
+	l_pro_seracctent_struct_h.fccy_amt=l_pro_seracctent_struct_h.fccy_amt*(-1);
+	l_pro_seracctent_struct_h.report_amt=l_pro_seracctent_struct_h.report_amt*(-1);
+	l_pro_seracctent_struct_h.db_cr_ind = DR_CR_IND;
+	l_pro_recacctent_struct_h.db_cr_ind =CREDIT_IND_A;
+		}
+		else
+		{
+	l_pro_seracctent_struct_h.db_cr_ind = CREDIT_IND_A;
+	l_pro_recacctent_struct_h.db_cr_ind =  DR_CR_IND;
+		}
+
+
+
+
+//shailesh 031007,ISKB430 assigning amount from service chrg
+		l_pro_recacctent_struct_h.lcl_amount = l_pro_seracctent_struct_h.lcl_amount;
+		if(h_ae_rate2)
+		l_pro_recacctent_struct_h.fccy_amt = l_pro_recacctent_struct_h.lcl_amount/h_ae_rate2;
+		
+		strcpy(l_pro_recacctent_struct_h.leg_ind,l_pro_seracctent_struct_h.inden_num);
+		l_pro_recacctent_struct_h.report_clt =l_pro_recacctent_struct_h.lcl_amount * h_ae_rate3;
+		/*	Report Amount Currency change to Client Currency for Recievable Account	ISKB-1994	*/
+		/*
+		l_pro_recacctent_struct_h.report_amt = l_pro_seracctent_struct_h.lcl_amount;
+		*/
+		if ((*p_cltent_othserv_struct + i)->h_repser < 0)
+			l_pro_recacctent_struct_h.report_amt = (*p_cltent_othserv_struct + i)->h_repser*(-1);
+		else
+			l_pro_recacctent_struct_h.report_amt = (*p_cltent_othserv_struct + i)->h_repser;
+
+
+		
+	if (APL_FAILURE == CO_Round(l_pro_recacctent_struct_h.lcl_amount,
+										int_g_common_params_decimallen,
+										&l_pro_recacctent_struct_h.lcl_amount) )
+	{
+		APL_GOBACK_FAIL	
+	}
+
+	if (APL_FAILURE == CO_Round(l_pro_recacctent_struct_h.report_clt,
+										int_g_bill_params_decimallen,		
+										&l_pro_recacctent_struct_h.report_clt) )
+	{
+		APL_GOBACK_FAIL	
+	}
+
+	if (APL_FAILURE == CO_Round(l_pro_recacctent_struct_h.fccy_amt,
+									int_l_bcustsetup_blccycode_decimallen,
+										&l_pro_recacctent_struct_h.fccy_amt) )
+	{
+		APL_GOBACK_FAIL	
+	}
+
+         /*Addedby siva.ganapathi for ISKB_2470 on 07-Dec-2010 -- started*/
+	sprintf(l_pro_recacctent_struct_h.deal_ident, "%s|%ld", chr_p_client, l_dbl_serv_cd);	
+         /*Addedby siva.ganapathi for ISKB_2470 on 07-Dec-2010 -- Ended*/
+
+		if (l_pro_seracctent_struct_h.lcl_amount != 0 )
+		{
+			if (APL_FAILURE == IV_Mod_ActEntNew(&l_pro_seracctent_struct_h,l_debug_info_ptr) )
+   		{
+     	 		fprintf(fl_userlog,"Could not insert the credit other services clt entries structure  into the accounting entries table \n");
+
+	      	APL_GOBACK_FAIL
+   		}
+               //shailesh 031007,ISKB430 debit entry for receivable acc
+		if (APL_FAILURE == IV_Mod_ActEntNew(&l_pro_recacctent_struct_h,l_debug_info_ptr) )
+   		{
+     	 		fprintf(fl_userlog,"Could not insert the debit other services clt entries structure  into the accounting entries table \n");
+
+	      	APL_GOBACK_FAIL
+   		}
+		}
+
+		*p_runseq = *p_runseq + 1 ;//ISKB-430
+
+		Alert("\nAT THE END ISKB-430:h_sequence_num |%d|",(*p_runseq));
+	} 
+	
+
+   if (fabs(*dcredit_ind - *ccredit_ind) !=0)
+   {
+      l_pro_recacctent_struct_h.lcl_amount
+                  = l_pro_recacctent_struct_h.lcl_amount - (*dcredit_ind - *ccredit_ind);
+
+      *dcredit_ind = *dcredit_ind - (*dcredit_ind - *ccredit_ind);
+   }
+	
+	Alert("The *dcredit_ind is before insert is |%lf|\n",*dcredit_ind);
+	Alert("The *ccredit_ind is before insert is |%lf|\n",*ccredit_ind);
+
+	if ( fabs(*dcredit_ind - *ccredit_ind) > IV_MAX_DIFF ) 
+   {
+   	fprintf(fl_userlog,"Debit controls are not equal to Credit controls for the client %s \n",chr_p_client);
+		fprintf(fl_userlog, "Difference is %lf\n", fabs(*dcredit_ind - *ccredit_ind));
+    	APL_GOBACK_FAIL
+   }		
+
+	fprintf(APL_OUT_FILE,"The rec Batch Number is %s\n",l_pro_recacctent_struct_h.proc_num);
+	fprintf(APL_OUT_FILE,"The com Batch Number is %s\n",l_pro_comacctent_struct_h.proc_num);
+
+	
+	
+	if( l_taxCondExists )
+	{
+		strcpy(l_pro_recacctent_struct_h.deal_cd, "523");
+		strcpy(l_pro_comacctent_struct_h.deal_cd, "523");
+		strcpy(l_pro_recacctent_struct_h.description,l_pro_comacctent_struct_h.spl_clt_cd);
+		strcpy(l_pro_comacctent_struct_h.description,l_pro_comacctent_struct_h.spl_clt_cd);
+		//l_pro_recacctent_struct_h.fccy_amt 	= h_famountcus;
+		//l_pro_recacctent_struct_h.exchg_rt 	= l_ae_rate2;	
+		//l_pro_recacctent_struct_h.lcl_amount	= h_lamountcus;
+		
+		//shailesh 031007,ISKB430
+		//l_pro_recacctent_struct_h.report_clt		= dbl_h_repcus;
+		//l_pro_recacctent_struct_h.report_amt		= h_lamountcus;
+
+		EXEC SQL SELECT FIELD_VAL INTO :chr_l_spl_apacode FROM PRO_GSSPLVAL WHERE
+		MAIN_FUN='BILLING_ACC_ENTRIES' AND SUB_PROCESS='SPL_APA_CODE' AND NATION='TR' ;
+
+		IS_ANY_ORA_ERROR
+		strcpy(l_pro_comacctent_struct_h.spl_clt_cd,chr_l_spl_apacode);
+     	if (l_tr_apa_code)
+		{
+			strncpy(l_pro_comacctent_struct_h.spl_clt_cd,chr_l_default_glcode,7);
+         l_pro_comacctent_struct_h.spl_clt_cd[7]=APL_NULL_CHAR;
+		}
+		
+	}
+
+	
+	Alert("l_pro_recacctent_struct_h.lcl_amount:|%lf|",l_pro_recacctent_struct_h.lcl_amount);
+	//shailesh 110907
+	strcpy(l_pro_recacctent_struct_h.leg_ind,l_pro_seracctent_struct_h.inden_num);
+	Alert("\n_shailesh 110907 l_pro_recacctent_struct_h.leg_ind=[%s]\n",l_pro_recacctent_struct_h.leg_ind);
+	Alert("\n_shailesh 110907 l_pro_seracctent_struct_h.inden_num=[%s]\n",l_pro_seracctent_struct_h.inden_num);
+	
+	/*--shailesh 031007 ISKB430 multiple instead  of single
+	if ( l_pro_recacctent_struct_h.lcl_amount != 0 )
+	{
+		Alert("l_tr_apa_code:|%d|",l_tr_apa_code);
+     	if (l_tr_apa_code)
+		{
+			memset(l_pro_recacctent_struct_h.spl_clt_cd,APL_NULL_CHAR,9);
+			strncpy(l_pro_recacctent_struct_h.spl_clt_cd,chr_l_default_glcode,7);
+         l_pro_recacctent_struct_h.spl_clt_cd[7]=APL_NULL_CHAR;
+		}
+	Alert("Entering IV_Mod_ActEntNew Final :|%s|",l_pro_recacctent_struct_h.client);
+	if (APL_FAILURE == IV_Mod_ActEntNew(&l_pro_recacctent_struct_h,l_debug_info_ptr) )
+   {
+      fprintf(fl_userlog,"Could not insert the debit clt entries  \n");
+      APL_GOBACK_FAIL
+
+   }
+   }  shailesh multiple instead  of single  */
+	
+	Alert("l_pro_comacctent_struct_h.lcl_amount:|%lf|",l_pro_comacctent_struct_h.lcl_amount);
+	
+	if (l_pro_comacctent_struct_h.lcl_amount != 0 )
+	{
+		strncpy(l_pro_comacctent_struct_h.spl_clt_cd,chr_l_default_glcode,7);
+		l_pro_comacctent_struct_h.spl_clt_cd[7]=APL_NULL_CHAR;
+		if (APL_FAILURE == IV_Mod_ActEntNew(&l_pro_comacctent_struct_h,l_debug_info_ptr) )
+   	{
+      	fprintf(fl_userlog,"Could not insert the credit dbl_comm clt entries structure  into the accounting entries table \n");
+
+ 	     APL_GOBACK_FAIL
+
+ 	  }
+	}
+
+	APL_GOBACK_SUCCESS
+
+		
+
+	RETURN_SUCCESS:
+	APL_IF_DEBUG
+	{
+	
+		CO_ProcMonitor(APL_OUT_FILE,"Exiting out of BlAcPassNew() Successfully\n",NULL,NULL);
+	}
+	return (APL_SUCCESS);
+	
+	RETURN_FAILURE:
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Exiting out of BlAcPassNew() unsuccessfully\n",NULL,NULL);
+
+	}
+	return (APL_FAILURE);
+
+}
+
+/* Bageshri HB_IV_005 : To reset Billing Accounting Entries */
+
+int IV_AccResBill(char	**argv, FILE *fl_techlog, FILE *fl_userlog, int *int_p_retstat, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	char chr_h_batch_in_proc_progname[40] = APL_NULL_STRING;
+	char chr_h_batch_in_proc_startdate[APL_DATE_LEN]= APL_NULL_STRING;
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+	char chr_h_batch_in_proc_rowid[APL_ROWID_LEN];
+	char chr_h_restart_data[50] = APL_NULL_STRING;
+	char chr_h_batch_in_proc_status[15] = APL_NULL_STRING;
+
+	short int_i_batch_in_proc_rowid = 0;
+	short i_restart_info = 0;
+
+	EXEC SQL END DECLARE SECTION;
+
+	strcpy(chr_h_batch_in_proc_progname,argv[0]);
+	strcpy(chr_h_batch_in_proc_startdate,argv[2]);
+
+	
+	EXEC SQL SELECT ROWID,PROCESSING_STATUS
+	INTO  :chr_h_batch_in_proc_rowid:int_i_batch_in_proc_rowid,:chr_h_restart_data:i_restart_info 
+	FROM SYS_BATCHPROC
+	WHERE PROCESS_NAME   = :chr_h_batch_in_proc_progname  
+	AND STARTDATE		=  :chr_h_batch_in_proc_startdate
+	AND STATUS			= 'started' 
+	FOR UPDATE OF PROCESSING_STATUS, STATUS;
+
+
+	if (sqlca.sqlcode <0)
+	{
+		fprintf(fl_userlog,"Batch_in_proc table cannot be locked.PLease run acouting entries again\n");
+		fprintf(fl_techlog,"Batch_in_proc table cannot be locked.PLease run acouting entries again\n");
+		CO_InsertErr(l_debug_info_ptr,3,ltoa(sqlca.sqlcode),APL_NULL_STRING,APL_NULL_STRING,__LINE__,__FILE__);
+		APL_GOBACK_FAIL;
+	}
+
+	if (sqlca.sqlcode == 1403)
+	{
+		fprintf(fl_userlog,"Record with process_name %s ,start date %s and status ind as started not found in the batch table\n",argv[0],argv[2] );
+		fprintf(fl_techlog,"Record with process_name %s ,start date %s and status ind as started not found in the batch table\n",argv[0],argv[2] );
+		APL_GOBACK_FAIL;
+	}
+
+	EXEC SQL DELETE FROM PRO_ACCTENT WHERE MODULE_IND = 'B' AND STATUS = 'G';
+                IS_ANY_ORA_ERROR
+
+	fprintf(fl_techlog,"Deleted rows from table PRO_ACCTENT successfully\n");
+
+	EXEC SQL UPDATE SYS_IVCONTROLPARAM SET AE_IND = 'N';
+                IS_ANY_ORA_ERROR
+
+	fprintf(fl_techlog,"Updated table SYS_IVCONTROLPARAM successfully\n");
+
+	strcpy(chr_h_batch_in_proc_status,"completed");
+	i_restart_info = -1;
+
+	EXEC SQL UPDATE SYS_BATCHPROC
+	SET STATUS = :chr_h_batch_in_proc_status,
+	STAT_DET = 'Reset Completed',
+	PROCESSING_STATUS = ''
+	WHERE ROWID = :chr_h_batch_in_proc_rowid;
+
+	IS_ANY_ORA_ERROR
+
+	if (sqlca.sqlcode == 1403)
+	{
+		fprintf(fl_userlog,"Failed to Update in sys batch proc table because rowid could not be found \n");
+		fprintf(fl_techlog,"Failed to Update in sys batch proc table because rowid could not be found \n");
+		printf("no rowid int_found\n");
+		APL_GOBACK_FAIL;
+
+	}
+
+       *int_p_retstat = IV_SUCCESS;
+        APL_GOBACK_SUCCESS
+
+RETURN_SUCCESS:
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Exiting out of IV_AccResBill() successfully\n",NULL,NULL);
+	}
+
+        return (APL_SUCCESS);
+
+RETURN_FAILURE:
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Exiting out of IV_AccResBill() unsuccessfully\n",NULL,NULL);
+	}
+
+        return (APL_FAILURE);
+
+}

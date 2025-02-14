@@ -1,0 +1,607 @@
+
+/*
+ *    COPYRIGHT NOTICE
+ *
+ *   Copyright 2005 Polaris Software Lab Limited. All rights reserved.
+ *
+ *   These materials are confidential and proprietary to
+ *    Polaris Software Lab Limited and no part of these materials should
+ *    be reproduced, published, transmitted or distributed in any form or
+ *    by any means, electronic, mechanical, photocopying, recording or
+ *    otherwise, or stored in any information storage or retrieval system
+ *    of any nature nor should the materials be disclosed to third parties
+ *    or used in any other manner for which this is not authorized, without
+ *    the prior express written authorization of Polaris Software Lab Limited.
+*/
+/*********************************************************************
+ *
+ * Module Name         :      Operations
+ *
+ * File Name           :      EOD_HandOver.pc
+ *
+ * Description         :      This file contains the Automatiob for starting
+ *                            EOD or BOD Scheduler.
+ *
+ *            Version Control Block
+ *
+ * Date        Version     Author			 Description       RFS No.
+ * ---------   --------  ------------		-------------     ---------
+ * 02/08/2007   1.0       Yogesh Ranmale        New file       
+ *
+ *********************************************************************/
+
+#include <sys/wait.h>
+#include <errno.h>
+#include <signal.h>
+#include <sys/types.h>
+#include "stdio_64.h" 
+#include "Intellect_Common.h"
+#include "BT_Common.h"
+
+
+EXEC SQL INCLUDE SQLCA;
+
+DEBUG_INFO_STRUCT_H 		**l_debug_info_ptr ;
+DEBUG_INFO_STRUCT_H         *l_debug_info_struct_h_tmp=NULL;
+
+char  chr_g_log_buffer[100] = APL_NULL_STRING;
+FILE *g_flogfile = NULL;
+
+main(int argc,char **argv)
+{
+
+	int chk_failure = 0;	
+	char chr_p_hdate[APL_DATE_LEN] =  APL_NULL_STRING;
+	char chr_p_ind[2] =  APL_NULL_STRING;
+	char chr_p_huser[25] =  APL_NULL_STRING;
+	char chr_p_access_stamp[APL_DATE_LEN] =  APL_NULL_STRING;
+	char chr_uname[APL_USERID_LEN] = APL_NULL_STRING;
+	char chr_custody_id_b[APL_USERID_LEN] = APL_NULL_STRING;
+	char chr_passwd[APL_PASSWD_LEN] = APL_NULL_STRING;
+	char chr_l_inifile[PATH_LENGTH] = APL_NULL_STRING;
+
+	short int_ret_val	=	0;
+
+ 	EXEC SQL BEGIN DECLARE SECTION;	
+	EXEC SQL VAR chr_uname IS STRING;
+	EXEC SQL VAR chr_custody_id_b IS STRING;
+	EXEC SQL VAR chr_passwd IS STRING;
+
+	EXEC SQL END DECLARE SECTION;
+	
+	fflush(stdout);
+
+	l_debug_info_ptr = (DEBUG_INFO_STRUCT_H **)calloc(1,sizeof(DEBUG_INFO_STRUCT_H *));
+
+
+	memset(chr_p_hdate,APL_NULL_CHAR,sizeof(chr_p_hdate));
+	memset(chr_p_ind,APL_NULL_CHAR,sizeof(chr_p_ind));
+	memset(chr_p_huser,APL_NULL_CHAR,sizeof(chr_p_huser));
+	memset(chr_p_access_stamp,APL_NULL_CHAR,sizeof(chr_p_access_stamp));
+
+	strcpy(chr_p_huser,argv[3]);
+	strcpy(chr_p_access_stamp,argv[2]);
+	strcpy(chr_p_hdate,argv[2]);
+	strcpy(chr_p_ind,argv[9]);
+	
+	Alert("chr_p_ind = |%s|\n" , chr_p_ind);
+	Alert("chr_p_access_stamp = |%s|\n" , chr_p_access_stamp);
+	Alert("chr_p_huser = |%s|\n" , chr_p_huser);
+	Alert("chr_p_hdate = |%s|\n" , chr_p_hdate);
+
+	   if(CO_Get_DBConnect(l_debug_info_ptr) == APL_FAILURE)
+	   {
+			Alert("Fail to connect Database ....\n");	
+			APL_GOBACK_FAIL
+	   }	
+/* Chirag to generate Log file 090807 */
+
+	if ( CO_Rtv_RptFileName("SO",
+            "User Log",
+            100,
+            argv[5],
+            argv,
+            &g_flogfile,
+            l_debug_info_ptr) == APL_FAILURE)
+   {
+      CO_ProcMonitor(g_flogfile,"EOD Handover:Failed To Create Log File",NULL,NULL);
+      APL_GOBACK_FAIL
+   }
+   sleep(1);
+
+	APL_FUNCTION_ENTER(g_flogfile)
+
+					 EXEC SQL COMMIT;	/* Bageshri 19/11/2008 - HDFC Issue Log 428 - process gives success at the end of log file even in case of failure */
+
+	if(BT_Status_Lock( argv[0],
+                     argv[1],
+                     argv[2],
+                     l_debug_info_ptr) == APL_FAILURE)
+   {
+      APL_GOBACK_FAIL
+   }
+/* Commented by Chirag 
+	Alert("\n Before Calling BT_Status_Update Function \n");
+	if(BT_Status_Update(argv[0],
+					argv[1],
+					argv[2],
+					APL_STARTED_STATUS,
+					l_debug_info_ptr) ==APL_FAILURE)
+	{
+		APL_GOBACK_FAIL
+	}
+*/
+	Alert("Before Calling Eod_HandOver Function \n");
+
+	if(strcmp(chr_p_ind,"R")==0)
+	{
+			chk_failure = Eod_HandOverRst(chr_p_hdate,chr_p_ind,chr_p_huser,chr_p_access_stamp,l_debug_info_ptr);
+
+			if (APL_FAILURE == chk_failure)
+			{
+								/* Bageshri 19/11/2008 - START - HDFC Issue Log 428 - process gives success at the end of log file even in case of failure */
+								CO_ProcMonitor(g_flogfile, "Eod Hand Over Reset Returned Failure.....\n",NULL,NULL);
+								EXEC SQL ROLLBACK;
+								IS_ANY_ORA_ERROR
+										  APL_GOBACK_FAIL
+										  /* Bageshri 19/11/2008 - END - HDFC Issue Log 428 - process gives success at the end of log file even in case of failure */
+
+			}
+			else
+			{
+								CO_ProcMonitor(g_flogfile, "Eod Hand Over Reset Returned successfully .....\n",NULL,NULL);	/* Bageshri 19/11/2008 - HDFC Issue Log 428 - process gives success at the end of log file even in case of failure */
+			}
+
+	}
+
+	else
+	{
+	chk_failure = Eod_HandOver(chr_p_hdate,chr_p_ind,chr_p_huser,chr_p_access_stamp,l_debug_info_ptr);
+
+	if (APL_FAILURE == chk_failure)
+	{
+								/* Bageshri 19/11/2008 - START - HDFC Issue Log 428 - process gives success at the end of log file even in case of failure */
+								CO_ProcMonitor(g_flogfile, "Eod Hand Over Returned Failure.....\n",NULL,NULL);
+								EXEC SQL ROLLBACK;
+								IS_ANY_ORA_ERROR
+										  APL_GOBACK_FAIL
+										  /* Bageshri 19/11/2008 - END - HDFC Issue Log 428 - process gives success at the end of log file even in case of failure */
+	}
+	else
+	{
+								CO_ProcMonitor(g_flogfile, "Eod Hand Over Returned successfully .....\n",NULL,NULL);	/* Bageshri 19/11/2008 - HDFC Issue Log 428 - process gives success at the end of log file even in case of failure */
+	}
+	}
+
+   CO_ProcMonitor(g_flogfile,"Finished Processing\n",NULL,NULL);
+
+
+
+		  APL_GOBACK_SUCCESS
+
+RETURN_SUCCESS:
+			{
+
+					/* Bageshri 19/11/2008 - START - HDFC Issue Log 428 - process gives success at the end of log file even in case of failure */
+	if(BT_Status_Completed(argv[0],
+									argv[1],
+									argv[2],
+									l_debug_info_ptr)   ==  APL_FAILURE )
+	{
+			  APL_GOBACK_FAIL
+	}
+
+
+						 EXEC SQL COMMIT WORK;
+					/* Bageshri 19/11/2008 - END - HDFC Issue Log 428 - process gives success at the end of log file even in case of failure */
+						 if(sqlca.sqlcode != 0)
+								APL_GOBACK_FAIL
+					CO_ProcMonitor(g_flogfile, "Exiting Eod Hand Over process with SUCCESS !!! \n",NULL,NULL);	/* Bageshri 19/11/2008 - HDFC Issue Log 428 - process gives success at the end of log file even in case of failure */
+						 fclose(g_flogfile);
+						 exit(0);
+			  }
+	
+				RETURN_FAILURE:
+				{
+
+					 /* Bageshri 19/11/2008 - START - HDFC Issue Log 428 - process gives success at the end of log file even in case of failure */
+					 if(BT_Status_Completed(argv[0],
+													 argv[1],
+													 argv[2],
+													 l_debug_info_ptr)   ==  APL_FAILURE )
+					 {
+								CO_ProcMonitor(g_flogfile,"Failed while updating table sys_batchproc\n",NULL,NULL);	
+					 }
+
+					 EXEC SQL COMMIT WORK;
+					 CO_ProcMonitor(g_flogfile,"Finished Processing unsuccessfully \n",NULL,NULL);
+
+					 CO_ProcMonitor(g_flogfile, "Exiting Eod Hand Over process with FAILURE !!! \n",NULL,NULL);
+					 /* Bageshri 19/11/2008 - END - HDFC Issue Log 428 - process gives success at the end of log file even in case of failure */
+
+						  fclose(g_flogfile);
+						  exit(-1);
+				}
+
+}
+		 
+
+int   Eod_HandOver(char *chr_p_hdate, 
+			char *chr_p_ind,
+			char *chr_p_huser,
+			char *chr_p_access_stamp,
+			DEBUG_INFO_STRUCT_H      **l_debug_info_ptr)
+{
+        
+		 Alert("Inside Eod_HandOver Function \n");
+		 int l_counter=0;
+		 int l_counter1=0;
+
+		 /* Change status of aborted and started process */
+		 char  chr_l_rowid_A[APL_ROWID_LEN] = APL_NULL_STRING;
+		 char  chr_h_process_nm[101] = APL_NULL_STRING;
+		 char  chr_h_process_dt[APL_DATE_LEN] = APL_NULL_STRING;
+		 int   int_h_process_id =0;
+		 short i_process_id =0;
+		 short i_process_nm =0;
+		 short i_process_dt =0;
+		 /* Change status of aborted and started process - End */
+		 /* Retro from ISHB_9902 to ISKB_9987 added by shruthi kumbla to check exes running having no entries in sys_batchproc start*/
+		 int int_process_stat=0;
+		 int size=0;
+		 FILE *pid=NULL;
+		 FILE *pname=NULL;
+		 FILE *cntryprefix=NULL;
+		 FILE *pexe=NULL;
+		 char *userid=getenv("USER");
+		 char *cmd=(char*)calloc(1,200);
+		 char *cmd_pname=(char*)calloc(1,500);
+		 char *cmd_cprefix=(char*)calloc(1,200);
+		 char *cmd_exe=(char*)calloc(1,200);
+		 char line_pid[500] = APL_NULL_STRING;
+		 char line_pname[500] = APL_NULL_STRING;
+		 char line_cprefix[500] = APL_NULL_STRING;
+		 char line_pexe[500] = APL_NULL_STRING;
+		 char p_name[500] = APL_NULL_STRING;
+		 char c_prefix[50] = APL_NULL_STRING;
+		 char cntry_prefix[10] = APL_NULL_STRING;
+		 char p_exe[50] = APL_NULL_STRING;
+		 int p_id=0;
+		
+		
+		
+		
+		if(userid==NULL) return EXIT_FAILURE;//fetching user id
+			Alert("User id is %s\n",userid);
+		/* Retro from ISHB_9902 to ISKB_9987 added by shruthi kumbla to check exes running having no entries in sys_batchproc end*/
+		
+	     Alert("Hand Over Date is  = |%s|\n" , chr_p_hdate);
+
+	   	EXEC SQL SELECT COUNT(*) INTO :l_counter 
+					FROM PRO_SYS_HANDOVER
+					WHERE TRUNC(HAND_OVER_DATE) = SUBSTR(:chr_p_hdate,0,10)
+					AND HAND_OVER_IND = 'E';
+
+		 Alert("l_counter of PRO_SYS_HANDOVER Table is : |%d| \n",l_counter);
+
+		 if(sqlca.sqlcode != 0)
+		 {
+					Alert("Error Fetching Data from HAND_OVER_IND : |%d| \n",sqlca.sqlcode);
+		 }
+
+		 IS_ANY_ORA_ERROR
+
+	    if(l_counter>0)
+		 {
+					Alert("\n System Already Handed Over to DC Users.. Please Contact Data Centre!\n" );
+					CO_ProcMonitor(g_flogfile,"System Already Handed Over for EOD...\n",NULL,NULL);
+					APL_GOBACK_FAIL
+		 }
+
+
+		/* Change status of aborted and started process */
+		EXEC SQL DECLARE ChkAbortCur
+		CURSOR  FOR
+			SELECT rowid,PROC_ID,PROCESS_NAME,STARTDATE
+			FROM SYS_BATCHPROC
+			WHERE (STATUS='started') AND
+			PROCESS_NAME NOT LIKE 'EOD_Handover';
+			//Commented for  ISKB_6221-Start
+			//AND (PROC_ENDFLG <> 'Y') ;
+			//Commented for  ISKB_6221-End
+
+		IS_ANY_ORA_ERROR
+
+		printf("\n sqlca.sqlcode is [%d] and no.of records fetched is [%d] and Error msg is [%s]",sqlca.sqlcode,sqlca.sqlerrd[2],sqlca.sqlerrm.sqlerrmc);
+
+		EXEC SQL OPEN ChkAbortCur;
+		IS_ANY_ORA_ERROR
+
+							
+		for(;;)
+		{
+			strcpy(chr_l_rowid_A,APL_NULL_STRING);
+			int_h_process_id = 0;
+			i_process_id = 0;
+
+
+			EXEC SQL FETCH ChkAbortCur
+			INTO :chr_l_rowid_A,
+					:int_h_process_id:i_process_id,
+					:chr_h_process_nm:i_process_nm,
+					:chr_h_process_dt:i_process_dt;
+			
+			IS_ANY_ORA_ERROR_CURSOR
+
+			printf("\n Yog -- Process Id = |%d|\n",int_h_process_id);
+
+			if ( i_process_id == -1 )
+			{
+				continue;
+			}
+
+			/*	Kill process is used with sig 0 to perform error check	Rohit	*/
+			if (kill(int_h_process_id,0) < 0)
+			{
+				printf("\n Yog -- Inside check process if Part \n");
+
+				EXEC SQL UPDATE SYS_BATCHPROC
+				SET STATUS='completed'
+				WHERE rowid=:chr_l_rowid_A;
+
+				IS_ANY_ORA_ERROR
+
+				fprintf(g_flogfile,"Process Id %d Name %s on Date %s is marked as completed\n",int_h_process_id,chr_h_process_nm,chr_h_process_dt);
+			}
+			else
+			{
+				fprintf(g_flogfile,"Process Id %d Name %s on Date %s is still running\n",int_h_process_id,chr_h_process_nm,chr_h_process_dt);
+			}
+
+		}
+		/* Change status of aborted and started process - End */
+
+		/* Retro from ISHB_9902 to ISKB_9987 added by shruthi kumbla to check exes running having no entries in sys_batchproc start*/
+			
+		strcpy(cmd_cprefix,"grep 'country_prefix='  $INTL_ROOT_PATH/users/admin.ksh");//fetching country prefix
+		cntryprefix=popen(cmd_cprefix, "r");
+	        while (fgets(line_cprefix, sizeof(line_cprefix), cntryprefix) != 0) {
+		if (sscanf(line_cprefix, "%s", &c_prefix) == 1) {
+		
+			//EXEC SQL SELECT SUBSTR(TRIM(:c_prefix),-9,8) into :cntry_prefix  FROM DUAL;//removing country_prefix=
+		EXEC SQL SELECT SUBSTR(TRIM(:c_prefix) ,INSTR(TRIM(:c_prefix),'"',1,1)) into :cntry_prefix FROM DUAL;
+			printf("country prefix: %s\n", cntry_prefix);//fetching country prefix		
+			}
+		}
+				 
+		 
+		sprintf(cmd,"ps -fu  %s | grep -v %s | grep -v EOD_Handover |grep -v java | grep -v sh | grep -v ps |  grep -v awk  | grep -v ps  | grep -v vi  | grep -v grep | grep -v defunct | grep -v tail |  awk '{print $2}'",userid,cntry_prefix);//fetching running process ids excluding handover java and commands process ids
+		printf("cmd is %s\n",cmd);
+				
+		pid=popen(cmd, "r");
+		   if (pid) {
+		
+		while (fgets(line_pid, sizeof line_pid, pid)) {
+		
+			if (sscanf(line_pid, "%d", &p_id) == 1) {
+			    
+			  
+				printf("currently running process id is %d\n", p_id);
+			    
+				sprintf(cmd_pname," ps -p %d -o comm= ",p_id);//command to fetch process name from process id
+				printf("cmd_pname is %s\n",cmd_pname);
+				
+				pname =popen(cmd_pname,"r");
+			      while (fgets(line_pname, sizeof(line_pname), pname) != 0) {
+				if (sscanf(line_pname, "%s", &p_name) == 1) 
+				{
+				
+				 printf("Running process name for pid %d is : %s\n",p_id, p_name);
+				 
+				 if(strlen(p_name) > 0){
+				 
+					sprintf(cmd_exe,"ls %s  ",p_name);//to check if process name is an exe 
+					printf("cmd_exe is %s\n",cmd_exe);
+					pexe =popen(cmd_exe,"r");
+					while (fgets(line_pexe, sizeof(line_pexe), pexe) != 0) {
+						if (sscanf(line_pexe, "%s", &p_exe) == 1) 
+						{
+							printf("The process of  %s exe is still running \n", p_exe);
+							
+							
+							
+							if(strstr(p_exe,"directory"))
+							{
+								printf("Exe of the name %s does not exists\n", p_name);
+							}
+							else 
+							{
+								Alert("\n Exe %s having process id %d still running !\n",p_name,p_id);
+								  
+								  fprintf(g_flogfile,"Exe %s having process id %d still running !! \n You are not allowed to proceed for EOD Hand Over...\n",p_name,p_id);
+								  fprintf(g_flogfile,"Kill this process to proceed...Contact Support \n");
+								  
+								  APL_GOBACK_FAIL
+							}
+				
+						}
+				
+					}
+					pclose(pexe);
+				}
+					
+				 
+					 
+			}
+		}
+		pclose(pname);
+			  
+		}
+		}
+		pclose(pid);
+	}			
+		/* ISHB_9902 added by shruthi kumbla to check exes running having no entries in sys_batchproc end*/
+		
+		  EXEC SQL SELECT COUNT(*) INTO :l_counter1
+					 FROM SYS_BATCHPROC
+					 WHERE TO_CHAR(STARTDATE,'DD/MM/YYYY')=SUBSTR(:chr_p_hdate,0,10)
+					 AND (PROCESS_NAME NOT LIKE '%MS_ISOFormatter'    
+										  AND PROCESS_NAME NOT LIKE '%MS_Transmitter'
+										  AND PROCESS_NAME NOT LIKE '%MS_EmailTransmitter'
+										  AND PROCESS_NAME NOT LIKE '%MS_MessageMover'
+										  AND PROCESS_NAME NOT LIKE 'EOD_Handover')
+					 AND STATUS='started' ;
+
+		 Alert("Processes in 'started' status from SYS_BATCHPROC Table is : |%d| \n",l_counter1);
+
+		 if(sqlca.sqlcode != 0)
+		 {
+					Alert("Error Fetching Data from SYS_BATCHPROC : |%d| \n",sqlca.sqlcode);
+		 }
+
+       IS_ANY_ORA_ERROR
+
+					if(l_counter1>0)
+					{
+							Alert("\n Some Batch Processes are still Running\n" );
+							
+							CO_ProcMonitor(g_flogfile,"Some user processes are still running...\n",NULL,NULL);
+								/* Bageshri 19/11/2008 - START - HDFC Issue Log 428 - process gives success at the end of log file even in case of failure */
+								CO_ProcMonitor(g_flogfile,"You are not allowed to proceed for EOD Hand Over...\n",NULL,NULL);
+								CO_ProcMonitor(g_flogfile,"Try EOD Hand Over after some time...Contact Support \n",NULL,NULL);
+								/* Bageshri 19/11/2008 - END - HDFC Issue Log 428 - process gives success at the end of log file even in case of failure */
+							APL_GOBACK_FAIL
+					}
+					else
+					{	
+							  Alert("\n Before Updateing in to PRO_SYS_HANDOVER Table!\n" );
+							  Alert("chr_p_hdate = |%s|\n" , chr_p_hdate);
+							  Alert("chr_p_huser = |%s|\n" , chr_p_huser);
+							  Alert("chr_p_ind = |%s|\n" , chr_p_ind);
+							  Alert("chr_p_access_stamp = |%s|\n" , chr_p_access_stamp);
+
+
+							  EXEC SQL UPDATE PRO_SYS_HANDOVER
+										 SET HAND_OVER_IND = 'E',
+											  HAND_OVER_USER = :chr_p_huser,
+											  ACCESS_STAMP = :chr_p_access_stamp
+											 WHERE TO_CHAR(HAND_OVER_DATE,'DD/MM/YYYY')=substr(:chr_p_hdate,0,10)
+												AND HAND_OVER_IND = 'O';
+
+
+							  Alert("\n HAND_OVER_IND|%d| \n",sqlca.sqlcode);
+
+							  if(sqlca.sqlcode != 0)
+							  {
+									 Alert("\n Error While Updateing PRO_SYS_HANDOVER table : |%d| \n",sqlca.sqlcode);
+									 APL_GOBACK_FAIL
+							  }
+
+							  IS_ANY_ORA_ERROR
+
+					}
+		APL_GOBACK_SUCCESS
+
+	
+
+
+	 RETURN_SUCCESS:
+	 {
+		    Alert("\n Existing Successfully from Eod_HandOver !!! \n");
+			return(APL_SUCCESS);
+		    
+	 }
+	
+	 RETURN_FAILURE:
+	 {
+		  Alert("\n Existing UnSuccessfully from Eod_HandOver !!! \n");
+		  return(APL_FAILURE);
+	 }		 
+}
+
+
+
+int   Eod_HandOverRst(char *chr_p_hdate, 
+			char *chr_p_ind,
+			char *chr_p_huser,
+			char *chr_p_access_stamp,
+			DEBUG_INFO_STRUCT_H      **l_debug_info_ptr)
+{
+        
+		 Alert("Inside Eod_HandOver Reset Function \n");
+		 int l_counter=0;
+		 		
+	     Alert("Hand Over Date is  = |%s|\n" , chr_p_hdate);
+
+	   	EXEC SQL SELECT COUNT(*) INTO :l_counter 
+					FROM PRO_SYS_DATE
+						 WHERE EOD_IND = 'O';
+						 /*TRUNC(HAND_OVER_DATE) = SUBSTR(:chr_p_hdate,0,10)
+						 AND */
+
+		 Alert("l_counter of PRO_SYS_Date Table is : |%d| \n",l_counter);
+
+		 if(sqlca.sqlcode != 0)
+		 {
+					Alert("Error Fetching Data from PRO_SYS_DATE : |%d| \n",sqlca.sqlcode);
+		 }
+
+		 IS_ANY_ORA_ERROR
+
+	    if(l_counter>0)
+		 {
+					
+				Alert("\n Before Updateing in to PRO_SYS_HANDOVER Table!\n" );
+				Alert("chr_p_hdate = |%s|\n" , chr_p_hdate);
+				Alert("chr_p_huser = |%s|\n" , chr_p_huser);
+				Alert("chr_p_ind = |%s|\n" , chr_p_ind);
+				Alert("chr_p_access_stamp = |%s|\n" , chr_p_access_stamp);					
+
+				EXEC SQL UPDATE PRO_SYS_HANDOVER
+								SET HAND_OVER_IND = 'O',
+								HAND_OVER_USER = :chr_p_huser,
+								ACCESS_STAMP = :chr_p_access_stamp
+								WHERE TO_CHAR(HAND_OVER_DATE,'DD/MM/YYYY')=substr(:chr_p_hdate,0,10)
+								AND HAND_OVER_IND = 'E';
+
+				printf("\n HAND_OVER_IND|%d| \n",sqlca.sqlcode);
+
+				if(sqlca.sqlcode != 0)
+				{
+						 Alert("\n Error While Updateing PRO_SYS_HANDOVER table : |%d| \n",sqlca.sqlcode);
+						 APL_GOBACK_FAIL
+				}
+
+				IS_ANY_ORA_ERROR
+
+				CO_ProcMonitor(g_flogfile,"EOD Hand Over Reset Done...\n",NULL,NULL);
+				printf("\nAfter Commit\n");
+
+			APL_GOBACK_SUCCESS
+
+		 }
+		 
+
+		else
+		{		
+				Alert("\n Eod/Bod is already Started\n" );
+				CO_ProcMonitor(g_flogfile,"Eod/Bod is already Started \n",NULL,NULL);
+								CO_ProcMonitor(g_flogfile,"You are not allowed to proceed for EOD Hand Over Reset...\n",NULL,NULL);	/* Bageshri 19/11/2008 - HDFC Issue Log 428 - process gives success at the end of log file even in case of failure */	
+				APL_GOBACK_FAIL
+		}
+		
+
+
+	 RETURN_SUCCESS:
+	 {
+		    Alert("\n Existing Successfully from Eod_HandOver !!! \n");
+			return(APL_SUCCESS);
+		    
+	 }
+	
+	 RETURN_FAILURE:
+	 {
+		  Alert("\n Existing UnSuccessfully from Eod_HandOver !!! \n");
+		  return(APL_FAILURE);
+	 }		 
+}

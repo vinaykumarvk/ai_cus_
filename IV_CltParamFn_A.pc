@@ -1,0 +1,1065 @@
+
+
+
+
+
+#include "stdio_64.h"
+#include <string.h>  
+#include <stdlib.h>  
+#include "IV_Control_A.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+
+
+int IV_ChkUpdBICcy(const char *p_client, int *int_p_retstat, 
+		   DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	
+
+	extern int IV_Rtv_IVCUSTSETUP(char *chr_l_client, 
+				     IV_CLIENTSETUP_STRUCT *l_iv_cltsetup_struct, 
+				     int *int_l_retstat, 
+				     DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+	extern int IV_Rtv_Bill_FrmGendt_DlvDt(DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+	extern int IV_Chk_IVPymtExtUnauthPymt(const char *chr_l_client, 
+						   int *int_l_status, 
+						   DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+	extern int IV_Chk_IVOTHERSERVIsExistOthSrv(const char *chr_l_client, 
+						  int *int_l_status, 
+						  DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+	
+
+	int int_l_status = 0;
+	IV_CLIENTSETUP_STRUCT l_iv_cltsetup_struct;
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+		struct sqlca sqlca;
+
+	EXEC SQL END DECLARE SECTION;
+
+	#ifdef APL_THREADS
+		APL_SET_CONTEXT
+		EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	if ( APL_SUCCESS == IV_Rtv_Bill_FrmGendt_DlvDt(l_debug_info_ptr) )
+	{
+		*int_p_retstat = IV_SUCCESS;
+
+		CO_InsertErr(l_debug_info_ptr, ERR_BILL_BTWGENDELV_CANTCHG_CCY, 
+			       APL_NULL_STRING, APL_NULL_STRING, 
+			       APL_NULL_STRING, __LINE__, __FILE__);
+
+		APL_GOBACK_FAIL
+	}
+	else if ( APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr) )
+	{
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+		APL_GOBACK_FAIL
+	}
+
+	int_l_status = 0; 
+
+	if ( APL_FAILURE == IV_Rtv_IVCUSTSETUP((char *)p_client, &l_iv_cltsetup_struct, 
+					      &int_l_status, l_debug_info_ptr) )//Changes done for AIX Migration
+	{
+		if ( int_l_status == IV_NO_DATA_FOUND_ERR )
+		{
+			CO_InsertErr(l_debug_info_ptr, ERR_BILLPARAM_NOTFND, 
+				       APL_NULL_STRING, APL_NULL_STRING, 
+				       APL_NULL_STRING, __LINE__, __FILE__);
+		}
+
+		if ( int_l_status != IV_COLUMN_NULL_ERR )
+		{
+			*int_p_retstat = int_l_status;
+
+			APL_GOBACK_FAIL
+		}
+	}
+
+	if ( l_iv_cltsetup_struct.total_osamount ) 
+	{
+		*int_p_retstat = IV_SUCCESS;
+
+		CO_InsertErr(l_debug_info_ptr, ERR_BILL_CANT_MODIFY_CCY, 
+			       "Outstanding Amount Exists", APL_NULL_STRING, 
+			       APL_NULL_STRING, __LINE__, __FILE__);
+
+		APL_GOBACK_FAIL
+	}
+
+	int_l_status = 0; 
+
+	if ( APL_SUCCESS == 
+			IV_Chk_IVPymtExtUnauthPymt(p_client, &int_l_status, 
+							l_debug_info_ptr) )
+	{
+		CO_InsertErr(l_debug_info_ptr, ERR_BILL_CANT_MODIFY_CCY, 
+			       "Unauthorised Payment(s) exist", 
+			       APL_NULL_STRING, APL_NULL_STRING, 
+			       __LINE__, __FILE__);
+
+		*int_p_retstat = int_l_status;
+
+		APL_GOBACK_FAIL
+	}
+	else if ( int_l_status == IV_CRITCAL_ERROR_IND )
+	{
+		*int_p_retstat = int_l_status;
+
+		APL_GOBACK_FAIL
+	}
+
+	int_l_status = 0; 
+
+	if ( APL_SUCCESS == 
+			IV_Chk_IVOTHERSERVIsExistOthSrv(p_client, &int_l_status, 
+						       l_debug_info_ptr) )
+	{
+		*int_p_retstat = IV_SUCCESS;
+
+		CO_InsertErr(l_debug_info_ptr, ERR_BILL_CANT_MODIFY_CCY, 
+			       "Other Service(s) exist", APL_NULL_STRING, 
+			       APL_NULL_STRING, __LINE__, __FILE__);
+
+		APL_GOBACK_FAIL
+	}
+	else if ( int_l_status == IV_CRITCAL_ERROR_IND )
+	{
+		*int_p_retstat = int_l_status;
+
+		APL_GOBACK_FAIL
+	}
+
+	*int_p_retstat = IV_SUCCESS;
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of \
+IV_ChkUpdBICcy().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_SUCCESS;
+
+	RETURN_FAILURE:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of\
+ IV_ChkUpdBICcy().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_FAILURE;
+}
+
+
+
+int IV_ChkCanDelAccount(const char *p_client, int *int_p_retstat, 
+		    DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	
+
+	extern int IV_IsFeeStructExist(const char *chr_l_client, int *int_l_status, 
+				      DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+	extern int IV_Rtv_MastAcc(const char *chr_l_client, char *chr_l_mst_acc, 
+				  int *int_l_retstat, DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+	extern int IV_Rtv_Bill_FrmGendt_DlvDt(DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+	extern int IV_Chk_IVPymtExtUnauthPymt(const char *chr_l_client, 
+						   int *int_l_retstat, 
+						   DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+	extern int IV_Rtv_IVCUSTSETUP(char *chr_l_client, 
+				     IV_CLIENTSETUP_STRUCT *l_iv_cltsetup_struct, 
+				     int *int_l_retstat, 
+				     DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+	extern int IV_ChkBISndMstExist(const char *chr_l_client, int *int_l_retstat, 
+				     DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+	extern int IV_Chk_IVOTHERSERVIsExistOthSrv(const char *chr_l_client, 
+						  int *int_l_retstat, 
+						  DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+	extern int IV_Chk_IVPymtExtActEnt(const char *chr_l_client, 
+						 int *int_l_retstat, 
+						 DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+	
+
+	char chr_l_mst_acc[APL_CLIENT_LENGTH];
+	int int_l_status = 0;
+	IV_CLIENTSETUP_STRUCT l_iv_cltsetup_struct;
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+		struct sqlca sqlca;
+
+	EXEC SQL END DECLARE SECTION;
+
+	#ifdef APL_THREADS
+		APL_SET_CONTEXT
+		EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	int_l_status = 0; 
+
+	if ( APL_SUCCESS == 
+			IV_IsFeeStructExist(p_client, &int_l_status, l_debug_info_ptr) )
+	{
+		*int_p_retstat = IV_SUCCESS;
+
+		CO_InsertErr(l_debug_info_ptr, ERR_FEES_EXIST_CANTDEL_ACC, 
+			       APL_NULL_STRING, APL_NULL_STRING, 
+			       APL_NULL_STRING, __LINE__, __FILE__);
+
+		APL_GOBACK_FAIL
+	}
+	else if ( int_l_status != IV_NO_DATA_FOUND_ERR )
+	{
+		*int_p_retstat = int_l_status;
+
+		APL_GOBACK_FAIL
+	}
+
+	if ( APL_SUCCESS == IV_Rtv_Bill_FrmGendt_DlvDt(l_debug_info_ptr) )
+	{
+		*int_p_retstat = IV_SUCCESS;
+
+		CO_InsertErr(l_debug_info_ptr, ERR_ACCOUNT_BTWN_GEN_AND_DELV_CANT_DEL, APL_NULL_STRING, 
+			       APL_NULL_STRING, APL_NULL_STRING, 
+			       __LINE__, __FILE__);
+
+		APL_GOBACK_FAIL
+	}
+	else if ( APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr) )
+	{
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+		APL_GOBACK_FAIL
+	}
+
+	int_l_status = 0; 
+
+	if ( APL_SUCCESS == IV_Chk_IVPymtExtUnauthPymt(p_client, 
+						&int_l_status, l_debug_info_ptr) )
+	{
+		*int_p_retstat = IV_SUCCESS;
+
+		CO_InsertErr(l_debug_info_ptr, ERR_UNAUTH_PAYM_CLI_NDEL, 
+			       APL_NULL_STRING, APL_NULL_STRING,
+			       APL_NULL_STRING, __LINE__, __FILE__);
+
+		APL_GOBACK_FAIL
+	}
+	else if ( int_l_status == IV_CRITCAL_ERROR_IND )
+	{
+		*int_p_retstat = int_l_status;
+
+		APL_GOBACK_FAIL
+	}
+
+	int_l_status = 0; 
+
+	if ( APL_SUCCESS == IV_Chk_IVOTHERSERVIsExistOthSrv(p_client, &int_l_status,
+							   l_debug_info_ptr) )
+	{
+		*int_p_retstat = IV_SUCCESS;
+
+		CO_InsertErr(l_debug_info_ptr, ERR_OTHRSERV_NOTBILLED_CANT_DELACC, 
+			       APL_NULL_STRING, APL_NULL_STRING, 
+			       APL_NULL_STRING, __LINE__, __FILE__);
+
+		APL_GOBACK_FAIL
+	}
+	else if ( int_l_status == IV_CRITCAL_ERROR_IND )
+	{
+		*int_p_retstat = int_l_status;
+
+		APL_GOBACK_FAIL
+	}
+
+	int_l_status = 0; 
+
+	if ( APL_FAILURE == IV_Rtv_IVCUSTSETUP((char *)p_client, &l_iv_cltsetup_struct, 
+					      &int_l_status, l_debug_info_ptr) )//Changes done for AIX Migration
+	{
+		if ( int_l_status == IV_CRITCAL_ERROR_IND )
+		{
+			*int_p_retstat = int_l_status;
+
+			APL_GOBACK_FAIL
+		}
+		else if ( int_l_status == IV_NO_DATA_FOUND_ERR )
+		{
+			*int_p_retstat = int_l_status;
+
+			CO_InsertErr(l_debug_info_ptr, ERR_BILLPARAM_NOTFND, 
+				       APL_NULL_STRING, APL_NULL_STRING, 
+				       APL_NULL_STRING, __LINE__, __FILE__);
+
+			APL_GOBACK_FAIL
+		}
+	}
+
+	if ( l_iv_cltsetup_struct.total_osamount )
+	{
+		*int_p_retstat = IV_SUCCESS;
+
+		CO_InsertErr(l_debug_info_ptr, ERR_OSAMT_EXIST_CANT_DELACC, 
+			       APL_NULL_STRING, APL_NULL_STRING, 
+			       APL_NULL_STRING, __LINE__, __FILE__);
+
+		APL_GOBACK_FAIL
+	}
+
+	int_l_status = 0; 
+
+	if ( APL_FAILURE == IV_Rtv_MastAcc(p_client, chr_l_mst_acc, &int_l_status, 
+					  l_debug_info_ptr) )
+	{
+		*int_p_retstat = int_l_status;
+
+		APL_GOBACK_FAIL
+	}
+	else
+	{
+		int_l_status = 0; 
+
+		if ( APL_SUCCESS == IV_ChkBISndMstExist(p_client, &int_l_status, 
+						      l_debug_info_ptr) )
+		{
+			*int_p_retstat = IV_SUCCESS;
+
+			CO_InsertErr(l_debug_info_ptr, ERR_BILLTOMAST_EXISTS_CANT_DELACC, 
+				       APL_NULL_STRING, APL_NULL_STRING, 
+				       APL_NULL_STRING, __LINE__, __FILE__);
+
+			APL_GOBACK_FAIL
+		}
+		else if ( int_l_status == IV_CRITCAL_ERROR_IND )
+		{
+			*int_p_retstat = int_l_status;
+
+			APL_GOBACK_FAIL
+		}
+	}
+
+	
+
+	int_l_status = 0;
+
+	if ( APL_SUCCESS == IV_Chk_IVPymtExtActEnt(p_client, &int_l_status, 
+							  l_debug_info_ptr) )	
+	{
+		CO_InsertErr(l_debug_info_ptr, ERR_ACCNOTGENDLV_CANTDEL, 
+			       APL_NULL_STRING, APL_NULL_STRING, 
+			       APL_NULL_STRING, __LINE__, __FILE__);
+
+		APL_GOBACK_FAIL
+	}
+	else if ( int_l_status == IV_CRITCAL_ERROR_IND )
+	{
+		*int_p_retstat = int_l_status;
+
+		APL_GOBACK_FAIL
+	}
+
+	*int_p_retstat = IV_SUCCESS;
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of \
+IV_ChkCanDelAccount().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_SUCCESS;
+
+	RETURN_FAILURE:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of\
+ IV_ChkCanDelAccount().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_FAILURE;
+}
+
+
+
+int IV_ChkIsMasterBillable(const char *p_client, int *int_p_retstat, 
+		       DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	
+
+	extern int IV_Rtv_MastAcc(const char *chr_l_client, char *chr_l_mst_acc, 
+				 int *int_l_retstat, DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+	
+
+	int int_l_status = 0;
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+		char chr_h_billableflg, chr_h_mst_acc[APL_CLIENT_LENGTH];
+		EXEC SQL VAR chr_h_mst_acc IS STRING;
+		char chr_h_status_flg;
+		short int int_i_billableflg = 0, int_i_status_flg = 0;
+		struct sqlca sqlca;
+
+	EXEC SQL END DECLARE SECTION;
+
+	#ifdef APL_THREADS
+		APL_SET_CONTEXT
+		EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	int_l_status = 0; 
+
+	if ((APL_FAILURE == IV_Rtv_MastAcc(p_client, chr_h_mst_acc, 
+					  &int_l_status, l_debug_info_ptr)) && 
+	    (int_l_status == IV_NO_DATA_FOUND_ERR) )
+	{
+		CO_InsertErr(l_debug_info_ptr, ERR_ACCNOT_FND, APL_NULL_STRING, 
+			       APL_NULL_STRING, APL_NULL_STRING, 
+			       __LINE__, __FILE__);
+
+		*int_p_retstat = int_l_status;
+
+		APL_GOBACK_FAIL
+	}
+
+	EXEC SQL SELECT MT_CLIENT.CLN_BILLABLEIND, IV_CLIENTSETUP.STAT_IND
+		 INTO :chr_h_billableflg INDICATOR :int_i_billableflg, 
+		      :chr_h_status_flg INDICATOR :int_i_status_flg
+		 FROM MT_CLIENT, IV_CLIENTSETUP
+		 WHERE ((MT_CLIENT.CLN_CODE = IV_CLIENTSETUP.CLIENT) AND
+			(MT_CLIENT.CLN_CODE = :chr_h_mst_acc));
+
+	if ( sqlca.sqlcode < 0 )
+	{
+		char chr_l_buffer[KEY_LENGTH];
+
+		memset(chr_l_buffer, APL_NULL_CHAR, KEY_LENGTH);
+
+		ltoa_r(sqlca.sqlcode, chr_l_buffer, KEY_LENGTH - 1);
+
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+		CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, chr_l_buffer, 
+			       APL_NULL_STRING, APL_NULL_STRING, 
+			       __LINE__, __FILE__);
+
+		APL_GOBACK_FAIL
+	}
+
+	*int_p_retstat = IV_SUCCESS;
+
+	if ( (chr_h_billableflg == 'Y') && (chr_h_status_flg != 'D') )
+	{
+		APL_GOBACK_SUCCESS
+	}
+	else
+	{
+		APL_GOBACK_FAIL
+	}
+
+	RETURN_SUCCESS:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of \
+IV_ChkIsMasterBillable().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_SUCCESS;
+
+	RETURN_FAILURE:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of\
+ IV_ChkIsMasterBillable().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_FAILURE;
+}
+
+
+
+int IV_ChkRecAcc(const char *p_blccycode, const char *p_recclt, 
+		 int *int_p_retstat, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	
+
+	extern int IV_Chk_AccGLCode(const char *l_blccycode, 
+				     const char *l_ibbscode, int *int_l_retstat, 
+				     DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+	
+
+	char chr_l_ccy_part[4], chr_l_recacc[APL_CLIENT_LENGTH];
+	int int_l_status = 0;
+
+	#ifdef APL_THREADS
+		APL_SET_CONTEXT
+		EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	memset(chr_l_ccy_part, APL_NULL_CHAR, 4);
+	memset(chr_l_recacc, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+
+	strcpy(chr_l_recacc, p_recclt);
+
+	
+
+	if ( chr_l_recacc[0] != '9' )
+	{
+		*int_p_retstat = IV_SUCCESS;
+
+		APL_GOBACK_SUCCESS
+	}
+
+	chr_l_ccy_part[0] = chr_l_recacc[6];
+	chr_l_ccy_part[1] = chr_l_recacc[7];
+	chr_l_ccy_part[2] = chr_l_recacc[8];
+	chr_l_ccy_part[3] = APL_NULL_CHAR;
+
+	int_l_status = 0;
+
+	if ( APL_FAILURE == IV_Chk_AccGLCode(p_blccycode, chr_l_ccy_part, 
+					      &int_l_status, l_debug_info_ptr) )
+	{
+                if ( int_l_status == IV_CRITCAL_ERROR_IND )
+                {
+                        *int_p_retstat = int_l_status;
+
+                        APL_GOBACK_FAIL
+                }
+                else if ( int_l_status == IV_NO_DATA_FOUND_ERR )
+                {
+                        *int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+                        CO_InsertErr(l_debug_info_ptr, ERR_BILLCCY_ACCRECEVCCY_MISMATCH,
+                                       APL_NULL_STRING, APL_NULL_STRING,
+                                       APL_NULL_STRING, __LINE__, __FILE__);
+
+                        
+
+                        APL_GOBACK_FAIL
+                }
+	}
+
+	*int_p_retstat = IV_SUCCESS;
+
+	APL_GOBACK_SUCCESS;
+
+	RETURN_SUCCESS:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of \
+IV_ChkRecAcc().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_SUCCESS;
+
+	RETURN_FAILURE:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of\
+IV_ChkRecAcc().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_FAILURE;
+}
+
+
+
+int IV_ChkCommAcc(const char *p_client, int *int_p_retstat, 
+		  DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+		char chr_h_commacc[APL_CLIENT_LENGTH];
+		EXEC SQL VAR chr_h_commacc IS STRING;
+		short int int_i_commacc = 0;
+		struct sqlca sqlca;
+
+	EXEC SQL END DECLARE SECTION;
+
+	#ifdef APL_THREADS
+		APL_SET_CONTEXT
+		EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	memset(chr_h_commacc, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+
+	EXEC SQL SELECT DECODE(:p_client, '1', COMM_A, '2', COMM_B, 
+					   '3', COMM_C, '4', COMM_D, 
+					   '5', COMM_E, '6', COMM_F, 
+					   '7', COMM_G, '8', COMM_H, 
+					   '9', COMM_I)
+		 INTO :chr_h_commacc INDICATOR :int_i_commacc
+		 FROM IV_CLIENT;
+
+	if ( sqlca.sqlcode < 0 )
+	{
+		char chr_l_buffer[KEY_LENGTH];
+
+		memset(chr_l_buffer, APL_NULL_CHAR, KEY_LENGTH);
+
+		ltoa_r(sqlca.sqlcode, chr_l_buffer, KEY_LENGTH - 1);
+
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+		CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, chr_l_buffer, 
+			       APL_NULL_STRING, APL_NULL_STRING, 
+			       __LINE__, __FILE__);
+
+		APL_GOBACK_FAIL
+	}
+	else if ( sqlca.sqlcode == 1403 )
+	{
+		*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+
+		APL_GOBACK_FAIL
+	}
+
+	if ( int_i_commacc == -1 )
+	{
+		*int_p_retstat = IV_COLUMN_NULL_ERR;
+
+		APL_GOBACK_FAIL
+	}
+
+	*int_p_retstat = IV_SUCCESS;
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of \
+IV_ChkCommAcc().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_SUCCESS;
+
+	RETURN_FAILURE:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of\
+IV_ChkCommAcc().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_FAILURE;
+}
+
+
+
+int IV_ChkDelFeeAcc(const char *p_client, const char *p_deffeeclt, 
+		    int *int_p_retstat, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+
+		char chr_h_deffeeacc[APL_CLIENT_LENGTH];
+		short int int_i_deffeeacc = 0;
+		EXEC SQL VAR chr_h_deffeeacc IS STRING;
+		struct sqlca sqlca;
+		
+	EXEC SQL END DECLARE SECTION;
+
+	#ifdef APL_THREADS
+		APL_SET_CONTEXT
+		EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	
+
+	if ( !strcmp(p_client, l_mt_core_sys_params_struct_h.custody_clt_cd) )
+	{
+		if ( strcmp(p_deffeeclt, l_mt_core_sys_params_struct_h.custody_clt_cd) )
+		{
+			*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+			CO_InsertErr(l_debug_info_ptr, ERR_INVALID_DEFLTACC_FEE, 
+				       APL_NULL_STRING, APL_NULL_STRING, 
+				       APL_NULL_STRING, __LINE__, __FILE__);
+
+			
+
+			APL_GOBACK_FAIL
+		}
+		else
+		{
+			*int_p_retstat = IV_SUCCESS;
+
+			APL_GOBACK_SUCCESS
+		}
+	}
+
+	if ( !strcmp(p_client, p_deffeeclt) ) 
+	{
+		*int_p_retstat = IV_SUCCESS;
+
+		APL_GOBACK_SUCCESS
+	}
+
+	memset(chr_h_deffeeacc, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+
+	EXEC SQL SELECT DEFAULT_FEECLT
+		 INTO :chr_h_deffeeacc INDICATOR :int_i_deffeeacc
+		 FROM IV_CLIENTSETUP
+		 WHERE CLIENT = :p_deffeeclt;
+
+	if ( sqlca.sqlcode < 0 )
+	{
+		char chr_l_buffer[KEY_LENGTH];
+
+		memset(chr_l_buffer, APL_NULL_CHAR, KEY_LENGTH);
+
+		ltoa_r(sqlca.sqlcode, chr_l_buffer, KEY_LENGTH - 1);
+
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+		CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, chr_l_buffer, 
+			       APL_NULL_STRING, APL_NULL_STRING, 
+			       __LINE__, __FILE__);
+
+		APL_GOBACK_FAIL
+	}
+	else if ( APL_ZERO_RESULT_SET )
+	{
+		*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+
+		APL_GOBACK_FAIL
+	}
+
+	if ( int_i_deffeeacc == -1 )
+	{
+		*int_p_retstat = IV_SUCCESS;
+
+		APL_GOBACK_SUCCESS
+	}
+	else if ( !strcmp(chr_h_deffeeacc, p_client) )
+	{
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+		CO_InsertErr(l_debug_info_ptr, ERR_CYCLIC_DFLTFEE_NOTALLOWED, APL_NULL_STRING,
+			       APL_NULL_STRING, APL_NULL_STRING, __LINE__, 
+			       __FILE__);
+
+		APL_GOBACK_FAIL
+
+		
+	}
+
+	*int_p_retstat = IV_SUCCESS;
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of \
+IV_ChkDelFeeAcc().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_SUCCESS;
+
+	RETURN_FAILURE:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of\
+IV_ChkDelFeeAcc().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_FAILURE;
+}
+
+
+
+int IV_ChkTxnServDepncy(const char *p_paramcode, const char *p_feebasis, 
+			const char *p_chargebasis, int *int_p_retstat, 
+			DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+		Alert(" entering IV_ChkTxnServDepncy...\n");
+
+        extern int IV_Chk_IVParam_Type_Code(const long l_servcode,
+                                               const char *l_paramcode,
+                                               int *int_l_status,
+                                               DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+	
+
+	char chr_l_param_code[IV_PARAM_LEN], chr_l_temp_param_code[IV_PARAM_LEN];
+        char *chr_l_last; 
+        int int_l_status = 0;
+
+        EXEC SQL BEGIN DECLARE SECTION;
+
+                struct sqlca sqlca;
+
+        EXEC SQL END DECLARE SECTION;
+
+        #ifdef APL_THREADS
+                APL_SET_CONTEXT
+                EXEC SQL CONTEXT USE :my_ctx_local;
+        #endif
+
+			 chr_l_last = (char *) calloc(IV_PARAM_LEN,sizeof(char));
+        memset(chr_l_param_code, APL_NULL_CHAR, IV_PARAM_LEN);
+        memset(chr_l_temp_param_code, APL_NULL_CHAR, IV_PARAM_LEN);
+        
+			printf("IV_ChkTxnServDepncy\n");
+ fflush(stdout);
+			  printf("parameter code G|%s|",p_paramcode);
+			  fflush(stdout);
+        strcpy(chr_l_param_code, p_paramcode);
+			  printf("parameter code|%s|",chr_l_param_code);
+			   fflush(stdout);
+			   
+		  if(strlen(chr_l_param_code) > 1)
+		  {
+			  printf("parameter code1|%s|",chr_l_param_code);
+			  fflush(stdout);
+        strcpy(chr_l_temp_param_code, strtok_r(chr_l_param_code, ";", &chr_l_last));
+
+        while ( strlen(chr_l_temp_param_code) )
+        {
+                
+
+                int_l_status = 0; 
+
+	IF_COND_NOT_EXISTS("ADMIN_CHARGE","NO_TXN_ADMIN")
+	{
+                if ( APL_FAILURE ==
+                       IV_Chk_IVParam_Type_Code(ADM_TXN_FEE_IND, chr_l_temp_param_code,
+                                                   &int_l_status, l_debug_info_ptr) )
+                {
+                        if ( int_l_status == IV_NO_DATA_FOUND_ERR )
+                        {
+                                *int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+                                CO_InsertErr(l_debug_info_ptr, ERR_INVALID_SERVDEP,
+                                               APL_NULL_STRING, APL_NULL_STRING,
+                                               APL_NULL_STRING, __LINE__,
+                                               __FILE__);
+                        }
+                        APL_GOBACK_FAIL
+                }
+	}
+
+                if ( !strcmp(chr_l_temp_param_code, "LOCATION") &&	/* Bageshri HDFCIV_001*/
+                      strcmp(l_mt_core_sys_params_struct_h.loc_proc_ind, "Y") )
+                {
+                        *int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+                        CO_InsertErr(l_debug_info_ptr, ERR_INVALID_DEPND_LOCPROC, 
+				       APL_NULL_STRING, APL_NULL_STRING, 
+				       APL_NULL_STRING, __LINE__, __FILE__);
+
+                        
+
+                        APL_GOBACK_FAIL
+                }
+
+		if ( !strcmp(p_feebasis, "PORTFOLIO VALUE") && 
+		     !strcmp(p_chargebasis, "NO. OF TRADES") )
+		{
+			if ( !strcmp(chr_l_temp_param_code, "DEALTYPE") ||
+			     !strcmp(chr_l_temp_param_code, "DEALCD") ) 	/* Bageshri HDFCIV_001*/
+			{
+				*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+				CO_InsertErr(l_debug_info_ptr, 
+					       ERR_DEAL_TYPE_DEP, 
+					       chr_l_temp_param_code, 
+					       APL_NULL_STRING, APL_NULL_STRING,
+					       __LINE__, __FILE__);
+
+				APL_GOBACK_FAIL
+			}
+		}
+		if(chr_l_last == (char *)NULL)
+		{
+			
+			strcpy(chr_l_temp_param_code, APL_NULL_STRING);
+  
+  
+		}
+		else
+		{
+			
+ if(strlen(chr_l_last) > 0)
+			 {
+			strcpy(chr_l_temp_param_code, strtok_r(chr_l_last,";",&chr_l_last));
+			
+			
+			 }
+			 else{
+	memset(chr_l_temp_param_code, APL_NULL_CHAR, IV_PARAM_LEN);
+			 }
+		}
+        }
+		  }
+
+        *int_p_retstat = IV_SUCCESS;
+
+        APL_GOBACK_SUCCESS
+
+        RETURN_SUCCESS:
+
+                APL_IF_DEBUG
+                {
+                        CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of \
+IV_ChkTxnServDepncy().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+                }
+
+                return APL_SUCCESS;
+
+        RETURN_FAILURE:
+
+                APL_IF_DEBUG
+                {
+                        CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of\
+ IV_ChkTxnServDepncy().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+                }
+
+                return APL_FAILURE;
+}
+
+
+
+int IV_ChkAdmServDepncy(const char *p_client, const long p_servcode, const char *p_apl_frm_date,
+			const char *p_paramcode, int *int_p_retstat, 
+			DEBUG_INFO_STRUCT_H **l_debug_info_ptr)/*added by Monica for ISKB_1737*/
+{
+	
+
+	
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+		long h_MainServCode = 0L;
+		char chr_h_mainservparamcode[IV_PARAM_LEN];
+		EXEC SQL VAR chr_h_mainservparamcode IS STRING;
+		short int int_i_mainservparamcode = 0;
+		struct sqlca sqlca;
+
+	EXEC SQL END DECLARE SECTION;
+
+	#ifdef APL_THREADS
+		APL_SET_CONTEXT
+		EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	if ( p_servcode == ADM_CUST_FEE_IND )
+	{
+		h_MainServCode = CUSTODYFEE;
+	}
+	else if ( p_servcode == ADM_TXN_FEE_IND )
+	{
+		h_MainServCode = TXNFEE;
+	}
+
+	EXEC SQL SELECT PARAMETER_CD
+		 INTO :chr_h_mainservparamcode INDICATOR :int_i_mainservparamcode
+		 FROM IV_CLIENTPARAM
+		 WHERE ( (CLIENT = :p_client)AND
+			 (SERVICE_CD = :h_MainServCode) AND
+			 (APL_FRM_DATE = :p_apl_frm_date));/*added by Monica for ISKB_1737*/
+
+	if ( sqlca.sqlcode < 0 )
+	{
+		char chr_l_buffer[KEY_LENGTH];
+
+		memset(chr_l_buffer, APL_NULL_CHAR, KEY_LENGTH);
+
+		ltoa_r(sqlca.sqlcode, chr_l_buffer, KEY_LENGTH - 1);
+
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+		CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, chr_l_buffer, 
+			       APL_NULL_STRING, APL_NULL_STRING, 
+			       __LINE__, __FILE__);
+
+		APL_GOBACK_FAIL
+	}
+
+	if ( APL_ZERO_RESULT_SET )
+	{
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+		CO_InsertErr(l_debug_info_ptr, ERR_DEPND_MAINSERV_NOTDEFINED, 
+			       APL_NULL_STRING, APL_NULL_STRING, 
+			       APL_NULL_STRING, __LINE__, __FILE__);
+
+		
+
+	}
+
+	if ( strcmp(p_paramcode, chr_h_mainservparamcode) )
+	{
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+		CO_InsertErr(l_debug_info_ptr, ERR_DEPND_AFMATCH_MAINSERV, 
+			       APL_NULL_STRING, APL_NULL_STRING, 
+			       APL_NULL_STRING, __LINE__, __FILE__);
+
+		
+
+		APL_GOBACK_FAIL
+	}
+
+	*int_p_retstat = IV_SUCCESS;
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of \
+IV_ChkAdmServDepncy().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_SUCCESS;
+
+	RETURN_FAILURE:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of\
+IV_ChkAdmServDepncy().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_FAILURE;
+}

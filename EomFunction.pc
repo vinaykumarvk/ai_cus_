@@ -1,0 +1,688 @@
+
+
+
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+
+
+#include "stdio_64.h" 
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <errno.h>
+#include <string.h>
+#include <signal.h>
+
+#include "CR_Common.h"
+
+#define S_PROGNAME_LENGTH 40
+#define S_RESTART_DATA_LENGTH 200 
+#define S_ERR_MSG_LENGTH 200
+#define S_PROGSTRING_LENGTH 200
+
+#define S_RESTART 10
+#define S_START 11
+#define S_CANNOT_EXECUTE 12
+#define S_CONFLICT 13
+#define S_PREDECESSOR 14
+#define S_DATE_LENGTH 20
+#define S_SLEEP_TIME 60
+
+
+EXEC SQL INCLUDE SQLCA.H;
+
+
+
+
+char chr_db_id[APL_USERID_LEN];
+char chr_db_pwd[100];
+char chr_custody_id_b[APL_USERID_LEN];
+
+static int	CO_Upd_SToNextBussDt(const	char		*p_tmp_date,
+								char				*p_out_date,
+								DEBUG_INFO_STRUCT_H   **l_debug_info_ptr
+								)
+{
+	char	chr_out_date[APL_DATE_LEN]	=	APL_NULL_STRING;
+	char chr_p_inp_date[APL_DATE_LEN]=APL_NULL_STRING;
+	short	i_out_date	=	0;
+	EXEC SQL VAR p_tmp_date IS STRING;
+	EXEC SQL VAR chr_p_inp_date IS STRING;
+	sprintf(strcpy(chr_p_inp_date,p_tmp_date)+11,"12:00:00");
+
+	/*Smita - Changed Col Names - HDFCCA Base Version*/
+	EXEC SQL select MAX(H_DATE) + 1
+	into	:chr_out_date:i_out_date
+	from MT_HOLIDAY
+	where STATUS='AA'
+	AND BANK_IND='Y'
+	connect by prior H_DATE + 1 = H_DATE
+				and prior STATUS = STATUS
+				and prior BANK_IND = BANK_IND
+	start with H_DATE=:chr_p_inp_date and STATUS='AA'
+	and BANK_IND='Y';
+
+	IS_ANY_ORA_ERROR
+
+	if	(i_out_date	==	-1)
+	{
+		strcpy(chr_out_date,chr_p_inp_date);
+	}
+
+	strcpy(p_out_date,chr_out_date);
+	
+		APL_GOBACK_SUCCESS
+      RETURN_SUCCESS  :
+      {
+			return (APL_SUCCESS);
+      }
+      RETURN_FAILURE  :
+      {
+         return (APL_FAILURE);
+		}
+}
+
+static int CO_Chk_LstDtYear(char *currdate,
+								int *int_result,
+								DEBUG_INFO_STRUCT_H **l_debug_info_ptr) {
+
+	char chr_nextdate[APL_DATE_LEN];
+	char chr_tempdate[APL_DATE_LEN];
+	int h_res;
+	EXEC SQL VAR chr_nextdate IS STRING;
+	EXEC SQL VAR currdate IS STRING;
+	EXEC SQL VAR chr_tempdate IS STRING;
+	EXEC SQL SELECT TO_DATE(:currdate)+1 INTO :chr_tempdate
+	FROM DUAL;
+	IS_ANY_ORA_ERROR
+	if(CO_Upd_SToNextBussDt(chr_tempdate,chr_nextdate,l_debug_info_ptr)==APL_FAILURE)
+		APL_GOBACK_FAIL
+	EXEC SQL SELECT LAST_DAY(TO_DATE(:currdate)) INTO :chr_tempdate
+	FROM DUAL;
+	IS_ANY_ORA_ERROR;
+	strncpy(chr_tempdate+11, "12:00:00", 8);
+	chr_tempdate[APL_DATE_LEN -1]=APL_NULL_CHAR;
+	EXEC SQL SELECT TO_DATE(:chr_tempdate)-TO_DATE(:chr_nextdate) INTO :h_res
+	FROM DUAL;
+	IS_ANY_ORA_ERROR
+	if(h_res<0){
+		*int_result=APL_SUCCESS;
+		}
+	else{
+		*int_result=APL_FAILURE;
+		}
+	RETURN_SUCCESS:
+	{
+		return APL_SUCCESS;
+	}
+	RETURN_FAILURE:
+	{
+		return APL_FAILURE;
+	}
+	}
+
+int CO_Pro_EOMScheduler(char *p_progname,
+							 char *chr_p_key_a,
+							 char *chr_l_sysdate_a,
+							 char *userid,
+							 char *h_mode,
+							 char *processtion,
+							 char *auth_req,
+							 char *subprocess,
+							 char *h_process,
+							 char *funcparams)
+{
+	char chr_h_restartdata[S_RESTART_DATA_LENGTH]; 
+	short i_restartData;
+	int int_resacl;
+	char chr_h_execit[S_PROGSTRING_LENGTH];
+	char chr_h_prog_function[APL_FUNC_NAME_LENGTH];
+	char chr_statinfo[100];
+	int int_l_childstatus;
+	int int_l_canstart;
+	int i;
+	int int_l_progno;
+	int int_l_exitcode;
+	
+	static int int_max_times_refire=-1;
+   int    int_refire_count=0;
+   int    int_refired_successfully=0;
+	int int_l_childpid;
+	char chr_l_nextdate_a[APL_DATE_LEN];
+	char chr_l_nextoutdate[APL_DATE_LEN];
+	char chr_flag[2];
+	FILE *chr_inifile;
+	char *argv[10];
+	FILE *chr_logfile;
+	char chr_sesamlogdir[PATH_LENGTH];
+	char chr_sesaminidir[PATH_LENGTH];
+	char *chr_sesamini;
+
+/* Rahul */
+int l_flg = 0;
+	
+	char chr_l_sysdatetime[APL_DATE_LEN]= APL_NULL_STRING;      
+	DEBUG_INFO_STRUCT_H *l_debug_infostruct_h = NULL;  
+	INTL_ENV_DATA_STRUCT_H l_intl_env_datastruct_h;
+	INTL_ENV_DATA_STRUCT_H *p_intl_env_datastruct_h=&l_intl_env_datastruct_h;
+	DEBUG_INFO_STRUCT_H **l_debug_info_ptr=&l_debug_infostruct_h;
+	chr_sesamini=getenv("INTL_ROOT_PATH");
+	if(!chr_sesamini) {
+		fprintf(APL_OUT_FILE,"Sesam ini not set\n");
+		exit(-1);
+		}
+	strcpy(chr_sesaminidir,chr_sesamini);
+	chr_inifile=fopen(strcat(chr_sesaminidir,"/intl_sun.cfg"),"r");
+	if(!chr_inifile) {
+		fprintf(APL_OUT_FILE,"Could not open ini h_file\n");
+		exit(-1);
+		}
+
+	strcpy(l_intl_env_datastruct_h.usr,userid);
+	strcpy(l_intl_env_datastruct_h.h_mode,h_mode);
+	strcpy(l_intl_env_datastruct_h.processtion,processtion);
+	strcpy(l_intl_env_datastruct_h.auth_req,auth_req);
+	strcpy(l_intl_env_datastruct_h.subprocess,subprocess);
+	strcpy(l_intl_env_datastruct_h.h_process,h_process);
+
+	EXEC SQL VAR chr_h_restartdata IS STRING;
+	EXEC SQL VAR chr_l_nextdate_a IS STRING;
+	EXEC SQL VAR chr_statinfo IS STRING;
+	EXEC SQL VAR chr_l_nextoutdate IS STRING;
+	EXEC SQL VAR chr_h_execit IS STRING;
+	EXEC SQL VAR p_progname IS STRING;
+	EXEC SQL VAR chr_p_key_a IS STRING;
+	EXEC SQL VAR userid IS STRING; /* Bageshri --10GM */
+	EXEC SQL VAR h_mode IS STRING;
+	EXEC SQL VAR processtion IS STRING;
+	EXEC SQL VAR auth_req IS STRING;
+	EXEC SQL VAR subprocess IS STRING;
+	EXEC SQL VAR chr_flag IS STRING;
+	EXEC SQL VAR h_process IS STRING;
+	EXEC SQL VAR chr_db_id IS STRING;
+	EXEC SQL VAR chr_db_pwd IS STRING;
+	EXEC SQL VAR funcparams IS STRING;
+	EXEC SQL VAR chr_h_prog_function IS STRING;
+
+	APL_FETCH_DB_LOGIN_DETAILS(chr_inifile,chr_custody_id_b,chr_db_id,chr_db_pwd,APL_OUT_FILE,l_debug_info_ptr);
+
+	EXEC SQL CONNECT :chr_db_id IDENTIFIED BY :chr_db_pwd;
+	IS_ANY_ORA_ERROR
+
+argv[0]=p_progname;
+argv[1]=chr_p_key_a;
+argv[2]=chr_l_sysdate_a;
+argv[3]=userid;
+argv[4]=h_mode;
+argv[5]="Eom stream";
+argv[6]=auth_req;
+argv[7]=subprocess;
+argv[8]=h_process;
+argv[9]=funcparams;
+	
+   if ( CO_Rtv_RptFileName("0M",
+								APL_LOGFILE_DESC,
+								100,
+								processtion,
+								argv,
+								&chr_logfile,
+								l_debug_info_ptr) == APL_FAILURE) 
+	{
+		exit(-1);	
+	}
+	EXEC SQL COMMIT;
+	IS_ANY_ORA_ERROR
+		
+	
+	
+   if ( CO_RtvSysParams(l_debug_info_ptr) == APL_FAILURE)
+   APL_GOBACK_FAIL
+
+	EXEC SQL SELECT EOD_IND INTO :chr_flag
+		FROM PRO_SYS_DATE;
+	IS_ANY_ORA_ERROR
+	if(chr_flag[0]!='E') {
+		fprintf(chr_logfile,"Eom requires the system to be in Eod state\n");
+		fflush(chr_logfile);
+		APL_GOBACK_FAIL
+		}
+
+	if(CO_Chk_LstDtYear(chr_l_sysdate_a,&int_l_exitcode,l_debug_info_ptr)==APL_FAILURE){
+		APL_GOBACK_FAIL
+	}	
+	if(int_l_exitcode==APL_SUCCESS){
+		fprintf(chr_logfile,"Todays %s is the chr_last chr_date of the month\n",chr_l_sysdate_a);
+		fprintf(chr_logfile,"Eom starts...\n");
+		} else {
+		fprintf(chr_logfile,"Today %s is not the chr_last chr_date of the month\n",chr_l_sysdate_a);
+		fprintf(chr_logfile,"Eom not reqd . Exitting...");
+		APL_GOBACK_SUCCESS;
+		}
+	
+	
+	EXEC SQL SELECT PROCESSING_STATUS INTO : chr_h_restartdata :i_restartData
+		FROM SYS_BATCHPROC
+			WHERE PROCESS_NAME=:p_progname
+			AND STARTDATE=:chr_l_sysdate_a
+			AND STATUS='completed'
+			AND PROC_INIT=:chr_p_key_a;
+
+	
+	IS_ANY_ORA_ERROR
+	if(sqlca.sqlcode!=1403) {
+		EXEC SQL DELETE SYS_BATCHPROC
+			WHERE PROCESS_NAME=:p_progname
+			AND 	STARTDATE=:chr_l_sysdate_a
+			AND	STATUS='started'
+			AND 	PROC_INIT=:chr_p_key_a;
+		EXEC SQL COMMIT;
+		fprintf(chr_logfile,"Eom completed\n");
+		fflush(chr_logfile);
+		fclose(chr_logfile);
+
+		return APL_SUCCESS;
+		}
+
+	
+	
+	EXEC SQL SELECT PROCESSING_STATUS INTO : chr_h_restartdata :i_restartData
+		FROM SYS_BATCHPROC
+			WHERE PROCESS_NAME=:p_progname
+			AND STARTDATE=:chr_l_sysdate_a
+			AND STATUS='started'
+			AND PROC_INIT=:chr_p_key_a
+				FOR UPDATE OF STATUS,PROCESSING_STATUS;
+
+	
+
+	if(sqlca.sqlcode==1403) {
+		fprintf(chr_logfile,"Eom completed\n");
+		fflush(chr_logfile);
+		fclose(chr_logfile);
+		return APL_SUCCESS;
+		}
+
+
+
+	IS_ANY_ORA_ERROR
+
+	for(;;)  
+	{
+	
+	EXEC SQL SELECT PROCESSING_STATUS INTO : chr_h_restartdata :i_restartData
+		FROM SYS_BATCHPROC
+			WHERE PROCESS_NAME=:p_progname
+			AND STARTDATE=:chr_l_sysdate_a
+			AND STATUS='completed'
+			AND PROC_INIT=:chr_p_key_a;
+
+	
+	IS_ANY_ORA_ERROR
+	if(sqlca.sqlcode!=1403) {
+		EXEC SQL DELETE SYS_BATCHPROC
+			WHERE PROCESS_NAME=:p_progname
+			AND 	STARTDATE=:chr_l_sysdate_a
+			AND	STATUS='started'
+			AND 	PROC_INIT=:chr_p_key_a;
+
+		EXEC SQL COMMIT;
+		fprintf(chr_logfile,"Eom completed\n");
+		fflush(chr_logfile);
+		fclose(chr_logfile);
+		return APL_SUCCESS;
+		}
+
+	
+	EXEC SQL SELECT PROCESSING_STATUS INTO : chr_h_restartdata INDICATOR :i_restartData
+		FROM SYS_BATCHPROC
+			WHERE PROCESS_NAME=:p_progname
+			AND STARTDATE=:chr_l_sysdate_a
+			AND STATUS='started'
+			AND PROC_INIT=:chr_p_key_a
+				FOR UPDATE OF STATUS,PROCESSING_STATUS;
+
+	if(sqlca.sqlcode==1403) {
+		fprintf(chr_logfile,"Eom completed\n");
+		fflush(chr_logfile);
+		fclose(chr_logfile);
+		EXEC SQL COMMIT;
+		return APL_SUCCESS;
+		}
+
+	if(i_restartData==-1)
+		int_l_progno=1;
+	else
+		sscanf(chr_h_restartdata,"%d",&int_l_progno);
+
+	
+	EXEC SQL SELECT PROCESS_NAME,TASK_CD INTO :chr_h_execit,:chr_h_prog_function
+		FROM SYS_BATCHSTREAM
+			WHERE PROCESS_NO=:int_l_progno
+				AND PROC_IND='M';
+	IS_ANY_ORA_ERROR
+	
+	if(sqlca.sqlcode==1403) 
+		break;
+
+		
+		fprintf(chr_logfile,"To exec %s\n",chr_h_execit);
+		
+		
+		memset(chr_l_sysdatetime,APL_NULL_CHAR,APL_DATE_LEN);
+				if (CO_RtvSysDtTime(chr_l_sysdatetime, l_debug_info_ptr) != APL_SUCCESS)
+								{APL_GOBACK_FAIL }
+		fflush(chr_logfile);
+		strcpy(p_intl_env_datastruct_h->processtion,chr_h_prog_function);		
+		int_l_canstart=CO_Pro_BatchRestartLPC(chr_h_execit,
+											chr_p_key_a,
+											"",
+											&int_l_childstatus,
+											&int_l_childpid,
+											l_debug_info_ptr,
+											p_intl_env_datastruct_h);
+		if(int_l_canstart==APL_FAILURE) {
+			fprintf(chr_logfile,"Cannot initiate execution of %s\n",chr_h_execit);
+			APL_GOBACK_FAIL
+			}
+		switch(int_l_canstart){
+		case S_RESTART:fprintf(chr_logfile,"The Process %s restarted at time : %s \n",chr_h_execit,chr_l_sysdatetime);
+							break;
+		case S_START:  fprintf(chr_logfile,"The Process %s started at time : %s \n",chr_h_execit,chr_l_sysdatetime);
+							break;
+		case S_CONFLICT:fprintf(chr_logfile,"MISMATCH with %s detected\n",chr_h_execit);	
+							APL_GOBACK_FAIL
+		case S_PREDECESSOR:fprintf(chr_logfile,"PRE_PROCESS problem with %s\n",chr_h_execit);
+							APL_GOBACK_FAIL
+		case S_CANNOT_EXECUTE:fprintf(chr_logfile,"A copy of %s running\n",chr_h_execit);
+							APL_GOBACK_FAIL
+		}
+/* Change by Rahul */		
+/*	while((wait(&int_l_childstatus)==-1) && (errno==EINTR));*/
+/*** SUBU - Change for AIX Migration
+What was happeniong was that waitpid was returning with status 0 and WIFSIGNALED true but teh signal value
+(WTERMSIG) was coming as 0
+Earlier handled this by signal(SIGCHLD, SIG_DFL)
+in BatchRestartLPC.pc
+But since the problem is recurring, handling case of signal 0 specifically
+***/
+/* while((waitpid(int_l_childpid,&int_l_childstatus,WNOHANG)==-1) && (errno==EINTR)) ; */
+ while(
+((waitpid(int_l_childpid,&int_l_childstatus,WNOHANG)==-1) && (errno==EINTR)) 
+||
+((waitpid(int_l_childpid,&int_l_childstatus,WNOHANG)==0) &&  (WIFSIGNALED(int_l_childstatus)==1) && (WTERMSIG(int_l_childstatus)==0))
+);
+
+		if(WIFEXITED(int_l_childstatus)) {
+			int_l_exitcode=WEXITSTATUS(int_l_childstatus);
+			if(int_l_exitcode!=0) {
+				
+				EXEC SQL UPDATE SYS_BATCHPROC
+					SET PROC_ENDFLG='Y'
+						WHERE PROCESS_NAME=:chr_h_execit
+						AND 	STATUS='started'
+						AND TO_CHAR(TO_DATE(STARTDATE),'ddmmyy')=TO_CHAR(TO_DATE(:chr_l_sysdate_a),'ddmmyy')
+						AND	PROC_INIT=:chr_p_key_a;
+				IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,
+																  "BATCH_IN_PROC",
+																  chr_h_execit,
+																  chr_p_key_a)
+				EXEC SQL COMMIT;
+				IS_ANY_ORA_ERROR
+				fprintf(chr_logfile,"Rolling back: Program %s exitted with exit status_ind %d\n",chr_h_execit,int_l_exitcode);
+				APL_GOBACK_FAIL
+				}
+			}
+/* Commented By Ram - Linux	starts	if(WIFSIGNALED(int_l_childstatus)) {
+			
+			if(int_max_times_refire == -1)
+			{
+				EXEC SQL SELECT TO_NUMBER(FIELD_VAL)
+				INTO :int_max_times_refire
+				FROM PRO_GSSPLVAL
+				WHERE MAIN_FUN='REFIRE_COUNT'
+				AND SUB_PROCESS='EOD'
+				AND NATION=:g_mt_commonsys_params_struct_h.nation_code;
+		
+				IS_ANY_ORA_ERROR
+				
+				if(APL_ZERO_RESULT_SET)
+				{
+					EXEC SQL SELECT TO_NUMBER(FIELD_VAL)
+            	INTO :int_max_times_refire
+            	FROM PRO_GSSPLVAL
+            	WHERE MAIN_FUN='REFIRE_COUNT'
+            	AND SUB_PROCESS='EOD'
+            	AND NATION='XX';
+		
+					IS_ANY_ORA_ERROR
+		
+					if(APL_ZERO_RESULT_SET)
+					{
+						int_max_times_refire = 0;
+	
+						fprintf(chr_logfile,"REFIRE COUNT not set in GSSPLVAL.Default Value of 0 Taken and Aborted Program not refired\n");
+					}
+			  }
+		 }
+				for(int_refire_count =0;int_refire_count <int_max_times_refire;)
+				{
+					fprintf(chr_logfile,"Process %s signalled by signal %d\n",chr_h_execit,WTERMSIG(int_l_childstatus));
+         		fprintf(chr_logfile,"Sleeping for one minute and then refiring\n");
+         		sleep(S_SLEEP_TIME);
+      			fprintf(chr_logfile,"To exec %s for the %d time\n",chr_h_execit,int_refire_count+2);
+      			
+      			fflush(chr_logfile);
+      			strcpy(p_intl_env_datastruct_h->processtion,chr_h_prog_function);
+
+					int_l_canstart=CO_Pro_BatchRestartLPC(chr_h_execit,
+												chr_p_key_a,
+												"",
+												&int_l_childstatus,
+												&int_l_childpid,
+												l_debug_info_ptr,
+												p_intl_env_datastruct_h);
+					if(int_l_canstart==APL_FAILURE) 
+					{
+						fprintf(chr_logfile,"Cannot initiate execution of %s\n",chr_h_execit);
+						APL_GOBACK_FAIL
+					}
+		
+				/*	while((wait(&int_l_childstatus)==-1) && (errno == EINTR));*/
+					/* while((waitpid(int_l_childpid,&int_l_childstatus,WNOHANG)==-1) && (errno==EINTR)) ;	 */
+/*** SUBU - Change for AIX Migration
+What was happeniong was that waitpid was returning with status 0 and WIFSIGNALED true but teh signal value
+(WTERMSIG) was coming as 0
+Earlier handled this by signal(SIGCHLD, SIG_DFL)
+in BatchRestartLPC.pc
+But since the problem is recurring, handling case of signal 0 specifically
+***/
+/*Commented for ISKB_6221(CA_GenEntitl process is not getting completed) on 06/08/2013--START
+errno=-1;
+ while((waitpid(int_l_childpid,&int_l_childstatus,WNOHANG)==-1) && (errno==EINTR)) ;
+ Commented for ISKB_6221(CA_GenEntitl process is not getting completed) on 06/08/2013--END */
+ //Uncommented for ISKB_6221(CA_GenEntitl process is not getting completed) on 06/08/2013--START
+ /*while(
+((waitpid(int_l_childpid,&int_l_childstatus,WNOHANG)==-1) && (errno==EINTR)) 
+||
+((waitpid(int_l_childpid,&int_l_childstatus,WNOHANG)==0) &&  (WIFSIGNALED(int_l_childstatus)==1) && (WTERMSIG(int_l_childstatus)==0))
+);
+ //Uncommented for ISKB_6221(CA_GenEntitl process is not getting completed) on 06/08/2013--END
+			
+		if(WIFEXITED(int_l_childstatus)) {
+         	int_l_exitcode=WEXITSTATUS(int_l_childstatus);
+         	if(int_l_exitcode!=0){
+						EXEC SQL UPDATE SYS_BATCHPROC
+							SET PROC_ENDFLG='Y'
+							WHERE PROCESS_NAME=:chr_h_execit
+							AND 	STATUS='started'
+							AND TO_CHAR(TO_DATE(STARTDATE),'ddmmyy')=TO_CHAR(TO_DATE(:chr_l_sysdate_a),'ddmmyy')
+							AND	PROC_INIT=:chr_p_key_a;
+				
+						IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,
+																	  "BATCH_IN_PROC",
+																	  chr_h_execit,
+																	  chr_p_key_a)
+				
+						EXEC SQL COMMIT;
+						IS_ANY_ORA_ERROR
+						fprintf(chr_logfile,"Rolling back: Process %s signalled by signal %d\n",chr_h_execit,WTERMSIG(int_l_childstatus));
+						APL_GOBACK_FAIL
+						}
+						else
+                  {
+                     int_refired_successfully = 1;
+                     int_refire_count = int_max_times_refire;
+                  } 
+					}
+
+					
+					else if(WIFSIGNALED(int_l_childstatus))
+					{
+						int_refire_count++;
+					}
+					
+					else
+					{
+						int_refired_successfully = 1;
+						int_refire_count = int_max_times_refire;
+					}
+				}
+					
+				if(int_refired_successfully == 0 )
+				{
+					
+
+					EXEC SQL UPDATE SYS_BATCHPROC
+						SET PROC_ENDFLG='Y'
+							WHERE PROCESS_NAME=:chr_h_execit
+							AND 	STATUS='started'
+							AND TO_CHAR(TO_DATE(STARTDATE),'ddmmyy')=TO_CHAR(TO_DATE(:chr_l_sysdate_a),'ddmmyy')
+							AND	PROC_INIT=:chr_p_key_a;
+				
+					IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,
+																	  "BATCH_IN_PROC",
+																	  chr_h_execit,
+																	  chr_p_key_a)
+				
+					EXEC SQL COMMIT;
+					IS_ANY_ORA_ERROR
+					fprintf(chr_logfile,"Rolling back: Process %s signalled by signal %d\n",chr_h_execit,WTERMSIG(int_l_childstatus));
+				APL_GOBACK_FAIL
+				}
+			} Commented By Ram - Linux	Ends */ 
+	int_l_progno++;
+
+	
+fprintf(chr_logfile,"\n************** int_l_progno |%d|\n",int_l_progno);
+		fflush(chr_logfile);
+	sprintf(chr_h_restartdata,"%d",int_l_progno);
+	sprintf(chr_statinfo,"Executed %s",chr_h_execit);
+	EXEC SQL UPDATE SYS_BATCHPROC
+		SET PROCESSING_STATUS=:chr_h_restartdata,
+			 STAT_DET=:chr_statinfo
+			WHERE PROCESS_NAME=:p_progname
+			AND	PROC_INIT=:chr_p_key_a
+			AND	STATUS='started'
+			AND   STARTDATE=:chr_l_sysdate_a;
+	IS_ANY_ORA_ERROR
+	fprintf(chr_logfile,"Commiting : Program %s exitted with exit status_ind %d\n",chr_h_execit,int_l_exitcode);
+		fflush(chr_logfile);
+	EXEC SQL COMMIT;
+	
+
+/*Start: Check Status of Child process   - Rahul*/
+   fprintf(chr_logfile,"\nCheck Status of Process |%s|\n",chr_h_execit);
+for ( ; ; )
+{
+   EXEC SQL SELECT COUNT(*) INTO :l_flg FROM SYS_BATCHPROC
+      WHERE PROCESS_NAME=:chr_h_execit
+       AND   PROC_INIT=:chr_p_key_a
+      AND   STATUS='started';
+   /*  AND   STARTDATE=:chr_l_sysdate_a;*/
+   IS_ANY_ORA_ERROR
+
+   if(l_flg == 0)
+   {
+      fprintf(chr_logfile,"Process is Completed \n");
+      break;
+   }
+}
+/*End: Check Status of Child process   - Rahul*/
+
+
+	} 
+APL_GOBACK_SUCCESS
+RETURN_SUCCESS:
+{
+	
+	
+	memset(chr_l_sysdatetime,APL_NULL_CHAR,APL_DATE_LEN);
+		if (CO_RtvSysDtTime(chr_l_sysdatetime, l_debug_info_ptr) != APL_SUCCESS)
+					{APL_GOBACK_FAIL }
+	fprintf(chr_logfile,"Returning successfully from completing Eom at %s\n",chr_l_sysdatetime);
+	EXEC SQL UPDATE SYS_BATCHPROC
+		SET STATUS='completed',
+			 STAT_DET='Completed Eod'
+			WHERE PROCESS_NAME=:p_progname
+			AND 	STATUS='started'
+			AND   STARTDATE=:chr_l_sysdate_a
+			AND	PROC_INIT=:chr_p_key_a;
+	IS_ANY_ORA_ERROR
+	EXEC SQL COMMIT;
+	fflush(chr_logfile);
+	fclose(chr_logfile);
+	fclose(chr_inifile);
+	return APL_SUCCESS;
+}
+	
+RETURN_FAILURE:
+{
+	EXEC SQL ROLLBACK ;
+	
+	EXEC SQL UPDATE SYS_BATCHPROC
+		SET PROC_ENDFLG='Y'
+			WHERE PROCESS_NAME=:p_progname
+			AND 	STATUS='started'
+			AND   STARTDATE=:chr_l_sysdate_a
+			AND	PROC_INIT=:chr_p_key_a;
+	EXEC SQL COMMIT;
+	
+	
+	memset(chr_l_sysdatetime,APL_NULL_CHAR,APL_DATE_LEN);
+		if (CO_RtvSysDtTime(chr_l_sysdatetime, l_debug_info_ptr) != APL_SUCCESS)
+			  {APL_GOBACK_FAIL }
+	fprintf(chr_logfile,"Returning unsuccessfully from completing Eom at %s\n",chr_l_sysdatetime);
+	fflush(chr_logfile);
+	fflush(chr_inifile);
+	fclose(chr_logfile);
+	return APL_FAILURE;
+}
+} 
+
+//AIX - Warnings Removal
+int main(int argc,char **argv) {
+	if(CO_Pro_EOMScheduler(argv[0],
+							argv[1],
+							argv[2],
+							argv[3],
+							argv[4],
+							argv[5],
+							argv[6],
+							argv[7],
+							argv[8],
+							argv[9]
+							)==APL_SUCCESS)
+					exit(0);
+	else
+					exit(1);
+	}

@@ -1,0 +1,4714 @@
+
+
+
+
+
+#include "CO_HostStructdef.h"
+#include "CO_Externdef.h"
+#define	DATE_NAME_LEN	11
+#define	IND_NAME_LEN	13
+
+EXEC SQL INCLUDE SQLCA.H;
+
+/* AIX - Warnings removal - Start */
+
+extern int CO_SplitStr(char *p_src, char p_separator, int *int_p_noelem, char ***p_retstr );
+extern int CO_Proc_RptClose( FILE *p_fhandle, DEBUG_INFO_STRUCT_H **l_debug_info_ptr );
+extern int CO_Rls_Context(void);
+extern int CO_InsertOraErr(DEBUG_INFO_STRUCT_H **l_debug_info_ptr,
+                    char *ora_msg,
+                    char *h_key1,
+                    char *h_key2,
+                    char *h_key3,
+                    int h_line,
+                    char *h_file );
+extern int ltoa_r(long p_long,char *p_return, int p_length);
+extern int CO_Pro_DateComp(char *p_from_date, char *p_to_date, 
+                           int *int_p_diff,DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+/* AIX - Warnings removal - End */
+ //AIX -Warning Removal - unused varibales commented in the file
+
+int CDBCusBalFn(	PO_LR_STRUCT_H *p_po_lr_struct_h, 
+						FILE 						*p_logfile, 
+						INTL_ENV_DATA_STRUCT_H 	*p_intl_envdatastruct_h, 
+						DEBUG_INFO_STRUCT_H 			**l_debug_info_ptr)
+{
+	struct sqlca sqlca;
+	DL_LOCALREPPROC2_STRUCT_H l_dl_localrepproc2_struct_h;
+	DL_LOCALREPPROC2_STRUCT_I l_dl_localrepproc2_struct_i;
+	char		chr_l_h_client_a[APL_CLIENT_LENGTH]	=	APL_NULL_STRING;
+	char		chr_l_h_domcpac[APL_CLIENT_LENGTH]	=	APL_NULL_STRING;
+	char		chr_l_h_instrcode_A[APL_INSTRUMENTCODE_LEN]		=	APL_NULL_STRING;
+	char		chr_l_h_trcode_a[APL_FLAG_LENGTH]		=	APL_NULL_STRING;
+	char		chr_l_h_lrtrdtype[3]					=	APL_NULL_STRING;
+   char 		chr_l_temp_trcode[2]              =  APL_NULL_STRING; 
+	double   l_temp_quantity							=	0;					  	
+	double	l_h_110safek						=	0;
+	double	l_h_210safek						=	0;
+	double	l_h_120safek						=	0;
+	//double	l_h_121safekeep_pos						=	0;
+	//double	l_h_221safekeep_pos						=	0;
+	//double	l_h_222safekeep_pos						=	0;
+	//double	l_h_224safekeep_pos						=	0;
+	double	l_h_311safekeep_pos						=	0;
+	double	l_h_111safekeep_pos						=	0;
+	double	l_h_quantity_a								=	0;
+	int		int_l_h_lrproc2_count					=	0;
+	short		l_i_lrproc2_count					=	0;
+	short		l_i_110safek						=	0;
+	short		l_i_210safek						=	0;
+	short		l_i_120safek						=	0;
+	//short		l_i_121safek						=	0;
+	//short		l_i_221safek						=	0;
+	//short		l_i_222safek						=	0;
+	//short		l_i_224safek						=	0;
+	short		l_i_311safek						=	0;
+	short		l_i_111safek						=	0;
+	short		l_i_account							=	0;
+	short		l_i_domcpac							=	0;
+	short		l_i_instr_code							=	0;
+	short		int_l_i_trcode							=	0;
+	short		int_l_i_qty								=	0;
+	short		l_i_lrtrdtype						=	0;
+
+	sqlca.sqlcode = 0;
+
+	EXEC SQL BEGIN DECLARE SECTION;
+	EXEC SQL VAR l_dl_localrepproc2_struct_h.h_instr_code IS STRING;
+	EXEC SQL VAR l_dl_localrepproc2_struct_h.h_ctclt IS STRING;
+	EXEC SQL VAR l_dl_localrepproc2_struct_h.h_dl_client IS STRING;
+	EXEC SQL VAR l_dl_localrepproc2_struct_h.h_domcpclt_cd IS STRING;
+	EXEC SQL VAR chr_l_h_client_a IS STRING;
+	EXEC SQL VAR chr_l_h_domcpac IS STRING;
+	EXEC SQL VAR chr_l_h_instrcode_A IS STRING;
+	EXEC SQL VAR chr_l_h_trcode_a IS STRING;
+	EXEC SQL VAR chr_l_h_lrtrdtype IS STRING;
+	EXEC SQL END DECLARE SECTION;
+	
+	
+
+	#ifdef SYS_DEBUG
+		printf( "Entering processtion CDBCusBalFn\n");
+	#endif
+		
+	CO_ProcMonitor(	p_logfile, "Entered processtion CDBCusBalFn\n", NULL, NULL);
+
+	EXEC SQL DECLARE safek_curs CURSOR FOR
+				SELECT  	a.CLIENT, 
+							a.INSTR_CODE, 
+							decode(a.client,'311',sum(a.SAFEKEEP_POS),0),
+							decode(a.client,'100000',sum(a.SAFEKEEP_POS + a.VAL_REC - a.VAL_DEL),
+												  '100001',sum(a.SAFEKEEP_POS + a.VAL_REC - a.VAL_DEL),
+												  '100002',sum(a.SAFEKEEP_POS + a.VAL_REC - a.VAL_DEL),
+									 			  0),
+							decode(a.client,'311',0,
+												  '100000',0,
+												  '100001',0,
+												  '100002',0,
+												  sum(a.SAFEKEEP_POS + a.VAL_REC - a.VAL_DEL)),
+							sum(a.SAFEKEEP_POS)
+				FROM		DL_SAFEK a, MT_INSTRUMENT b
+				WHERE		a.INSTR_CODE	=	b.INSTR_CODE
+				AND		b.CLASSCD	=	'LCR'
+				GROUP BY a.CLIENT, a.INSTR_CODE;
+
+	EXEC SQL OPEN safek_curs;
+	IS_ANY_ORA_ERROR
+
+	for ( ; ; )
+	{
+		strcpy( chr_l_h_client_a, APL_NULL_STRING);
+		strcpy( chr_l_h_instrcode_A, APL_NULL_STRING);
+		l_h_311safekeep_pos = 0;
+		l_h_111safekeep_pos = 0;
+		l_h_110safek = 0;
+		l_h_210safek = 0;
+		l_i_311safek = 0;
+		l_i_111safek = 0;
+		l_i_110safek = 0;
+		l_i_210safek = 0;
+		l_i_account	 = 0;
+		l_i_instr_code	 = 0;
+		memset(&l_dl_localrepproc2_struct_h, NULL, sizeof(DL_LOCALREPPROC2_STRUCT_H) );
+		memset(&l_dl_localrepproc2_struct_i, NULL, sizeof(DL_LOCALREPPROC2_STRUCT_I) );
+
+		EXEC SQL FETCH safek_curs INTO :chr_l_h_client_a:l_i_account,
+												 :chr_l_h_instrcode_A:l_i_instr_code,
+												 :l_h_311safekeep_pos:l_i_311safek,
+												 :l_h_111safekeep_pos:l_i_111safek,
+												 :l_h_110safek:l_i_110safek,
+												 :l_h_210safek:l_i_210safek;
+
+		IS_ANY_ORA_ERROR;
+
+		if ( APL_ZERO_RESULT_SET )
+		{
+			break;
+		}
+
+		
+		if ( l_i_311safek == -1 )
+		{
+			l_h_311safekeep_pos = 0;
+		}
+						
+		if ( l_i_111safek == -1 )
+		{
+			l_h_111safekeep_pos = 0;
+		}
+		
+		if ( l_i_110safek == -1 )
+		{
+			l_h_110safek = 0;
+		}
+
+		if ( l_i_210safek == -1 )
+		{
+			l_h_210safek = 0;
+		}
+
+		EXEC SQL DECLARE trade_temp_curs CURSOR FOR
+		SELECT DEAL_CD,QTY FROM DL_DEAL
+		WHERE	CLIENT=:chr_l_h_client_a       		
+		AND	INSTR_CODE =:chr_l_h_instrcode_A	   	
+		AND	FAILREASON_CD='60'
+		AND	INSTRUMENT_DT	IS NULL
+		AND	EX_ARENA!='3'
+		AND	LRINSTR_DATE IS NOT NULL
+		AND	DEAL_STAT='CC';
+
+		EXEC SQL OPEN trade_temp_curs;
+
+		IS_ANY_ORA_ERROR;
+
+		for(;;)
+		{
+			strcpy(chr_l_temp_trcode,APL_NULL_STRING);
+			l_temp_quantity=0;
+
+			EXEC SQL FETCH trade_temp_curs INTO :chr_l_temp_trcode,:l_temp_quantity;
+			IS_ANY_ORA_ERROR;
+	
+			if (APL_ZERO_RESULT_SET)
+			{
+				break;
+			}
+			if((!strcmp(chr_l_temp_trcode,"1")) || (!strcmp(chr_l_temp_trcode,"3"))) //AIX - Warnings
+			{
+				l_h_311safekeep_pos=l_h_311safekeep_pos - l_temp_quantity;	
+			}
+			else if((!strcmp(chr_l_temp_trcode,"2")) || (!strcmp(chr_l_temp_trcode,"4"))) //AIX-Warnings
+			{
+				l_h_311safekeep_pos=l_h_311safekeep_pos + l_temp_quantity;	
+			}
+		}	
+		EXEC SQL CLOSE trade_temp_curs;
+		IS_ANY_ORA_ERROR;
+
+		
+		
+		if ( l_h_110safek > 0 )
+		{
+			strcpy( l_dl_localrepproc2_struct_h.h_ctclt, "110");
+			l_dl_localrepproc2_struct_h.h_qty = l_h_110safek;
+		   strcpy(l_dl_localrepproc2_struct_h.h_dl_client, chr_l_h_client_a);
+	  	   strcpy(l_dl_localrepproc2_struct_h.h_instr_code, chr_l_h_instrcode_A);
+		   strcpy(l_dl_localrepproc2_struct_h.h_domcpclt_cd, APL_NULL_STRING);
+		   l_dl_localrepproc2_struct_i.i_dl_client = 0;
+		   l_dl_localrepproc2_struct_i.i_instr_code = 0;
+		   l_dl_localrepproc2_struct_i.i_ctclt = 0;
+		   l_dl_localrepproc2_struct_i.i_qty = 0;
+		   l_dl_localrepproc2_struct_i.i_domcpclt_cd = -1;
+		  EXEC SQL INSERT INTO DL_LOCALREPPROC2 VALUES (:l_dl_localrepproc2_struct_h:l_dl_localrepproc2_struct_i);
+
+		}
+
+		if ( l_h_210safek > 0 )
+		{
+			strcpy( l_dl_localrepproc2_struct_h.h_ctclt, "210");
+			l_dl_localrepproc2_struct_h.h_qty = l_h_210safek;
+		   strcpy(l_dl_localrepproc2_struct_h.h_dl_client, chr_l_h_client_a);
+		   strcpy(l_dl_localrepproc2_struct_h.h_instr_code, chr_l_h_instrcode_A);
+		   strcpy(l_dl_localrepproc2_struct_h.h_domcpclt_cd, APL_NULL_STRING);
+		   l_dl_localrepproc2_struct_i.i_dl_client = 0;
+		   l_dl_localrepproc2_struct_i.i_instr_code = 0;
+		   l_dl_localrepproc2_struct_i.i_ctclt = 0;
+		   l_dl_localrepproc2_struct_i.i_qty = 0;
+		   l_dl_localrepproc2_struct_i.i_domcpclt_cd = -1;
+		  EXEC SQL INSERT INTO DL_LOCALREPPROC2 VALUES (:l_dl_localrepproc2_struct_h:l_dl_localrepproc2_struct_i);
+		}
+
+		if ( l_h_311safekeep_pos > 0 )
+		{
+			strcpy( l_dl_localrepproc2_struct_h.h_ctclt, "311");
+			l_dl_localrepproc2_struct_h.h_qty = l_h_311safekeep_pos;
+		   strcpy(l_dl_localrepproc2_struct_h.h_dl_client, chr_l_h_client_a);
+		   strcpy(l_dl_localrepproc2_struct_h.h_instr_code, chr_l_h_instrcode_A);
+		   strcpy(l_dl_localrepproc2_struct_h.h_domcpclt_cd, APL_NULL_STRING);
+		   l_dl_localrepproc2_struct_i.i_dl_client = 0;
+		   l_dl_localrepproc2_struct_i.i_instr_code = 0;
+		   l_dl_localrepproc2_struct_i.i_ctclt = 0;
+	      l_dl_localrepproc2_struct_i.i_qty = 0;
+		   l_dl_localrepproc2_struct_i.i_domcpclt_cd = -1;
+	      EXEC SQL INSERT INTO DL_LOCALREPPROC2 VALUES (:l_dl_localrepproc2_struct_h:l_dl_localrepproc2_struct_i);
+		}
+
+		if ( l_h_111safekeep_pos > 0 )
+		{
+			strcpy( l_dl_localrepproc2_struct_h.h_ctclt, "111");
+			l_dl_localrepproc2_struct_h.h_qty = l_h_111safekeep_pos;
+		  strcpy(l_dl_localrepproc2_struct_h.h_dl_client, chr_l_h_client_a);
+		  strcpy(l_dl_localrepproc2_struct_h.h_instr_code, chr_l_h_instrcode_A);
+		  strcpy(l_dl_localrepproc2_struct_h.h_domcpclt_cd, APL_NULL_STRING);
+		  l_dl_localrepproc2_struct_i.i_dl_client = 0;
+		  l_dl_localrepproc2_struct_i.i_instr_code = 0;
+		  l_dl_localrepproc2_struct_i.i_ctclt = 0;
+		  l_dl_localrepproc2_struct_i.i_qty = 0;
+		  l_dl_localrepproc2_struct_i.i_domcpclt_cd = -1;
+
+		 EXEC SQL INSERT INTO DL_LOCALREPPROC2 VALUES (:l_dl_localrepproc2_struct_h:l_dl_localrepproc2_struct_i);
+		}
+
+	}
+
+	EXEC SQL CLOSE safek_curs;
+	IS_ANY_ORA_ERROR;
+
+	
+
+	EXEC SQL DECLARE 	order_curs CURSOR FOR
+				SELECT 	a.CLIENT, a.INSTR_CODE, sum(NVL(a.ORD_QTY,0))
+				FROM	 	OR_ORDERDETAILS a, MT_INSTRUMENT b
+				WHERE		a.INSTR_CODE	=	b.INSTR_CODE
+				AND		a.CHECKER_DT IS NULL
+				AND		a.BUY_SELL_IND	=	'B'
+				AND		a.DATEOF_CANCEL IS NULL
+				AND		a.EXP_DATE >= 	(SELECT CURRENT_DATE FROM PRO_SYS_DATE)
+				AND		b.CLASSCD	=	'LCR'
+				GROUP BY a.CLIENT, a.INSTR_CODE;
+
+	EXEC SQL OPEN order_curs;
+	IS_ANY_ORA_ERROR;
+
+	for ( ; ; )
+	{
+
+		strcpy(chr_l_h_client_a, APL_NULL_STRING);
+		strcpy(chr_l_h_instrcode_A, APL_NULL_STRING);
+		l_h_120safek = 0;
+		l_i_120safek = 0;
+		l_i_account	 =	0;
+		l_i_instr_code	 =	0;
+		memset(&l_dl_localrepproc2_struct_h, NULL, sizeof(DL_LOCALREPPROC2_STRUCT_H) );
+		memset(&l_dl_localrepproc2_struct_i, NULL, sizeof(DL_LOCALREPPROC2_STRUCT_I) );
+
+		EXEC SQL FETCH order_curs INTO 	:chr_l_h_client_a:l_i_account,
+													:chr_l_h_instrcode_A:l_i_instr_code,
+													:l_h_120safek:l_i_120safek;
+		
+		IS_ANY_ORA_ERROR;
+
+		if ( APL_ZERO_RESULT_SET )
+		{
+			break;
+		}
+
+		if ( l_i_120safek == -1 )
+		{
+			l_h_120safek = 0;
+		}
+
+		if ( l_h_120safek > 0 )
+		{
+			strcpy(l_dl_localrepproc2_struct_h.h_dl_client, chr_l_h_client_a);
+			strcpy(l_dl_localrepproc2_struct_h.h_instr_code, chr_l_h_instrcode_A);
+			strcpy(l_dl_localrepproc2_struct_h.h_domcpclt_cd, APL_NULL_STRING);
+			strcpy(l_dl_localrepproc2_struct_h.h_ctclt, "120");
+			l_dl_localrepproc2_struct_h.h_qty = l_h_120safek;
+			l_dl_localrepproc2_struct_i.i_dl_client = 0;
+			l_dl_localrepproc2_struct_i.i_instr_code = 0;
+			l_dl_localrepproc2_struct_i.i_ctclt = 0;
+			l_dl_localrepproc2_struct_i.i_qty = 0;
+			l_dl_localrepproc2_struct_i.i_domcpclt_cd = -1;
+
+			EXEC SQL INSERT INTO DL_LOCALREPPROC2 VALUES (:l_dl_localrepproc2_struct_h:l_dl_localrepproc2_struct_i);
+
+			if ( 	strcmp(chr_l_h_client_a, "100000") == 0 ||
+					strcmp(chr_l_h_client_a, "100001") == 0 ||
+					strcmp(chr_l_h_client_a, "100002") == 0 )
+			{
+				EXEC SQL UPDATE DL_LOCALREPPROC2
+							SET	QTY = QTY - :l_h_120safek
+							WHERE	CLIENT	=	:chr_l_h_client_a:l_i_account
+							AND	INSTR_CODE	=	:chr_l_h_instrcode_A:l_i_instr_code
+							AND	CREDITCLIENT		=	'111';
+		
+				IS_ANY_ORA_ERROR;
+			}
+			else
+			{
+				EXEC SQL UPDATE DL_LOCALREPPROC2
+							SET	QTY = QTY - :l_h_120safek
+							WHERE	CLIENT	=	:chr_l_h_client_a:l_i_account
+							AND	INSTR_CODE	=	:chr_l_h_instrcode_A:l_i_instr_code
+							AND	CREDITCLIENT		=	'110';
+		
+				IS_ANY_ORA_ERROR;
+			}
+		}
+	}
+
+	EXEC SQL CLOSE order_curs;
+	IS_ANY_ORA_ERROR;
+
+	
+
+   
+	EXEC SQL DECLARE 	trade_curs CURSOR FOR
+				SELECT 	a.CLIENT, a.INSTR_CODE, a.DOMESTIC_CPCLT, a.DEAL_CD, a.LR_DL_CLASS, sum(NVL(a.QTY,0))
+				FROM	 	DL_DEAL a, MT_INSTRUMENT b
+				WHERE		a.INSTR_CODE = b.INSTR_CODE
+				AND		a.DEAL_STAT != 'DU'
+				AND		( (a.LR_DL_CLASS IN ('01','02','05','06','08','10','11','12','14','16','17','19')) OR ( a.LR_DL_CLASS = '03' AND a.DEAL_CD = '1') )
+				AND		a.INSTRUMENT_DT IS NULL
+				AND		(a.VAL_FDT IS NOT NULL AND (FAILREASON_CD IS NULL OR FAILREASON_CD !='60'))
+				AND		a.EX_ARENA	!=	'3'
+				AND		b.CLASSCD = 'LCR'
+				GROUP BY a.CLIENT, a.INSTR_CODE, a.DOMESTIC_CPCLT, a.DEAL_CD, a.LR_DL_CLASS;
+
+	EXEC SQL OPEN trade_curs;
+	IS_ANY_ORA_ERROR;
+
+	for ( ; ; )
+	{
+
+		strcpy(chr_l_h_client_a, APL_NULL_STRING);
+		strcpy(chr_l_h_domcpac, APL_NULL_STRING);
+		strcpy(chr_l_h_instrcode_A, APL_NULL_STRING);
+		strcpy(chr_l_h_trcode_a, APL_NULL_STRING);
+		strcpy(chr_l_h_lrtrdtype, APL_NULL_STRING);
+		l_h_quantity_a 		 	= 	0;
+		int_l_i_qty 		 	= 	0;
+		l_i_account	 	=	0;
+		l_i_domcpac	 	=	0;
+		l_i_instr_code	 	=	0;
+		int_l_i_trcode	 	=	0;
+		l_i_lrtrdtype	=	0;
+		memset(&l_dl_localrepproc2_struct_h, NULL, sizeof(DL_LOCALREPPROC2_STRUCT_H) );
+		memset(&l_dl_localrepproc2_struct_i, NULL, sizeof(DL_LOCALREPPROC2_STRUCT_I) );
+
+		EXEC SQL FETCH trade_curs INTO 	:chr_l_h_client_a:l_i_account,
+													:chr_l_h_instrcode_A:l_i_instr_code,
+													:chr_l_h_domcpac:l_i_domcpac,
+													:chr_l_h_trcode_a:int_l_i_trcode,
+													:chr_l_h_lrtrdtype:l_i_lrtrdtype,
+													:l_h_quantity_a:int_l_i_qty;
+		
+		IS_ANY_ORA_ERROR;
+
+		if ( APL_ZERO_RESULT_SET )
+		{
+			break;
+		}
+
+		if ( int_l_i_qty == -1 )
+		{
+			l_h_quantity_a = 0;
+		}
+
+		if ( l_h_quantity_a > 0 )
+		{
+			strcpy(l_dl_localrepproc2_struct_h.h_dl_client, chr_l_h_client_a);
+			strcpy(l_dl_localrepproc2_struct_h.h_instr_code, chr_l_h_instrcode_A);
+			strcpy(l_dl_localrepproc2_struct_h.h_domcpclt_cd, chr_l_h_domcpac);
+			if ( chr_l_h_trcode_a[0] == '2' || chr_l_h_trcode_a[0] == '4' )
+			{
+				strcpy(l_dl_localrepproc2_struct_h.h_ctclt, "221");
+			}
+			else
+			{
+				if ( 	strcmp( chr_l_h_lrtrdtype, "02" ) == 0 ||
+						strcmp( chr_l_h_lrtrdtype, "17" ) == 0 )
+				{
+					strcpy(l_dl_localrepproc2_struct_h.h_ctclt, "224");
+				}
+				else
+				{
+					strcpy(l_dl_localrepproc2_struct_h.h_ctclt, "222");
+				}
+			}
+			l_dl_localrepproc2_struct_h.h_qty = l_h_quantity_a;
+			l_dl_localrepproc2_struct_i.i_dl_client = 0;
+			l_dl_localrepproc2_struct_i.i_instr_code = 0;
+			l_dl_localrepproc2_struct_i.i_ctclt = 0;
+			l_dl_localrepproc2_struct_i.i_qty = 0;
+			l_dl_localrepproc2_struct_i.i_domcpclt_cd = 0;
+
+			EXEC SQL SELECT	NVL(COUNT(*),0) 
+						INTO	:int_l_h_lrproc2_count:l_i_lrproc2_count
+						FROM	DL_LOCALREPPROC2
+						WHERE	CLIENT	=	:l_dl_localrepproc2_struct_h.h_dl_client
+						AND	INSTR_CODE	=	:l_dl_localrepproc2_struct_h.h_instr_code
+						AND	CREDITCLIENT		=	:l_dl_localrepproc2_struct_h.h_ctclt
+						AND	DOMESTIC_CPCLT	=	:l_dl_localrepproc2_struct_h.h_domcpclt_cd;
+
+			IS_ANY_ORA_ERROR;
+
+			if ( l_i_lrproc2_count == -1 )
+			{
+				int_l_h_lrproc2_count = 0;
+			}
+
+			if ( int_l_h_lrproc2_count == 0 )
+			{
+				EXEC SQL INSERT INTO DL_LOCALREPPROC2 VALUES (:l_dl_localrepproc2_struct_h:l_dl_localrepproc2_struct_i);
+				IS_ANY_ORA_ERROR;
+			}
+			else if ( int_l_h_lrproc2_count == 1 ) 
+			{
+				EXEC SQL UPDATE DL_LOCALREPPROC2
+							SET QTY = QTY + :l_dl_localrepproc2_struct_h.h_qty
+							WHERE	CLIENT	=	:l_dl_localrepproc2_struct_h.h_dl_client
+							AND	INSTR_CODE	=	:l_dl_localrepproc2_struct_h.h_instr_code
+							AND	CREDITCLIENT		=	:l_dl_localrepproc2_struct_h.h_ctclt
+							AND	DOMESTIC_CPCLT	=	:l_dl_localrepproc2_struct_h.h_domcpclt_cd;
+				IS_ANY_ORA_ERROR;
+			}
+			else
+			{
+				CO_ProcMonitor(	p_logfile, "More than 1 row for ACCOUNT, INSTR_CODE, CTACC, DOMCPAC Combination in CLRPROC2\n", NULL, NULL);
+				CO_ProcMonitor(	p_logfile, "Contact Support\n", NULL, NULL);
+				APL_GOBACK_FAIL
+			}
+		}
+	}
+
+	EXEC SQL CLOSE trade_curs;
+	IS_ANY_ORA_ERROR;
+
+	EXEC SQL DELETE DL_LOCALREPSAFEK;
+	IS_ANY_ORA_ERROR;
+
+	EXEC SQL INSERT INTO DL_LOCALREPSAFEK (SELECT 	INSTR_CODE, 
+													  	CREDITCLIENT, 
+													  	CLIENT, 
+													  	0,
+													  	SUM(decode(CREDITCLIENT,'210',NVL(QTY,0) * -1,
+																			  '221',NVL(QTY,0) * -1,
+																				     NVL(QTY,0) ) ), 
+													  	NULL, 
+													  	NULL
+											 FROM	  	DL_LOCALREPPROC2
+											 WHERE  	DOMESTIC_CPCLT IS NULL
+											 GROUP BY INSTR_CODE, CREDITCLIENT, CLIENT);
+
+	IS_ANY_ORA_ERROR;
+
+	EXEC SQL INSERT INTO DL_LOCALREPSAFEK (SELECT 	INSTR_CODE, 
+													  	CREDITCLIENT, 
+													  	CLIENT, 
+													  	0,
+													  	SUM(decode(CREDITCLIENT,'210',NVL(QTY,0) * -1,
+																			  '221',NVL(QTY,0) * -1,
+																				     NVL(QTY,0) ) ), 
+													  	DOMESTIC_CPCLT, 
+													  	NULL
+											 FROM	  	DL_LOCALREPPROC2
+											 WHERE	DOMESTIC_CPCLT IS NOT NULL
+											 GROUP BY INSTR_CODE, CREDITCLIENT, CLIENT, DOMESTIC_CPCLT);
+
+	IS_ANY_ORA_ERROR;
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS	:
+
+		CO_ProcMonitor(	p_logfile, "Exiting CDBCusBalFn processtion successfully\n", NULL, NULL);
+
+		#ifdef SYS_DEBUG
+			printf( "Leaving CDBCusBalFn with success\n");
+		#endif
+		
+		return(APL_SUCCESS);
+
+	RETURN_FAILURE	:
+	
+		CO_ProcMonitor(	p_logfile, "Exiting CDBCusBalFn processtion with errors\n", NULL, NULL);
+
+		#ifdef SYS_DEBUG
+			printf( "Leaving CDBCusBalFn with errors\n");
+		#endif
+		
+		return(APL_FAILURE);
+      
+}
+
+
+
+int CDBAddLRSAFEKRecFn(	DL_LOCALREPSAFEK_STRUCT_H 	*p_dl_localrepsafek_struct_h, 
+								FILE 						*p_logfile, 
+								INTL_ENV_DATA_STRUCT_H 	*p_intl_envdatastruct_h, 
+								DEBUG_INFO_STRUCT_H 			**l_debug_info_ptr)
+{
+	struct sqlca sqlca;
+	int	int_l_h_lrsafek_count	=	0;
+	short	l_i_lrsafek_count	=	0;
+
+	sqlca.sqlcode = 0;
+	
+   EXEC SQL BEGIN DECLARE SECTION;
+   EXEC SQL VAR p_dl_localrepsafek_struct_h->h_instr_code IS STRING;
+   EXEC SQL VAR p_dl_localrepsafek_struct_h->h_ct_clt IS STRING;
+   EXEC SQL VAR p_dl_localrepsafek_struct_h->h_dl_client IS STRING;
+   EXEC SQL VAR p_dl_localrepsafek_struct_h->h_domcpclt_cd IS STRING;
+   EXEC SQL VAR p_dl_localrepsafek_struct_h->h_lst_instr_date IS STRING;
+   EXEC SQL END DECLARE SECTION;
+
+	
+
+	#ifdef SYS_DEBUG
+		printf( "Entering processtion CDBAddLRSAFEKRecFn\n");
+	#endif
+		
+	CO_ProcMonitor(	p_logfile, "Entered processtion CDBAddLRSAFEKRecFn\n", NULL, NULL);
+
+	fprintf(p_logfile,"The client is :%s\n", p_dl_localrepsafek_struct_h->h_dl_client );
+	fprintf(p_logfile,"The instr_code is :%s\n", p_dl_localrepsafek_struct_h->h_instr_code );
+	fprintf(p_logfile,"The ctacc is :%s\n", p_dl_localrepsafek_struct_h->h_ct_clt );
+	fprintf(p_logfile,"The openbal is :%f\n", p_dl_localrepsafek_struct_h->h_openbalance );
+	fprintf(p_logfile,"The openbal is :%f\n", p_dl_localrepsafek_struct_h->h_closing_bal );
+	fprintf(p_logfile,"The domestic_cpclt is :%s\n", p_dl_localrepsafek_struct_h->h_domcpclt_cd );
+	fprintf(p_logfile,"The chr_last instr dt is :%s\n", p_dl_localrepsafek_struct_h->h_lst_instr_date );
+
+	if ( strlen(p_dl_localrepsafek_struct_h->h_domcpclt_cd) > 0 )
+	{
+		EXEC SQL SELECT NVL(COUNT(*),0)
+					INTO	:int_l_h_lrsafek_count:l_i_lrsafek_count
+					FROM	DL_LOCALREPSAFEK
+					WHERE	CLIENT	=	:p_dl_localrepsafek_struct_h->h_dl_client
+					AND	INSTR_CODE	=	:p_dl_localrepsafek_struct_h->h_instr_code
+					AND	DOMESTIC_CPCLT	=	:p_dl_localrepsafek_struct_h->h_domcpclt_cd
+					AND	CREDIT_CLT	=	:p_dl_localrepsafek_struct_h->h_ct_clt ;
+	}
+	else
+	{
+		EXEC SQL SELECT NVL(COUNT(*),0)
+					INTO	:int_l_h_lrsafek_count:l_i_lrsafek_count
+					FROM	DL_LOCALREPSAFEK
+					WHERE	CLIENT	=	:p_dl_localrepsafek_struct_h->h_dl_client
+					AND	INSTR_CODE	=	:p_dl_localrepsafek_struct_h->h_instr_code
+					AND	DOMESTIC_CPCLT	IS NULL
+					AND	CREDIT_CLT	=	:p_dl_localrepsafek_struct_h->h_ct_clt ;
+	}
+
+	IS_ANY_ORA_ERROR;
+
+	if ( int_l_h_lrsafek_count == 0 )
+	{	
+		EXEC SQL INSERT INTO DL_LOCALREPSAFEK VALUES (:p_dl_localrepsafek_struct_h);
+
+		IS_ANY_ORA_ERROR;
+	}
+	else
+	{
+		EXEC SQL UPDATE DL_LOCALREPSAFEK 
+					SET 	CLOSING_BAL 	= 	CLOSING_BAL + :p_dl_localrepsafek_struct_h->h_closing_bal,
+							LAST_INSTR_DATE	=	:p_dl_localrepsafek_struct_h->h_lst_instr_date
+					WHERE	CLIENT	=	:p_dl_localrepsafek_struct_h->h_dl_client
+					AND	INSTR_CODE	=	:p_dl_localrepsafek_struct_h->h_instr_code
+					AND	DOMESTIC_CPCLT	=	:p_dl_localrepsafek_struct_h->h_domcpclt_cd
+					AND	CREDIT_CLT	=	:p_dl_localrepsafek_struct_h->h_ct_clt ;
+
+		IS_ANY_ORA_ERROR;
+	}
+
+	EXEC SQL DELETE DL_LOCALREPSAFEK WHERE OPENBALANCE = 0 AND CLOSING_BAL = 0;
+
+	IS_ANY_ORA_ERROR;
+				
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS	:
+
+		CO_ProcMonitor(	p_logfile, "Exiting CDBAddLRSAFEKRecFn processtion successfully\n", NULL, NULL);
+
+		#ifdef SYS_DEBUG
+			printf( "Leaving CDBAddLRSAFEKRecFn with success\n");
+		#endif
+		
+		return(APL_SUCCESS);
+
+	RETURN_FAILURE	:
+	
+		CO_ProcMonitor(	p_logfile, "Exiting CDBAddLRSAFEKRecFn processtion with errors\n", NULL, NULL);
+
+		#ifdef SYS_DEBUG
+			printf( "Leaving CDBAddLRSAFEKRecFn with errors\n");
+		#endif
+		
+		return(APL_FAILURE);
+      
+}
+
+
+int CDBPassOrdEntryFn(	PO_LR_STRUCT_H *p_po_lr_struct_h, 
+								LR_ORD_STRUCT_H 	*p_lr_ord_struct_h_a,
+								LR_ORD_STRUCT_I		*p_lr_ord_struct_i,
+								DL_LOCALREPSPEC_STRUCT_H		*p_dl_localrepspec_struct_h_a,
+								FILE 						*p_logfile, 
+								INTL_ENV_DATA_STRUCT_H 	*p_intl_envdatastruct_h, 
+								DEBUG_INFO_STRUCT_H 			**l_debug_info_ptr)
+{
+	struct sqlca sqlca;
+	DL_LOCALREPPROC_STRUCT_H	l_dl_localrepproc_struct_h;
+	DL_LOCALREPSAFEK_STRUCT_H	l_dl_localrepsafek_struct_h;
+	char	chr_l_h_acc_accclass[3]			=	APL_NULL_STRING;
+	//char	chr_l_h_lracc_accown[4]			=	APL_NULL_STRING;
+	char	chr_l_client_a[APL_CLIENT_LENGTH]	=	APL_NULL_STRING;
+	char	chr_l_h_ct[4]						=	APL_NULL_STRING;
+	char	chr_l_h_db[4]						=	APL_NULL_STRING;
+	double	l_quantity 						=	0;
+	short	l_i_acc_accclass				=	0;
+	//short	l_i_lracc_accown				=	0;
+	short	l_i_ct							=	0;
+	short	l_i_db							=	0;
+
+	sqlca.sqlcode = 0;
+	
+	
+
+	#ifdef SYS_DEBUG
+		printf( "Entering processtion CDBPassOrdEntryFn\n");
+	#endif
+		
+	CO_ProcMonitor(	p_logfile, "Entered processtion CDBPassOrdEntryFn\n", NULL, NULL);
+
+	
+
+	EXEC SQL VAR	chr_l_h_acc_accclass	IS STRING;
+	//EXEC SQL VAR	chr_l_h_lracc_accown	IS STRING;
+	EXEC SQL VAR	chr_l_h_ct				IS STRING;
+	EXEC SQL VAR	chr_l_h_db				IS STRING;
+
+	EXEC SQL VAR   p_lr_ord_struct_h_a->h_dl_client IS STRING; 
+	EXEC SQL VAR   p_lr_ord_struct_h_a->h_orderindentity_no IS STRING; 
+	EXEC SQL VAR   p_lr_ord_struct_h_a->h_buy_sell_flag IS STRING; 
+	EXEC SQL VAR   p_lr_ord_struct_h_a->h_orderdate IS STRING; 
+	EXEC SQL VAR   p_lr_ord_struct_h_a->h_limit_ind IS STRING; 
+	EXEC SQL VAR   p_lr_ord_struct_h_a->h_isgte_ind IS STRING; 
+	EXEC SQL VAR   p_lr_ord_struct_h_a->h_all_none_ind IS STRING; 
+	EXEC SQL VAR   p_lr_ord_struct_h_a->h_ex_arena IS STRING; 
+	EXEC SQL VAR   p_lr_ord_struct_h_a->h_ord_stat IS STRING; 
+	EXEC SQL VAR   p_lr_ord_struct_h_a->h_instr_code IS STRING; 
+	EXEC SQL VAR   p_lr_ord_struct_h_a->h_maker IS STRING; 
+	EXEC SQL VAR   p_lr_ord_struct_h_a->h_maker_dt IS STRING; 
+	EXEC SQL VAR   p_lr_ord_struct_h_a->h_access_stamp IS STRING; 
+	EXEC SQL VAR   p_lr_ord_struct_h_a->h_checker IS STRING; 
+	EXEC SQL VAR   p_lr_ord_struct_h_a->h_checker_dt IS STRING; 
+	EXEC SQL VAR   p_lr_ord_struct_h_a->h_expirydate IS STRING; 
+	EXEC SQL VAR   p_lr_ord_struct_h_a->h_canceleddate IS STRING; 
+	EXEC SQL VAR   p_lr_ord_struct_h_a->h_candropdate IS STRING; 
+	EXEC SQL VAR   p_lr_ord_struct_h_a->h_broker_cd IS STRING; 
+	EXEC SQL VAR   p_lr_ord_struct_h_a->h_locindentity_no IS STRING; 
+	EXEC SQL VAR   p_lr_ord_struct_h_a->h_lrdltype IS STRING; 
+	EXEC SQL VAR   p_lr_ord_struct_h_a->h_lr_chkdate IS STRING; 
+	EXEC SQL VAR   p_lr_ord_struct_h_a->h_lr_ublckdate IS STRING; 
+	EXEC SQL VAR   p_lr_ord_struct_h_a->h_ublckdate IS STRING; 
+	EXEC SQL VAR   p_lr_ord_struct_h_a->h_lastexecdate IS STRING; 
+	EXEC SQL VAR   p_lr_ord_struct_h_a->h_lastdeal IS STRING; 
+
+	EXEC SQL VAR   l_dl_localrepproc_struct_h.h_dl_client IS STRING; 
+	EXEC SQL VAR   l_dl_localrepproc_struct_h.h_indentity_no IS STRING; 
+	EXEC SQL VAR   l_dl_localrepproc_struct_h.h_instr_code IS STRING; 
+	EXEC SQL VAR   l_dl_localrepproc_struct_h.h_ctclt IS STRING; 
+	EXEC SQL VAR   l_dl_localrepproc_struct_h.h_dbclt IS STRING; 
+	EXEC SQL VAR   l_dl_localrepproc_struct_h.h_domcpclt_cd IS STRING; 
+	EXEC SQL VAR   l_dl_localrepproc_struct_h.h_ord_ind IS STRING; 
+	EXEC SQL VAR   l_dl_localrepproc_struct_h.h_lrdltype IS STRING; 
+	EXEC SQL VAR   l_dl_localrepproc_struct_h.h_dealcd IS STRING; 
+	EXEC SQL VAR   l_dl_localrepproc_struct_h.h_reset_ind IS STRING; 
+
+	EXEC SQL VAR   l_dl_localrepsafek_struct_h.h_instr_code IS STRING; 
+	EXEC SQL VAR   l_dl_localrepsafek_struct_h.h_ct_clt IS STRING; 
+	EXEC SQL VAR   l_dl_localrepsafek_struct_h.h_dl_client IS STRING; 
+	EXEC SQL VAR   l_dl_localrepsafek_struct_h.h_domcpclt_cd IS STRING; 
+	EXEC SQL VAR   l_dl_localrepsafek_struct_h.h_lst_instr_date IS STRING; 
+
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_dealclass IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_dealcd IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_status_active IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_dtname IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_indname IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_debit_flag IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_debit_ind_100 IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_credit_flag IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_credit_ind_100 IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_desc IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_info IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_iv_cond IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_local_iv_cond IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_desc_a IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_desc_b IS STRING;
+
+	EXEC SQL SELECT CLN_CLAS
+				INTO	:chr_l_h_acc_accclass:l_i_acc_accclass
+				FROM	MT_CLIENT
+				WHERE	CLN_CODE	=	:p_lr_ord_struct_h_a->h_dl_client;
+
+	IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_ACCNOT_FND,
+														p_lr_ord_struct_h_a->h_dl_client,
+														APL_NULL_STRING,
+														APL_NULL_STRING );
+
+
+	
+
+	if ( chr_l_h_acc_accclass[0] == '1')
+	{
+		
+
+		if ( strlen(p_dl_localrepspec_struct_h_a->h_credit_ind_100) != 0 )
+		{
+			EXEC SQL SELECT CLIENT_OWN
+						INTO	:chr_l_h_ct:l_i_ct
+						FROM	DL_LOCALREPCLIENT
+						WHERE	CREDIT_CLT	=	:p_dl_localrepspec_struct_h_a->h_credit_flag;
+
+			IS_ANY_ORA_ERROR;
+
+			fprintf(p_logfile,"l_h_ct is :%s\n",chr_l_h_ct);
+			fprintf(p_logfile,"CT_ACC is :%s\n",p_dl_localrepspec_struct_h_a->h_credit_flag);
+
+		}
+	}
+
+	if ( chr_l_h_acc_accclass[0] == '2')
+	{
+		
+
+		if ( strlen(p_dl_localrepspec_struct_h_a->h_credit_ind_100) != 0 )
+		{
+			strcpy(chr_l_client_a, p_lr_ord_struct_h_a->h_dl_client);
+
+			
+
+			strcpy(chr_l_h_ct, &chr_l_client_a[strlen(chr_l_client_a)-3] );
+		}
+	}
+
+	if (strlen( p_dl_localrepspec_struct_h_a->h_debit_ind_100 ) != 0 )
+	{
+
+		
+
+		if ( strcmp( p_dl_localrepspec_struct_h_a->h_debit_ind_100, "CLIENT") == 0 )
+		{
+			EXEC SQL SELECT CLN_CLAS
+						INTO	:chr_l_h_acc_accclass:l_i_acc_accclass
+						FROM	MT_CLIENT
+						WHERE	CLN_CODE	=	:p_lr_ord_struct_h_a->h_dl_client;
+
+			IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_ACCNOT_FND,
+																p_lr_ord_struct_h_a->h_dl_client,
+																APL_NULL_STRING,
+																APL_NULL_STRING );
+		}
+		else if ( strcmp( p_dl_localrepspec_struct_h_a->h_debit_ind_100, "DOMESTIC_CPCLT") == 0 )
+		{
+			
+
+			EXEC SQL SELECT CLN_CLAS
+						INTO	:chr_l_h_acc_accclass:l_i_acc_accclass
+						FROM	MT_CLIENT
+						WHERE	CLN_CODE	=	:p_lr_ord_struct_h_a->h_broker_cd;
+
+			IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_ACCNOT_FND,
+																p_lr_ord_struct_h_a->h_broker_cd,
+																APL_NULL_STRING,
+																APL_NULL_STRING );
+		}
+
+		if ( chr_l_h_acc_accclass[0] == '1')
+		{
+			
+
+			EXEC SQL SELECT CLIENT_OWN
+						INTO	:chr_l_h_db:l_i_db
+						FROM	DL_LOCALREPCLIENT
+						WHERE	CREDIT_CLT	=	:p_dl_localrepspec_struct_h_a->h_debit_flag;
+
+			IS_ANY_ORA_ERROR;
+		}
+
+		if ( chr_l_h_acc_accclass[0] == '2')
+		{
+			
+
+			if ( strcmp( p_dl_localrepspec_struct_h_a->h_debit_ind_100, "CLIENT") == 0 )
+			{
+				strcpy(chr_l_client_a, p_lr_ord_struct_h_a->h_dl_client);
+			}
+			else if ( strcmp( p_dl_localrepspec_struct_h_a->h_debit_ind_100, "DOMESTIC_CPCLT") == 0 )
+			{
+				strcpy(chr_l_client_a, p_lr_ord_struct_h_a->h_broker_cd);
+			}
+
+			
+
+			strcpy(chr_l_h_db, &chr_l_client_a[strlen(chr_l_client_a)-3] );
+		}
+
+	}
+
+	if ( strlen( chr_l_h_ct ) == 0 )
+	{
+		strcpy(chr_l_h_ct, p_dl_localrepspec_struct_h_a->h_credit_flag);
+	}
+
+	if ( strlen( chr_l_h_db ) == 0 )
+	{
+		strcpy(chr_l_h_db, p_dl_localrepspec_struct_h_a->h_debit_flag);
+	}
+
+	if ( strlen(chr_l_h_ct) == 0 || strlen(chr_l_h_db) == 0 )
+	{
+		CO_ProcMonitor( p_logfile, "DB Account / CT Account is Empty", NULL, NULL );
+		APL_GOBACK_FAIL
+	}
+
+	
+
+	if ( p_dl_localrepspec_struct_h_a->h_status_active[0] == 'Y' )
+	{
+		if ( strcmp(p_dl_localrepspec_struct_h_a->h_dtname, "CHECKER_DT") == 0 )
+		{
+			l_quantity = p_lr_ord_struct_h_a->h_orderquantity;
+		}
+		else
+		{
+			if ( p_lr_ord_struct_i->i_execquantity == -1 )
+			{
+				l_quantity = p_lr_ord_struct_h_a->h_orderquantity;
+			}
+			else
+			{
+				l_quantity = p_lr_ord_struct_h_a->h_orderquantity - p_lr_ord_struct_h_a->h_execquantity;
+			}
+		}
+
+		memset( &l_dl_localrepproc_struct_h, NULL, sizeof(DL_LOCALREPPROC_STRUCT_H) );
+
+		strcpy(l_dl_localrepproc_struct_h.h_dl_client, p_lr_ord_struct_h_a->h_dl_client);
+		strcpy(l_dl_localrepproc_struct_h.h_indentity_no, p_lr_ord_struct_h_a->h_orderindentity_no);
+		strcpy(l_dl_localrepproc_struct_h.h_instr_code, p_lr_ord_struct_h_a->h_instr_code);
+		strcpy(l_dl_localrepproc_struct_h.h_domcpclt_cd, p_lr_ord_struct_h_a->h_broker_cd);
+		strcpy(l_dl_localrepproc_struct_h.h_ctclt, chr_l_h_ct);
+		strcpy(l_dl_localrepproc_struct_h.h_dbclt, chr_l_h_db);
+		l_dl_localrepproc_struct_h.h_qty = l_quantity;
+		l_dl_localrepproc_struct_h.h_dtfld = p_dl_localrepspec_struct_h_a->h_dtfld;
+		strcpy(l_dl_localrepproc_struct_h.h_lrdltype, p_lr_ord_struct_h_a->h_lrdltype);
+
+		if ( p_lr_ord_struct_h_a->h_buy_sell_flag[0] == 'B' )
+		{
+			l_dl_localrepproc_struct_h.h_dealcd[0] = '4';
+			l_dl_localrepproc_struct_h.h_dealcd[1] = APL_NULL_CHAR;
+		}
+		else
+		{
+			l_dl_localrepproc_struct_h.h_dealcd[0] = '3';
+			l_dl_localrepproc_struct_h.h_dealcd[1] = APL_NULL_CHAR;
+		}
+
+		l_dl_localrepproc_struct_h.h_r_code = 1;
+
+		if ( strcmp( p_lr_ord_struct_h_a->h_lrdltype,"18" ) == 0 ||
+				strcmp( p_lr_ord_struct_h_a->h_lrdltype, "04" ) == 0 ) 
+		{
+			l_dl_localrepproc_struct_h.h_ord_ind[0] = 'N';
+			l_dl_localrepproc_struct_h.h_ord_ind[1] = APL_NULL_CHAR;
+		}
+		else
+		{
+			l_dl_localrepproc_struct_h.h_ord_ind[0] = 'Y';
+			l_dl_localrepproc_struct_h.h_ord_ind[1] = APL_NULL_CHAR;
+		}
+
+		EXEC SQL INSERT INTO DL_LOCALREPPROC VALUES (:l_dl_localrepproc_struct_h);
+
+		
+
+		memset( &l_dl_localrepproc_struct_h, NULL, sizeof(DL_LOCALREPPROC_STRUCT_H) );
+
+		strcpy(l_dl_localrepproc_struct_h.h_dl_client, p_lr_ord_struct_h_a->h_dl_client);
+		strcpy(l_dl_localrepproc_struct_h.h_indentity_no, p_lr_ord_struct_h_a->h_orderindentity_no);
+		strcpy(l_dl_localrepproc_struct_h.h_instr_code, p_lr_ord_struct_h_a->h_instr_code);
+		strcpy(l_dl_localrepproc_struct_h.h_domcpclt_cd, p_lr_ord_struct_h_a->h_broker_cd);
+		strcpy(l_dl_localrepproc_struct_h.h_ctclt, chr_l_h_db);
+		strcpy(l_dl_localrepproc_struct_h.h_dbclt, chr_l_h_ct);
+		l_dl_localrepproc_struct_h.h_qty = l_quantity;
+		l_dl_localrepproc_struct_h.h_dtfld = p_dl_localrepspec_struct_h_a->h_dtfld;
+		strcpy(l_dl_localrepproc_struct_h.h_lrdltype, p_lr_ord_struct_h_a->h_lrdltype);
+
+		if ( p_lr_ord_struct_h_a->h_buy_sell_flag[0] == 'B' )
+		{
+			l_dl_localrepproc_struct_h.h_dealcd[0] = '4';
+			l_dl_localrepproc_struct_h.h_dealcd[1] = APL_NULL_CHAR;
+		}
+		else
+		{
+			l_dl_localrepproc_struct_h.h_dealcd[0] = '3';
+			l_dl_localrepproc_struct_h.h_dealcd[1] = APL_NULL_CHAR;
+		}
+
+		l_dl_localrepproc_struct_h.h_r_code = 0;
+
+		if ( strcmp( p_lr_ord_struct_h_a->h_lrdltype,"18" ) == 0 ||
+				strcmp( p_lr_ord_struct_h_a->h_lrdltype, "04" ) == 0 ) 
+		{
+			l_dl_localrepproc_struct_h.h_ord_ind[0] = 'N'; // AIX - Warnings removal
+			l_dl_localrepproc_struct_h.h_ord_ind[1] = APL_NULL_CHAR; // AIX - Warnings removal
+		}
+		else
+		{
+			l_dl_localrepproc_struct_h.h_ord_ind[0] = 'Y'; // AIX - Warnings removal
+			l_dl_localrepproc_struct_h.h_ord_ind[1] = APL_NULL_CHAR; // AIX - Warnings removal
+		}
+
+		EXEC SQL INSERT INTO DL_LOCALREPPROC VALUES (:l_dl_localrepproc_struct_h);
+
+	}
+
+	
+
+	memset( &l_dl_localrepsafek_struct_h, NULL, sizeof(DL_LOCALREPSAFEK_STRUCT_H) );
+
+	strcpy( l_dl_localrepsafek_struct_h.h_instr_code, p_lr_ord_struct_h_a->h_instr_code);
+	strcpy( l_dl_localrepsafek_struct_h.h_ct_clt, chr_l_h_ct);	
+	strcpy( l_dl_localrepsafek_struct_h.h_dl_client, p_lr_ord_struct_h_a->h_dl_client);
+	l_dl_localrepsafek_struct_h.h_openbalance = 0;
+	l_dl_localrepsafek_struct_h.h_closing_bal = l_quantity;
+	strcpy(l_dl_localrepsafek_struct_h.h_domcpclt_cd, p_lr_ord_struct_h_a->h_broker_cd);
+	strcpy( l_dl_localrepsafek_struct_h.h_lst_instr_date, p_lr_ord_struct_h_a->h_lastexecdate );
+
+	if ( APL_FAILURE == CDBAddLRSAFEKRecFn( 	&l_dl_localrepsafek_struct_h,
+															p_logfile,
+															p_intl_envdatastruct_h,
+															l_debug_info_ptr ) )
+	{
+		APL_GOBACK_FAIL
+	}
+			
+	memset( &l_dl_localrepsafek_struct_h, NULL, sizeof(DL_LOCALREPSAFEK_STRUCT_H) );
+
+	strcpy( l_dl_localrepsafek_struct_h.h_instr_code, p_lr_ord_struct_h_a->h_instr_code);
+	strcpy( l_dl_localrepsafek_struct_h.h_ct_clt, chr_l_h_ct);	
+	strcpy( l_dl_localrepsafek_struct_h.h_dl_client, p_lr_ord_struct_h_a->h_dl_client);
+	l_dl_localrepsafek_struct_h.h_openbalance = 0;
+	l_dl_localrepsafek_struct_h.h_closing_bal = l_quantity * -1;
+	strcpy(l_dl_localrepsafek_struct_h.h_domcpclt_cd, p_lr_ord_struct_h_a->h_broker_cd);
+	strcpy( l_dl_localrepsafek_struct_h.h_lst_instr_date, p_lr_ord_struct_h_a->h_lastexecdate );
+
+	if ( APL_FAILURE == CDBAddLRSAFEKRecFn( 	&l_dl_localrepsafek_struct_h,
+															p_logfile,
+															p_intl_envdatastruct_h,
+															l_debug_info_ptr ) )
+	{
+		APL_GOBACK_FAIL
+	}
+			
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS	:
+
+		CO_ProcMonitor(	p_logfile, "Exiting CDBPassOrdEntryFn processtion successfully\n", NULL, NULL);
+
+		#ifdef SYS_DEBUG
+			printf( "Leaving CDBPassOrdEntryFn with success\n");
+		#endif
+		
+		return(APL_SUCCESS);
+
+	RETURN_FAILURE	:
+	
+		CO_ProcMonitor(	p_logfile, "Exiting CDBPassOrdEntryFn processtion with errors\n", NULL, NULL);
+
+		#ifdef SYS_DEBUG
+			printf( "Leaving CDBPassOrdEntryFn with errors\n");
+		#endif
+		
+		return(APL_FAILURE);
+      
+}
+
+
+
+int CDBPassLREntryFn(	PO_LR_STRUCT_H *p_po_lr_struct_h, 
+								DEAL_LR_STRUCT_H  	*p_deal_lr_struct_h,
+								DL_LOCALREPSPEC_STRUCT_H		*p_dl_localrepspec_struct_h_a,
+								FILE 						*p_logfile, 
+								INTL_ENV_DATA_STRUCT_H 	*p_intl_envdatastruct_h, 
+								DEBUG_INFO_STRUCT_H 			**l_debug_info_ptr)
+{
+	struct sqlca sqlca;
+	DL_LOCALREPPROC_STRUCT_H	l_dl_localrepproc_struct_h;
+	DL_LOCALREPSAFEK_STRUCT_H	l_dl_localrepsafek_struct_h;
+	char	chr_l_h_acc_accclass[3]			=	APL_NULL_STRING;
+	//char	chr_l_h_lracc_accown[4]			=	APL_NULL_STRING;
+	char	chr_l_client_a[APL_CLIENT_LENGTH]	=	APL_NULL_STRING;
+	char	chr_l_h_ct[4]						=	APL_NULL_STRING;
+	char	chr_l_h_db[4]						=	APL_NULL_STRING;
+	short	l_i_acc_accclass				=	0;
+	//short	l_i_lracc_accown				=	0;
+	short	l_i_ct							=	0;
+	short	l_i_db							=	0;
+
+	sqlca.sqlcode = 0;
+	
+	
+
+	#ifdef SYS_DEBUG
+		printf( "Entering processtion CDBPassLREntryFn\n");
+	#endif
+		
+	CO_ProcMonitor(	p_logfile, "Entered processtion CDBPassLREntryFn\n", NULL, NULL);
+
+	
+
+	EXEC SQL VAR	chr_l_h_acc_accclass	IS STRING;
+	//EXEC SQL VAR	chr_l_h_lracc_accown	IS STRING;
+	EXEC SQL VAR	chr_l_h_ct				IS STRING;
+	EXEC SQL VAR	chr_l_h_db				IS STRING;
+
+   EXEC SQL VAR p_deal_lr_struct_h->h_dl_client IS STRING;
+   EXEC SQL VAR p_deal_lr_struct_h->h_domcpclt_cd IS STRING;
+   EXEC SQL VAR p_deal_lr_struct_h->h_countclt IS STRING;
+   EXEC SQL VAR p_deal_lr_struct_h->h_lrdltype IS STRING;
+   EXEC SQL VAR p_deal_lr_struct_h->h_deal_status IS STRING;
+   EXEC SQL VAR p_deal_lr_struct_h->h_indentity_no IS STRING;
+   EXEC SQL VAR p_deal_lr_struct_h->h_instr_code IS STRING;
+   EXEC SQL VAR p_deal_lr_struct_h->h_classofdl IS STRING;
+   EXEC SQL VAR p_deal_lr_struct_h->h_dealcd IS STRING;
+   EXEC SQL VAR p_deal_lr_struct_h->h_instrdate IS STRING;
+   EXEC SQL VAR p_deal_lr_struct_h->h_confdate IS STRING;
+   EXEC SQL VAR p_deal_lr_struct_h->h_checker IS STRING;
+   EXEC SQL VAR p_deal_lr_struct_h->h_ndsdate IS STRING;
+   EXEC SQL VAR p_deal_lr_struct_h->h_newdt IS STRING;
+   EXEC SQL VAR p_deal_lr_struct_h->h_dlfromord IS STRING;
+   EXEC SQL VAR p_deal_lr_struct_h->h_countcltnm IS STRING;
+
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_dealclass IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_dealcd IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_status_active IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_dtname IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_indname IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_debit_flag IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_debit_ind_100 IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_credit_flag IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_credit_ind_100 IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_desc IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_info IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_iv_cond IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_local_iv_cond IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_desc_a IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_desc_b IS STRING;
+
+   EXEC SQL VAR   l_dl_localrepproc_struct_h.h_dl_client IS STRING; 
+   EXEC SQL VAR   l_dl_localrepproc_struct_h.h_indentity_no IS STRING; 
+   EXEC SQL VAR   l_dl_localrepproc_struct_h.h_instr_code IS STRING; 
+   EXEC SQL VAR   l_dl_localrepproc_struct_h.h_ctclt IS STRING; 
+   EXEC SQL VAR   l_dl_localrepproc_struct_h.h_dbclt IS STRING; 
+   EXEC SQL VAR   l_dl_localrepproc_struct_h.h_domcpclt_cd IS STRING; 
+   EXEC SQL VAR   l_dl_localrepproc_struct_h.h_ord_ind IS STRING; 
+   EXEC SQL VAR   l_dl_localrepproc_struct_h.h_lrdltype IS STRING; 
+   EXEC SQL VAR   l_dl_localrepproc_struct_h.h_dealcd IS STRING; 
+   EXEC SQL VAR   l_dl_localrepproc_struct_h.h_reset_ind IS STRING; 
+
+   EXEC SQL VAR   l_dl_localrepsafek_struct_h.h_instr_code IS STRING; 
+   EXEC SQL VAR   l_dl_localrepsafek_struct_h.h_ct_clt IS STRING; 
+   EXEC SQL VAR   l_dl_localrepsafek_struct_h.h_dl_client IS STRING; 
+   EXEC SQL VAR   l_dl_localrepsafek_struct_h.h_domcpclt_cd IS STRING; 
+   EXEC SQL VAR   l_dl_localrepsafek_struct_h.h_lst_instr_date IS STRING; 
+
+   
+   G_SYS_ACCOUNT_LEN = 10; 
+
+	EXEC SQL SELECT CLN_CLAS
+				INTO	:chr_l_h_acc_accclass:l_i_acc_accclass
+				FROM	MT_CLIENT
+				WHERE	CLN_CODE	=	:p_deal_lr_struct_h->h_dl_client;
+
+	IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_ACCNOT_FND,
+														p_deal_lr_struct_h->h_dl_client,
+														APL_NULL_STRING,
+														APL_NULL_STRING );
+
+
+	
+
+	if ( chr_l_h_acc_accclass[0] == '1')
+	{
+		
+
+		if ( strlen(p_dl_localrepspec_struct_h_a->h_credit_ind_100) != 0 )
+		{
+			EXEC SQL SELECT CLIENT_OWN
+						INTO	:chr_l_h_ct:l_i_ct
+						FROM	DL_LOCALREPCLIENT
+						WHERE	CREDIT_CLT	=	:p_dl_localrepspec_struct_h_a->h_credit_flag;
+
+			IS_ANY_ORA_ERROR;
+
+			fprintf(p_logfile,"CT_ACC is :%s\n",p_dl_localrepspec_struct_h_a->h_credit_flag);
+			fprintf(p_logfile,"ACC_OWN is :%s\n",chr_l_h_ct);
+		}
+	}
+
+	if ( chr_l_h_acc_accclass[0] == '2')
+	{
+		
+
+		if ( strlen(p_dl_localrepspec_struct_h_a->h_credit_ind_100) != 0 )
+		{
+			strcpy(chr_l_client_a, p_deal_lr_struct_h->h_dl_client);
+
+			
+
+			strcpy(chr_l_h_ct, &chr_l_client_a[strlen(chr_l_client_a)-3] );
+		}
+	}
+
+	if (strlen( p_dl_localrepspec_struct_h_a->h_debit_ind_100 ) != 0 )
+	{
+
+		
+
+		if ( strcmp( p_dl_localrepspec_struct_h_a->h_debit_ind_100, "CLIENT") == 0 )
+		{
+
+
+			EXEC SQL SELECT CLN_CLAS
+						INTO	:chr_l_h_acc_accclass:l_i_acc_accclass
+						FROM	MT_CLIENT
+						WHERE	CLN_CODE	=	rtrim(SUBSTR(:p_deal_lr_struct_h->h_dl_client,1,:G_SYS_ACCOUNT_LEN));
+
+			IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_ACCNOT_FND,
+																p_deal_lr_struct_h->h_dl_client,
+																APL_NULL_STRING,
+																APL_NULL_STRING );
+		}
+		else if ( strcmp( p_dl_localrepspec_struct_h_a->h_debit_ind_100, "DOMESTIC_CPCLT") == 0 )
+		{
+			EXEC SQL SELECT CLN_CLAS
+						INTO	:chr_l_h_acc_accclass:l_i_acc_accclass
+						FROM	MT_CLIENT
+						WHERE	CLN_CODE	=	:p_deal_lr_struct_h->h_domcpclt_cd;
+
+			IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_ACCNOT_FND,
+																p_deal_lr_struct_h->h_domcpclt_cd,
+																APL_NULL_STRING,
+																APL_NULL_STRING );
+		}
+		else if ( ( strcmp( p_dl_localrepspec_struct_h_a->h_debit_ind_100, "CP_CLT") == 0 ) &&  strcmp( p_deal_lr_struct_h->h_countclt,APL_NULL_STRING) )
+		{
+
+
+			EXEC SQL SELECT CLN_CLAS
+						INTO	:chr_l_h_acc_accclass:l_i_acc_accclass
+						FROM	MT_CLIENT
+						WHERE	CLN_CODE	=	rtrim(SUBSTR(:p_deal_lr_struct_h->h_dl_client,1,:G_SYS_ACCOUNT_LEN));
+
+			IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_ACCNOT_FND,
+																p_deal_lr_struct_h->h_countclt,
+																APL_NULL_STRING,
+																APL_NULL_STRING );
+		}
+
+		if ( chr_l_h_acc_accclass[0] == '1')
+		{
+			
+
+			EXEC SQL SELECT CLIENT_OWN
+						INTO	:chr_l_h_db:l_i_db
+						FROM	DL_LOCALREPCLIENT
+						WHERE	CREDIT_CLT	=	:p_dl_localrepspec_struct_h_a->h_debit_flag;
+
+			IS_ANY_ORA_ERROR;
+		}
+
+		if ( chr_l_h_acc_accclass[0] == '2')
+		{
+			
+
+			if ( strcmp( p_dl_localrepspec_struct_h_a->h_debit_ind_100, "CLIENT") == 0 )
+			{
+				strcpy(chr_l_client_a, p_deal_lr_struct_h->h_dl_client);
+			}
+			else if ( strcmp( p_dl_localrepspec_struct_h_a->h_debit_ind_100, "DOMESTIC_CPCLT") == 0 )
+			{
+				strcpy(chr_l_client_a, p_deal_lr_struct_h->h_domcpclt_cd);
+			}
+			else if ( strcmp( p_dl_localrepspec_struct_h_a->h_debit_ind_100, "CP_CLT") == 0 )
+			{
+           
+				strncpy(chr_l_client_a, p_deal_lr_struct_h->h_countclt,APL_CLIENT_LENGTH-1);
+            strcat(chr_l_client_a,"\0");
+			}
+
+			
+
+			strcpy(chr_l_h_db, &chr_l_client_a[strlen(chr_l_client_a)-3] );
+		}
+
+	}
+
+	if ( strlen( chr_l_h_ct ) == 0 )
+	{
+		strcpy(chr_l_h_ct, p_dl_localrepspec_struct_h_a->h_credit_flag);
+	}
+
+	if ( strlen( chr_l_h_db ) == 0 )
+	{
+		strcpy(chr_l_h_db, p_dl_localrepspec_struct_h_a->h_debit_flag);
+	}
+
+	if ( strlen(chr_l_h_ct) == 0 || strlen(chr_l_h_db) == 0 )
+	{
+		CO_ProcMonitor( p_logfile, "DB Account / CT Account is Empty", NULL, NULL );
+		APL_GOBACK_FAIL
+	}
+
+	
+
+	if ( p_dl_localrepspec_struct_h_a->h_status_active[0] == 'Y' )
+	{
+		memset( &l_dl_localrepproc_struct_h, NULL, sizeof(DL_LOCALREPPROC_STRUCT_H));
+
+		if ( strcmp(p_deal_lr_struct_h->h_lrdltype,"18") == 0 ||
+				strcmp(p_deal_lr_struct_h->h_lrdltype,"04") == 0)
+		{
+
+			strncpy(l_dl_localrepproc_struct_h.h_dl_client, p_deal_lr_struct_h->h_countclt,APL_CLIENT_LENGTH-1);
+         strcat(l_dl_localrepproc_struct_h.h_dl_client,"\0"); 
+			l_dl_localrepproc_struct_h.h_ord_ind[0] = 'N';
+			l_dl_localrepproc_struct_h.h_ord_ind[1] = APL_NULL_CHAR;
+		}
+		else
+		{
+			strcpy( l_dl_localrepproc_struct_h.h_dl_client, p_deal_lr_struct_h->h_dl_client );
+			if ( strcmp( p_deal_lr_struct_h->h_deal_status, STATUS_DEL_AUTH ) == 0 )
+			{
+				l_dl_localrepproc_struct_h.h_ord_ind[0] = 'Y';
+				l_dl_localrepproc_struct_h.h_ord_ind[1] = APL_NULL_CHAR;
+			}
+			else
+			{
+				l_dl_localrepproc_struct_h.h_ord_ind[0] = 'N';
+				l_dl_localrepproc_struct_h.h_ord_ind[1] = APL_NULL_CHAR;
+			}
+		}
+
+		strcpy( l_dl_localrepproc_struct_h.h_indentity_no, p_deal_lr_struct_h->h_indentity_no );
+		strcpy( l_dl_localrepproc_struct_h.h_instr_code, p_deal_lr_struct_h->h_instr_code );
+
+		
+		if	( ( strcmp( p_deal_lr_struct_h->h_domcpclt_cd, 
+			   			l_mt_core_sys_params_struct_h.custody_clt_cd ) == 0 )	&&
+			  ( strcmp(p_deal_lr_struct_h->h_classofdl,"26") == 0) )
+		{
+			if ( 	( strcmp(p_deal_lr_struct_h->h_lrdltype,"18") == 0 		||
+					  strcmp(p_deal_lr_struct_h->h_lrdltype,"04") == 0) 	&&
+					( p_dl_localrepspec_struct_h_a->h_dtfld == 3 ) )
+			{
+				strcpy( l_dl_localrepproc_struct_h.h_domcpclt_cd, p_deal_lr_struct_h->h_dl_client );
+			}
+			else
+			{
+
+				strncpy(l_dl_localrepproc_struct_h.h_domcpclt_cd, p_deal_lr_struct_h->h_countclt,APL_CLIENT_LENGTH-1);
+            strcat(l_dl_localrepproc_struct_h.h_domcpclt_cd,"\0");
+			}
+		}
+		else
+		{
+			strcpy( l_dl_localrepproc_struct_h.h_domcpclt_cd, p_deal_lr_struct_h->h_domcpclt_cd );
+		}
+
+		if ( p_po_lr_struct_h->h_rst_ind == 'N' )
+		{
+			strcpy( l_dl_localrepproc_struct_h.h_ctclt, chr_l_h_ct );
+			strcpy( l_dl_localrepproc_struct_h.h_dbclt, chr_l_h_db );
+			l_dl_localrepproc_struct_h.h_reset_ind[0] = 'N';
+			l_dl_localrepproc_struct_h.h_reset_ind[1] = APL_NULL_CHAR;
+		}
+		else
+		{
+			strcpy( l_dl_localrepproc_struct_h.h_ctclt, chr_l_h_db );
+			strcpy( l_dl_localrepproc_struct_h.h_dbclt, chr_l_h_ct );
+			l_dl_localrepproc_struct_h.h_reset_ind[0] = 'Y';
+			l_dl_localrepproc_struct_h.h_reset_ind[1] = APL_NULL_CHAR;
+		}
+
+		l_dl_localrepproc_struct_h.h_qty = p_deal_lr_struct_h->h_qty;
+		l_dl_localrepproc_struct_h.h_dtfld = p_dl_localrepspec_struct_h_a->h_dtfld;
+		
+      if ( ( strcmp( p_deal_lr_struct_h->h_domcpclt_cd, 
+                     l_mt_core_sys_params_struct_h.custody_clt_cd ) == 0 ) &&
+           ( strcmp(p_deal_lr_struct_h->h_classofdl,"26") == 0) )
+        l_dl_localrepproc_struct_h.h_r_code = 0;
+      else
+			l_dl_localrepproc_struct_h.h_r_code = 1;
+
+		strcpy(l_dl_localrepproc_struct_h.h_lrdltype, p_deal_lr_struct_h->h_lrdltype );
+		strcpy(l_dl_localrepproc_struct_h.h_dealcd, p_deal_lr_struct_h->h_dealcd );
+
+
+fprintf( p_logfile,"Within CDBPassLREntryFn.........\n"); 
+fprintf( p_logfile,"Going to Insert Into CLRPROC\n"); 
+fprintf( p_logfile,"account is : %s ", l_dl_localrepproc_struct_h.h_dl_client); 
+fprintf( p_logfile,"refno is : %s ", l_dl_localrepproc_struct_h.h_indentity_no); 
+fprintf( p_logfile,"instr_code is : %s ", l_dl_localrepproc_struct_h.h_instr_code); 
+fprintf( p_logfile,"rcode is : %d ", l_dl_localrepproc_struct_h.h_r_code); 
+fprintf( p_logfile,"ctacc is : %s ", l_dl_localrepproc_struct_h.h_ctclt); 
+fprintf( p_logfile,"dbacc is : %s ", l_dl_localrepproc_struct_h.h_dbclt); 
+fprintf( p_logfile,"domcpac is : %s ", l_dl_localrepproc_struct_h.h_domcpclt_cd); 
+fprintf( p_logfile,"isorder is : %s ", l_dl_localrepproc_struct_h.h_ord_ind); 
+fprintf( p_logfile,"lrtrdtype is : %s ", l_dl_localrepproc_struct_h.h_lrdltype); 
+fprintf( p_logfile,"trcode is : %s ", l_dl_localrepproc_struct_h.h_dealcd); 
+fprintf( p_logfile,"isreset is : %s ", l_dl_localrepproc_struct_h.h_reset_ind); 
+fprintf( p_logfile,"datefld is : %d ", l_dl_localrepproc_struct_h.h_dtfld); 
+fprintf( p_logfile,"qty is : %f ", l_dl_localrepproc_struct_h.h_qty); 
+
+
+		EXEC SQL INSERT INTO DL_LOCALREPPROC VALUES (:l_dl_localrepproc_struct_h);
+
+		IS_ANY_ORA_ERROR;
+
+		
+		
+		memset( &l_dl_localrepproc_struct_h, NULL, sizeof(DL_LOCALREPPROC_STRUCT_H));
+
+		strcpy( l_dl_localrepproc_struct_h.h_dl_client, p_deal_lr_struct_h->h_dl_client );
+		strcpy( l_dl_localrepproc_struct_h.h_indentity_no, p_deal_lr_struct_h->h_indentity_no );
+		strcpy( l_dl_localrepproc_struct_h.h_instr_code, p_deal_lr_struct_h->h_instr_code );
+		
+		if	( ( strcmp( p_deal_lr_struct_h->h_domcpclt_cd, 
+			   			l_mt_core_sys_params_struct_h.custody_clt_cd ) == 0 )	&&
+			  ( strcmp(p_deal_lr_struct_h->h_classofdl,"26") == 0) )
+		{
+
+			strncpy(l_dl_localrepproc_struct_h.h_domcpclt_cd, p_deal_lr_struct_h->h_countclt,APL_CLIENT_LENGTH-1);
+         strcat(l_dl_localrepproc_struct_h.h_domcpclt_cd,"\0");
+		}
+		else
+		{
+			strcpy( l_dl_localrepproc_struct_h.h_domcpclt_cd, p_deal_lr_struct_h->h_domcpclt_cd );
+		}
+
+		if ( p_po_lr_struct_h->h_rst_ind == 'N' )
+		{
+			strcpy( l_dl_localrepproc_struct_h.h_ctclt, chr_l_h_db );
+			strcpy( l_dl_localrepproc_struct_h.h_dbclt, chr_l_h_ct );
+			l_dl_localrepproc_struct_h.h_reset_ind[0] = 'N';
+			l_dl_localrepproc_struct_h.h_reset_ind[1] = APL_NULL_CHAR;
+		}
+		else
+		{
+			strcpy( l_dl_localrepproc_struct_h.h_ctclt, chr_l_h_ct );
+			strcpy( l_dl_localrepproc_struct_h.h_dbclt, chr_l_h_db );
+			l_dl_localrepproc_struct_h.h_reset_ind[0] = 'Y';
+			l_dl_localrepproc_struct_h.h_reset_ind[1] = APL_NULL_CHAR;
+		}
+
+		l_dl_localrepproc_struct_h.h_qty = p_deal_lr_struct_h->h_qty;
+		l_dl_localrepproc_struct_h.h_dtfld = p_dl_localrepspec_struct_h_a->h_dtfld;
+		
+      if ( ( strcmp( p_deal_lr_struct_h->h_domcpclt_cd, 
+                     l_mt_core_sys_params_struct_h.custody_clt_cd ) == 0 ) &&
+           ( strcmp(p_deal_lr_struct_h->h_classofdl,"26") == 0) )
+         l_dl_localrepproc_struct_h.h_r_code = 1;
+      else
+			l_dl_localrepproc_struct_h.h_r_code = 0;
+
+		strcpy(l_dl_localrepproc_struct_h.h_lrdltype, p_deal_lr_struct_h->h_lrdltype );
+		strcpy(l_dl_localrepproc_struct_h.h_dealcd, p_deal_lr_struct_h->h_dealcd );
+
+		if ( strcmp(p_deal_lr_struct_h->h_lrdltype,"18") == 0 ||
+				strcmp(p_deal_lr_struct_h->h_lrdltype,"04") == 0 )
+		{
+			l_dl_localrepproc_struct_h.h_ord_ind[0] = 'N';
+			l_dl_localrepproc_struct_h.h_ord_ind[1] = APL_NULL_CHAR;
+		}
+		else
+		{
+			if ( strcmp( p_deal_lr_struct_h->h_deal_status, STATUS_DEL_AUTH ) == 0 )
+			{
+				l_dl_localrepproc_struct_h.h_ord_ind[0] = 'Y';
+				l_dl_localrepproc_struct_h.h_ord_ind[1] = APL_NULL_CHAR;
+			}
+			else
+			{
+				l_dl_localrepproc_struct_h.h_ord_ind[0] = 'N';
+				l_dl_localrepproc_struct_h.h_ord_ind[1] = APL_NULL_CHAR;
+			}
+		}
+
+
+fprintf( p_logfile,"Within CDBPassLREntryFn.........\n"); 
+fprintf( p_logfile,"Going to Insert Into CLRPROC\n"); 
+fprintf( p_logfile,"account is : %s ", l_dl_localrepproc_struct_h.h_dl_client); 
+fprintf( p_logfile,"refno is : %s ", l_dl_localrepproc_struct_h.h_indentity_no); 
+fprintf( p_logfile,"instr_code is : %s ", l_dl_localrepproc_struct_h.h_instr_code); 
+fprintf( p_logfile,"rcode is : %d ", l_dl_localrepproc_struct_h.h_r_code); 
+fprintf( p_logfile,"ctacc is : %s ", l_dl_localrepproc_struct_h.h_ctclt); 
+fprintf( p_logfile,"dbacc is : %s ", l_dl_localrepproc_struct_h.h_dbclt); 
+fprintf( p_logfile,"domcpac is : %s ", l_dl_localrepproc_struct_h.h_domcpclt_cd); 
+fprintf( p_logfile,"isorder is : %s ", l_dl_localrepproc_struct_h.h_ord_ind); 
+fprintf( p_logfile,"lrtrdtype is : %s ", l_dl_localrepproc_struct_h.h_lrdltype); 
+fprintf( p_logfile,"trcode is : %s ", l_dl_localrepproc_struct_h.h_dealcd); 
+fprintf( p_logfile,"isreset is : %s ", l_dl_localrepproc_struct_h.h_reset_ind); 
+
+
+		EXEC SQL INSERT INTO DL_LOCALREPPROC VALUES (:l_dl_localrepproc_struct_h);
+
+		IS_ANY_ORA_ERROR;
+		
+	}
+
+	
+
+	if ( p_po_lr_struct_h->h_rst_ind == 'N' )
+	{
+		memset( &l_dl_localrepsafek_struct_h, NULL, sizeof(DL_LOCALREPSAFEK_STRUCT_H) );
+
+		strcpy( l_dl_localrepsafek_struct_h.h_instr_code, p_deal_lr_struct_h->h_instr_code);
+		strcpy( l_dl_localrepsafek_struct_h.h_ct_clt, chr_l_h_ct);	
+		strcpy( l_dl_localrepsafek_struct_h.h_dl_client, p_deal_lr_struct_h->h_dl_client);
+		l_dl_localrepsafek_struct_h.h_openbalance = 0;
+		l_dl_localrepsafek_struct_h.h_closing_bal = p_deal_lr_struct_h->h_qty;
+		if (strcmp(p_deal_lr_struct_h->h_domcpclt_cd, l_mt_core_sys_params_struct_h.custody_clt_cd) == 0 && strcmp(p_deal_lr_struct_h->h_classofdl, DL_BOOKTRF_IND) == 0)
+		{
+
+			strncpy(l_dl_localrepsafek_struct_h.h_domcpclt_cd, p_deal_lr_struct_h->h_countclt,APL_CLIENT_LENGTH-1);
+         strcat(l_dl_localrepsafek_struct_h.h_domcpclt_cd,"\0");
+		}
+		else
+		{
+			strcpy(l_dl_localrepsafek_struct_h.h_domcpclt_cd, p_deal_lr_struct_h->h_domcpclt_cd);
+		}
+		strcpy( l_dl_localrepsafek_struct_h.h_lst_instr_date, p_deal_lr_struct_h->h_instrdate );
+
+		if ( APL_FAILURE == CDBAddLRSAFEKRecFn( 	&l_dl_localrepsafek_struct_h,
+																p_logfile,
+																p_intl_envdatastruct_h,
+																l_debug_info_ptr ) )
+		{
+			APL_GOBACK_FAIL
+		}
+			
+		memset( &l_dl_localrepsafek_struct_h, NULL, sizeof(DL_LOCALREPSAFEK_STRUCT_H) );
+
+		strcpy( l_dl_localrepsafek_struct_h.h_instr_code, p_deal_lr_struct_h->h_instr_code);
+		strcpy( l_dl_localrepsafek_struct_h.h_ct_clt, chr_l_h_db);	
+		strcpy( l_dl_localrepsafek_struct_h.h_dl_client, p_deal_lr_struct_h->h_dl_client);
+		l_dl_localrepsafek_struct_h.h_openbalance = 0;
+		l_dl_localrepsafek_struct_h.h_closing_bal = p_deal_lr_struct_h->h_qty * -1;
+		if (strcmp(p_deal_lr_struct_h->h_domcpclt_cd, l_mt_core_sys_params_struct_h.custody_clt_cd) == 0 && strcmp(p_deal_lr_struct_h->h_classofdl, DL_BOOKTRF_IND) == 0)
+		{
+
+			strncpy(l_dl_localrepsafek_struct_h.h_domcpclt_cd, p_deal_lr_struct_h->h_countclt,APL_CLIENT_LENGTH-1);
+         strcat(l_dl_localrepsafek_struct_h.h_domcpclt_cd,"\0");
+		}
+		else
+		{
+			strcpy(l_dl_localrepsafek_struct_h.h_domcpclt_cd, p_deal_lr_struct_h->h_domcpclt_cd);
+		}
+		strcpy( l_dl_localrepsafek_struct_h.h_lst_instr_date, p_deal_lr_struct_h->h_instrdate );
+
+		if ( APL_FAILURE == CDBAddLRSAFEKRecFn( 	&l_dl_localrepsafek_struct_h,
+																p_logfile,
+																p_intl_envdatastruct_h,
+																l_debug_info_ptr ) )
+		{
+			APL_GOBACK_FAIL
+		}
+			
+		memset( &l_dl_localrepsafek_struct_h, NULL, sizeof(DL_LOCALREPSAFEK_STRUCT_H) );
+
+		strcpy( l_dl_localrepsafek_struct_h.h_instr_code, p_deal_lr_struct_h->h_instr_code);
+		strcpy( l_dl_localrepsafek_struct_h.h_ct_clt, chr_l_h_db);	
+		strcpy( l_dl_localrepsafek_struct_h.h_dl_client, p_deal_lr_struct_h->h_dl_client);
+		l_dl_localrepsafek_struct_h.h_openbalance = 0;
+		l_dl_localrepsafek_struct_h.h_closing_bal = p_deal_lr_struct_h->h_qty;
+		if (strcmp(p_deal_lr_struct_h->h_domcpclt_cd, l_mt_core_sys_params_struct_h.custody_clt_cd) == 0 && strcmp(p_deal_lr_struct_h->h_classofdl, DL_BOOKTRF_IND) == 0)
+		{
+
+			strncpy(l_dl_localrepsafek_struct_h.h_domcpclt_cd, p_deal_lr_struct_h->h_countclt,APL_CLIENT_LENGTH-1);
+         strcat(l_dl_localrepsafek_struct_h.h_domcpclt_cd,"\0"); 
+		}
+		else
+		{
+			strcpy(l_dl_localrepsafek_struct_h.h_domcpclt_cd, p_deal_lr_struct_h->h_domcpclt_cd);
+		}
+		strcpy( l_dl_localrepsafek_struct_h.h_lst_instr_date, p_deal_lr_struct_h->h_instrdate );
+
+		if ( APL_FAILURE == CDBAddLRSAFEKRecFn( 	&l_dl_localrepsafek_struct_h,
+																p_logfile,
+																p_intl_envdatastruct_h,
+																l_debug_info_ptr ) )
+		{
+			APL_GOBACK_FAIL
+		}
+			
+		memset( &l_dl_localrepsafek_struct_h, NULL, sizeof(DL_LOCALREPSAFEK_STRUCT_H) );
+
+		strcpy( l_dl_localrepsafek_struct_h.h_instr_code, p_deal_lr_struct_h->h_instr_code);
+		strcpy( l_dl_localrepsafek_struct_h.h_ct_clt, chr_l_h_ct);	
+		strcpy( l_dl_localrepsafek_struct_h.h_dl_client, p_deal_lr_struct_h->h_dl_client);
+		l_dl_localrepsafek_struct_h.h_openbalance = 0;
+		l_dl_localrepsafek_struct_h.h_closing_bal = p_deal_lr_struct_h->h_qty * -1;
+		if (strcmp(p_deal_lr_struct_h->h_domcpclt_cd, l_mt_core_sys_params_struct_h.custody_clt_cd) == 0 && strcmp(p_deal_lr_struct_h->h_classofdl, DL_BOOKTRF_IND) == 0)
+		{
+
+			strncpy(l_dl_localrepsafek_struct_h.h_domcpclt_cd, p_deal_lr_struct_h->h_countclt,APL_CLIENT_LENGTH-1);
+         strcat(l_dl_localrepsafek_struct_h.h_domcpclt_cd,"\0");
+		}
+		else
+		{
+			strcpy(l_dl_localrepsafek_struct_h.h_domcpclt_cd, p_deal_lr_struct_h->h_domcpclt_cd);
+		}
+		strcpy( l_dl_localrepsafek_struct_h.h_lst_instr_date, p_deal_lr_struct_h->h_instrdate );
+
+		if ( APL_FAILURE == CDBAddLRSAFEKRecFn( 	&l_dl_localrepsafek_struct_h,
+																p_logfile,
+																p_intl_envdatastruct_h,
+																l_debug_info_ptr ) )
+		{
+			APL_GOBACK_FAIL
+		}
+			
+	}
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS	:
+
+		CO_ProcMonitor(	p_logfile, "Exiting CDBPassLREntryFn processtion successfully\n", NULL, NULL);
+
+		#ifdef SYS_DEBUG
+			printf( "Leaving CDBPassLREntryFn with success\n");
+		#endif
+		
+		return(APL_SUCCESS);
+
+	RETURN_FAILURE	:
+	
+		CO_ProcMonitor(	p_logfile, "Exiting CDBPassLREntryFn processtion with errors\n", NULL, NULL);
+
+		#ifdef SYS_DEBUG
+			printf( "Leaving CDBPassLREntryFn with errors\n");
+		#endif
+		
+		return(APL_FAILURE);
+      
+}
+
+
+
+
+int CDBMatchKeyPassFn(	PO_LR_STRUCT_H *p_po_lr_struct_h, 
+								DEAL_LR_STRUCT_H    *p_deal_lr_struct_h,
+								DEAL_LR_STRUCT_I		*p_deal_lr_struct_i,
+								DL_LOCALREPSPEC_STRUCT_H		*p_dl_localrepspec_struct_h_a,
+								FILE 						*p_logfile, 
+								INTL_ENV_DATA_STRUCT_H 	*p_intl_envdatastruct_h, 
+								DEBUG_INFO_STRUCT_H 			**l_debug_info_ptr)
+{
+	struct sqlca sqlca;
+	DL_LOCALREPPROC_STRUCT_H	l_dl_localrepproc_struct_h;
+	DL_LOCALREPPROC_STRUCT_H	l_dl_localrepprocstruct_h;
+	DL_LOCALREPSAFEK_STRUCT_H	l_dl_localrepsafek_struct_h;
+	DEAL_LR_STRUCT_H	l_deal_lr_struct_h;
+	DEAL_LR_STRUCT_I	l_deal_lr_struct_i;
+	char	chr_l_nodata							=	APL_NULL_CHAR;
+	char	chr_l_h_acc_accclass[3]			=	APL_NULL_STRING;
+	//char	chr_l_h_lracc_accown[4]			=	APL_NULL_STRING;
+	char	chr_l_client_a[APL_CLIENT_LENGTH]	=	APL_NULL_STRING;
+	char	chr_l_h_ct[4]						=	APL_NULL_STRING;
+	char	chr_l_h_db[4]						=	APL_NULL_STRING;
+	char	chr_l_confdt[APL_DATE_LEN]		=	APL_NULL_STRING;
+	char	chr_l_temp_countacc[APL_COUNTACC_LEN]	= APL_NULL_STRING;  
+	short	l_i_temp_countacc				=	0;
+	short	l_i_acc_accclass				=	0;
+	//short	l_i_lracc_accown				=	0;
+	short	l_i_ct							=	0;
+	short	l_i_db							=	0;
+
+	
+	char	chr_l_temp_lrspec_cond[201]		=	APL_NULL_STRING;
+	
+
+	EXEC SQL BEGIN DECLARE SECTION;
+		varchar 	sqlstmt[300];
+	EXEC SQL END DECLARE SECTION;
+
+	sqlca.sqlcode = 0;
+	
+	
+
+	#ifdef SYS_DEBUG
+		printf( "Entering processtion CDBMatchKeyPassFn\n");
+	#endif
+		
+	CO_ProcMonitor(	p_logfile, "Entered processtion CDBMatchKeyPassFn\n", NULL, NULL);
+
+	
+
+	EXEC SQL VAR	chr_l_h_acc_accclass	IS STRING;
+	//EXEC SQL VAR	chr_l_h_lracc_accown	IS STRING;
+	EXEC SQL VAR	chr_l_h_ct				IS STRING;
+	EXEC SQL VAR	chr_l_h_db				IS STRING;
+
+   EXEC SQL VAR p_deal_lr_struct_h->h_dl_client IS STRING;
+   EXEC SQL VAR p_deal_lr_struct_h->h_domcpclt_cd IS STRING;
+   EXEC SQL VAR p_deal_lr_struct_h->h_countclt IS STRING;
+   EXEC SQL VAR p_deal_lr_struct_h->h_lrdltype IS STRING;
+   EXEC SQL VAR p_deal_lr_struct_h->h_deal_status IS STRING;
+   EXEC SQL VAR p_deal_lr_struct_h->h_indentity_no IS STRING;
+   EXEC SQL VAR p_deal_lr_struct_h->h_instr_code IS STRING;
+   EXEC SQL VAR p_deal_lr_struct_h->h_classofdl IS STRING;
+   EXEC SQL VAR p_deal_lr_struct_h->h_dealcd IS STRING;
+   EXEC SQL VAR p_deal_lr_struct_h->h_instrdate IS STRING;
+   EXEC SQL VAR p_deal_lr_struct_h->h_confdate IS STRING;
+   EXEC SQL VAR p_deal_lr_struct_h->h_checker IS STRING;
+   EXEC SQL VAR p_deal_lr_struct_h->h_ndsdate IS STRING;
+   EXEC SQL VAR p_deal_lr_struct_h->h_newdt IS STRING;
+   EXEC SQL VAR p_deal_lr_struct_h->h_dlfromord IS STRING;
+   EXEC SQL VAR p_deal_lr_struct_h->h_countcltnm IS STRING;
+
+   EXEC SQL VAR l_deal_lr_struct_h.h_dl_client IS STRING;
+   EXEC SQL VAR l_deal_lr_struct_h.h_domcpclt_cd IS STRING;
+   EXEC SQL VAR l_deal_lr_struct_h.h_countclt IS STRING;
+   EXEC SQL VAR l_deal_lr_struct_h.h_lrdltype IS STRING;
+   EXEC SQL VAR l_deal_lr_struct_h.h_deal_status IS STRING;
+   EXEC SQL VAR l_deal_lr_struct_h.h_indentity_no IS STRING;
+   EXEC SQL VAR l_deal_lr_struct_h.h_instr_code IS STRING;
+   EXEC SQL VAR l_deal_lr_struct_h.h_classofdl IS STRING;
+   EXEC SQL VAR l_deal_lr_struct_h.h_dealcd IS STRING;
+   EXEC SQL VAR l_deal_lr_struct_h.h_instrdate IS STRING;
+   EXEC SQL VAR l_deal_lr_struct_h.h_confdate IS STRING;
+   EXEC SQL VAR l_deal_lr_struct_h.h_checker IS STRING;
+   EXEC SQL VAR l_deal_lr_struct_h.h_ndsdate IS STRING;
+   EXEC SQL VAR l_deal_lr_struct_h.h_newdt IS STRING;
+   EXEC SQL VAR l_deal_lr_struct_h.h_dlfromord IS STRING;
+   EXEC SQL VAR l_deal_lr_struct_h.h_countcltnm IS STRING;
+
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_dealcd IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_status_active IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_dtname IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_indname IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_debit_flag IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_debit_ind_100 IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_credit_flag IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_credit_ind_100 IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_desc IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_info IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_iv_cond IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_local_iv_cond IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_desc_a IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_desc_b IS STRING;
+
+   EXEC SQL VAR   l_dl_localrepproc_struct_h.h_dl_client IS STRING; 
+   EXEC SQL VAR   l_dl_localrepproc_struct_h.h_indentity_no IS STRING; 
+   EXEC SQL VAR   l_dl_localrepproc_struct_h.h_instr_code IS STRING; 
+   EXEC SQL VAR   l_dl_localrepproc_struct_h.h_ctclt IS STRING; 
+   EXEC SQL VAR   l_dl_localrepproc_struct_h.h_dbclt IS STRING; 
+   EXEC SQL VAR   l_dl_localrepproc_struct_h.h_domcpclt_cd IS STRING; 
+   EXEC SQL VAR   l_dl_localrepproc_struct_h.h_ord_ind IS STRING; 
+   EXEC SQL VAR   l_dl_localrepproc_struct_h.h_lrdltype IS STRING;
+   EXEC SQL VAR   l_dl_localrepproc_struct_h.h_dealcd IS STRING;
+   EXEC SQL VAR   l_dl_localrepproc_struct_h.h_reset_ind IS STRING;
+
+   EXEC SQL VAR   l_dl_localrepprocstruct_h.h_dl_client IS STRING; 
+   EXEC SQL VAR   l_dl_localrepprocstruct_h.h_indentity_no IS STRING; 
+   EXEC SQL VAR   l_dl_localrepprocstruct_h.h_instr_code IS STRING; 
+   EXEC SQL VAR   l_dl_localrepprocstruct_h.h_ctclt IS STRING; 
+   EXEC SQL VAR   l_dl_localrepprocstruct_h.h_dbclt IS STRING; 
+   EXEC SQL VAR   l_dl_localrepprocstruct_h.h_domcpclt_cd IS STRING; 
+   EXEC SQL VAR   l_dl_localrepprocstruct_h.h_ord_ind IS STRING; 
+   EXEC SQL VAR   l_dl_localrepprocstruct_h.h_lrdltype IS STRING;
+   EXEC SQL VAR   l_dl_localrepprocstruct_h.h_dealcd IS STRING;
+   EXEC SQL VAR   l_dl_localrepprocstruct_h.h_reset_ind IS STRING;
+
+	EXEC SQL VAR   l_dl_localrepsafek_struct_h.h_instr_code IS STRING;
+   EXEC SQL VAR   l_dl_localrepsafek_struct_h.h_ct_clt IS STRING;
+   EXEC SQL VAR   l_dl_localrepsafek_struct_h.h_dl_client IS STRING;
+   EXEC SQL VAR   l_dl_localrepsafek_struct_h.h_domcpclt_cd IS STRING;
+   EXEC SQL VAR   l_dl_localrepsafek_struct_h.h_lst_instr_date IS STRING;
+
+	chr_l_nodata = 'N';
+
+   
+   G_SYS_ACCOUNT_LEN = 10; 
+
+	EXEC SQL SELECT CLN_CLAS
+				INTO	:chr_l_h_acc_accclass:l_i_acc_accclass
+				FROM	MT_CLIENT
+				WHERE	CLN_CODE	=	:p_deal_lr_struct_h->h_dl_client;
+
+	IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_ACCNOT_FND,
+														p_deal_lr_struct_h->h_dl_client,
+														APL_NULL_STRING,
+														APL_NULL_STRING );
+
+
+	
+
+	if ( chr_l_h_acc_accclass[0] == '1')
+	{
+		
+
+		if ( strlen(p_dl_localrepspec_struct_h_a->h_credit_ind_100) != 0 )
+		{
+			EXEC SQL SELECT CLIENT_OWN
+						INTO	:chr_l_h_ct:l_i_ct
+						FROM	DL_LOCALREPCLIENT
+						WHERE	CREDIT_CLT	=	:p_dl_localrepspec_struct_h_a->h_credit_flag;
+
+			IS_ANY_ORA_ERROR;
+		}
+	}
+
+	if ( chr_l_h_acc_accclass[0] == '2')
+	{
+		
+
+		if ( strlen(p_dl_localrepspec_struct_h_a->h_credit_ind_100) != 0 )
+		{
+			strcpy(chr_l_client_a, p_deal_lr_struct_h->h_dl_client);
+
+			
+
+			strcpy(chr_l_h_ct, &chr_l_client_a[strlen(chr_l_client_a)-3] );
+		}
+	}
+
+	if (strlen( p_dl_localrepspec_struct_h_a->h_debit_ind_100 ) != 0 )
+	{
+
+		
+
+		if ( strcmp( p_dl_localrepspec_struct_h_a->h_debit_ind_100, "CLIENT") == 0 )
+		{
+			EXEC SQL SELECT CLN_CLAS
+						INTO	:chr_l_h_acc_accclass:l_i_acc_accclass
+						FROM	MT_CLIENT
+						WHERE	CLN_CODE	=	:p_deal_lr_struct_h->h_dl_client;
+
+			IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_ACCNOT_FND,
+																p_deal_lr_struct_h->h_dl_client,
+																APL_NULL_STRING,
+																APL_NULL_STRING );
+		}
+		else if ( strcmp( p_dl_localrepspec_struct_h_a->h_debit_ind_100, "DOMESTIC_CPCLT") == 0 )
+		{
+			EXEC SQL SELECT CLN_CLAS
+						INTO	:chr_l_h_acc_accclass:l_i_acc_accclass
+						FROM	MT_CLIENT
+						WHERE	CLN_CODE	=	:p_deal_lr_struct_h->h_domcpclt_cd;
+
+			IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_ACCNOT_FND,
+																p_deal_lr_struct_h->h_domcpclt_cd,
+																APL_NULL_STRING,
+																APL_NULL_STRING );
+		}
+		else if ( ( strcmp( p_dl_localrepspec_struct_h_a->h_debit_ind_100, "CP_CLT") == 0 ) &&  strcmp( p_deal_lr_struct_h->h_countclt,APL_NULL_STRING) ) 
+		{
+		
+			EXEC SQL SELECT CLN_CLAS
+						INTO	:chr_l_h_acc_accclass:l_i_acc_accclass
+						FROM	MT_CLIENT
+						WHERE	CLN_CODE	=	rtrim(SUBSTR(:p_deal_lr_struct_h->h_countclt,1,:G_SYS_ACCOUNT_LEN));
+
+			IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_ACCNOT_FND,
+																p_deal_lr_struct_h->h_countclt,
+																APL_NULL_STRING,
+																APL_NULL_STRING );
+		}
+
+		if ( chr_l_h_acc_accclass[0] == '1')
+		{
+			
+
+			EXEC SQL SELECT CLIENT_OWN
+						INTO	:chr_l_h_db:l_i_db
+						FROM	DL_LOCALREPCLIENT
+						WHERE	CREDIT_CLT	=	:p_dl_localrepspec_struct_h_a->h_debit_flag;
+
+			IS_ANY_ORA_ERROR;
+		}
+
+		if ( chr_l_h_acc_accclass[0] == '2')
+		{
+			
+
+			if ( strcmp( p_dl_localrepspec_struct_h_a->h_debit_ind_100, "CLIENT") == 0 )
+			{
+				strcpy(chr_l_client_a, p_deal_lr_struct_h->h_dl_client);
+			}
+			else if ( strcmp( p_dl_localrepspec_struct_h_a->h_debit_ind_100, "DOMESTIC_CPCLT") == 0 )
+			{
+				strcpy(chr_l_client_a, p_deal_lr_struct_h->h_domcpclt_cd);
+			}
+			else if ( strcmp( p_dl_localrepspec_struct_h_a->h_debit_ind_100, "CP_CLT") == 0 )
+			{
+
+				strncpy(chr_l_client_a, p_deal_lr_struct_h->h_countclt,APL_CLIENT_LENGTH-1);
+            strcat(chr_l_client_a,"\0");
+			}
+
+			
+
+			strcpy(chr_l_h_db, &chr_l_client_a[strlen(chr_l_client_a)-3] );
+		}
+
+	}
+
+	if ( strlen( chr_l_h_ct ) == 0 )
+	{
+		strcpy(chr_l_h_ct, p_dl_localrepspec_struct_h_a->h_credit_flag);
+	}
+
+	if ( strlen( chr_l_h_db ) == 0 )
+	{
+		strcpy(chr_l_h_db, p_dl_localrepspec_struct_h_a->h_debit_flag);
+	}
+
+
+	memset( &l_dl_localrepproc_struct_h, NULL, sizeof(DL_LOCALREPPROC_STRUCT_H));
+
+	if ( (strcmp(p_deal_lr_struct_h->h_lrdltype,"18") == 0 ||
+			strcmp(p_deal_lr_struct_h->h_lrdltype,"04")  == 0)	  &&
+			p_dl_localrepspec_struct_h_a->h_dtfld == 3)
+	{
+
+		strncpy( l_dl_localrepproc_struct_h.h_dl_client, p_deal_lr_struct_h->h_countclt,APL_CLIENT_LENGTH-1);
+      strcat(l_dl_localrepproc_struct_h.h_dl_client,"\0");
+	}
+	else
+	{
+		strcpy( l_dl_localrepproc_struct_h.h_dl_client, p_deal_lr_struct_h->h_dl_client );
+	}
+
+	strcpy( l_dl_localrepproc_struct_h.h_indentity_no, p_deal_lr_struct_h->h_indentity_no );
+	strcpy( l_dl_localrepproc_struct_h.h_instr_code, p_deal_lr_struct_h->h_instr_code );
+	
+	if	( ( strcmp( p_deal_lr_struct_h->h_domcpclt_cd, 
+		   			l_mt_core_sys_params_struct_h.custody_clt_cd ) == 0 )	&&
+		  ( strcmp(p_deal_lr_struct_h->h_classofdl,"26") == 0) )
+	{
+		if ( 	( strcmp(p_deal_lr_struct_h->h_lrdltype,"18") == 0 		||
+				  strcmp(p_deal_lr_struct_h->h_lrdltype,"04") == 0 ) 	&&
+				( p_dl_localrepspec_struct_h_a->h_dtfld == 3 ) )
+		{
+			strcpy( l_dl_localrepproc_struct_h.h_domcpclt_cd, p_deal_lr_struct_h->h_dl_client );
+		}
+		else
+		{
+
+			strncpy( l_dl_localrepproc_struct_h.h_domcpclt_cd, p_deal_lr_struct_h->h_countclt,APL_CLIENT_LENGTH-1 );
+         strcat(l_dl_localrepproc_struct_h.h_domcpclt_cd,"\0");
+		}
+	}
+	else
+	{
+		strcpy( l_dl_localrepproc_struct_h.h_domcpclt_cd, p_deal_lr_struct_h->h_domcpclt_cd );
+	}
+
+	if ( p_po_lr_struct_h->h_rst_ind == 'N' )
+	{
+		strcpy( l_dl_localrepproc_struct_h.h_ctclt, chr_l_h_ct );
+		strcpy( l_dl_localrepproc_struct_h.h_dbclt, chr_l_h_db );
+		l_dl_localrepproc_struct_h.h_reset_ind[0] = 'N';
+		l_dl_localrepproc_struct_h.h_reset_ind[1] = APL_NULL_CHAR;
+	}
+	else
+	{
+		strcpy( l_dl_localrepproc_struct_h.h_ctclt, chr_l_h_db );
+		strcpy( l_dl_localrepproc_struct_h.h_dbclt, chr_l_h_ct );
+		l_dl_localrepproc_struct_h.h_reset_ind[0] = 'Y';
+		l_dl_localrepproc_struct_h.h_reset_ind[1] = APL_NULL_CHAR;
+	}
+
+	l_dl_localrepproc_struct_h.h_qty = p_deal_lr_struct_h->h_qty;
+	l_dl_localrepproc_struct_h.h_dtfld = p_dl_localrepspec_struct_h_a->h_dtfld;
+	
+   if ( ( strcmp( p_deal_lr_struct_h->h_domcpclt_cd, 
+                  l_mt_core_sys_params_struct_h.custody_clt_cd ) == 0 ) &&
+         ( strcmp(p_deal_lr_struct_h->h_classofdl,"26") == 0) )
+     l_dl_localrepproc_struct_h.h_r_code = 0;
+   else
+		l_dl_localrepproc_struct_h.h_r_code = 1;
+
+	strcpy(l_dl_localrepproc_struct_h.h_lrdltype, p_deal_lr_struct_h->h_lrdltype );
+	strcpy(l_dl_localrepproc_struct_h.h_dealcd, p_deal_lr_struct_h->h_dealcd );
+
+	if (strcmp(p_deal_lr_struct_h->h_lrdltype,"18") == 0 ||
+		 strcmp(p_deal_lr_struct_h->h_lrdltype,"04") == 0)
+	{
+		l_dl_localrepproc_struct_h.h_ord_ind[0] = 'N';
+		l_dl_localrepproc_struct_h.h_ord_ind[1] = APL_NULL_CHAR;
+	}
+	else
+	{
+		if ( strcmp( p_deal_lr_struct_h->h_deal_status, STATUS_DEL_AUTH ) == 0 )
+		{
+			l_dl_localrepproc_struct_h.h_ord_ind[0] = 'Y';
+			l_dl_localrepproc_struct_h.h_ord_ind[1] = APL_NULL_CHAR;
+		}
+		else
+		{
+			l_dl_localrepproc_struct_h.h_ord_ind[0] = 'N';
+			l_dl_localrepproc_struct_h.h_ord_ind[1] = APL_NULL_CHAR;
+		}
+	}
+
+
+fprintf( p_logfile,"Within CDBMatchKeyPassFn.........\n"); 
+fprintf( p_logfile,"Going to Insert Into CLRPROC\n"); 
+fprintf( p_logfile,"account is : %s ", l_dl_localrepproc_struct_h.h_dl_client); 
+fprintf( p_logfile,"refno is : %s ", l_dl_localrepproc_struct_h.h_indentity_no); 
+fprintf( p_logfile,"instr_code is : %s ", l_dl_localrepproc_struct_h.h_instr_code); 
+fprintf( p_logfile,"rcode is : %d ", l_dl_localrepproc_struct_h.h_r_code); 
+fprintf( p_logfile,"ctacc is : %s ", l_dl_localrepproc_struct_h.h_ctclt); 
+fprintf( p_logfile,"dbacc is : %s ", l_dl_localrepproc_struct_h.h_dbclt); 
+fprintf( p_logfile,"domcpac is : %s ", l_dl_localrepproc_struct_h.h_domcpclt_cd); 
+fprintf( p_logfile,"isorder is : %s ", l_dl_localrepproc_struct_h.h_ord_ind); 
+fprintf( p_logfile,"lrtrdtype is : %s ", l_dl_localrepproc_struct_h.h_lrdltype); 
+fprintf( p_logfile,"trcode is : %s ", l_dl_localrepproc_struct_h.h_dealcd); 
+fprintf( p_logfile,"isreset is : %s ", l_dl_localrepproc_struct_h.h_reset_ind); 
+
+
+	EXEC SQL INSERT INTO DL_LOCALREPPROC VALUES (:l_dl_localrepproc_struct_h);
+
+	IS_ANY_ORA_ERROR;
+
+	strcpy( chr_l_confdt, p_deal_lr_struct_h->h_confdate);
+
+	
+	
+
+	if ( p_po_lr_struct_h->h_rst_ind == 'N' )
+	{
+		memset( &l_dl_localrepsafek_struct_h, NULL, sizeof(DL_LOCALREPSAFEK_STRUCT_H) );
+
+		strcpy( l_dl_localrepsafek_struct_h.h_instr_code, p_deal_lr_struct_h->h_instr_code);
+		strcpy( l_dl_localrepsafek_struct_h.h_ct_clt, chr_l_h_ct);	
+		strcpy( l_dl_localrepsafek_struct_h.h_dl_client, p_deal_lr_struct_h->h_dl_client);
+		l_dl_localrepsafek_struct_h.h_openbalance = 0;
+		l_dl_localrepsafek_struct_h.h_closing_bal = p_deal_lr_struct_h->h_qty;
+		if (strcmp(p_deal_lr_struct_h->h_domcpclt_cd, l_mt_core_sys_params_struct_h.custody_clt_cd) == 0 && strcmp(p_deal_lr_struct_h->h_classofdl, DL_BOOKTRF_IND) == 0)
+		{
+
+			strncpy(l_dl_localrepsafek_struct_h.h_domcpclt_cd, p_deal_lr_struct_h->h_countclt,APL_CLIENT_LENGTH-1);
+         strcat(l_dl_localrepsafek_struct_h.h_domcpclt_cd,"\0");
+		}
+		else
+		{
+			strcpy(l_dl_localrepsafek_struct_h.h_domcpclt_cd, p_deal_lr_struct_h->h_domcpclt_cd);
+		}
+		strcpy( l_dl_localrepsafek_struct_h.h_lst_instr_date, p_deal_lr_struct_h->h_instrdate );
+
+		if ( APL_FAILURE == CDBAddLRSAFEKRecFn( 	&l_dl_localrepsafek_struct_h,
+																p_logfile,
+																p_intl_envdatastruct_h,
+																l_debug_info_ptr ) )
+		{
+			APL_GOBACK_FAIL
+		}
+			
+	}
+	else
+	{
+		memset( &l_dl_localrepsafek_struct_h, NULL, sizeof(DL_LOCALREPSAFEK_STRUCT_H) );
+
+		strcpy( l_dl_localrepsafek_struct_h.h_instr_code, p_deal_lr_struct_h->h_instr_code);
+		strcpy( l_dl_localrepsafek_struct_h.h_ct_clt, chr_l_h_db);	
+		strcpy( l_dl_localrepsafek_struct_h.h_dl_client, p_deal_lr_struct_h->h_dl_client);
+		l_dl_localrepsafek_struct_h.h_openbalance = 0;
+		l_dl_localrepsafek_struct_h.h_closing_bal = p_deal_lr_struct_h->h_qty;
+		if (strcmp(p_deal_lr_struct_h->h_domcpclt_cd, l_mt_core_sys_params_struct_h.custody_clt_cd) == 0 && strcmp(p_deal_lr_struct_h->h_classofdl, DL_BOOKTRF_IND) == 0)
+		{
+
+			strncpy(l_dl_localrepsafek_struct_h.h_domcpclt_cd, p_deal_lr_struct_h->h_countclt,APL_CLIENT_LENGTH-1);
+         strcat(l_dl_localrepsafek_struct_h.h_domcpclt_cd,"\0");
+		}
+		else
+		{
+			strcpy(l_dl_localrepsafek_struct_h.h_domcpclt_cd, p_deal_lr_struct_h->h_domcpclt_cd);
+		}
+		strcpy( l_dl_localrepsafek_struct_h.h_lst_instr_date, p_deal_lr_struct_h->h_instrdate );
+
+		if ( APL_FAILURE == CDBAddLRSAFEKRecFn( 	&l_dl_localrepsafek_struct_h,
+																p_logfile,
+																p_intl_envdatastruct_h,
+																l_debug_info_ptr ) )
+		{
+			APL_GOBACK_FAIL
+		}
+	}
+
+	
+	
+
+
+
+	strcpy(chr_l_temp_lrspec_cond,"\0");
+
+	if(!(strcmp(p_dl_localrepspec_struct_h_a->h_dealclass,"04"))&& (!(strcmp(p_dl_localrepspec_struct_h_a->h_dealcd,"1")) || !(strcmp(p_dl_localrepspec_struct_h_a->h_dealcd,"3")) )
+			&& !(strcmp(p_dl_localrepspec_struct_h_a->h_dtname,"INSTRUMENT_DT")) && !(strcmp(p_dl_localrepspec_struct_h_a->h_indname,"LRINSTR_DATE")))
+	{
+		sprintf(chr_l_temp_lrspec_cond,"lrtrdtype=:v1 AND confdt IS NOT NULL AND instr_dt IS NULL AND failreason_cd='60' AND (TRUNC(access_stamp) + 0.5)= :v3 AND (deal_cd=2 OR deal_cd=4) AND client=:v4 AND cp_clt=:v5 AND quantity=:v6 AND instr_code=:v7");
+	}
+
+	if(!(strcmp(p_dl_localrepspec_struct_h_a->h_dealclass,"04"))&& (!(strcmp(p_dl_localrepspec_struct_h_a->h_dealcd,"2")) || !(strcmp(p_dl_localrepspec_struct_h_a->h_dealcd,"4")))
+			&& !(strcmp(p_dl_localrepspec_struct_h_a->h_dtname,"INSTRUMENT_DT")) && !(strcmp(p_dl_localrepspec_struct_h_a->h_indname,"LRINSTR_DATE")))
+	{
+		sprintf(chr_l_temp_lrspec_cond,"lrtrdtype=:v1 AND confdt IS NOT NULL AND instr_dt IS NULL AND failreason_cd='60' AND (TRUNC(access_stamp) + 0.5)= :v3 AND (deal_cd=3 OR deal_cd=1) AND client=:v4 AND cp_clt=:v5 AND quantity=:v6 AND instr_code=:v7");
+	}
+
+	if(!(strcmp(p_dl_localrepspec_struct_h_a->h_dealclass,"09"))&&!(strcmp(p_dl_localrepspec_struct_h_a->h_dealcd,"1"))
+			&& !(strcmp(p_dl_localrepspec_struct_h_a->h_dtname,"INSTRUMENT_DT")) && !(strcmp(p_dl_localrepspec_struct_h_a->h_indname,"LRINSTR_DATE")))
+	{
+		sprintf(chr_l_temp_lrspec_cond,"lrtrdtype=:v1 AND confdt IS NOT NULL AND instr_dt IS NULL AND failreason_cd='60' AND (TRUNC(access_stamp) + 0.5)= :v3 AND deal_cd=2  AND client=:v4 AND domestic_cpclt=:v5 AND quantity=:v6 AND instr_code=:v7");
+	}
+	
+	if(!(strcmp(p_dl_localrepspec_struct_h_a->h_dealclass,"09"))&&!(strcmp(p_dl_localrepspec_struct_h_a->h_dealcd,"2"))
+			&& !(strcmp(p_dl_localrepspec_struct_h_a->h_dtname,"INSTRUMENT_DT")) && !(strcmp(p_dl_localrepspec_struct_h_a->h_indname,"LRINSTR_DATE")))
+	{
+		sprintf(chr_l_temp_lrspec_cond,"lrtrdtype=:v1 AND confdt IS NOT NULL AND instr_dt IS NULL AND failreason_cd='60' AND (TRUNC(access_stamp) + 0.5)= :v3 AND deal_cd=1  AND client=:v4 AND domestic_cpclt=:v5 AND quantity=:v6 AND instr_code=:v7");
+	}
+	
+	if(!(strcmp(p_dl_localrepspec_struct_h_a->h_dealclass,"18"))&&!(strcmp(p_dl_localrepspec_struct_h_a->h_dealcd,"2"))
+			&& !(strcmp(p_dl_localrepspec_struct_h_a->h_dtname,"NDS_DATE")) && !(strcmp(p_dl_localrepspec_struct_h_a->h_indname,"LRNDS_DATE")))
+	{
+		sprintf(chr_l_temp_lrspec_cond,"lrtrdtype=:v1 AND confdt IS NOT NULL AND instr_dt IS NULL AND failreason_cd='60' AND (TRUNC(access_stamp) + 0.5)= :v3 AND (deal_cd=3 OR deal_cd=1) AND client=:v4 AND cp_clt=:v5 AND quantity=:v6 AND instr_code=:v7");
+	}
+
+	if(!(strcmp(p_dl_localrepspec_struct_h_a->h_dealclass,"18"))&&!(strcmp(p_dl_localrepspec_struct_h_a->h_dealcd,"4"))
+			&& !(strcmp(p_dl_localrepspec_struct_h_a->h_dtname,"INSTRUMENT_DT")) && !(strcmp(p_dl_localrepspec_struct_h_a->h_indname,"LRINSTR_DATE")))
+	{
+		sprintf(chr_l_temp_lrspec_cond,"lrtrdtype=:v1 AND confdt IS NOT NULL AND instr_dt IS NULL AND failreason_cd='60' AND (TRUNC(access_stamp) + 0.5)= :v3 AND (deal_cd=3 OR deal_cd=1) AND client=:v4 AND cp_clt=:v5 AND quantity=:v6 AND instr_code=:v7");
+	}
+
+	if(!(strcmp(p_dl_localrepspec_struct_h_a->h_dealclass,"55"))&&!(strcmp(p_dl_localrepspec_struct_h_a->h_dealcd,"4"))
+			&& !(strcmp(p_dl_localrepspec_struct_h_a->h_dtname,"NDS_DATE")) && !(strcmp(p_dl_localrepspec_struct_h_a->h_indname,"LRNDS_DATE")))
+	{
+		sprintf(chr_l_temp_lrspec_cond,"lrtrdtype=:v1 AND confdt IS NOT NULL AND instr_dt IS NULL AND failreason_cd='60' AND (TRUNC(access_stamp) + 0.5)= :v3 AND (deal_cd=3 OR deal_cd=1) AND client=:v4 AND cp_clt=:v5 AND quantity=:v6 AND instr_code=:v7");
+	}
+
+
+	
+	if ( strcmp( p_dl_localrepspec_struct_h_a->h_iv_cond , APL_NULL_STRING ))
+	{
+		if (strcmp(l_dl_localrepproc_struct_h.h_lrdltype,"18") == 0 ||
+			 strcmp(l_dl_localrepproc_struct_h.h_lrdltype,"04") == 0)	  
+		{
+ //AIX -Warning Removal - (char*) added
+			sprintf((char *)sqlstmt.arr, "SELECT * FROM TXN_LR_VEW WHERE  %s AND  (cp_clt=:v8 OR cp_clt IS NULL) AND confdt = :v9 AND ACCOUNT = :v10", p_dl_localrepspec_struct_h_a->h_iv_cond);	
+			strcat((char *)sqlstmt.arr," AND (EXARENA !='3' OR INSTR_DT IS NOT NULL) ");	
+			
+			strcat((char *)sqlstmt.arr," UNION SELECT ACCOUNT,DOMCPAC,COUNTACC,LRTRDTYPE,TRADE_STATUS,REFNO,INSTR_CODE,TYPEOFTRD,QTY,TRCODE,INSTR_DT,CONFDT,CHECKER,NDSDT,INPUTDT,TRDFROMORD,COUNTACCNM,ACCESS_STAMP, EXARENA, REGMSGQTY as SETTLE_SEQ_NO FROM DL_DEAL WHERE  ");
+			strcat((char *)sqlstmt.arr,chr_l_temp_lrspec_cond);	
+			strcat((char *)sqlstmt.arr," AND (EXARENA !='3' OR INSTR_DT IS NOT NULL) ");	
+			strcat((char *)sqlstmt.arr,"  AND  (cp_clt=:v8 OR cp_clt IS NULL) AND confdt = :v9 AND ACCOUNT = :v10 ");
+			strcat((char *)sqlstmt.arr," UNION SELECT ACCOUNT,DOMCPAC,COUNTACC,LRTRDTYPE,TRADE_STATUS,REFNO,INSTR_CODE,TYPEOFTRD,QTY,TRCODE,INSTR_DT,CONFDT,CHECKER,NDSDT,INPUTDT,TRDFROMORD,COUNTACCNM,ACCESS_STAMP, EXARENA,REGMSGQTY as SETTLE_SEQ_NO FROM CHISTRADE WHERE  ");
+			strcat((char *)sqlstmt.arr,chr_l_temp_lrspec_cond);	
+			strcat((char *)sqlstmt.arr," AND (EXARENA !='3' OR INSTR_DT IS NOT NULL) ");	
+			strcat((char *)sqlstmt.arr,"  AND  (cp_clt=:v8 OR cp_clt IS NULL) AND confdt = :v9 AND ACCOUNT = :v10 ");
+		}
+		else
+		{
+ //AIX -Warning Removal - (char*) added
+			sprintf((char *)sqlstmt.arr, "SELECT * FROM TXN_LR_VEW WHERE  %s AND domestic_cpclt=:v8 AND confdt = :v9 AND ACCOUNT = :v10", p_dl_localrepspec_struct_h_a->h_iv_cond);
+			strcat((char *)sqlstmt.arr," AND (EXARENA !='3' OR INSTR_DT IS NOT NULL) ");	
+			
+			strcat((char *)sqlstmt.arr," UNION SELECT ACCOUNT,DOMCPAC,COUNTACC,LRTRDTYPE,TRADE_STATUS,REFNO,INSTR_CODE,TYPEOFTRD,QTY,TRCODE,INSTR_DT,CONFDT,CHECKER,NDSDT,INPUTDT,TRDFROMORD,COUNTACCNM,ACCESS_STAMP, EXARENA, REGMSGQTY as SETTLE_SEQ_NO FROM DL_DEAL WHERE  ");
+			strcat((char *)sqlstmt.arr,chr_l_temp_lrspec_cond);	
+			strcat((char *)sqlstmt.arr," AND (EXARENA !='3' OR INSTR_DT IS NOT NULL) ");	
+			strcat((char *)sqlstmt.arr," AND domestic_cpclt=:v8 AND confdt = :v9 AND ACCOUNT = :v10 ");
+			strcat((char *)sqlstmt.arr," UNION SELECT ACCOUNT,DOMCPAC,COUNTACC,LRTRDTYPE,TRADE_STATUS,REFNO,INSTR_CODE,TYPEOFTRD,QTY,TRCODE,INSTR_DT,CONFDT,CHECKER,NDSDT,INPUTDT,TRDFROMORD,COUNTACCNM,ACCESS_STAMP, EXARENA, REGMSGQTY as SETTLE_SEQ_NO FROM CHISTRADE WHERE  ");
+			strcat((char *)sqlstmt.arr,chr_l_temp_lrspec_cond);	
+			strcat((char *)sqlstmt.arr," AND (EXARENA !='3' OR INSTR_DT IS NOT NULL) ");	
+			strcat((char *)sqlstmt.arr," AND domestic_cpclt=:v8 AND confdt = :v9 AND ACCOUNT = :v10 ");
+
+
+	
+		}
+	}
+	else
+	{
+		if (strcmp(l_dl_localrepproc_struct_h.h_lrdltype,"18") == 0 ||
+			 strcmp(l_dl_localrepproc_struct_h.h_lrdltype,"04") == 0 )	  
+		{
+ //AIX -Warning Removal - (char*) added
+			sprintf((char *)sqlstmt.arr, "SELECT * FROM TXN_LR_VEW WHERE (cp_clt=:v1 OR cp_clt IS NULL) AND confdt = :v2 AND ACCOUNT = :v3");//, p_dl_localrepspec_struct_h_a->h_iv_cond);
+			strcat((char *)sqlstmt.arr," AND (EXARENA !='3' OR INSTR_DT IS NOT NULL) ");	
+		}
+		else
+		{
+ //AIX -Warning Removal - (char*) added
+			sprintf((char *)sqlstmt.arr, "SELECT * FROM TXN_LR_VEW WHERE domestic_cpclt=:v1 AND confdt = :v2 AND ACCOUNT = :v3"); //, p_dl_localrepspec_struct_h_a->h_iv_cond);
+			strcat((char *)sqlstmt.arr," AND (EXARENA !='3' OR INSTR_DT IS NOT NULL) ");	
+		}
+	
+	}
+		
+	
+ //AIX -Warning Removal - (char*) added
+	if (strcmp(l_dl_localrepproc_struct_h.h_lrdltype,"18") == 0 ||
+		 strcmp(l_dl_localrepproc_struct_h.h_lrdltype,"04") == 0)	  
+	{
+		strcat((char *)sqlstmt.arr, " ORDER BY SETTLE_SEQ_NO, COUNTACC, CONFDT, ACCOUNT");  //AIX -Warning Removal - (char*) added
+	}
+	else
+	{
+		strcat((char *)sqlstmt.arr, " ORDER BY SETTLE_SEQ_NO, DOMCPAC, CONFDT, ACCOUNT, COUNTACCNM");  //AIX -Warning Removal - (char*) added
+	}
+
+	fprintf( p_logfile,(char *)sqlstmt.arr); //AIX -Warning Removal - (char*) added
+	
+	sqlstmt.len = (int)strlen((char *)sqlstmt.arr); //AIX -Warnings Removal
+	sqlstmt.arr[sqlstmt.len]=APL_NULL_CHAR;
+	sqlstmt.len++;
+	EXEC SQL PREPARE s FROM :sqlstmt;
+	EXEC SQL DECLARE matchtrd CURSOR FOR s;
+
+	if ( strcmp( l_dl_localrepproc_struct_h.h_lrdltype, "09") == 0 )
+	{
+		strcpy(chr_l_temp_countacc, p_deal_lr_struct_h->h_domcpclt_cd);
+		l_i_temp_countacc = 0;
+	}
+	else
+	{
+		strcpy(chr_l_temp_countacc, p_deal_lr_struct_h->h_countclt);
+		if ( strlen(chr_l_temp_countacc) == 0 )
+		{
+			l_i_temp_countacc = -1;
+		}
+		else
+		{
+			l_i_temp_countacc = 0;
+		}
+	}
+
+	if ( strcmp( p_dl_localrepspec_struct_h_a->h_iv_cond , APL_NULL_STRING ))
+	{
+		if  ((strcmp(l_dl_localrepproc_struct_h.h_lrdltype,"18") == 0 ||
+			 strcmp(l_dl_localrepproc_struct_h.h_lrdltype,"04") == 0)	   &&
+					p_dl_localrepspec_struct_h_a->h_dtfld == 3 )
+		{
+			EXEC SQL OPEN matchtrd USING :p_deal_lr_struct_h->h_lrdltype:p_deal_lr_struct_i->i_lrdltype, 
+												:p_deal_lr_struct_h->h_confdate:p_deal_lr_struct_i->i_confdate, 
+												:p_deal_lr_struct_h->h_instrdate:p_deal_lr_struct_i->i_instrdate, 
+												:chr_l_temp_countacc:l_i_temp_countacc,
+												:p_deal_lr_struct_h->h_dl_client:p_deal_lr_struct_i->i_dl_client, 
+												:p_deal_lr_struct_h->h_qty:p_deal_lr_struct_i->i_qty, 
+												:p_deal_lr_struct_h->h_instr_code:p_deal_lr_struct_i->i_instr_code, 
+												:l_dl_localrepproc_struct_h.h_domcpclt_cd,
+												:chr_l_confdt, 
+												:l_dl_localrepproc_struct_h.h_dl_client; 
+		}
+		else
+		{
+			EXEC SQL OPEN matchtrd USING :p_deal_lr_struct_h->h_lrdltype:p_deal_lr_struct_i->i_lrdltype, 
+												:p_deal_lr_struct_h->h_confdate:p_deal_lr_struct_i->i_confdate, 
+												:p_deal_lr_struct_h->h_instrdate:p_deal_lr_struct_i->i_instrdate, 
+												:chr_l_temp_countacc:l_i_temp_countacc,
+												:p_deal_lr_struct_h->h_dl_client:p_deal_lr_struct_i->i_dl_client, 
+												:p_deal_lr_struct_h->h_qty:p_deal_lr_struct_i->i_qty, 
+												:p_deal_lr_struct_h->h_instr_code:p_deal_lr_struct_i->i_instr_code, 
+												:l_dl_localrepproc_struct_h.h_dl_client, 
+												:chr_l_confdt, 
+												:l_dl_localrepproc_struct_h.h_domcpclt_cd;
+		}
+	}
+	else
+	{
+		if ( (strcmp(l_dl_localrepproc_struct_h.h_lrdltype,"18") == 0 ||
+			 strcmp(l_dl_localrepproc_struct_h.h_lrdltype,"04") == 0)	  &&
+						p_dl_localrepspec_struct_h_a->h_dtfld == 3 )
+		{
+			EXEC SQL OPEN matchtrd USING  :l_dl_localrepproc_struct_h.h_domcpclt_cd, 
+													:chr_l_confdt, 
+													:l_dl_localrepproc_struct_h.h_dl_client;
+		}
+		else
+		{
+			EXEC SQL OPEN matchtrd USING  :l_dl_localrepproc_struct_h.h_dl_client, 
+													:chr_l_confdt, 
+													:l_dl_localrepproc_struct_h.h_domcpclt_cd;
+		}
+
+	}
+
+	IS_ANY_ORA_ERROR;
+	
+	for ( ; ;)
+	{
+		memset( &l_deal_lr_struct_h, NULL, sizeof(DEAL_LR_STRUCT_H));
+		memset( &l_deal_lr_struct_i, NULL, sizeof(DEAL_LR_STRUCT_I));
+		memset( &l_dl_localrepprocstruct_h, NULL, sizeof(DL_LOCALREPPROC_STRUCT_H));
+		strcpy(chr_l_h_ct, APL_NULL_STRING);
+		strcpy(chr_l_h_db, APL_NULL_STRING);
+		strcpy(chr_l_client_a, APL_NULL_STRING);
+		strcpy(chr_l_h_acc_accclass, APL_NULL_STRING);
+		l_i_acc_accclass = 0;
+
+		EXEC SQL FETCH matchtrd INTO :l_deal_lr_struct_h:l_deal_lr_struct_i;
+		
+		IS_ANY_ORA_ERROR;
+
+		if ( APL_ZERO_RESULT_SET )
+		{
+			chr_l_nodata = 'Y';
+			break;
+		}
+
+		EXEC SQL SELECT CLN_CLAS
+					INTO	:chr_l_h_acc_accclass:l_i_acc_accclass
+					FROM	MT_CLIENT
+					WHERE	CLN_CODE	=	:l_deal_lr_struct_h.h_dl_client;
+
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_ACCNOT_FND,
+															l_deal_lr_struct_h.h_dl_client,
+															APL_NULL_STRING,
+															APL_NULL_STRING );
+
+
+		
+
+		if ( chr_l_h_acc_accclass[0] == '1')
+		{
+			
+
+			if ( strlen(p_dl_localrepspec_struct_h_a->h_credit_ind_100) != 0 )
+			{
+				EXEC SQL SELECT CLIENT_OWN
+							INTO	:chr_l_h_ct:l_i_ct
+							FROM	DL_LOCALREPCLIENT
+							WHERE	CREDIT_CLT	=	:p_dl_localrepspec_struct_h_a->h_credit_flag;
+
+				IS_ANY_ORA_ERROR;
+			}
+		}
+
+		if ( chr_l_h_acc_accclass[0] == '2')
+		{
+			
+
+			if ( strlen(p_dl_localrepspec_struct_h_a->h_credit_ind_100) != 0 )
+			{
+				strcpy(chr_l_client_a, l_deal_lr_struct_h.h_dl_client);
+
+				
+
+				strcpy(chr_l_h_ct, &chr_l_client_a[strlen(chr_l_client_a)-3] );
+			}
+		}
+
+		if (strlen( p_dl_localrepspec_struct_h_a->h_debit_ind_100 ) != 0 )
+		{
+
+			
+
+			if ( strcmp( p_dl_localrepspec_struct_h_a->h_debit_ind_100, "CLIENT") == 0 )
+			{
+				EXEC SQL SELECT CLN_CLAS
+							INTO	:chr_l_h_acc_accclass:l_i_acc_accclass
+							FROM	MT_CLIENT
+							WHERE	CLN_CODE	=	:l_deal_lr_struct_h.h_dl_client;
+
+				IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_ACCNOT_FND,
+																	l_deal_lr_struct_h.h_dl_client,
+																	APL_NULL_STRING,
+																	APL_NULL_STRING );
+			}
+			else if ( strcmp( p_dl_localrepspec_struct_h_a->h_debit_ind_100, "DOMESTIC_CPCLT") == 0 )
+			{
+				EXEC SQL SELECT CLN_CLAS
+							INTO	:chr_l_h_acc_accclass:l_i_acc_accclass
+							FROM	MT_CLIENT
+							WHERE	CLN_CODE	=	:l_deal_lr_struct_h.h_domcpclt_cd;
+
+				IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_ACCNOT_FND,
+																	l_deal_lr_struct_h.h_domcpclt_cd,
+																	APL_NULL_STRING,
+																	APL_NULL_STRING );
+			}
+			else if ( ( strcmp( p_dl_localrepspec_struct_h_a->h_debit_ind_100, "CP_CLT") == 0 ) &&  strcmp( l_deal_lr_struct_h.h_countclt,APL_NULL_STRING) )
+			{
+
+				EXEC SQL SELECT CLN_CLAS
+							INTO	:chr_l_h_acc_accclass:l_i_acc_accclass
+							FROM	MT_CLIENT
+							WHERE	CLN_CODE	=	rtrim(SUBSTR(:l_deal_lr_struct_h.h_countclt,1,:G_SYS_ACCOUNT_LEN));
+
+				IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_ACCNOT_FND,
+																	l_deal_lr_struct_h.h_countclt,
+																	APL_NULL_STRING,
+																	APL_NULL_STRING );
+ 			}
+
+			if ( chr_l_h_acc_accclass[0] == '1')
+			{
+				
+
+				EXEC SQL SELECT CLIENT_OWN
+							INTO	:chr_l_h_db:l_i_db
+							FROM	DL_LOCALREPCLIENT
+							WHERE	CREDIT_CLT	=	:p_dl_localrepspec_struct_h_a->h_debit_flag;
+
+				IS_ANY_ORA_ERROR;
+			}
+
+			if ( chr_l_h_acc_accclass[0] == '2')
+			{
+				
+
+				if ( strcmp( p_dl_localrepspec_struct_h_a->h_debit_ind_100, "CLIENT") == 0 )
+				{
+					strcpy(chr_l_client_a, l_deal_lr_struct_h.h_dl_client);
+				}	
+				else if ( strcmp( p_dl_localrepspec_struct_h_a->h_debit_ind_100, "DOMESTIC_CPCLT") == 0 )
+				{
+					strcpy(chr_l_client_a, l_deal_lr_struct_h.h_domcpclt_cd);
+				}
+				else if ( strcmp( p_dl_localrepspec_struct_h_a->h_debit_ind_100, "CP_CLT") == 0 )
+				{
+
+					strncpy(chr_l_client_a, l_deal_lr_struct_h.h_countclt,APL_CLIENT_LENGTH-1);
+               strcat(chr_l_client_a,"\0");
+				}
+
+				
+	
+				strcpy(chr_l_h_db, &chr_l_client_a[strlen(chr_l_client_a)-3] );
+			}
+
+		}
+
+		if ( strlen( chr_l_h_ct ) == 0 )
+		{
+			strcpy(chr_l_h_ct, p_dl_localrepspec_struct_h_a->h_credit_flag);
+		}
+
+		if ( strlen( chr_l_h_db ) == 0 )
+		{
+			strcpy(chr_l_h_db, p_dl_localrepspec_struct_h_a->h_debit_flag);
+		}
+			
+		memset( &l_dl_localrepprocstruct_h, NULL, sizeof(DL_LOCALREPPROC_STRUCT_H));
+
+		
+		strcpy( l_dl_localrepprocstruct_h.h_dl_client, l_deal_lr_struct_h.h_dl_client );
+		strcpy( l_dl_localrepprocstruct_h.h_indentity_no, l_deal_lr_struct_h.h_indentity_no );
+		strcpy( l_dl_localrepprocstruct_h.h_instr_code, l_deal_lr_struct_h.h_instr_code );
+	
+		if	( ( strcmp( l_deal_lr_struct_h.h_domcpclt_cd, 
+			   			l_mt_core_sys_params_struct_h.custody_clt_cd ) == 0 )	&&
+		  	( strcmp(l_deal_lr_struct_h.h_classofdl,"26") == 0) )
+		{
+
+			strncpy(l_dl_localrepprocstruct_h.h_domcpclt_cd, l_deal_lr_struct_h.h_countclt,APL_CLIENT_LENGTH-1);
+          strcat(l_dl_localrepprocstruct_h.h_domcpclt_cd,"\0");
+			 
+		}
+		else
+		{
+			strcpy( l_dl_localrepprocstruct_h.h_domcpclt_cd, l_deal_lr_struct_h.h_domcpclt_cd );
+		}
+
+		if ( p_po_lr_struct_h->h_rst_ind == 'N' )
+		{
+			strcpy( l_dl_localrepprocstruct_h.h_ctclt, chr_l_h_ct );
+			strcpy( l_dl_localrepprocstruct_h.h_dbclt, chr_l_h_db );
+			l_dl_localrepprocstruct_h.h_reset_ind[0] = 'N';
+			l_dl_localrepprocstruct_h.h_reset_ind[1] = APL_NULL_CHAR;
+		}
+		else
+		{
+			strcpy( l_dl_localrepprocstruct_h.h_ctclt, chr_l_h_db );
+			strcpy( l_dl_localrepprocstruct_h.h_dbclt, chr_l_h_ct );
+			l_dl_localrepprocstruct_h.h_reset_ind[0] = 'Y';
+			l_dl_localrepprocstruct_h.h_reset_ind[1] = APL_NULL_CHAR;
+		}
+
+		l_dl_localrepprocstruct_h.h_qty = l_deal_lr_struct_h.h_qty;
+		l_dl_localrepprocstruct_h.h_dtfld = p_dl_localrepspec_struct_h_a->h_dtfld;
+		
+      if ( ( strcmp( l_deal_lr_struct_h.h_domcpclt_cd, 
+                     l_mt_core_sys_params_struct_h.custody_clt_cd ) == 0 ) &&
+         ( strcmp(l_deal_lr_struct_h.h_classofdl,"26") == 0) )
+        l_dl_localrepprocstruct_h.h_r_code = 1;
+      else
+			l_dl_localrepprocstruct_h.h_r_code = 0;
+
+		strcpy(l_dl_localrepprocstruct_h.h_lrdltype, l_deal_lr_struct_h.h_lrdltype );
+		strcpy(l_dl_localrepprocstruct_h.h_dealcd, l_deal_lr_struct_h.h_dealcd );
+
+		if (strcmp(l_deal_lr_struct_h.h_lrdltype,"18") == 0 ||
+			 strcmp(l_deal_lr_struct_h.h_lrdltype,"04") == 0 )
+		{
+			l_dl_localrepprocstruct_h.h_ord_ind[0] = 'N';
+			l_dl_localrepprocstruct_h.h_ord_ind[1] = APL_NULL_CHAR;
+		}
+		else
+		{
+			if ( strcmp( l_deal_lr_struct_h.h_deal_status, STATUS_DEL_AUTH ) == 0 )
+			{
+				l_dl_localrepprocstruct_h.h_ord_ind[0] = 'Y';
+				l_dl_localrepprocstruct_h.h_ord_ind[1] = APL_NULL_CHAR;
+			}
+			else
+			{
+				l_dl_localrepprocstruct_h.h_ord_ind[0] = 'N';
+				l_dl_localrepprocstruct_h.h_ord_ind[1] = APL_NULL_CHAR;
+			}
+		}
+
+
+fprintf( p_logfile,"Within CDBMatchKeyPassFn.........\n"); 
+fprintf( p_logfile,"Going to Insert Into CLRPROC\n"); 
+fprintf( p_logfile,"account is : %s ", l_dl_localrepprocstruct_h.h_dl_client); 
+fprintf( p_logfile,"refno is : %s ", l_dl_localrepprocstruct_h.h_indentity_no); 
+fprintf( p_logfile,"instr_code is : %s ", l_dl_localrepprocstruct_h.h_instr_code); 
+fprintf( p_logfile,"rcode is : %d ", l_dl_localrepprocstruct_h.h_r_code); 
+fprintf( p_logfile,"ctacc is : %s ", l_dl_localrepprocstruct_h.h_ctclt); 
+fprintf( p_logfile,"dbacc is : %s ", l_dl_localrepprocstruct_h.h_dbclt); 
+fprintf( p_logfile,"domcpac is : %s ", l_dl_localrepprocstruct_h.h_domcpclt_cd); 
+fprintf( p_logfile,"isorder is : %s ", l_dl_localrepprocstruct_h.h_ord_ind); 
+fprintf( p_logfile,"lrtrdtype is : %s ", l_dl_localrepprocstruct_h.h_lrdltype); 
+fprintf( p_logfile,"trcode is : %s ", l_dl_localrepprocstruct_h.h_dealcd); 
+fprintf( p_logfile,"isreset is : %s ", l_dl_localrepprocstruct_h.h_reset_ind); 
+
+
+		EXEC SQL INSERT INTO DL_LOCALREPPROC VALUES (:l_dl_localrepprocstruct_h);
+
+		IS_ANY_ORA_ERROR;
+
+		
+
+		if ( p_po_lr_struct_h->h_rst_ind == 'N' )
+		{
+			memset( &l_dl_localrepsafek_struct_h, NULL, sizeof(DL_LOCALREPSAFEK_STRUCT_H) );
+
+			strcpy( l_dl_localrepsafek_struct_h.h_instr_code, l_deal_lr_struct_h.h_instr_code);
+			strcpy( l_dl_localrepsafek_struct_h.h_ct_clt, chr_l_h_ct);	
+			strcpy( l_dl_localrepsafek_struct_h.h_dl_client, l_deal_lr_struct_h.h_dl_client);
+			l_dl_localrepsafek_struct_h.h_openbalance = 0;
+			l_dl_localrepsafek_struct_h.h_closing_bal = l_deal_lr_struct_h.h_qty * -1 ;
+			if (strcmp(l_deal_lr_struct_h.h_domcpclt_cd, l_mt_core_sys_params_struct_h.custody_clt_cd) == 0 && strcmp(l_deal_lr_struct_h.h_classofdl, DL_BOOKTRF_IND) == 0)
+			{
+
+				strncpy(l_dl_localrepsafek_struct_h.h_domcpclt_cd, l_deal_lr_struct_h.h_countclt,APL_CLIENT_LENGTH-1);
+            strcat(l_dl_localrepsafek_struct_h.h_domcpclt_cd,"\0");
+			}
+			else
+			{
+				strcpy(l_dl_localrepsafek_struct_h.h_domcpclt_cd, l_deal_lr_struct_h.h_domcpclt_cd);
+			}
+			strcpy( l_dl_localrepsafek_struct_h.h_lst_instr_date, l_deal_lr_struct_h.h_instrdate );
+
+			if ( APL_FAILURE == CDBAddLRSAFEKRecFn( 	&l_dl_localrepsafek_struct_h,
+																	p_logfile,
+																	p_intl_envdatastruct_h,
+																	l_debug_info_ptr ) )
+			{
+				APL_GOBACK_FAIL
+			}
+			
+		}
+		else
+		{
+			memset( &l_dl_localrepsafek_struct_h, NULL, sizeof(DL_LOCALREPSAFEK_STRUCT_H) );
+
+			strcpy( l_dl_localrepsafek_struct_h.h_instr_code, l_deal_lr_struct_h.h_instr_code);
+			strcpy( l_dl_localrepsafek_struct_h.h_ct_clt, chr_l_h_db);	
+			strcpy( l_dl_localrepsafek_struct_h.h_dl_client, l_deal_lr_struct_h.h_dl_client);
+			l_dl_localrepsafek_struct_h.h_openbalance = 0;
+			l_dl_localrepsafek_struct_h.h_closing_bal = l_deal_lr_struct_h.h_qty * -1 ;
+			if (strcmp(l_deal_lr_struct_h.h_domcpclt_cd, l_mt_core_sys_params_struct_h.custody_clt_cd) == 0 && strcmp(l_deal_lr_struct_h.h_classofdl, DL_BOOKTRF_IND) == 0)
+			{
+
+				strncpy(l_dl_localrepsafek_struct_h.h_domcpclt_cd, l_deal_lr_struct_h.h_countclt,APL_CLIENT_LENGTH-1);
+            strcat(l_dl_localrepsafek_struct_h.h_domcpclt_cd,"\0");
+			}
+			else
+			{
+				strcpy(l_dl_localrepsafek_struct_h.h_domcpclt_cd, l_deal_lr_struct_h.h_domcpclt_cd);
+			}
+			strcpy( l_dl_localrepsafek_struct_h.h_lst_instr_date, l_deal_lr_struct_h.h_instrdate );
+
+			if ( APL_FAILURE == CDBAddLRSAFEKRecFn( 	&l_dl_localrepsafek_struct_h,
+																	p_logfile,
+																	p_intl_envdatastruct_h,
+																	l_debug_info_ptr ) )
+			{
+				APL_GOBACK_FAIL
+			}
+		}
+
+		chr_l_nodata = 'N';
+		break;
+
+	}
+
+	EXEC SQL CLOSE matchtrd;
+			
+	IS_ANY_ORA_ERROR;
+
+	
+
+	if ( chr_l_nodata == 'Y' )
+	{
+		EXEC SQL UPDATE DL_LOCALREPPROC
+					SET 	R_CODE = 2
+					WHERE CLIENT		=	:l_dl_localrepproc_struct_h.h_dl_client	
+					AND	IDENTIY_NO			=	:l_dl_localrepproc_struct_h.h_indentity_no
+					AND	INSTR_CODE		=	:l_dl_localrepproc_struct_h.h_instr_code
+					AND	DOMESTIC_CPCLT		=	:l_dl_localrepproc_struct_h.h_domcpclt_cd
+					AND	LR_DL_CLASS	=	:l_dl_localrepproc_struct_h.h_lrdltype
+					AND	DEAL_CD		=	:l_dl_localrepproc_struct_h.h_dealcd;
+					
+		IS_ANY_ORA_ERROR;
+	}
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS	:
+
+		CO_ProcMonitor(	p_logfile, "Exiting CDBMatchKeyPassFn processtion successfully\n", NULL, NULL);
+
+		#ifdef SYS_DEBUG
+			printf( "Leaving CDBMatchKeyPassFn with success\n");
+		#endif
+		
+		return(APL_SUCCESS);
+
+	RETURN_FAILURE	:
+	
+		CO_ProcMonitor(	p_logfile, "Exiting CDBMatchKeyPassFn processtion with errors\n", NULL, NULL);
+
+		#ifdef SYS_DEBUG
+			printf( "Leaving CDBMatchKeyPassFn with errors\n");
+		#endif
+		
+		return(APL_FAILURE);
+      
+}
+
+
+
+
+int CDBMatchExistsFn(	PO_LR_STRUCT_H *p_po_lr_struct_h, 
+								DEAL_LR_STRUCT_H    *p_deal_lr_struct_h,
+								DEAL_LR_STRUCT_I		*p_deal_lr_struct_i,
+								DL_LOCALREPSPEC_STRUCT_H		*p_dl_localrepspec_struct_h_a,
+								FILE 						*p_logfile, 
+								INTL_ENV_DATA_STRUCT_H 	*p_intl_envdatastruct_h, 
+								DEBUG_INFO_STRUCT_H 			**l_debug_info_ptr)
+{
+	struct sqlca sqlca;
+	DL_LOCALREPPROC_STRUCT_H	l_dl_localrepproc_struct_h;
+	DL_LOCALREPPROC_STRUCT_I	l_dl_localrepproc_struct_i;
+	DEAL_LR_STRUCT_H	l_deal_lr_struct_h;
+	DEAL_LR_STRUCT_I	l_deal_lr_struct_i;
+	char	chr_l_h_acc_accclass[3]				=	APL_NULL_STRING;
+	//char	chr_l_h_lracc_accown[4]				=	APL_NULL_STRING;
+	char	chr_l_h_client_a[APL_CLIENT_LENGTH]	=	APL_NULL_STRING;
+	char	chr_l_client_a[APL_CLIENT_LENGTH]		=	APL_NULL_STRING;
+	char	chr_l_h_ct[4]							=	APL_NULL_STRING;
+	char	chr_l_h_db[4]							=	APL_NULL_STRING;
+    
+	char	chr_l_temp_countacc[APL_COUNTACC_LEN]	=	APL_NULL_STRING; 
+	short	l_i_temp_countacc					=	0;
+	short	l_i_acc_accclass					=	0;
+	//short	l_i_lracc_accown					=	0;
+	short	l_i_ct								=	0;
+	short	l_i_db								=	0;
+	short	l_i_account							=	0;
+
+	EXEC SQL BEGIN DECLARE SECTION;
+		varchar 	sqlstmt[300];
+	EXEC SQL END DECLARE SECTION;
+
+   EXEC SQL VAR p_deal_lr_struct_h->h_dl_client IS STRING;
+   EXEC SQL VAR p_deal_lr_struct_h->h_domcpclt_cd IS STRING;
+   EXEC SQL VAR p_deal_lr_struct_h->h_countclt IS STRING;
+   EXEC SQL VAR p_deal_lr_struct_h->h_lrdltype IS STRING;
+   EXEC SQL VAR p_deal_lr_struct_h->h_deal_status IS STRING;
+   EXEC SQL VAR p_deal_lr_struct_h->h_indentity_no IS STRING;
+   EXEC SQL VAR p_deal_lr_struct_h->h_instr_code IS STRING;
+   EXEC SQL VAR p_deal_lr_struct_h->h_classofdl IS STRING;
+   EXEC SQL VAR p_deal_lr_struct_h->h_dealcd IS STRING;
+   EXEC SQL VAR p_deal_lr_struct_h->h_instrdate IS STRING;
+   EXEC SQL VAR p_deal_lr_struct_h->h_confdate IS STRING;
+   EXEC SQL VAR p_deal_lr_struct_h->h_checker IS STRING;
+   EXEC SQL VAR p_deal_lr_struct_h->h_ndsdate IS STRING;
+   EXEC SQL VAR p_deal_lr_struct_h->h_newdt IS STRING;
+   EXEC SQL VAR p_deal_lr_struct_h->h_dlfromord IS STRING;
+   EXEC SQL VAR p_deal_lr_struct_h->h_countcltnm IS STRING;
+
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_dealcd IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_status_active IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_dtname IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_indname IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_debit_flag IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_debit_ind_100 IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_credit_flag IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_credit_ind_100 IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_desc IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_info IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_iv_cond IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_local_iv_cond IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_desc_a IS STRING;
+   EXEC SQL VAR p_dl_localrepspec_struct_h_a->h_desc_b IS STRING;
+
+   EXEC SQL VAR   l_dl_localrepproc_struct_h.h_dl_client IS STRING;
+   EXEC SQL VAR   l_dl_localrepproc_struct_h.h_indentity_no IS STRING;
+   EXEC SQL VAR   l_dl_localrepproc_struct_h.h_instr_code IS STRING;
+   EXEC SQL VAR   l_dl_localrepproc_struct_h.h_ctclt IS STRING;
+   EXEC SQL VAR   l_dl_localrepproc_struct_h.h_dbclt IS STRING;
+   EXEC SQL VAR   l_dl_localrepproc_struct_h.h_domcpclt_cd IS STRING;
+   EXEC SQL VAR   l_dl_localrepproc_struct_h.h_ord_ind IS STRING;
+   EXEC SQL VAR   l_dl_localrepproc_struct_h.h_lrdltype IS STRING;
+   EXEC SQL VAR   l_dl_localrepproc_struct_h.h_dealcd IS STRING;
+   EXEC SQL VAR   l_dl_localrepproc_struct_h.h_reset_ind IS STRING;
+
+   EXEC SQL VAR l_deal_lr_struct_h.h_dl_client IS STRING;
+   EXEC SQL VAR l_deal_lr_struct_h.h_domcpclt_cd IS STRING;
+   EXEC SQL VAR l_deal_lr_struct_h.h_countclt IS STRING;
+   EXEC SQL VAR l_deal_lr_struct_h.h_lrdltype IS STRING;
+   EXEC SQL VAR l_deal_lr_struct_h.h_deal_status IS STRING;
+   EXEC SQL VAR l_deal_lr_struct_h.h_indentity_no IS STRING;
+   EXEC SQL VAR l_deal_lr_struct_h.h_instr_code IS STRING;
+   EXEC SQL VAR l_deal_lr_struct_h.h_classofdl IS STRING;
+   EXEC SQL VAR l_deal_lr_struct_h.h_dealcd IS STRING;
+   EXEC SQL VAR l_deal_lr_struct_h.h_instrdate IS STRING;
+   EXEC SQL VAR l_deal_lr_struct_h.h_confdate IS STRING;
+   EXEC SQL VAR l_deal_lr_struct_h.h_checker IS STRING;
+   EXEC SQL VAR l_deal_lr_struct_h.h_ndsdate IS STRING;
+   EXEC SQL VAR l_deal_lr_struct_h.h_newdt IS STRING;
+   EXEC SQL VAR l_deal_lr_struct_h.h_dlfromord IS STRING;
+   EXEC SQL VAR l_deal_lr_struct_h.h_countcltnm IS STRING;
+
+	sqlca.sqlcode = 0;
+	
+	
+
+	#ifdef SYS_DEBUG
+		printf( "Entering processtion CDBMatchExistsFn\n");
+	#endif
+		
+	CO_ProcMonitor(	p_logfile, "Entered processtion CDBMatchExistsFn\n", NULL, NULL);
+
+	
+
+	EXEC SQL VAR	chr_l_h_acc_accclass	IS STRING;
+	//EXEC SQL VAR	chr_l_h_lracc_accown	IS STRING;
+	EXEC SQL VAR	chr_l_h_ct				IS STRING;
+	EXEC SQL VAR	chr_l_h_db				IS STRING;
+	EXEC SQL VAR 	chr_l_h_client_a			IS STRING;
+
+	
+	
+ //AIX -Warning Removal - (char*) added
+   if ( strcmp( p_dl_localrepspec_struct_h_a->h_iv_cond , APL_NULL_STRING ))
+   {
+		   sprintf((char *)sqlstmt.arr, "SELECT * FROM TXN_LR_VEW WHERE %s AND domestic_cpclt=:v8 AND confdt = :v9 AND ACCOUNT = :v10 ",p_dl_localrepspec_struct_h_a->h_iv_cond);
+			strcat((char *)sqlstmt.arr ," AND (EXARENA!='3' OR INSTR_DT IS NOT NULL ) ORDER BY SETTLE_SEQ_NO, DOMCPAC, CONFDT, ACCOUNT, COUNTACCNM");
+		
+   }
+   else
+   {
+      sprintf((char *)sqlstmt.arr, "SELECT * FROM TXN_LR_VEW WHERE %s  domestic_cpclt=:v1 AND confdt = :v2 AND ACCOUNT = :v3  AND  (EXARENA !='3' OR INSTR_DT IS NOT NULL) ORDER BY SETTLE_SEQ_NO, DOMCPAC, CONFDT, ACCOUNT, COUNTACCNM",p_dl_localrepspec_struct_h_a->h_iv_cond);
+		
+   }
+	
+	sqlstmt.len = (int)strlen((char *)sqlstmt.arr); //AIX -Warnings Removal
+	sqlstmt.arr[sqlstmt.len]=APL_NULL_CHAR;
+	sqlstmt.len++;
+	if ( strcmp( p_deal_lr_struct_h->h_lrdltype, "09") == 0 )
+	{
+		strcpy(chr_l_temp_countacc, p_deal_lr_struct_h->h_domcpclt_cd);
+		l_i_temp_countacc = 0;
+	}
+	else
+	{
+		strcpy(chr_l_temp_countacc, p_deal_lr_struct_h->h_countclt);
+		if ( strlen(chr_l_temp_countacc) == 0 )
+		{
+			l_i_temp_countacc = -1;
+		}
+		else
+		{
+			l_i_temp_countacc = 0;
+		}
+	}
+	EXEC SQL PREPARE s FROM :sqlstmt;
+	EXEC SQL DECLARE matchtrd2 CURSOR FOR s;
+	if ( strcmp( p_dl_localrepspec_struct_h_a->h_iv_cond , APL_NULL_STRING ))
+	{
+		EXEC SQL OPEN matchtrd2 USING :p_deal_lr_struct_h->h_lrdltype:p_deal_lr_struct_i->i_lrdltype, 
+											:p_deal_lr_struct_h->h_confdate:p_deal_lr_struct_i->i_confdate, 
+											:p_deal_lr_struct_h->h_instrdate:p_deal_lr_struct_i->i_instrdate, 
+											:chr_l_temp_countacc:l_i_temp_countacc,
+											:p_deal_lr_struct_h->h_dl_client:p_deal_lr_struct_i->i_dl_client, 
+											:p_deal_lr_struct_h->h_qty:p_deal_lr_struct_i->i_qty, 
+											:p_deal_lr_struct_h->h_instr_code:p_deal_lr_struct_i->i_instr_code, 
+											:p_deal_lr_struct_h->h_dl_client, 
+											:p_deal_lr_struct_h->h_confdate, 
+											:p_deal_lr_struct_h->h_domcpclt_cd;
+	}
+	else
+	{
+		EXEC SQL OPEN matchtrd2 USING  :p_deal_lr_struct_h->h_dl_client, 
+											:p_deal_lr_struct_h->h_confdate, 
+											:p_deal_lr_struct_h->h_domcpclt_cd;
+	
+	}
+
+	IS_ANY_ORA_ERROR;
+
+	sqlca.sqlerrd[2]=0;
+	for ( ; ;)
+	{
+		memset( &l_deal_lr_struct_h, NULL, sizeof(DEAL_LR_STRUCT_H) );
+		memset( &l_deal_lr_struct_i, NULL, sizeof(DEAL_LR_STRUCT_I) );
+
+		EXEC SQL FETCH matchtrd2 INTO :l_deal_lr_struct_h:l_deal_lr_struct_i;
+		
+		IS_ANY_ORA_ERROR;
+
+		if ( APL_ZERO_RESULT_SET )
+		{
+			break;
+		}
+		break;
+	}
+
+	EXEC SQL CLOSE matchtrd2;
+	IS_ANY_ORA_ERROR;
+
+	if ( sqlca.sqlerrd[2] == 0 )
+	{
+
+		EXEC SQL DECLARE lrproc_curs CURSOR FOR
+					SELECT * FROM DL_LOCALREPPROC
+					WHERE		CLIENT	=	:p_deal_lr_struct_h->h_dl_client
+					AND		IDENTIY_NO		=	:p_deal_lr_struct_h->h_indentity_no;
+
+		EXEC SQL OPEN lrproc_curs;
+		IS_ANY_ORA_ERROR;
+
+		EXEC SQL FETCH lrproc_curs
+					INTO	:l_dl_localrepproc_struct_h:l_dl_localrepproc_struct_i;
+
+		IS_ANY_ORA_ERROR;
+
+		EXEC SQL CLOSE lrproc_curs;
+		IS_ANY_ORA_ERROR;
+
+		strcpy(chr_l_h_ct, p_dl_localrepspec_struct_h_a->h_credit_flag);
+		strcpy(chr_l_h_db, p_dl_localrepspec_struct_h_a->h_debit_flag);
+
+		if ( strlen(p_dl_localrepspec_struct_h_a->h_credit_ind_100) != 0 )
+		{
+			if ( strcmp(p_dl_localrepspec_struct_h_a->h_credit_ind_100, "CP_CLT") == 0 )
+			{
+				EXEC SQL SELECT CLN_CLAS, CLN_CODE
+						INTO	:chr_l_h_acc_accclass:l_i_acc_accclass,
+								:chr_l_h_client_a:l_i_account
+						FROM	MT_CLIENT
+						WHERE	CLN_CODE	=	:l_dl_localrepproc_struct_h.h_domcpclt_cd;
+
+				IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_ACCNOT_FND,
+																	l_dl_localrepproc_struct_h.h_domcpclt_cd,
+																	APL_NULL_STRING,
+																	APL_NULL_STRING );
+			}
+			else
+			{
+
+				
+
+				if ( strcmp(p_dl_localrepspec_struct_h_a->h_credit_ind_100, "DOMESTIC_CPCLT") == 0 )
+				{
+					EXEC SQL SELECT CLN_CLAS, CLN_CODE
+							INTO	:chr_l_h_acc_accclass:l_i_acc_accclass,
+									:chr_l_h_client_a:l_i_account
+							FROM	MT_CLIENT
+							WHERE	CLN_CODE	=	:l_dl_localrepproc_struct_h.h_domcpclt_cd;
+
+					IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_ACCNOT_FND,
+																		l_dl_localrepproc_struct_h.h_domcpclt_cd,
+																		APL_NULL_STRING,
+																		APL_NULL_STRING );
+				}
+				else if ( strcmp(p_dl_localrepspec_struct_h_a->h_credit_ind_100, "CLIENT") == 0 )
+				{
+					EXEC SQL SELECT CLN_CLAS, CLN_CODe
+							INTO	:chr_l_h_acc_accclass:l_i_acc_accclass,
+									:chr_l_h_client_a:l_i_account
+							FROM	MT_CLIENT
+							WHERE	CLN_CODe	=	:l_dl_localrepproc_struct_h.h_dl_client;
+
+					IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_ACCNOT_FND,
+																		l_dl_localrepproc_struct_h.h_dl_client,
+																		APL_NULL_STRING,
+																		APL_NULL_STRING );
+				}
+			}
+		}
+		else
+		{
+			EXEC SQL SELECT CLN_CLAS, CLN_CODe
+					INTO	:chr_l_h_acc_accclass:l_i_acc_accclass,
+							:chr_l_h_client_a:l_i_account
+					FROM	MT_CLIENT
+					WHERE	CLN_CODe	=	:l_deal_lr_struct_h.h_dl_client;
+
+			IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_ACCNOT_FND,
+																l_deal_lr_struct_h.h_dl_client,
+																APL_NULL_STRING,
+																APL_NULL_STRING );
+		}
+
+		
+
+		if ( chr_l_h_acc_accclass[0] == '1')
+		{
+			
+
+			if ( strlen(p_dl_localrepspec_struct_h_a->h_credit_ind_100) != 0 )
+			{
+				EXEC SQL SELECT CLIENT_OWN
+							INTO	:chr_l_h_ct:l_i_ct
+							FROM	DL_LOCALREPCLIENT
+							WHERE	CREDIT_CLT	=	:p_dl_localrepspec_struct_h_a->h_credit_flag;
+
+				IS_ANY_ORA_ERROR;
+			}
+		}	
+
+		if ( chr_l_h_acc_accclass[0] == '2')
+		{
+			
+
+			if ( strlen(p_dl_localrepspec_struct_h_a->h_credit_ind_100) != 0 )
+			{
+				strcpy(chr_l_client_a, chr_l_h_client_a);
+
+				
+
+				strcpy(chr_l_h_ct, &chr_l_client_a[strlen(chr_l_client_a)-3] );
+			}
+		}
+
+		if (strlen( p_dl_localrepspec_struct_h_a->h_debit_ind_100 ) != 0 )
+		{
+			if ( strcmp(p_dl_localrepspec_struct_h_a->h_debit_ind_100, "CP_CLT") == 0 )
+			{
+				EXEC SQL SELECT CLN_CLAS, CLN_CODE
+						INTO	:chr_l_h_acc_accclass:l_i_acc_accclass,
+								:chr_l_h_client_a:l_i_account
+						FROM	MT_CLIENT
+						WHERE	CLN_CODE	=	:l_dl_localrepproc_struct_h.h_domcpclt_cd;
+
+				IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_ACCNOT_FND,
+																	l_dl_localrepproc_struct_h.h_domcpclt_cd,
+																	APL_NULL_STRING,
+																	APL_NULL_STRING );
+			}
+			else
+			{
+
+				
+
+				if ( strcmp(p_dl_localrepspec_struct_h_a->h_debit_ind_100, "DOMESTIC_CPCLT") == 0 )
+				{
+					EXEC SQL SELECT CLN_CLAS, CLN_CODE
+							INTO	:chr_l_h_acc_accclass:l_i_acc_accclass,
+									:chr_l_h_client_a:l_i_account
+							FROM	MT_CLIENT
+							WHERE	CLN_CODE	=	:l_dl_localrepproc_struct_h.h_domcpclt_cd;
+
+					IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_ACCNOT_FND,
+																		l_dl_localrepproc_struct_h.h_domcpclt_cd,
+																		APL_NULL_STRING,
+																		APL_NULL_STRING );
+				}
+				else if ( strcmp(p_dl_localrepspec_struct_h_a->h_debit_ind_100, "CLIENT") == 0 )
+				{
+					EXEC SQL SELECT CLN_CLAS, CLN_CODE
+							INTO	:chr_l_h_acc_accclass:l_i_acc_accclass,
+									:chr_l_h_client_a:l_i_account
+							FROM	MT_CLIENT
+							WHERE	CLN_CODE	=	:l_dl_localrepproc_struct_h.h_dl_client;
+
+					IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_ACCNOT_FND,
+																		l_dl_localrepproc_struct_h.h_dl_client,
+																		APL_NULL_STRING,
+																		APL_NULL_STRING );
+				}
+			}
+
+			if ( chr_l_h_acc_accclass[0] == '1')
+			{
+				
+
+				EXEC SQL SELECT CLIENT_OWN
+							INTO	:chr_l_h_db:l_i_db
+							FROM	DL_LOCALREPCLIENT
+							WHERE	CREDIT_CLT	=	:p_dl_localrepspec_struct_h_a->h_debit_flag;
+	
+				IS_ANY_ORA_ERROR;
+			}
+
+			if ( chr_l_h_acc_accclass[0] == '2')
+			{
+				
+
+				if ( strcmp( p_dl_localrepspec_struct_h_a->h_debit_ind_100, "CLIENT") == 0 )
+				{
+					strcpy(chr_l_client_a, p_deal_lr_struct_h->h_dl_client);
+				}	
+				else if ( strcmp( p_dl_localrepspec_struct_h_a->h_debit_ind_100, "DOMESTIC_CPCLT") == 0 )
+				{	
+					strcpy(chr_l_client_a, p_deal_lr_struct_h->h_domcpclt_cd);
+				}
+				else if ( strcmp( p_dl_localrepspec_struct_h_a->h_debit_ind_100, "CP_CLT") == 0 )
+				{
+
+					strncpy(chr_l_client_a, p_deal_lr_struct_h->h_countclt,APL_CLIENT_LENGTH-1);
+               strcat(chr_l_client_a,"\0");
+				}
+
+				
+
+				strcpy(chr_l_h_db, &chr_l_client_a[strlen(chr_l_client_a)-3] );
+			}
+
+		}
+
+		memset( &l_dl_localrepproc_struct_h, NULL, sizeof(DL_LOCALREPPROC_STRUCT_H) );
+		
+		strcpy(l_dl_localrepproc_struct_h.h_dl_client, p_deal_lr_struct_h->h_dl_client );
+		strcpy(l_dl_localrepproc_struct_h.h_indentity_no, p_deal_lr_struct_h->h_indentity_no );
+		strcpy(l_dl_localrepproc_struct_h.h_instr_code, p_deal_lr_struct_h->h_instr_code );
+
+		if (strcmp(p_deal_lr_struct_h->h_domcpclt_cd, l_mt_core_sys_params_struct_h.custody_clt_cd) == 0 && strcmp(p_deal_lr_struct_h->h_classofdl, DL_BOOKTRF_IND) == 0)
+		{
+
+		 strncpy(l_dl_localrepproc_struct_h.h_domcpclt_cd, p_deal_lr_struct_h->h_countclt,APL_CLIENT_LENGTH-1);
+        strcat(l_dl_localrepproc_struct_h.h_domcpclt_cd,"\0");
+		}
+		else
+		{
+			strcpy(l_dl_localrepproc_struct_h.h_domcpclt_cd, p_deal_lr_struct_h->h_domcpclt_cd );
+		}
+		strcpy(l_dl_localrepproc_struct_h.h_ctclt, chr_l_h_ct );
+		strcpy(l_dl_localrepproc_struct_h.h_dbclt, chr_l_h_db );
+
+		l_dl_localrepproc_struct_h.h_qty = p_deal_lr_struct_h->h_qty;
+		l_dl_localrepproc_struct_h.h_dtfld = p_dl_localrepspec_struct_h_a->h_dtfld;
+		l_dl_localrepproc_struct_h.h_r_code = 2;
+		fprintf(p_logfile,"The client for l_debuglist is (%s)",p_deal_lr_struct_h->h_dl_client);
+		fprintf(p_logfile,"The refno for l_debuglist is (%s)",p_deal_lr_struct_h->h_indentity_no);
+
+
+fprintf( p_logfile,"Within CDBMatchExistsFn.........\n"); 
+fprintf( p_logfile,"Going to Insert Into CLRPROC\n"); 
+fprintf( p_logfile,"account is : %s ", l_dl_localrepproc_struct_h.h_dl_client); 
+fprintf( p_logfile,"refno is : %s ", l_dl_localrepproc_struct_h.h_indentity_no); 
+fprintf( p_logfile,"instr_code is : %s ", l_dl_localrepproc_struct_h.h_instr_code); 
+fprintf( p_logfile,"rcode is : %d ", l_dl_localrepproc_struct_h.h_r_code); 
+fprintf( p_logfile,"ctacc is : %s ", l_dl_localrepproc_struct_h.h_ctclt); 
+fprintf( p_logfile,"dbacc is : %s ", l_dl_localrepproc_struct_h.h_dbclt); 
+fprintf( p_logfile,"domcpac is : %s ", l_dl_localrepproc_struct_h.h_domcpclt_cd); 
+fprintf( p_logfile,"isorder is : %s ", l_dl_localrepproc_struct_h.h_ord_ind); 
+fprintf( p_logfile,"lrtrdtype is : %s ", l_dl_localrepproc_struct_h.h_lrdltype); 
+fprintf( p_logfile,"trcode is : %s ", l_dl_localrepproc_struct_h.h_dealcd); 
+fprintf( p_logfile,"isreset is : %s ", l_dl_localrepproc_struct_h.h_reset_ind); 
+
+
+		EXEC SQL INSERT INTO DL_LOCALREPPROC VALUES (:l_dl_localrepproc_struct_h);
+		IS_ANY_ORA_ERROR;
+	}
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS	:
+
+		CO_ProcMonitor(	p_logfile, "Exiting CDBMatchExistsFn processtion successfully\n", NULL, NULL);
+
+		#ifdef SYS_DEBUG
+			printf( "Leaving CDBMatchExistsFn with success\n");
+		#endif
+		
+		return(APL_SUCCESS);
+
+	RETURN_FAILURE	:
+	
+		CO_ProcMonitor(	p_logfile, "Exiting CDBMatchExistsFn processtion with errors\n", NULL, NULL);
+
+		#ifdef SYS_DEBUG
+			printf( "Leaving CDBMatchExistsFn with errors\n");
+		#endif
+		
+		return(APL_FAILURE);
+      
+}
+
+
+
+int CDBUpdLRPROCFn(	PO_LR_STRUCT_H *p_po_lr_struct_h, 
+							FILE *p_logfile, 
+							INTL_ENV_DATA_STRUCT_H *p_intl_envdatastruct_h, 
+							DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	struct sqlca sqlca;
+	DEAL_LR_STRUCT_H		l_deal_lr_struct_h;
+	LR_ORD_STRUCT_H		l_lr_ord_struct_h;
+	DL_LOCALREPSPEC_STRUCT_H		l_dl_localrepspec_struct_h;
+	char	chr_l_h_datename_val[20]				=	APL_NULL_STRING;
+	char	chr_l_h_flagname_val[20]				=	APL_NULL_STRING;
+	char	chr_l_resetflg							=	APL_NULL_CHAR;
+	char	chr_l_resettoday						=	APL_NULL_CHAR;
+	char	chr_l_h_cubk[APL_FLAG_LENGTH]			=	APL_NULL_STRING;
+	short	l_i_cubk								=	0;
+	//FILE  *l_repfile                       =  NULL; 
+	int	int_l_datediff							=	0;
+	int	int_l_h_lrproc_count					=	0;
+	int	int_l_h_lrsafek_count					=	0;
+	//short	l_i_datename						=	0;
+	//short	l_i_flagname						=	0;
+	short	l_i_lrproc_count					=	0;
+	short	l_i_lrsafek_count					=	0;
+	DEAL_LR_STRUCT_I		l_deal_lr_struct_i;
+	LR_ORD_STRUCT_I		l_lr_ord_struct_i;
+	DL_LOCALREPSPEC_STRUCT_I		l_dl_localrepspec_struct_i;
+  
+   //int   int_chk_flg  = 0;
+   //char  chr_temp_lr_instr_dt[APL_DATE_LEN]  =  APL_NULL_STRING;
+   char  chr_l_temp_access_stamp[APL_DATE_LEN]  =  APL_NULL_STRING;
+	char  chr_l_temp_failcode[3]				=	APL_NULL_STRING;
+	int	int_l_lr_datediff							=	0;
+	int	int_l_cn_datediff							=	0;
+	short i_temp_failcode						=	0;
+  
+	EXEC SQL BEGIN DECLARE SECTION;
+		varchar sqlstmt[100];
+		varchar l_h_account_val[APL_CLIENT_LENGTH];
+		varchar l_h_refno_val[APL_TXNREFNO_LEN];
+		varchar l_h_inputdt_val[APL_DATE_LEN];
+	EXEC SQL END DECLARE SECTION;
+
+	sqlca.sqlcode = 0;
+
+	
+
+	#ifdef SYS_DEBUG
+		printf( "Entering processtion CDBUpdLRPROCFn\n");
+	#endif
+		
+	CO_ProcMonitor(	p_logfile, "Entered processtion CDBUpdLRPROCFn\n", NULL, NULL);
+
+	
+
+	EXEC SQL VAR 	l_deal_lr_struct_h.h_dl_client			IS STRING;
+	EXEC SQL VAR 	l_deal_lr_struct_h.h_domcpclt_cd			IS STRING;
+	EXEC SQL VAR 	l_deal_lr_struct_h.h_checker			IS STRING;
+	EXEC SQL VAR 	l_deal_lr_struct_h.h_indentity_no				IS STRING;
+	EXEC SQL VAR 	l_deal_lr_struct_h.h_ndsdate				IS STRING;
+	EXEC SQL VAR 	l_deal_lr_struct_h.h_instrdate				IS STRING;
+	EXEC SQL VAR 	l_deal_lr_struct_h.h_deal_status	IS STRING;
+	EXEC SQL VAR	l_deal_lr_struct_h.h_lrdltype		IS STRING;
+	EXEC SQL VAR	l_deal_lr_struct_h.h_countclt			IS STRING;
+	EXEC SQL VAR	l_deal_lr_struct_h.h_instr_code			IS STRING;
+	EXEC SQL VAR	l_deal_lr_struct_h.h_classofdl		IS STRING;
+	EXEC SQL VAR	l_deal_lr_struct_h.h_dealcd			IS STRING;
+	EXEC SQL VAR	l_deal_lr_struct_h.h_confdate			IS STRING;
+	EXEC SQL VAR	l_deal_lr_struct_h.h_newdt			IS STRING;
+	EXEC SQL VAR	l_deal_lr_struct_h.h_countcltnm		IS STRING;
+	EXEC SQL VAR	l_deal_lr_struct_h.h_countcltnm		IS STRING;
+	EXEC SQL VAR	l_dl_localrepspec_struct_h.h_dealclass				IS STRING;
+	EXEC SQL VAR	l_dl_localrepspec_struct_h.h_dealcd				IS STRING;
+	EXEC SQL VAR	l_dl_localrepspec_struct_h.h_dtname			IS STRING;
+	EXEC SQL VAR	l_dl_localrepspec_struct_h.h_indname			IS STRING;
+	EXEC SQL VAR	l_dl_localrepspec_struct_h.h_credit_flag					IS STRING;
+	EXEC SQL VAR	l_dl_localrepspec_struct_h.h_debit_flag					IS STRING;
+	EXEC SQL VAR	l_dl_localrepspec_struct_h.h_credit_ind_100				IS STRING;
+	EXEC SQL VAR	l_dl_localrepspec_struct_h.h_debit_ind_100				IS STRING;
+	EXEC SQL VAR	l_dl_localrepspec_struct_h.h_status_active				IS STRING;
+	EXEC SQL VAR	l_dl_localrepspec_struct_h.h_iv_cond					IS STRING;
+	EXEC SQL VAR	l_dl_localrepspec_struct_h.h_desc				IS STRING;
+	EXEC SQL VAR	l_dl_localrepspec_struct_h.h_info					IS STRING;
+	EXEC SQL VAR	l_dl_localrepspec_struct_h.h_local_iv_cond			IS STRING;
+	EXEC SQL VAR	l_dl_localrepspec_struct_h.h_desc_a				IS STRING;
+	EXEC SQL VAR	l_dl_localrepspec_struct_h.h_desc_b				IS STRING;
+	EXEC SQL VAR	chr_l_h_datename_val							IS STRING;
+	EXEC SQL VAR	chr_l_h_flagname_val							IS STRING;
+	EXEC SQL VAR	l_lr_ord_struct_h.h_broker_cd			IS STRING;
+	EXEC SQL VAR	l_lr_ord_struct_h.h_instr_code			IS STRING;
+	EXEC SQL VAR	l_lr_ord_struct_h.h_lrdltype		IS STRING;
+	EXEC SQL VAR	l_lr_ord_struct_h.h_buy_sell_flag		IS STRING;
+	EXEC SQL VAR	l_lr_ord_struct_h.h_lastexecdate		IS STRING;
+	EXEC SQL VAR	l_lr_ord_struct_h.h_isgte_ind				IS STRING;
+	EXEC SQL VAR	l_lr_ord_struct_h.h_expirydate			IS STRING;
+	EXEC SQL VAR	l_lr_ord_struct_h.h_ublckdate			IS STRING;
+	EXEC SQL VAR	l_lr_ord_struct_h.h_ord_stat	IS STRING;
+	EXEC SQL VAR	l_lr_ord_struct_h.h_orderindentity_no		IS STRING;
+	EXEC SQL VAR	l_lr_ord_struct_h.h_dl_client			IS STRING;
+	EXEC SQL VAR	chr_l_temp_failcode							IS STRING; 
+
+	#ifdef SYS_DEBUG
+		printf( "Starting Processing of Trades.....\n");
+	#endif
+		
+	CO_ProcMonitor(	p_logfile, "Starting Processing of Trades....\n", NULL, NULL);
+
+	
+   
+	
+	EXEC SQL	DECLARE curs_upd_lrproctrd CURSOR FOR
+				SELECT a.* , c.*
+				FROM 	DEAL_LOCALREP_VEW a, MT_INSTRUMENT b, DL_LOCALREPSPEC c
+				WHERE	a.instr_code		=	b.instr_code
+				AND	a.checker 	IS NOT NULL
+				AND	b.CLASSCD 	!= 'NLCR'
+				AND	a.LR_DL_CLASS = 	c.DEALCLASS
+				AND	a.deal_cd		=	c.deal_cd
+				AND	(a.EX_ARENA !='3' OR a.INSTRUMENT_DT IS NOT NULL)
+				AND	( (a.DEAL_FRM_ORD = 'Y' and c.DT_NAME != 'CHECKERDT') 
+							OR (a.DEAL_FRM_ORD = 'N') )
+				ORDER BY MOD(TO_NUMBER(a.deal_cd),2),decode(MOD(TO_NUMBER(a.deal_cd),2),1,MOD(TO_NUMBER(a.dl_class),26),decode(MOD(TO_NUMBER(a.dl_class),26),1,a.dl_class,MOD(TO_NUMBER(a.dl_class),99))) ,SETL_IDEN_NO, c.DT_FIELD;
+	
+
+	         
+	EXEC SQL OPEN curs_upd_lrproctrd;
+           
+
+	IS_ANY_ORA_ERROR;
+
+	for ( ; ;)
+	{
+		
+
+		memset( &l_deal_lr_struct_h, NULL, sizeof(DEAL_LR_STRUCT_H) );
+		memset( &l_deal_lr_struct_i, NULL, sizeof(DEAL_LR_STRUCT_I) );
+		memset( &l_dl_localrepspec_struct_h, NULL, sizeof(DL_LOCALREPSPEC_STRUCT_H) );
+		memset( &l_dl_localrepspec_struct_i, NULL, sizeof(DL_LOCALREPSPEC_STRUCT_I) );
+		chr_l_resetflg 		=	'N';
+		chr_l_resettoday	=	'N';
+
+		
+		memset( chr_l_temp_failcode, NULL, 3 );
+		i_temp_failcode=0;
+		
+
+		EXEC SQL FETCH curs_upd_lrproctrd
+					INTO	:l_deal_lr_struct_h:l_deal_lr_struct_i,
+							:l_dl_localrepspec_struct_h:l_dl_localrepspec_struct_i;
+
+		IS_ANY_ORA_ERROR;
+
+		if ( APL_ZERO_RESULT_SET )
+		{
+			break;
+		}
+				 
+		EXEC SQL SELECT FAILREASON_CD,ACCESS_STAMP
+		INTO :chr_l_temp_failcode:i_temp_failcode
+				,:chr_l_temp_access_stamp
+		FROM DL_DEAL
+		WHERE	IDENTIY_NO				=	:l_deal_lr_struct_h.h_indentity_no
+		AND 	CLIENT			=	:l_deal_lr_struct_h.h_dl_client;
+
+		IS_ANY_ORA_ERROR;
+   
+		if ( (strcmp(l_dl_localrepspec_struct_h.h_dtname, "NDS_DATE") == 0 ) && 
+			  (strlen(l_deal_lr_struct_h.h_ndsdate) != 0 ) &&
+			  (strlen(l_deal_lr_struct_h.h_instrdate) == 0 )&&
+           (!(strlen(l_deal_lr_struct_h.h_confdate) && (!strcmp(chr_l_temp_failcode,"60"))))
+		   )
+		{
+			if ( strcmp( l_deal_lr_struct_h.h_deal_status, STATUS_DEL_AUTH ) != 0 )
+			{
+				
+
+				EXEC SQL UPDATE DL_DEAL
+							SET	NDS_DATE		=	NULL
+							WHERE	CLIENT	=	:l_deal_lr_struct_h.h_dl_client
+							AND	IDENTIY_NO		=	:l_deal_lr_struct_h.h_indentity_no;
+			}
+			else
+			{
+				
+
+				EXEC SQL UPDATE DL_HISDEAL
+							SET	NDS_DATE		=	NULL
+							WHERE	CLIENT	=	:l_deal_lr_struct_h.h_dl_client
+							AND	IDENTIY_NO		=	:l_deal_lr_struct_h.h_indentity_no
+							AND	DATEOF_INPUT	=	:l_deal_lr_struct_h.h_newdt;
+			}
+		
+			IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_DEAL_NF,
+																l_deal_lr_struct_h.h_dl_client,
+																l_deal_lr_struct_h.h_indentity_no,
+																APL_NULL_STRING );
+		}
+
+		
+ //AIX -Warning Removal - (char*) added
+		strcpy((char *)l_h_account_val.arr, l_deal_lr_struct_h.h_dl_client);
+		l_h_account_val.len	=	strlen(l_deal_lr_struct_h.h_dl_client);
+		strcpy((char *)l_h_refno_val.arr, l_deal_lr_struct_h.h_indentity_no);
+		l_h_refno_val.len	=	strlen(l_deal_lr_struct_h.h_indentity_no);
+		strcpy((char *)l_h_inputdt_val.arr, l_deal_lr_struct_h.h_newdt);
+		l_h_inputdt_val.len	=	strlen(l_deal_lr_struct_h.h_newdt);
+
+		if ( strcmp( l_deal_lr_struct_h.h_deal_status, STATUS_DEL_AUTH ) != 0 )
+		{
+			
+
+			sprintf((char *)sqlstmt.arr, "SELECT %s,%s FROM DL_DEAL WHERE client=:v1 and refno = :v2 ",l_dl_localrepspec_struct_h.h_dtname, l_dl_localrepspec_struct_h.h_indname); //AIX -Warning Removal - (char*) added
+		}
+		else
+		{
+			
+
+			sprintf((char *)sqlstmt.arr, "SELECT %s,%s FROM CHISTRADE WHERE client=:v1 and refno = :v2 and inputdt = :v3",l_dl_localrepspec_struct_h.h_dtname, l_dl_localrepspec_struct_h.h_indname); //AIX -Warning Removal - (char*) added
+		}
+	
+		sqlstmt.len = (int)strlen((char *)sqlstmt.arr);
+		sqlstmt.arr[sqlstmt.len]=APL_NULL_CHAR;
+		sqlstmt.len++;
+		EXEC SQL PREPARE s FROM :sqlstmt;
+
+      printf("\n ******%s********\n",sqlstmt.arr);
+      fflush(stdout);
+ 
+		EXEC SQL DECLARE selecttrd CURSOR FOR s;
+		if ( strcmp( l_deal_lr_struct_h.h_deal_status, STATUS_DEL_AUTH ) != 0 )
+		{
+			EXEC SQL OPEN selecttrd USING :l_h_account_val, :l_h_refno_val ;
+		}
+		else
+		{
+			EXEC SQL OPEN selecttrd USING :l_h_account_val, :l_h_refno_val, :l_h_inputdt_val;
+		}
+
+		IS_ANY_ORA_ERROR;
+
+		EXEC SQL FETCH selecttrd INTO :chr_l_h_datename_val, :chr_l_h_flagname_val;
+
+		if ( sqlca.sqlcode != -1405 )
+		{
+			IS_ANY_ORA_ERROR;
+		}
+
+		EXEC SQL CLOSE selecttrd;
+
+		IS_ANY_ORA_ERROR;
+
+		
+
+		
+	
+
+		if ( strlen(chr_l_h_flagname_val) > 0 )
+     	{
+         if ( APL_FAILURE == CO_Pro_DateComp(chr_l_h_flagname_val,p_po_lr_struct_h->h_run_dt,&int_l_lr_datediff, l_debug_info_ptr) )
+         {
+            APL_GOBACK_FAIL
+         }
+      }
+
+		if ( strlen(chr_l_temp_access_stamp) > 0 )
+      {
+         if ( APL_FAILURE == CO_Pro_DateComp(chr_l_temp_access_stamp,p_po_lr_struct_h->h_run_dt,&int_l_cn_datediff, l_debug_info_ptr) )
+         {
+            APL_GOBACK_FAIL
+         }
+      }
+	
+		
+
+		if ( strlen(chr_l_h_datename_val) > 0 ) 
+		{
+			if ( APL_FAILURE == CO_Pro_DateComp(p_po_lr_struct_h->h_run_dt, chr_l_h_datename_val, &int_l_datediff, l_debug_info_ptr) ) 
+			{
+				APL_GOBACK_FAIL
+			}
+		}
+
+		if ( strlen(chr_l_h_datename_val) == 0 ||
+				int_l_datediff > 0 )
+		{
+	      if (!(((!strcmp(l_dl_localrepspec_struct_h.h_dtname,"INSTRUMENT_DT"))||(!strcmp(l_dl_localrepspec_struct_h.h_dtname,"NDS_DATE")))
+					  && 
+				   (!strlen(chr_l_h_datename_val)) &&  
+  	   	      (strlen(l_deal_lr_struct_h.h_confdate)) && 
+   	       (!strcmp(chr_l_temp_failcode,"60" ))))
+			{
+		
+			
+			
+
+			if ( (strlen(chr_l_h_datename_val) == 0 ) &&
+				  (strlen(chr_l_h_flagname_val) != 0 ) )
+			{
+				
+
+				chr_l_resetflg = 'Y';
+				if ( int_l_datediff == 0 )
+				{
+					chr_l_resettoday = 'Y';
+				}
+				else
+				{
+					chr_l_resettoday = 'N';
+				}
+				
+				
+
+				strcpy((char *)sqlstmt.arr, APL_NULL_STRING); //AIX -Warning Removal - (char*) added
+
+				if ( strcmp( l_deal_lr_struct_h.h_deal_status, STATUS_DEL_AUTH ) != 0 )
+				{
+					
+
+					sprintf((char *)sqlstmt.arr, "UPDATE DL_DEAL SET %s = NULL WHERE client=:v1 and refno = :v2 ",l_dl_localrepspec_struct_h.h_indname); //AIX -Warning Removal - (char*) added
+				}
+				else	
+				{
+					
+
+					sprintf((char *)sqlstmt.arr, "UPDATE CHISTRADE SET %s = NULL WHERE client=:v1 and refno = :v2 and inputdt = :v3",l_dl_localrepspec_struct_h.h_indname); //AIX -Warning Removal - (char*) added
+				}
+
+				sqlstmt.len = (int)strlen((char *)sqlstmt.arr); //AIX -Warnings Removal
+				sqlstmt.arr[sqlstmt.len]=APL_NULL_CHAR;
+				sqlstmt.len++;
+				EXEC SQL PREPARE s FROM :sqlstmt;
+				if ( strcmp( l_deal_lr_struct_h.h_deal_status, STATUS_DEL_AUTH ) != 0 )
+				{
+					EXEC SQL EXECUTE s USING :l_h_account_val, :l_h_refno_val;
+				}
+				else
+				{
+					EXEC SQL EXECUTE s USING :l_h_account_val, :l_h_refno_val, :l_h_inputdt_val;
+				}
+				IS_ANY_ORA_ERROR;
+
+			}
+			else
+			{
+				continue;
+			}
+			}	
+		}
+
+		if ( chr_l_resetflg == 'N' )
+		{
+			
+
+			fprintf(p_logfile,"The client is :%s\n",l_deal_lr_struct_h.h_dl_client  );
+			fprintf(p_logfile,"The refno is :%s\n",l_deal_lr_struct_h.h_indentity_no );
+			fprintf(p_logfile,"The inputdt is :%s\n",l_deal_lr_struct_h.h_newdt );
+			fprintf(p_logfile,"h_run_date  is :%s\n", p_po_lr_struct_h->h_run_dt);
+			fprintf(p_logfile,"l_datename is :%s\n", l_dl_localrepspec_struct_h.h_dtname );
+			fprintf(p_logfile,"l_datename_val is :%s\n", chr_l_h_datename_val );
+			fprintf(p_logfile,"l_flagname is :%s\n", l_dl_localrepspec_struct_h.h_indname );
+			fprintf(p_logfile,"l_flagname_val is :%s\n", chr_l_h_flagname_val );
+			fprintf(p_logfile,"l_datediff  is :%d\n", int_l_datediff );
+			fprintf(p_logfile,"l_cn_datediff  is :%d\n", int_l_cn_datediff );
+			fprintf(p_logfile,"l_lr_datediff  is :%d\n", int_l_lr_datediff );
+			fprintf(p_logfile,"l_h_lrspecstruct.h_status_active  is :%s\n", l_dl_localrepspec_struct_h.h_status_active );
+         fprintf(p_logfile,"l_h_lrspecstruct.h_iv_cond is :%s\n", l_dl_localrepspec_struct_h.h_iv_cond );
+         fprintf(p_logfile,"l_resettoday is :%c\n", chr_l_resettoday);
+
+			
+
+			 
+
+	      if (((!strcmp(l_dl_localrepspec_struct_h.h_dtname,"INSTRUMENT_DT"))||(!strcmp(l_dl_localrepspec_struct_h.h_dtname,"NDS_DATE")))
+				  && 
+				   (!strlen(chr_l_h_datename_val)) &&  
+  	   	      (strlen(l_deal_lr_struct_h.h_confdate)) && 
+   	       (!strcmp(chr_l_temp_failcode,"60" )))
+			{
+				if (int_l_cn_datediff > 0)
+				continue;
+			}
+			else
+			{
+
+			 
+
+				if (((!strcmp(l_dl_localrepspec_struct_h.h_dtname,"INSTRUMENT_DT"))||(!strcmp(l_dl_localrepspec_struct_h.h_dtname,"NDS_DATE")))
+						&& 
+					  strlen(chr_l_h_datename_val) &&  
+          	     strlen(l_deal_lr_struct_h.h_confdate) && 
+				     strlen(chr_l_h_flagname_val) && 
+					  int_l_lr_datediff > 0)
+				continue;
+   
+        
+			}
+			
+
+			if ( !( (int_l_datediff == 0) || 
+				(strlen(chr_l_h_datename_val) == 0) ) )
+			{
+				continue;
+			}
+		}
+
+		
+
+		if ( l_dl_localrepspec_struct_h.h_status_active[0] == 'Y' )
+		{
+			if ( strlen(l_dl_localrepspec_struct_h.h_iv_cond) == 0 )
+			{
+				if ( chr_l_resettoday == 'N' )
+				{
+					p_po_lr_struct_h->h_rst_tday_ind = chr_l_resettoday;
+					p_po_lr_struct_h->h_rst_ind	  = chr_l_resetflg;
+
+					if ( APL_FAILURE == CDBPassLREntryFn(	p_po_lr_struct_h, &l_deal_lr_struct_h, &l_dl_localrepspec_struct_h, p_logfile, p_intl_envdatastruct_h, l_debug_info_ptr ) )
+					{
+						APL_GOBACK_FAIL
+					}
+				}
+			}
+			else
+			{
+				if ( chr_l_resettoday == 'N' )
+				{
+					p_po_lr_struct_h->h_rst_tday_ind = chr_l_resettoday;
+					p_po_lr_struct_h->h_rst_ind	  = chr_l_resetflg;
+					
+					
+					
+					if(!strcmp(chr_l_temp_failcode,"60" )&&!strlen(l_deal_lr_struct_h.h_instrdate)&&!strcmp(l_dl_localrepspec_struct_h.h_dtname,"INSTRUMENT_DT"))
+					{
+						strcpy(l_deal_lr_struct_h.h_instrdate,p_po_lr_struct_h->h_run_dt);
+						l_deal_lr_struct_i.i_instrdate=0; 
+					}
+					
+					
+
+					if ( APL_FAILURE == CDBMatchKeyPassFn(	p_po_lr_struct_h, &l_deal_lr_struct_h, &l_deal_lr_struct_i, &l_dl_localrepspec_struct_h, p_logfile, p_intl_envdatastruct_h, l_debug_info_ptr ))
+					{
+						APL_GOBACK_FAIL
+					}
+				}
+			}
+		}
+		else
+		{
+			EXEC SQL SELECT NVL(COUNT(*),0)
+						INTO	:int_l_h_lrproc_count:l_i_lrproc_count
+						FROM DL_LOCALREPPROC
+						WHERE	CLIENT	=	:l_deal_lr_struct_h.h_dl_client
+						AND	IDENTIY_NO		=	:l_deal_lr_struct_h.h_indentity_no;
+			
+			IS_ANY_ORA_ERROR;
+
+			EXEC SQL SELECT CLN_BRK_ALL 
+						INTO	:chr_l_h_cubk:l_i_cubk
+						FROM	MT_CLIENT
+						WHERE	CLN_CODE = :l_deal_lr_struct_h.h_domcpclt_cd;
+		
+			IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_ACCNOT_FND,
+																l_deal_lr_struct_h.h_domcpclt_cd,
+																APL_NULL_STRING,
+																APL_NULL_STRING);
+
+			if ( ( int_l_h_lrproc_count != 0 ) && (chr_l_h_cubk[0] != 'B') )
+			{
+				if ( APL_FAILURE == CDBMatchExistsFn(	p_po_lr_struct_h, &l_deal_lr_struct_h, &l_deal_lr_struct_i, &l_dl_localrepspec_struct_h, p_logfile, p_intl_envdatastruct_h, l_debug_info_ptr ) )
+				{
+					APL_GOBACK_FAIL
+				}
+			}
+		}
+		
+		if ( chr_l_resetflg == 'N' )
+		{
+			
+
+			strcpy((char *)sqlstmt.arr, APL_NULL_STRING); //AIX -Warning Removal - (char*) added
+
+			if ( strcmp( l_deal_lr_struct_h.h_deal_status, STATUS_DEL_AUTH ) != 0 )
+			{
+				
+			sprintf((char *)sqlstmt.arr, "UPDATE DL_DEAL SET %s = :v1 WHERE client=:v2 and refno = :v3 ",l_dl_localrepspec_struct_h.h_indname); //AIX -Warning Removal - (char*) added
+			}
+			else
+			{
+				
+			sprintf((char *)sqlstmt.arr, "UPDATE CHISTRADE SET %s = :v1 WHERE client=:v2 and refno = :v3 and inputdt = :v4",l_dl_localrepspec_struct_h.h_indname); //AIX -Warning Removal - (char*) added
+			}
+	
+			sqlstmt.len = (int)strlen((char *)sqlstmt.arr); //AIX -Warnings Removal
+			sqlstmt.arr[sqlstmt.len]=APL_NULL_CHAR;
+			sqlstmt.len++;
+			EXEC SQL PREPARE s FROM :sqlstmt;
+			if ( strcmp( l_deal_lr_struct_h.h_deal_status, STATUS_DEL_AUTH ) != 0 )
+			{
+				EXEC SQL EXECUTE s USING :p_po_lr_struct_h->h_run_dt,:l_h_account_val, :l_h_refno_val;
+          	fprintf(p_logfile,"\nIn CDBUpdLRPROCFn Resetflg = N\n");
+				fprintf(p_logfile,"\nUpdated DL_DEAL with following statement \n");
+          	fprintf(p_logfile,"\n####### Statement #####\n");
+          	fprintf(p_logfile,"\n%s\n",sqlstmt.arr);
+			}
+			else
+			{
+				EXEC SQL EXECUTE s USING :p_po_lr_struct_h->h_run_dt,:l_h_account_val, :l_h_refno_val, :l_h_inputdt_val;
+          	fprintf(p_logfile,"\nIn CDBUpdLRPROCFn Resetflg = N\n");
+          	fprintf(p_logfile,"\nUpdated CHISTTRADE with following statement \n");
+          	fprintf(p_logfile,"\n####### Statement #####\n");
+          	fprintf(p_logfile,"\n%s\n",sqlstmt.arr);
+			}
+			IS_ANY_ORA_ERROR;
+
+		}
+   	
+	}
+	
+	EXEC SQL CLOSE curs_upd_lrproctrd;
+
+	IS_ANY_ORA_ERROR;
+
+	#ifdef SYS_DEBUG
+		printf( "Starting Processing of Orders.....\n");
+	#endif
+		
+	CO_ProcMonitor(	p_logfile, "Starting Processing of Orders....\n", NULL, NULL);
+
+	
+
+	EXEC SQL DECLARE curs_upd_lrprocord CURSOR FOR
+				SELECT a.*, c.*
+				FROM		OR_ORD_LR_VEW a, MT_INSTRUMENT b, DL_LOCALREPSPEC c
+				WHERE		a.instr_code = b.instr_code
+				AND		b.CLASSCD != 'NLCR'
+				AND		a.LR_DL_CLASS = c.DEALCLASS
+				AND		c.deal_cd = decode(a.BUY_SELL_IND,'B','4','3') 
+				AND		a.checker_dt IS NOT NULL
+				AND		c.DT_NAME	= 'CHECKERDT'
+				AND		c.DT_NAME	= 'UBLCKDT';
+
+	EXEC SQL OPEN curs_upd_lrprocord;
+
+	IS_ANY_ORA_ERROR;
+
+	for ( ; ;)
+	{
+		memset(&l_lr_ord_struct_h, NULL, sizeof(LR_ORD_STRUCT_H) );
+		memset(&l_lr_ord_struct_i, NULL, sizeof(LR_ORD_STRUCT_I) );
+		memset( &l_dl_localrepspec_struct_h, NULL, sizeof(DL_LOCALREPSPEC_STRUCT_H) );
+		memset( &l_dl_localrepspec_struct_i, NULL, sizeof(DL_LOCALREPSPEC_STRUCT_I) );
+
+		EXEC SQL FETCH curs_upd_lrprocord
+					INTO	:l_lr_ord_struct_h:l_lr_ord_struct_i,
+							:l_dl_localrepspec_struct_h:l_dl_localrepspec_struct_i;
+
+		IS_ANY_ORA_ERROR;
+
+		if ( APL_ZERO_RESULT_SET )
+		{
+			break;
+		}
+
+		
+		
+		if ( l_lr_ord_struct_h.h_isgte_ind[0] == 'Y' )
+		{
+			if ( APL_FAILURE == CO_Pro_DateComp( l_lr_ord_struct_h.h_expirydate, p_po_lr_struct_h->h_run_dt, &int_l_datediff, l_debug_info_ptr ) )
+			{
+				APL_GOBACK_FAIL
+			}
+
+			if ( 	strlen(l_lr_ord_struct_h.h_ublckdate) == 0 &&
+					int_l_datediff > 0 )
+			{
+
+				if ( strcmp(l_lr_ord_struct_h.h_ord_stat, STATUS_DEL_AUTH) == 0 )
+				{
+					
+
+					EXEC SQL UPDATE OR_ORDERDETAILS 
+								SET		UNBLK_DATE		=	:p_po_lr_struct_h->h_run_dt
+								WHERE		CLIENT		=	:l_lr_ord_struct_h.h_dl_client
+								AND		ORD_REFNO	=	:l_lr_ord_struct_h.h_orderindentity_no;
+				}
+				else
+				{
+					
+
+					EXEC SQL UPDATE OR_HISORDER 
+								SET		UNBLK_DATE		=	:p_po_lr_struct_h->h_run_dt
+								WHERE		CLIENT		=	:l_lr_ord_struct_h.h_dl_client
+								AND		ORD_REFNO	=	:l_lr_ord_struct_h.h_orderindentity_no;
+				}
+
+				IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_ORD_NOTFND,
+																	l_lr_ord_struct_h.h_dl_client,
+																	l_lr_ord_struct_h.h_orderindentity_no,
+																	APL_NULL_STRING );
+				
+				fprintf( p_logfile, "Detected Expired Order.... Account - %s, Refno - %s", l_lr_ord_struct_h.h_dl_client, l_lr_ord_struct_h.h_orderindentity_no );
+			}
+		}
+
+		
+
+		if ( ( strcmp(l_lr_ord_struct_h.h_ord_stat, STATUS_DEL_UAUTH) == 0 ) ||
+			  ( strcmp(l_lr_ord_struct_h.h_ord_stat, STATUS_DEL_AUTH)	 == 0 ) ||
+			  ( strcmp(l_lr_ord_struct_h.h_ord_stat, STATUS_CANC_AUTH)	 == 0 ) ||
+			  ( strcmp(l_lr_ord_struct_h.h_ord_stat, STATUS_CANC_UAUTH) == 0) )
+		{
+				if ( strcmp(l_lr_ord_struct_h.h_ord_stat, STATUS_DEL_AUTH) == 0 )
+				{
+					
+
+					EXEC SQL UPDATE 	OR_ORDERDETAILS 
+								SET		UNBLK_DATE		=	CHECKER_DT
+								WHERE		CLIENT		=	:l_lr_ord_struct_h.h_dl_client
+								AND		ORD_REFNO	=	:l_lr_ord_struct_h.h_orderindentity_no;
+				}
+				else
+				{
+					
+
+					EXEC SQL UPDATE 	OR_HISORDER 
+								SET		UNBLK_DATE		=	CHECKER_DT
+								WHERE		CLIENT		=	:l_lr_ord_struct_h.h_dl_client
+								AND		ORD_REFNO	=	:l_lr_ord_struct_h.h_orderindentity_no;
+				}
+				
+
+			IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_ORD_NOTFND,
+																l_lr_ord_struct_h.h_dl_client,
+																l_lr_ord_struct_h.h_orderindentity_no,
+																APL_NULL_STRING );
+				
+		}
+
+		
+
+		strcpy((char *)l_h_account_val.arr, l_lr_ord_struct_h.h_dl_client); // AIX - Warnings removal
+		l_h_account_val.len	=	strlen(l_lr_ord_struct_h.h_dl_client);
+		strcpy((char *)l_h_refno_val.arr, l_lr_ord_struct_h.h_orderindentity_no); // AIX - Warnings removal
+		l_h_refno_val.len	=	strlen(l_lr_ord_struct_h.h_orderindentity_no);
+
+		if ( strcmp(l_lr_ord_struct_h.h_ord_stat, STATUS_DEL_AUTH) == 0 )
+		{
+			
+
+		sprintf((char *)sqlstmt.arr, "SELECT %s,%s FROM CORDER WHERE client=:v1 and orderrefno = :v2 ",l_dl_localrepspec_struct_h.h_dtname, l_dl_localrepspec_struct_h.h_indname); // AIX - Warnings removal
+		}
+		else
+		{
+			
+
+			sprintf((char *)sqlstmt.arr, "SELECT %s,%s FROM CHISORDER WHERE client=:v1 and orderrefno = :v2 ",l_dl_localrepspec_struct_h.h_dtname, l_dl_localrepspec_struct_h.h_indname);
+		}
+		
+	
+		sqlstmt.len = (int)strlen((char *)sqlstmt.arr); // AIX - Warnings removal
+		sqlstmt.arr[sqlstmt.len]=APL_NULL_CHAR;
+		sqlstmt.len++;
+		fprintf(p_logfile, (char *)sqlstmt.arr); //AIX -Warning Removal - (char*) added
+		EXEC SQL PREPARE s FROM :sqlstmt;
+		EXEC SQL DECLARE selectord CURSOR FOR s;
+		EXEC SQL OPEN selectord USING :l_h_account_val, :l_h_refno_val;
+
+		IS_ANY_ORA_ERROR;
+
+		EXEC SQL FETCH selectord INTO :chr_l_h_datename_val, :chr_l_h_flagname_val;
+		IS_ANY_ORA_ERROR;
+
+		EXEC SQL CLOSE selectord;
+
+		IS_ANY_ORA_ERROR;
+
+
+		
+
+		if ( strlen(chr_l_h_datename_val) > 0 )
+		{
+			if ( APL_FAILURE == CO_Pro_DateComp(p_po_lr_struct_h->h_run_dt, chr_l_h_datename_val, &int_l_datediff, l_debug_info_ptr) ) 
+			{
+				APL_GOBACK_FAIL
+			}
+		}
+
+		if ( strlen(chr_l_h_datename_val) == 0 ||
+				int_l_datediff == 0 )
+		{
+			
+			continue;
+		}
+
+		if ( l_dl_localrepspec_struct_h.h_status_active[0] == 'Y' )
+		{
+			if ( strlen(l_dl_localrepspec_struct_h.h_iv_cond) == 0 )
+			{
+				if ( APL_FAILURE == CDBPassOrdEntryFn(	p_po_lr_struct_h, &l_lr_ord_struct_h, &l_lr_ord_struct_i, &l_dl_localrepspec_struct_h, p_logfile, p_intl_envdatastruct_h, l_debug_info_ptr ) )
+				{
+					APL_GOBACK_FAIL
+				}
+			}		
+			else
+			{
+				CO_ProcMonitor(	p_logfile, "Error In Static Table... Contact Support\n", NULL, NULL);
+				APL_GOBACK_FAIL
+			}
+		}
+
+		
+
+		strcpy((char *)sqlstmt.arr, APL_NULL_STRING); //AIX -Warnings Removal
+
+		if ( strcmp(l_lr_ord_struct_h.h_ord_stat, STATUS_DEL_AUTH) == 0 )
+		{
+			
+
+			sprintf((char *)sqlstmt.arr, "UPDATE CORDER SET %s = :v1 WHERE client=:v2 and orderrefno = :v3 ",l_dl_localrepspec_struct_h.h_indname); //AIX -Warning Removal - (char*) added
+		}
+		else
+		{
+			
+
+			sprintf((char *)sqlstmt.arr, "UPDATE CHISORDER SET %s = :v1 WHERE client=:v2 and orderrefno = :v3 ",l_dl_localrepspec_struct_h.h_indname); //AIX -Warning Removal - (char*) added
+		}
+	
+		sqlstmt.len = (int)strlen((char *)sqlstmt.arr); //AIX -Warnings Removal
+		sqlstmt.arr[sqlstmt.len]=APL_NULL_CHAR;
+		sqlstmt.len++;
+		EXEC SQL PREPARE s FROM :sqlstmt;
+		EXEC SQL EXECUTE s USING :p_po_lr_struct_h->h_run_dt,:l_h_account_val, :l_h_refno_val;
+		IS_ANY_ORA_ERROR;
+
+	}
+
+	EXEC SQL CLOSE curs_upd_lrprocord;
+
+	IS_ANY_ORA_ERROR;
+
+	
+
+	if ( p_po_lr_struct_h->h_daily_ind[0] == 'Y' )
+	{
+
+		CO_ProcMonitor( p_logfile, "Starting to copy dummy records into CLRPROC Table...", NULL, NULL);
+
+		#ifdef SYS_DEBUG
+			printf( "Starting to copy dummy records into CLRPROC Table\n");
+		#endif
+		
+		EXEC SQL SELECT NVL(COUNT(*),0)
+					INTO	:int_l_h_lrsafek_count:l_i_lrsafek_count
+					FROM	DL_LOCALREPSAFEK;
+
+		IS_ANY_ORA_ERROR;
+
+		if ( int_l_h_lrsafek_count == 0 )
+		{
+			CO_ProcMonitor( p_logfile, "No Records in LR Safekeeping File... Cannot Proceed", NULL, NULL);
+			APL_GOBACK_FAIL
+		}
+					
+		EXEC SQL INSERT INTO DL_LOCALREPPROC
+					(SELECT 	CLIENT, 
+								NULL, 
+								INSTR_CODE, 
+								CREDIT_CLT, 
+								NULL, 
+								NULL, 
+								CLOSING_BAL, 
+								0, 
+								NULL, 
+								NULL, 
+								NULL, 
+								NULL, 
+								NULL 
+					FROM 		DL_LOCALREPSAFEK a 
+					WHERE 	NOT EXISTS( SELECT CLIENT||INSTR_CODE||CREDIT_CLT 
+												FROM DL_LOCALREPPROC 
+												WHERE CLIENT||INSTR_CODE||CREDIT_CLT = a.CLIENT||INSTR_CODE||CREDIT_CLT) ) ;
+
+		IS_ANY_ORA_ERROR;
+
+	}
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS	:
+
+		CO_ProcMonitor(	p_logfile, "Exiting CDBUpdLRPROCFn processtion successfully\n", NULL, NULL);
+
+		#ifdef SYS_DEBUG
+			printf( "Leaving CDBUpdLRPROCFn with success\n");
+		#endif
+		
+		return(APL_SUCCESS);
+
+	RETURN_FAILURE	:
+	
+		CO_ProcMonitor(	p_logfile, "Exiting CDBUpdLRPROCFn processtion with errors\n", NULL, NULL);
+
+		#ifdef SYS_DEBUG
+			printf( "Leaving CDBUpdLRPROCFn with errors\n");
+		#endif
+		
+		return(APL_FAILURE);
+      
+}
+
+
+
+int CDBSfkUpdateFn(	PO_LR_STRUCT_H *p_po_lr_struct_h, 
+							FILE *p_logfile, 
+							INTL_ENV_DATA_STRUCT_H *p_intl_envdatastruct_h, 
+							DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	struct sqlca sqlca;
+
+	sqlca.sqlcode = 0;
+	
+	
+
+	#ifdef SYS_DEBUG
+		printf( "Entering processtion CDBSfkUpdateFn\n");
+	#endif
+		
+	CO_ProcMonitor(	p_logfile, "Entered processtion CDBSfkUpdateFn\n", NULL, NULL);
+
+	if ( strcmp(p_po_lr_struct_h->h_lastlrdt, 
+					p_po_lr_struct_h->h_sysdt) != 0 )
+	{
+		EXEC SQL UPDATE DL_LOCALREPSAFEK
+					SET	OPENBALANCE = CLOSING_BAL;
+
+		IS_ANY_ORA_ERROR;
+	}
+	else
+	{
+		EXEC SQL UPDATE DL_LOCALREPSAFEK
+					SET	CLOSING_BAL = OPENBALANCE;
+
+		IS_ANY_ORA_ERROR;
+	}
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS	:
+
+		CO_ProcMonitor(	p_logfile, "Exiting CDBSfkUpdateFn processtion successfully\n", NULL, NULL);
+
+		#ifdef SYS_DEBUG
+			printf( "Leaving CDBSfkUpdateFn with success\n");
+		#endif
+		
+		return(APL_SUCCESS);
+
+	RETURN_FAILURE	:
+	
+		CO_ProcMonitor(	p_logfile, "Exiting CDBSfkUpdateFn processtion with errors\n", NULL, NULL);
+
+		#ifdef SYS_DEBUG
+			printf( "Leaving CDBSfkUpdateFn with errors\n");
+		#endif
+		
+		return(APL_FAILURE);
+      
+}
+
+
+
+int CDBLRDlyProcFn(	PO_LR_STRUCT_H *p_po_lr_struct_h, 
+							char  **argv,
+							FILE *p_logfile, 
+							char *chr_p_err_filedesc,
+							FILE *l_errrpt_repfile,
+							INTL_ENV_DATA_STRUCT_H *p_intl_envdatastruct_h, 
+							DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	struct sqlca sqlca;
+
+	FILE *l_operrec_repfile             			= NULL;
+	FILE *l_custoperbook_repfile             		= NULL;
+	FILE *l_mainoperbook_repfile             		= NULL;
+	FILE *l_dlybalrpt_repfile             			= NULL;
+
+	char  chr_l_h_restart_data[APL_RESTARTDATA_LENGTH]  = APL_NULL_STRING;
+	char *chr_p_oprec_filedesc  							= NULL;
+	char chr_l_errflg											= APL_NULL_CHAR;
+	
+	short l_i_restart_data                       =  0;
+	short p_status_ind=0;  
+	short p_status1=0;  
+	short p_status2=0; 
+
+
+	sqlca.sqlcode = 0;
+
+	
+  
+   EXEC SQL VAR chr_l_h_restart_data IS STRING;
+	
+	
+
+	#ifdef SYS_DEBUG
+		printf( "Entering Function CDBLRDlyProcFn\n");
+	#endif
+		
+	CO_ProcMonitor(	p_logfile, "Entered processtion CDBLRDlyProcFn\n", NULL, NULL);
+	
+	chr_p_oprec_filedesc = (char *)calloc(60,sizeof(char));
+
+	chr_l_errflg = 'N';
+
+	EXEC SQL DELETE DL_LOCALREPSAFEK WHERE CLOSING_BAL = 0;
+
+	IS_ANY_ORA_ERROR;
+	
+	EXEC SQL DELETE DL_LOCALREPPROC ;
+
+	IS_ANY_ORA_ERROR;
+
+	EXEC SQL DELETE DL_LOCALREPPROC2 ;
+
+	IS_ANY_ORA_ERROR;
+
+	EXEC SQL DELETE DL_LOCALREPPROC3 ;
+
+	IS_ANY_ORA_ERROR;
+
+   if( !strcmp(p_po_lr_struct_h->h_genoperreport_ind, "Y"))
+   {
+      if ( p_po_lr_struct_h->h_daily_ind[0] != 'Y' )
+      {
+         if (APL_FAILURE == CO_Rtv_RptFileName( "OR",
+                                             "DZIENNIK OPERACJI Z DNIA",
+                                             135,
+                                             argv[5],
+                                             argv,
+                                             &l_operrec_repfile,
+                                             l_debug_info_ptr ) )
+         {
+            APL_GOBACK_FAIL
+         }
+		}
+	}
+   if( !strcmp(p_po_lr_struct_h->h_gencustoperreport_ind, "Y"))
+   {
+		sleep(1);
+      if (APL_FAILURE == CO_Rtv_RptFileName( "OR",
+	                                    "DZIENNIK OPERACJI Z DNIA",
+                                       135,
+                                       argv[5],
+                                       argv,
+                                       &l_custoperbook_repfile,
+                                       l_debug_info_ptr ) )
+      {
+         APL_GOBACK_FAIL
+      }
+	}
+
+   if( !strcmp(p_po_lr_struct_h->h_genmainoperreport_ind, "Y"))
+   {
+		sleep(1);
+      if (APL_FAILURE == CO_Rtv_RptFileName( "OR",
+                                       "DZIENNIK OPERACJI Z DNIA",
+                                       135,
+                                       argv[5],
+                                       argv,
+                                       &l_mainoperbook_repfile,
+                                       l_debug_info_ptr ) )
+      {
+         APL_GOBACK_FAIL
+      }
+	}
+	
+   if( !strcmp(p_po_lr_struct_h->h_gendlybalreport_ind, "Y"))
+   {
+		sleep(1);
+      if (APL_FAILURE == CO_Rtv_RptFileName( "OR",
+                                       "DZIENNIK OPERACJI Z DNIA",
+                                       135,
+                                       argv[5],
+                                       argv,
+                                       &l_dlybalrpt_repfile,
+                                       l_debug_info_ptr ) )
+      {
+          APL_GOBACK_FAIL
+      } 
+	}	
+
+
+	if ( APL_FAILURE == CDBSfkUpdateFn(	p_po_lr_struct_h,
+													p_logfile,
+													p_intl_envdatastruct_h,
+													l_debug_info_ptr ) )
+	{
+		APL_GOBACK_FAIL
+	}
+
+	if ( APL_FAILURE == CDBUpdLRPROCFn(	p_po_lr_struct_h,
+													p_logfile,
+													p_intl_envdatastruct_h,
+													l_debug_info_ptr ) )
+	{
+		APL_GOBACK_FAIL
+	}
+
+  if (APL_FAILURE == CBLRErr_RepFn( chr_p_err_filedesc,
+												l_errrpt_repfile,
+												&chr_l_errflg,
+												p_logfile,
+												p_intl_envdatastruct_h, 
+												l_debug_info_ptr))
+  {
+      APL_GOBACK_FAIL
+  }
+  if ( chr_l_errflg == 'Y' )
+  {
+		CO_ProcMonitor( p_logfile, "Found Errors........Exiting",NULL,NULL);
+		APL_GOBACK_SUCCESS
+  }
+
+
+ strcpy(chr_p_oprec_filedesc,"DZIENNIK OPERACJI Z DNIA");
+ strcat(chr_p_oprec_filedesc," - ");
+ strncat(chr_p_oprec_filedesc,p_po_lr_struct_h->h_run_dt,10);
+ chr_p_oprec_filedesc[strlen(chr_p_oprec_filedesc)] = '\0';
+ 
+ p_status_ind = 0;
+ p_status1 = 0;
+ p_status2 = 0; 
+
+
+
+      if( !strcmp(p_po_lr_struct_h->h_genoperreport_ind, "Y"))
+      {
+			if ( p_po_lr_struct_h->h_daily_ind[0] != 'Y' )
+			{
+				if (APL_FAILURE == CBLROpBkFn(p_po_lr_struct_h->h_run_dt,
+														chr_p_oprec_filedesc, 
+														l_operrec_repfile, 
+														1,
+														&p_status_ind,
+														p_logfile,
+														p_intl_envdatastruct_h, 
+														l_debug_info_ptr))
+         	{
+            	APL_GOBACK_FAIL
+         	}
+
+				if (APL_FAILURE == CBLROpBkFn(p_po_lr_struct_h->h_run_dt,
+														chr_p_oprec_filedesc, 
+														l_operrec_repfile, 
+														2,
+														&p_status1,
+														p_logfile,
+														p_intl_envdatastruct_h, 
+														l_debug_info_ptr))
+         	{
+            	APL_GOBACK_FAIL
+         	}
+
+
+				if (APL_FAILURE == CBLROpBkFn(p_po_lr_struct_h->h_run_dt,
+                                          chr_p_oprec_filedesc,
+                                          l_operrec_repfile,
+                                          3,
+                                          &p_status2,
+                                          p_logfile,
+                                          p_intl_envdatastruct_h,
+                                          l_debug_info_ptr))
+            {
+               APL_GOBACK_FAIL
+            }
+
+	         if (p_status_ind == 3 && p_status1 == 3 && p_status2 == 3)  
+   	      {
+					
+	
+					CO_ProcMonitor(   p_logfile, "Winding Up For The Day\n", NULL, NULL);
+	  				if (APL_FAILURE == CR_Mod_LRProcDet( p_po_lr_struct_h->h_run_dt , 
+																	l_debug_info_ptr))
+	  				{
+		  				APL_GOBACK_FAIL
+	  				}
+
+					
+				
+				}
+			}
+      }
+
+
+
+      if( !strcmp(p_po_lr_struct_h->h_gencustoperreport_ind, "Y"))
+      {
+			if (APL_FAILURE == CBLRCusOpBkFn(&p_status_ind,
+														p_po_lr_struct_h->h_run_dt,
+														l_custoperbook_repfile, 
+														p_logfile,
+														p_intl_envdatastruct_h,
+														l_debug_info_ptr))
+ 	      {
+   	      APL_GOBACK_FAIL
+      	}
+      }
+
+
+
+      if( !strcmp(p_po_lr_struct_h->h_genmainoperreport_ind, "Y"))
+      {
+			 if (APL_FAILURE == CBLRMainOpBkFn( &p_status_ind,
+															p_po_lr_struct_h->h_run_dt,
+															l_mainoperbook_repfile, 
+															p_logfile,
+															p_intl_envdatastruct_h,
+															l_debug_info_ptr))
+    	    {
+         	APL_GOBACK_FAIL
+          }
+      }
+
+
+
+      if( !strcmp(p_po_lr_struct_h->h_gendlybalreport_ind, "Y"))
+		{
+			if (APL_FAILURE == CBLRBalRepFn( p_po_lr_struct_h->h_run_dt,
+														l_dlybalrpt_repfile,
+														p_logfile,
+														p_intl_envdatastruct_h,
+														l_debug_info_ptr))
+			{
+				APL_GOBACK_FAIL
+			}
+		}
+
+ 	  EXEC SQL COMMIT;
+     IS_ANY_ORA_ERROR
+
+ 	  
+
+    EXEC SQL SELECT PROCESSING_STATUS
+             INTO  :chr_l_h_restart_data:l_i_restart_data
+             FROM  SYS_BATCHPROC
+             WHERE PROCESS_NAME    =  :argv[0]
+             AND   PROC_INIT         =  :argv[1]
+             AND   STARTDATE   =  :argv[2]
+             AND   STATUS      =  'started'
+             FOR UPDATE OF PROCESSING_STATUS;
+
+	 IS_ANY_ORA_ERROR
+
+    if (APL_ZERO_RESULT_SET)
+    {
+      CO_ProcMonitor(   p_logfile, "No Entry in batch_in_proc", NULL, NULL);
+      APL_GOBACK_FAIL
+    }
+
+		if ( p_po_lr_struct_h->h_updlocrepposn_ind[0] == 'Y' )
+		{
+			if ( APL_FAILURE == CDBCusBalFn(	p_po_lr_struct_h,
+														p_logfile,
+														p_intl_envdatastruct_h,
+														l_debug_info_ptr ) )
+			{
+				APL_GOBACK_FAIL
+			}
+		}
+
+		
+			 
+	  if (APL_FAILURE == CR_Mod_LRProcDet( p_po_lr_struct_h->h_run_dt , 
+														l_debug_info_ptr))
+	  {
+		  APL_GOBACK_FAIL
+	  }
+
+	APL_GOBACK_SUCCESS
+	
+	RETURN_SUCCESS	:
+
+		if( !strcmp(p_po_lr_struct_h->h_genoperreport_ind, "Y"))
+      {
+         if ( p_po_lr_struct_h->h_daily_ind[0] != 'Y' )
+         {
+			   if (APL_FAILURE == CO_Proc_RptClose(  l_operrec_repfile,l_debug_info_ptr))
+      		{
+     	 		  	APL_GOBACK_FAIL
+      		}
+			}
+		}
+
+		if( !strcmp(p_po_lr_struct_h->h_gencustoperreport_ind, "Y"))
+		{
+      	if (APL_FAILURE == CO_Proc_RptClose(  l_custoperbook_repfile,l_debug_info_ptr))
+      	{
+         	APL_GOBACK_FAIL
+      	}
+		}
+
+	   if( !strcmp(p_po_lr_struct_h->h_genmainoperreport_ind, "Y"))
+		{
+      	if (APL_FAILURE == CO_Proc_RptClose(  l_mainoperbook_repfile,l_debug_info_ptr))
+      	{
+         	APL_GOBACK_FAIL
+      	}
+		}
+
+		if( !strcmp(p_po_lr_struct_h->h_gendlybalreport_ind, "Y"))
+		{
+ 	     if (APL_FAILURE == CO_Proc_RptClose(  l_dlybalrpt_repfile,l_debug_info_ptr))
+   	   {
+      	   APL_GOBACK_FAIL
+      	}
+		}
+		
+		CO_ProcMonitor(	p_logfile, "Exiting CDBLRDlyProcFn processtion successfully\n", NULL, NULL);
+
+		#ifdef SYS_DEBUG
+			printf( "Leaving CDBLRDlyProcFn with success\n");
+		#endif
+		
+		return(APL_SUCCESS);
+
+	RETURN_FAILURE	:
+
+      if( !strcmp(p_po_lr_struct_h->h_genoperreport_ind, "Y"))
+      {
+         if ( p_po_lr_struct_h->h_daily_ind[0] != 'Y' )
+         {
+            if (APL_FAILURE == CO_Proc_RptClose(  l_operrec_repfile,l_debug_info_ptr))
+            {
+               APL_GOBACK_FAIL
+            }
+         }
+      }
+
+      if( !strcmp(p_po_lr_struct_h->h_gencustoperreport_ind, "Y"))
+      {
+         if (APL_FAILURE == CO_Proc_RptClose(  l_custoperbook_repfile,l_debug_info_ptr))
+         {
+            APL_GOBACK_FAIL
+         }
+      }
+
+      if( !strcmp(p_po_lr_struct_h->h_genmainoperreport_ind, "Y"))
+      {
+         if (APL_FAILURE == CO_Proc_RptClose(  l_mainoperbook_repfile,l_debug_info_ptr))
+         {
+            APL_GOBACK_FAIL
+         }
+      }
+
+      if( !strcmp(p_po_lr_struct_h->h_gendlybalreport_ind, "Y"))
+      {
+        if (APL_FAILURE == CO_Proc_RptClose(  l_dlybalrpt_repfile,l_debug_info_ptr))
+         {
+            APL_GOBACK_FAIL
+         }
+      }
+      
+	
+		CO_ProcMonitor(	p_logfile, "Exiting CDBLRDlyProcFn processtion with errors\n", NULL, NULL);
+
+		#ifdef SYS_DEBUG
+			printf( "Leaving CDBLRDlyProcFn with errors\n");
+		#endif
+		
+		return(APL_FAILURE);
+      
+}
+
+
+
+int CDBLRMainFn(	char **argv, 
+						FILE *p_logfile, 
+						char *chr_p_err_filedesc,
+						FILE *l_errrpt_repfile,
+						INTL_ENV_DATA_STRUCT_H *p_intl_envdatastruct_h, 
+						DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	
+	struct sqlca sqlca;
+	char	**temp											=	NULL;
+	char	chr_l_h_restart_data[APL_RESTARTDATA_LENGTH]	=	APL_NULL_STRING;	
+	char	chr_l_h_lastlrdate[APL_DATE_LEN]				=	APL_NULL_STRING;
+	char	chr_l_sysdate_b[APL_DATE_LEN]						=	APL_NULL_STRING;
+	//char	chr_l_lrrundate[APL_DATE_LEN]					=	APL_NULL_STRING;
+	int	int_l_h_trd_count									=	0;
+	int	int_l_h_ord_count									=	0;
+	int	int_l_datediff										=	0;
+	int	int_num												=	0;
+	short	l_i_lastlrdate									=	0;
+	short	l_i_trd_count									=	0;
+	short	l_i_ord_count									=	0;
+	short	l_i_restart_data								=	0;
+	PO_LR_STRUCT_H l_po_lr_struct_h;
+
+	sqlca.sqlcode = 0;
+
+	
+
+	EXEC SQL VAR chr_l_h_restart_data	IS STRING;
+	EXEC SQL VAR chr_l_h_lastlrdate	IS STRING;
+
+	
+
+	#ifdef SYS_DEBUG
+		printf( "Entered Function CDBLRMainFn\n");
+	#endif
+
+	CO_ProcMonitor(	p_logfile, "Entered processtion CDBLRMainFn\n", NULL, NULL);
+		
+	
+
+	EXEC SQL SELECT PROCESSING_STATUS
+				INTO	:chr_l_h_restart_data:l_i_restart_data
+				FROM	SYS_BATCHPROC
+				WHERE	PROCESS_NAME		=	:argv[0]
+				AND	PROC_INIT			=	:argv[1]
+				AND	STARTDATE	=	:argv[2]
+				AND	STATUS		=	'started'
+				FOR UPDATE OF PROCESSING_STATUS;
+
+	if (APL_ZERO_RESULT_SET)
+	{
+		CO_ProcMonitor(	p_logfile, "No Entry in batch_in_proc", NULL, NULL);
+		APL_GOBACK_FAIL
+	}
+
+	IS_ANY_ORA_ERROR;
+
+	if ( APL_FAILURE == CO_SplitStr(argv[9],'|',&int_num, &temp) )
+	{
+		APL_GOBACK_FAIL
+	}
+
+	EXEC SQL SELECT LR_DT
+				INTO	:chr_l_h_lastlrdate:l_i_lastlrdate
+				FROM	DL_LOCALREPDATES
+				WHERE	CLR_NAME = 1;
+
+	IS_ANY_ORA_ERROR;
+
+	if ( APL_FAILURE == CO_RtvSysDt( chr_l_sysdate_b, l_debug_info_ptr ) )
+	{
+		APL_GOBACK_FAIL
+	}
+
+	strcpy(l_po_lr_struct_h.h_run_dt, temp[0]);
+	strcpy(l_po_lr_struct_h.h_daily_ind, temp[1]);
+	strcpy(l_po_lr_struct_h.h_genoperreport_ind, temp[2]);
+	strcpy(l_po_lr_struct_h.h_gencustoperreport_ind, temp[3]);
+	strcpy(l_po_lr_struct_h.h_genmainoperreport_ind, temp[4]);
+	strcpy(l_po_lr_struct_h.h_gendlybalreport_ind, temp[5]);
+	strcpy(l_po_lr_struct_h.h_updlocrepposn_ind, temp[6]);
+	strcpy(l_po_lr_struct_h.h_lastlrdt, chr_l_h_lastlrdate);
+	strcpy(l_po_lr_struct_h.h_sysdt, chr_l_sysdate_b);
+
+	fprintf( p_logfile, "The current Run Date is : %s\n", l_po_lr_struct_h.h_run_dt);
+	fprintf( p_logfile, "The Daily / Activities Reporting chr_flag is : %s\n", l_po_lr_struct_h.h_daily_ind);
+	fprintf( p_logfile, "The Generate Operations Report Flag is : %s\n", l_po_lr_struct_h.h_genoperreport_ind);
+	fprintf( p_logfile, "The Generate Customer Operations Report Flag is : %s\n", l_po_lr_struct_h.h_gencustoperreport_ind);
+	fprintf( p_logfile, "The Generate Main Operations Report Flag is : %s\n", l_po_lr_struct_h.h_genmainoperreport_ind);
+	fprintf( p_logfile, "The Generate Daily Balance Report Flag is : %s\n", l_po_lr_struct_h.h_gendlybalreport_ind);
+	fprintf( p_logfile, "The Update Local Reporting Positions Flag is : %s\n", l_po_lr_struct_h.h_updlocrepposn_ind);
+	fprintf( p_logfile, "The Last Local Reporting run Date is : %s\n", l_po_lr_struct_h.h_lastlrdt);
+
+	if ( strlen(l_po_lr_struct_h.h_run_dt) == 0 )
+	{
+		CO_ProcMonitor(	p_logfile, "Mandatory Data Missing - RUN DATE\n", NULL, NULL);
+		APL_GOBACK_FAIL
+	}	
+
+	
+
+	if ( APL_FAILURE == CO_Pro_DateComp( l_po_lr_struct_h.h_run_dt, chr_l_sysdate_b, &int_l_datediff, l_debug_info_ptr) )
+	{
+		APL_GOBACK_FAIL
+	}
+	else
+	{
+		if ( int_l_datediff < 0 )
+		{
+			CO_ProcMonitor(	p_logfile, "Cannot Run Local Reporting for a chr_date in future\n", NULL, NULL);
+			APL_GOBACK_FAIL
+		}
+	}
+
+	
+
+	if ( APL_FAILURE == CO_Pro_DateComp( l_po_lr_struct_h.h_lastlrdt, l_po_lr_struct_h.h_run_dt, &int_l_datediff, l_debug_info_ptr) )
+	{
+		APL_GOBACK_FAIL
+	}
+	else
+	{
+		if (int_l_datediff < 0 )
+		{
+			fprintf(	p_logfile, "Local Reporting already run for : %s\n", l_po_lr_struct_h.h_lastlrdt);
+			fprintf(	p_logfile, "Hence, Cannot run Local Reporting for : %s\n", l_po_lr_struct_h.h_run_dt);
+			APL_GOBACK_FAIL
+		}
+	}
+
+	
+
+	EXEC SQL SELECT NVL(COUNT(*),0)
+				INTO	:int_l_h_trd_count:l_i_trd_count
+				FROM 	DL_DEAL;
+
+	IS_ANY_ORA_ERROR;
+
+	EXEC SQL SELECT NVL(COUNT(*),0)
+				INTO	:int_l_h_ord_count:l_i_ord_count
+				FROM 	OR_ORDERDETAILS;
+
+	IS_ANY_ORA_ERROR;
+
+	if ( ( int_l_h_trd_count == 0 ) || ( int_l_h_ord_count == 0 ) )
+	{
+		CO_ProcMonitor( p_logfile, "Trades / Orders File Empty. Cannot Proceed", NULL, NULL);
+		APL_GOBACK_FAIL
+	}
+
+	if ( APL_FAILURE == CDBLRDlyProcFn( &l_po_lr_struct_h,
+													argv,
+													p_logfile,
+													chr_p_err_filedesc,
+													l_errrpt_repfile,
+													p_intl_envdatastruct_h,
+													l_debug_info_ptr ) )
+	{
+		APL_GOBACK_FAIL
+	}
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS	:
+
+		CO_FreeErrLst(l_debug_info_ptr);
+
+		CO_ProcMonitor(	p_logfile, "Exiting CDBLRMainFn processtion successfully\n", NULL, NULL);
+
+		#ifdef SYS_DEBUG
+			printf( "Leaving CDBLRMainFn with success\n");
+		#endif
+		
+		return(APL_SUCCESS);
+
+	RETURN_FAILURE	:
+	
+		if (APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+		{
+			CO_ProcMonitor(p_logfile,
+						"Got Errors : ",
+						l_debug_info_ptr,
+						p_intl_envdatastruct_h);
+			CO_FreeErrLst(l_debug_info_ptr);
+		}
+
+		CO_ProcMonitor(	p_logfile, "Exiting CDBLRMainFn processtion with errors\n", NULL, NULL);
+
+		#ifdef SYS_DEBUG
+			printf( "Leaving CDBLRMainFn with errors\n");
+		#endif
+		
+		return(APL_FAILURE);
+      
+}
+
+
+
+int main(int argc,char **argv) // AIX - Warnings removal
+{
+	struct sqlca sqlca;
+   DEBUG_INFO_STRUCT_H **l_debug_info_ptr				=	NULL;
+	INTL_ENV_DATA_STRUCT_H l_intl_env_data_h;
+	FILE 	*l_finifile							=	NULL;
+	FILE	*l_logfile							=	NULL;
+	FILE  *l_errrpt_repfile             =  NULL;
+	char  *chr_p_err_filedesc               =  NULL;
+
+	//char	chr_l_logfile_name[PATH_LENGTH]	=	APL_NULL_STRING;	
+	char  chr_l_temp_str[APL_DATE_LEN]		=  APL_NULL_STRING;
+	int	int_l_retval								=	0;
+	char	chr_uname[APL_USERID_LEN]			=	APL_NULL_STRING;
+	char	chr_custody_id_b[APL_USERID_LEN]			=	APL_NULL_STRING;
+	char	chr_passwd[APL_PASSWD_LEN]			=	APL_NULL_STRING;
+	//char	chr_l_logdir[PATH_LENGTH]			=	APL_NULL_STRING;
+	char	chr_l_inifile[PATH_LENGTH]			=	APL_NULL_STRING;
+
+   EXEC SQL VAR chr_uname 	IS STRING;
+	EXEC SQL VAR chr_custody_id_b 	IS STRING;
+   EXEC SQL VAR chr_passwd 	IS STRING;
+
+	sqlca.sqlcode = 0;
+
+	chr_p_err_filedesc = (char *)calloc(60,sizeof(char));
+
+	strcpy(chr_l_inifile,getenv("INTL_ROOT_PATH"));
+	strcat(chr_l_inifile,"intl_sun.cfg");
+
+	if ( ( l_finifile=fopen(chr_l_inifile,"r") ) == NULL)
+	{
+		APL_GOBACK_FAIL
+	}
+
+	APL_FETCH_DB_LOGIN_DETAILS(l_finifile,chr_custody_id_b, chr_uname, chr_passwd, APL_OUT_FILE, l_debug_info_ptr) //AIX -Warning Removal
+
+	EXEC SQL CONNECT :chr_uname IDENTIFIED BY :chr_passwd;
+
+	if (sqlca.sqlcode)
+	{
+		APL_GOBACK_FAIL
+	}
+	else
+	{
+
+		
+
+		if (APL_FAILURE == CO_Rtv_RptFileName(	"3g",
+														APL_LOGFILE_DESC,
+														100,
+														argv[5],
+														argv,
+														&l_logfile,
+														l_debug_info_ptr) ) //AIX -Warning Removal
+		{
+			APL_GOBACK_FAIL
+		}
+
+		
+		strcpy(chr_p_err_filedesc,"RAPORT BLEDOW Z DNIA");
+		strcat(chr_p_err_filedesc," - ");
+   
+		sscanf(argv[9], "%[^|]", chr_l_temp_str);
+		strncat(chr_p_err_filedesc,chr_l_temp_str,10);
+		chr_p_err_filedesc[strlen(chr_p_err_filedesc)] = '\0';
+
+		EXEC SQL UPDATE DL_DEAL 
+		SET NDS_DATE = INSTRUMENT_DT 
+		WHERE NDS_DATE IS NULL AND
+		INSTRUMENT_DT IS NOT NULL;
+
+		IS_ANY_ORA_ERROR;
+
+		
+		EXEC SQL UPDATE DL_DEAL
+		SET NDS_DATE	=to_date(to_char(access_stamp,'dd/chr_mm/chr_yyyy ')||'12:00:00')	
+		WHERE	FAILREASON_CD = '60'
+		AND	VAL_FDT	is not null
+		AND 	INSTRUMENT_DT		is null
+		AND	LRINSTR_DATE	is null;
+
+		IS_ANY_ORA_ERROR;
+		
+
+		if (APL_FAILURE == CO_Rtv_RptFileName( "ER",
+														 chr_p_err_filedesc,
+														 135,
+														 argv[5],	
+														 argv,
+													    &l_errrpt_repfile,
+													    l_debug_info_ptr ) )
+		{
+			APL_GOBACK_FAIL
+		}
+		
+
+		EXEC SQL COMMIT WORK;
+
+		if (sqlca.sqlcode)
+		{
+			CO_ProcMonitor(l_logfile, "Could not commit after opening chr_log file",
+						NULL, NULL);
+			CO_Proc_RptClose(l_logfile, l_debug_info_ptr); //AIX -Warning Removal
+			APL_GOBACK_FAIL
+		}
+
+		
+
+		if (APL_FAILURE == CO_RtvSysParams(l_debug_info_ptr)) //AIX -Warning Removal
+		{
+			CO_ProcMonitor(l_logfile, "Error in getting System Parameters",
+						NULL, NULL);
+			CO_Proc_RptClose(l_logfile, l_debug_info_ptr); //AIX -Warning Removal
+			APL_GOBACK_FAIL
+		}
+
+		
+
+		strcpy(l_intl_env_data_h.usr, argv[3]);
+		strcpy(l_intl_env_data_h.h_mode, argv[4]);
+		strcpy(l_intl_env_data_h.processtion, argv[5]);
+		strcpy(l_intl_env_data_h.auth_req, argv[6]);
+		strcpy(l_intl_env_data_h.subprocess, argv[7]);
+		strcpy(l_intl_env_data_h.h_process, argv[8]);
+
+		int_l_retval = CDBLRMainFn( argv, l_logfile,chr_p_err_filedesc,l_errrpt_repfile, &l_intl_env_data_h, l_debug_info_ptr);   //AIX -Warning Removal
+      if ( int_l_retval == APL_FAILURE )
+      {
+			CO_ProcMonitor(l_logfile, "CDBLRMainFn returned failure; ROLLING BACK", NULL, NULL);
+			CO_Proc_RptClose(l_logfile, l_debug_info_ptr); //AIX -Warning Removal
+
+			if (APL_FAILURE == CO_Proc_RptClose(  l_errrpt_repfile,l_debug_info_ptr))
+			{
+				APL_GOBACK_FAIL
+			}
+
+			EXEC SQL ROLLBACK WORK RELEASE;
+			APL_GOBACK_FAIL
+      }
+      else
+      {
+         EXEC SQL UPDATE SYS_BATCHPROC
+         SET  status = 'completed'
+         WHERE PROCESS_NAME=:argv[0]
+         AND   PROC_INIT=:argv[1]
+         AND   STARTDATE=:argv[2]
+         AND   STATUS='started';
+
+			CO_ProcMonitor(l_logfile, "CDBLRMainFn returned success; COMMITTING WORK & EXITTING WITH SUCCESS", NULL, NULL);
+
+         EXEC SQL COMMIT WORK RELEASE;
+			CO_Proc_RptClose(l_logfile, l_debug_info_ptr); //AIX -Warning Removal
+
+			if (APL_FAILURE == CO_Proc_RptClose(  l_errrpt_repfile,l_debug_info_ptr)) // AIX - Warnings
+			{
+				APL_GOBACK_FAIL
+			}
+        	APL_GOBACK_SUCCESS 
+      }
+	}
+
+	RETURN_SUCCESS	:	exit(0);
+	RETURN_FAILURE	:	exit(-1);
+}

@@ -1,0 +1,4031 @@
+/*
+ *   COPYRIGHT NOTICE
+ *
+ *   Copyright 2016 Intellect Design Arena Limited. All rights reserved.
+ *
+ *    These materials are confidential and proprietary to 
+ *    Intellect Design Arena Limited and no part of these materials should
+ *    be reproduced, published, transmitted or distributed in any form or
+ *    by any means, electronic, mechanical, photocopying, recording or 
+ *    otherwise, or stored in any information storage or retrieval system
+ *    of any nature nor should the materials be disclosed to third parties
+ *    or used in any other manner for which this is not authorized, without
+ *    the prior express written authorization of Intellect Design Arena Limited.
+ */
+/*******************************************************************************
+ *
+ * Module Name         :         Deal Processing
+ *
+ * File Name           :         DL_GenAE.pc
+ *
+ * Description         :         This file contains all functions for Obligation Accounting Entries Generation
+ *
+ *            Version Control Block
+ *
+ * Date        Version       Author           Description        RFS No.
+ * ---------   --------   ---------------  -----------------   --------------
+ * 14/03/2006   1.0        Amit Bhosale    New File               HDFCDL_016
+ * 18/07/2011   1.0.1.4    Shweta S        New Core Banking       ISKB_4802
+ *                                         Account No Size Change
+ * 11/10/2012   1.0.4.5    Charuta Save    MCS Enhancement        ISKB_5878
+ * 24/04/2015   1.0.4.6    Priyanka B      Lien Marking Changes   ISKB_1493
+ * 13/05/2015   1.0.4.7    Prateek Singh   Lien/Margin Automation ISKB_1493
+ * *****************************************************************************/
+
+#include "BT_Common.h"
+#include "DL_Interface.h"
+#include "CO_IndStructdef.h"
+#include "CO_Commdef.h"
+
+#define  RTV_SYSTEM_DATA
+#define  COMMIT_FREQ_LOGAUTOEVNT 2
+#define  APL_STATINFO_LEN  100
+#define  LOCAL_CCY "INR"
+#define  MODULE_IND_DL 'C'
+#define  AE_DLCD "930"
+#define  APL_ACCTENT_GEN_IND  'G'
+#define  APL_ACCTENT_NORMENT '2'
+#define  TXN_REF_DELIMITER "|"
+#define  APL_ACCTENT_NARR_LEN      102
+#define  APL_ACCTENT_DEAL_REF_LEN 51
+#define  APL_ACCTENT_BATCHNO_LEN 10
+#define  APL_ACCTENT_SEQNUM_LEN  11
+
+EXEC SQL INCLUDE SQLCA.H;
+
+char  chr_g_log_buffer[BUFFER_LEN] = APL_NULL_STRING;
+char  chr_g_log_buffer1[2000] = APL_NULL_STRING;
+
+char  chr_g_ml_log_buffer[BUFFER_LEN] = APL_NULL_STRING;
+char  chr_l_mcl_detail_file_name[100]   = APL_NULL_STRING;
+
+
+char  chr_g_progname        [APL_BATCH_PROGNAME_LEN] = APL_NULL_STRING;
+char  chr_g_key             [APL_BATCH_KEY_LEN] = APL_NULL_STRING;
+char  chr_g_start_date      [APL_DATE_LEN] = APL_NULL_STRING;
+char  chr_g_sys_date[APL_DATE_LEN] = APL_NULL_STRING;
+char  chr_g_sys_date_time[APL_DATE_LEN] = APL_NULL_STRING;
+
+char	int_g_seq_num[APL_ACCTENT_SEQNUM_LEN] = APL_NULL_STRING;
+int		int_g_run_seq_num = 1;
+char	chr_g_batch_no[APL_ACCTENT_BATCHNO_LEN] = APL_NULL_STRING;
+short	g_get_batch_no_flg = APL_FAILURE;
+int flag=0;  /* Added by Ram for Equity Fund */
+
+FILE *g_flogfile=NULL;
+FILE *g_ml_flogfile=NULL;
+
+
+/* Following Added For Host Array Changes - 12052015 - Priyanka B. - Start */
+int hvRecBefore = 0;
+int hvRecThisTime = 0;
+int ArrayCounter = 0;
+/* Following Added For Host Array Changes - 12052015 - Priyanka B. - End */
+
+int Gen_MarginAE(DL_OBLG_ACC_ENT_HSTRUCT_H  p_oblg_acc_ent_struct_h[],
+				int RecCounter,
+				char *p_chr_batch_no,
+				DEBUG_INFO_STRUCT_H  **l_debug_info_ptr);
+
+
+int	CA_Pro_FillActEntStruct(PRO_ACCTENT_STRUCT_H		*p_iacctent_struct_h,
+								PRO_ACCTENT_STRUCT_I		*p_iacctent_struct_i,
+ 								DL_OBLG_ACC_ENT_HSTRUCT_H	p_oblg_acc_ent_struct_h[],
+								char						chr_p_acc_typ_ind,
+								int i,
+								int int_p_entry_no,
+								DEBUG_INFO_STRUCT_H			**l_debug_info_ptr
+							);
+
+int DL_Proc_GenActEnt(char *p_chr_deal_date,
+							 char *p_chr_settlement_no,
+							 char *p_chr_exchange,
+							 char *p_chr_mkt_type,
+							 char *p_chr_clh_flg,
+							 char *p_chr_deal_cd,
+							 char *p_chr_instr_subtype,
+							 char *p_process_name,
+							 char *p_process_key,
+							 char *p_start_date,
+							 INTL_ENV_DATA_STRUCT_H  *l_intlenv_datastruct_h,
+							 DEBUG_INFO_STRUCT_H      **l_debug_info_ptr)
+
+{
+
+	PRO_ACCTENT_STRUCT_H 	*l_pro_cracctent_struct_h = NULL;
+	PRO_ACCTENT_STRUCT_I 	*l_pro_cracctent_struct_i = NULL;
+	PRO_ACCTENT_STRUCT_H 	*l_pro_dbacctent_struct_h = NULL;
+	PRO_ACCTENT_STRUCT_I 	*l_pro_dbacctent_struct_i = NULL;
+
+	struct sqlca sqlca;
+
+	char chr_gl_account[24] = APL_NULL_STRING;
+
+	char chr_l_acc_typ_ind=APL_NULL_CHAR;
+	short chr_i_gl_account	=0;
+	char l_leg_ind_gl[11]=APL_NULL_STRING;				//Changes done by Tushar for ISKB_10384
+	char l_leg_ind_clt[11]=APL_NULL_STRING;				//Changes done by Tushar for ISKB_10384
+	int int_l_counter=0;
+	int int_l_entry_no=0;
+	char *chr_l_sel_msg_stmt ;
+	char l_chr_compdate[APL_DATE_LEN]=APL_NULL_STRING;
+        int l_interop_cond = 0;                      /* HB_12174 - Interoperability changes */
+
+	char hvSysDate[APL_DATE_LEN]=APL_NULL_STRING;
+	char hvPayinDate[APL_DATE_LEN]=APL_NULL_STRING;
+	char hvBusiDay[APL_DATE_LEN]=APL_NULL_STRING;
+	char hvDealMrgRevDate[APL_DATE_LEN]=APL_NULL_STRING;
+	char hvErlPyinCln[2];
+	//char hvLienReqd[2];
+	short hiPayinDate			= 0;
+	//short hiDealMrgRevDate	= 0;
+	int  hvMrgnRevDays			= 0;
+	int  int_l_diff				= 0;
+	int  int_l_diff1			= 0;
+	int  hvCount				= 0;
+	int  hvCount1				= 0;
+	double  l_revrs_amount		= 0.0;
+	int  hvSetValDt				= 0;
+	double hvMarginAmt			= 0.0;
+	double hvAvailCollatrl		= 0.0;
+	char l_gl_revrsl_acct[24]	= APL_NULL_STRING;
+	EXEC SQL BEGIN DECLARE SECTION;
+
+	EXEC SQL VAR chr_gl_account IS STRING;
+	EXEC SQL VAR l_gl_revrsl_acct IS STRING;//20052015
+	//EXEC SQL VAR hvDealClass IS STRING; //24042015
+	//EXEC SQL VAR hvExArena IS STRING; //24042015
+
+	EXEC SQL END DECLARE SECTION;
+
+	DL_OBLG_ACC_ENT_HSTRUCT_H *l_oblg_acc_ent_struct_h	=	NULL;
+	DL_OBLG_ACC_ENT_HSTRUCT_I *l_oblg_acc_ent_struct_i	=	NULL;
+	
+/* Following Added For Host Array Changes - 12052015 - Priyanka B. - Start */	
+	l_oblg_acc_ent_struct_h = ( DL_OBLG_ACC_ENT_HSTRUCT_H * )calloc ( 1, sizeof ( DL_OBLG_ACC_ENT_HSTRUCT_H) );
+	APL_MALLOC_FAIL(l_oblg_acc_ent_struct_h);
+	
+	l_oblg_acc_ent_struct_i = ( DL_OBLG_ACC_ENT_HSTRUCT_I * )calloc ( 1, sizeof ( DL_OBLG_ACC_ENT_HSTRUCT_I) );
+	APL_MALLOC_FAIL(l_oblg_acc_ent_struct_i);
+/* Following Added For Host Array Changes - 12052015 - Priyanka B. - End */
+
+	l_pro_cracctent_struct_h = ( PRO_ACCTENT_STRUCT_H * )calloc ( 1, sizeof ( PRO_ACCTENT_STRUCT_H) );
+	APL_MALLOC_FAIL(l_pro_cracctent_struct_h);
+	
+	l_pro_cracctent_struct_i = ( PRO_ACCTENT_STRUCT_I * )calloc ( 1, sizeof ( PRO_ACCTENT_STRUCT_I) );
+	APL_MALLOC_FAIL(l_pro_cracctent_struct_i);
+
+	memset(l_pro_cracctent_struct_i,-1,sizeof( PRO_ACCTENT_STRUCT_I) );
+	
+	l_pro_dbacctent_struct_h = ( PRO_ACCTENT_STRUCT_H * )calloc ( 1, sizeof ( PRO_ACCTENT_STRUCT_H) );
+	APL_MALLOC_FAIL(l_pro_dbacctent_struct_h);
+	
+	l_pro_dbacctent_struct_i = ( PRO_ACCTENT_STRUCT_I * )calloc ( 1, sizeof ( PRO_ACCTENT_STRUCT_I) );
+	APL_MALLOC_FAIL(l_pro_dbacctent_struct_i);
+
+	memset(l_pro_dbacctent_struct_i,-1,sizeof( PRO_ACCTENT_STRUCT_I) );
+
+	chr_l_sel_msg_stmt = (char *)calloc(15000,sizeof(char));
+	memset(chr_l_sel_msg_stmt,APL_NULL_CHAR,15000);
+
+	/* 12174 - Interoperability changes */
+	IF_COND_EXISTS("INTEROPERABILITY","SETL_TRD")
+	{
+		l_interop_cond = 1;
+	}
+
+	if (APL_FAILURE == CO_Rtv_NxtBatchSeq( MODULE_IND_DL,
+									   chr_g_batch_no,
+									   int_g_seq_num,
+									   l_debug_info_ptr) )
+	{
+		printf("\n Error in CO_Rtv_NxtBatchSeq \n");
+		APL_GOBACK_FAIL
+	}
+	else
+	{
+		Alert("Success in CO_Rtv_NxtBatchSeq");
+	}
+
+
+
+	if		( CO_Rtv_NxtBatchSeq(MODULE_IND_DL,
+									chr_g_batch_no,
+									int_g_seq_num,
+									l_debug_info_ptr
+									)	==	APL_FAILURE
+			)
+	{
+		fprintf(g_flogfile,"Could not obtain Batch Number");
+		APL_GOBACK_FAIL
+	}
+	else   
+	{
+		Alert("We go batch number from CO_Rtv_NxtBatchSeq = |%s|", chr_g_batch_no);
+
+		if	( !strcmp(chr_g_batch_no,APL_NULL_STRING) )
+		{
+			Alert("g_get_batch_no_flg = |%d|", g_get_batch_no_flg);
+			g_get_batch_no_flg = APL_SUCCESS;
+		}
+		else	
+		{
+			Alert("g_get_batch_no_flg is not true = |%d|", g_get_batch_no_flg);
+			int_g_run_seq_num = atoi(int_g_seq_num);
+			int_g_run_seq_num = int_g_run_seq_num + 1;
+			sprintf(int_g_seq_num,"%d",int_g_run_seq_num);
+			sprintf(chr_g_log_buffer,"\n Got Batch Number :[%s] Sequence Number :[%s]",chr_g_batch_no,int_g_seq_num);
+			CO_ProcMonitor(g_flogfile,chr_g_log_buffer,NULL,NULL);
+			Alert("int_g_seq_num=|%d|",int_g_seq_num);
+		}
+
+	}	
+
+	printf("\n Here Batchno2=|%s| \n",chr_g_batch_no);
+	printf("\n Here SeqNumber2=|%s| \n",int_g_seq_num);
+
+
+
+/*Changes done for -- Kotak Ench -- Account No Size change --ISKB_4802 --11072011  --Shweta*/			
+/* KB_5878 Charuta MCS */	
+EXEC SQL SELECT DECODE(:p_chr_exchange,'NSE',SUBSTR(a.NSECLH,9),'BSE',SUBSTR(a.BSECLH,9),'MCS',SUBSTR(a.MCSCLH,9))
+			INTO :chr_gl_account:chr_i_gl_account
+			FROM IV_CLIENTGL a;
+		
+			IS_ANY_ORA_ERROR
+
+
+	printf("\n GL Account 2=|%s| \n",chr_gl_account);	
+
+
+	sprintf(chr_g_log_buffer,"\n Got Suspense Account=|%s|",chr_gl_account);
+	fprintf(g_flogfile,"%s",chr_g_log_buffer);
+	memset(hvSysDate,APL_NULL_CHAR,sizeof(hvSysDate));
+	
+		EXEC SQL SELECT TO_CHAR(sys_date,'YYYYMMDD') ,sys_date
+							INTO :l_chr_compdate,:hvSysDate
+							FROM PRO_SYS_DATE;
+									
+		IS_ANY_ORA_ERROR
+
+			printf("\n **** Date to be compared=|%s| ***\n",l_chr_compdate);
+			sprintf(chr_g_log_buffer,"\n **** Date to be compared=|%s| ***\n",l_chr_compdate);
+			fprintf(g_flogfile,"%s",chr_g_log_buffer);
+
+
+	strcpy(chr_l_sel_msg_stmt,"SELECT a.client,a.identiy_no,a.deal_date,a.cost,a.exch_code,a.amount,a.brokercomm,a.stx_comm,a.stamp_duty,");
+	strcat(chr_l_sel_msg_stmt,"DECODE('");
+ /* Added by Ram for Equity Fund CS0169152- START*/
+	if(strcmp(p_chr_clh_flg,"E")==0)
+	{
+		p_chr_clh_flg="C";
+		flag=1;
+	}
+ /* Added by Ram for Equity Fund CS0169152 - END*/
+	strcat(chr_l_sel_msg_stmt,p_chr_clh_flg);
+	// Changes done by Monica for ISKB_1621 Swift Message Upgradation on 06/10/2015 -- starts (Modified 'QTY' --> QTY)
+	strcat(chr_l_sel_msg_stmt,"','C',ORIG_QTY,'D',QTY,'%',DECODE(a.clh_flg,'C',ORIG_QTY,'D',QTY)),");
+	// Changes done by Monica for ISKB_1621 Swift Message Upgradation on 06/10/2015 -- ends
+	strcat(chr_l_sel_msg_stmt,"a.domestic_cpclt,b.pty_name,a.deal_cd,a.instr_code,a.settlement_no,a.mkt_type,NULL,c.oblg_lvl,");
+	//Commented and Rewritten by Prateek on 14052015 for ISKB_1493(Lien/Margin Automation) -START
+	//strcat(chr_l_sel_msg_stmt,"'Y',a.net_amt,a.clh_flg,a.DL_CLASS,a.EX_ARENA"); //DL_CLASS Added on 24042015
+	strcat(chr_l_sel_msg_stmt,"'Y',a.net_amt,a.clh_flg,a.DL_CLASS,a.EX_ARENA,c.PAY_IN_DAY,c.PAY_OUT_DAY,"); 
+  //Added  by Azhar K. for API NRI Accounting Entries - START
+	strcat(chr_l_sel_msg_stmt,"a.deal_stat,a.instrument_dt,a.money_setl_dt,a.PEND_REG_QTY,a.MRK_DL_FAILQTY,a.REC_INT_000,a.DL_COMPLETEQTY,a.DELTA_000,a.DELTA_001,a.DELTA_003,a.ACCESS_STAMP,e.cln_type");
+  //Added  by Azhar K. for API NRI Accounting Entries - END
+	//Commented and Rewritten by Prateek on 14052015 for ISKB_1493(Lien/Margin Automation) -END
+	strcat(chr_l_sel_msg_stmt," FROM dl_deal a,mt_party b,iv_clientsetup c ,mt_instrument d,mt_client e");
+	strcat(chr_l_sel_msg_stmt," WHERE ");
+	strcat(chr_l_sel_msg_stmt," a.domestic_cpclt=b.pty_code");
+	strcat(chr_l_sel_msg_stmt," AND a.client=c.client");
+	strcat(chr_l_sel_msg_stmt," AND a.client=e.cln_code");      //Added by Azhar for API NRI Accounting Entries
+	strcat(chr_l_sel_msg_stmt," AND a.instr_code=d.instr_code");
+	if(flag==1)
+	{
+	   strcat(chr_l_sel_msg_stmt," AND a.deal_cd ='4'");
+	}
+	else
+	{	
+	   strcat(chr_l_sel_msg_stmt," AND a.deal_cd IN('3','4')");
+	}
+	strcat(chr_l_sel_msg_stmt," AND TO_CHAR(a.deal_date,'DD/MM/YYYY')='");
+	strcat(chr_l_sel_msg_stmt,p_chr_deal_date);
+	strcat(chr_l_sel_msg_stmt,"' AND a.settlement_no LIKE '");
+	strcat(chr_l_sel_msg_stmt,p_chr_settlement_no);
+	strcat(chr_l_sel_msg_stmt,"' AND a.exch_code LIKE '");
+	strcat(chr_l_sel_msg_stmt,p_chr_exchange);
+	strcat(chr_l_sel_msg_stmt,"' AND a.mkt_type LIKE '");
+	strcat(chr_l_sel_msg_stmt,p_chr_mkt_type);
+	strcat(chr_l_sel_msg_stmt,"' AND a.clh_flg LIKE '");
+	strcat(chr_l_sel_msg_stmt,p_chr_clh_flg);
+	strcat(chr_l_sel_msg_stmt,"' AND a.deal_cd LIKE '");
+	strcat(chr_l_sel_msg_stmt,p_chr_deal_cd);
+	strcat(chr_l_sel_msg_stmt,"' AND d.instr_sub_type LIKE '");
+	strcat(chr_l_sel_msg_stmt,p_chr_instr_subtype);
+	strcat(chr_l_sel_msg_stmt,"' AND a.host_date IS NULL");
+	strcat(chr_l_sel_msg_stmt," AND a.dl_class NOT IN('17','18','19','21','56','59')");
+
+	if(strcmp(p_chr_clh_flg,"C")==0)
+	{	
+		printf("\n FOR C:p_chr_clh_flg=|%s| \n",p_chr_clh_flg);
+		if(flag!=1)
+		{	
+		 strcat(chr_l_sel_msg_stmt," AND a.deal_stat=DECODE('");
+		 strcat(chr_l_sel_msg_stmt,p_chr_clh_flg);
+		 strcat(chr_l_sel_msg_stmt,"','C',DECODE(a.deal_cd,'3','SS','4','CC'))");
+		}
+		/* Bageshri 03-04-2008 to skip SLB trades - START */
+		strcat(chr_l_sel_msg_stmt," AND a.mkt_type not in ('7','18','19','20','23','24','25')");
+		strcat(chr_l_sel_msg_stmt," AND DECODE(a.deal_cd,'3',TO_DATE(a.SETL_DATE,'DD/MM/YYYY HH24:MI:SS'),TO_DATE('");
+		strcat(chr_l_sel_msg_stmt,hvSysDate);
+		strcat(chr_l_sel_msg_stmt,"','DD/MM/YYYY HH24:MI:SS'))");
+		strcat(chr_l_sel_msg_stmt," <=TO_DATE('");
+		strcat(chr_l_sel_msg_stmt,hvSysDate);
+		strcat(chr_l_sel_msg_stmt,"','DD/MM/YYYY HH24:MI:SS')");
+		/* Bageshri 03-04-2008 to skip SLB trades - END */
+		if(flag==1)
+		{
+		  strcat(chr_l_sel_msg_stmt,"AND getclientparambyid('EARLY_PAYIN_FND',a.CLIENT)='Y' and a.DEAL_STAT  ='PM'");
+		}
+	}
+	else if(strcmp(p_chr_clh_flg,"D")==0)
+	{
+		printf("\n FOR D:p_chr_clh_flg=|%s| \n",p_chr_clh_flg);
+		strcat(chr_l_sel_msg_stmt," AND a.deal_stat=DECODE('");
+		strcat(chr_l_sel_msg_stmt,p_chr_clh_flg);
+		strcat(chr_l_sel_msg_stmt,"','D',DECODE(a.deal_cd,'3','CC','4','SS'))");
+	}
+	else if(strcmp(p_chr_clh_flg,"%")==0)
+	{
+		printf("\n FOR both:p_chr_clh_flg=|%s| \n",p_chr_clh_flg);
+		strcat(chr_l_sel_msg_stmt," AND ((a.deal_cd='3' AND a.deal_stat='SS' AND a.clh_flg='C') OR (a.deal_cd='4' AND a.deal_stat='CC' AND a.clh_flg='C') OR (a.deal_cd='3' AND a.deal_stat='CC' AND a.clh_flg='D') OR (a.deal_cd='4' AND a.deal_stat='SS' AND a.clh_flg='D')) ");
+	}
+
+
+	printf("\n\n Dynamic SQL is ...|%s| \n",chr_l_sel_msg_stmt);
+	sprintf(chr_g_log_buffer1," Dynamic SQL is ...=|%s|",chr_l_sel_msg_stmt);
+	fprintf(g_flogfile,"%s",chr_g_log_buffer1);
+	
+
+		EXEC SQL PREPARE S FROM :chr_l_sel_msg_stmt;
+		IS_ANY_ORA_ERROR
+		
+		EXEC SQL DECLARE l_cur_acc_ent CURSOR FOR S;
+		IS_ANY_ORA_ERROR
+			
+
+	EXEC SQL OPEN l_cur_acc_ent;
+	IS_ANY_ORA_ERROR
+	
+/* Following Changed For Host Array Changes - 12052015 - Priyanka B. */	
+	int fetchComplete=0;	
+	//for(;;)
+	while(!fetchComplete)
+	{
+		hvSetValDt = 0;
+		
+		EXEC SQL FETCH	l_cur_acc_ent
+		INTO :l_oblg_acc_ent_struct_h->h_client:l_oblg_acc_ent_struct_i->i_client,
+			  :l_oblg_acc_ent_struct_h->h_identiy_no:l_oblg_acc_ent_struct_i->i_identiy_no,
+			  :l_oblg_acc_ent_struct_h->h_deal_date:l_oblg_acc_ent_struct_i->i_deal_date,
+			  :l_oblg_acc_ent_struct_h->h_cost:l_oblg_acc_ent_struct_i->i_cost,
+			  :l_oblg_acc_ent_struct_h->h_exch_code:l_oblg_acc_ent_struct_i->i_exch_code,
+			  :l_oblg_acc_ent_struct_h->h_amount:l_oblg_acc_ent_struct_i->i_amount,
+			  :l_oblg_acc_ent_struct_h->h_brokercomm:l_oblg_acc_ent_struct_i->i_brokercomm,
+			  :l_oblg_acc_ent_struct_h->h_stx_comm:l_oblg_acc_ent_struct_i->i_stx_comm,
+			  :l_oblg_acc_ent_struct_h->h_stamp_duty:l_oblg_acc_ent_struct_i->i_stamp_duty,
+			  :l_oblg_acc_ent_struct_h->h_qty:l_oblg_acc_ent_struct_i->i_qty,
+			  :l_oblg_acc_ent_struct_h->h_brk_no:l_oblg_acc_ent_struct_i->i_brk_no,
+			  :l_oblg_acc_ent_struct_h->h_brk_name:l_oblg_acc_ent_struct_i->i_brk_name,
+			  :l_oblg_acc_ent_struct_h->h_deal_cd:l_oblg_acc_ent_struct_i->i_deal_cd,
+			  :l_oblg_acc_ent_struct_h->h_instr_code:l_oblg_acc_ent_struct_i->i_instr_code,
+			  :l_oblg_acc_ent_struct_h->h_settlement_no:l_oblg_acc_ent_struct_i->i_settlement_no,
+			  :l_oblg_acc_ent_struct_h->h_mkt_type:l_oblg_acc_ent_struct_i->i_mkt_type,
+			  :l_oblg_acc_ent_struct_h->h_deal_link_no:l_oblg_acc_ent_struct_i->i_deal_link_no,
+			  :l_oblg_acc_ent_struct_h->h_oblg_type:l_oblg_acc_ent_struct_i->i_oblg_type,
+			  :l_oblg_acc_ent_struct_h->h_acc_ent_ind:l_oblg_acc_ent_struct_i->i_acc_ent_ind,
+			  :l_oblg_acc_ent_struct_h->h_net_amt:l_oblg_acc_ent_struct_i->i_net_amt,
+			  :l_oblg_acc_ent_struct_h->h_clh_flg:l_oblg_acc_ent_struct_i->i_clh_flg,
+			  :l_oblg_acc_ent_struct_h->hvDealClass:l_oblg_acc_ent_struct_i->i_DealClass,
+			  :l_oblg_acc_ent_struct_h->hvExArena:l_oblg_acc_ent_struct_i->i_ExArena,
+			  :l_oblg_acc_ent_struct_h->h_payin_day:l_oblg_acc_ent_struct_i->i_payin_day,
+			  :l_oblg_acc_ent_struct_h->h_payout_day:l_oblg_acc_ent_struct_i->i_payout_day,
+		  //Added by Azhar K. for API NRI Accounting Entries - START
+		      :l_oblg_acc_ent_struct_h->h_deal_stat:l_oblg_acc_ent_struct_i->i_deal_stat,
+			  :l_oblg_acc_ent_struct_h->h_instrdate:l_oblg_acc_ent_struct_i->i_instrdate,
+			  :l_oblg_acc_ent_struct_h->h_moneydate:l_oblg_acc_ent_struct_i->i_moneydate,
+			  :l_oblg_acc_ent_struct_h->h_pendregquantity:l_oblg_acc_ent_struct_i->i_pendregquantity,
+			  :l_oblg_acc_ent_struct_h->h_marktrfquantity:l_oblg_acc_ent_struct_i->i_marktrfquantity,
+			  :l_oblg_acc_ent_struct_h->h_rec_int_000:l_oblg_acc_ent_struct_i->i_rec_int_000,
+			  :l_oblg_acc_ent_struct_h->h_mcomplquantity:l_oblg_acc_ent_struct_i->i_mcomplquantity,
+			  :l_oblg_acc_ent_struct_h->h_delta_000:l_oblg_acc_ent_struct_i->i_delta_000,
+			  :l_oblg_acc_ent_struct_h->h_delta_001:l_oblg_acc_ent_struct_i->i_delta_001,
+			  :l_oblg_acc_ent_struct_h->h_delta_002:l_oblg_acc_ent_struct_i->i_delta_002,
+			  :l_oblg_acc_ent_struct_h->h_access_stamp:l_oblg_acc_ent_struct_i->i_access_stamp,
+			  :l_oblg_acc_ent_struct_h->h_cln_type:l_oblg_acc_ent_struct_i->i_cln_type; 
+		  //Added by Azhar K. for API NRI Accounting Entries - END
+	
+				printf("\n Sqlcode after fetching from l_cur_acc_ent CURSOR :[%d]", sqlca.sqlcode);
+	
+/* Following Changed For Host Array Changes - 12052015 - Priyanka B. */	
+
+				if(sqlca.sqlcode == 1403)
+				{
+						printf("\n No Records Found in the l_cur_acc_ent CURSOR!\n");
+						fetchComplete=1;
+
+						printf("\n int_l_counter: [%d]",int_l_counter);
+                  if(int_l_counter==0)
+                        {
+                                fprintf(g_flogfile,"\n No Records Found in the l_cur_acc_ent CURSOR!\n");
+                        }
+
+						hvRecThisTime = sqlca.sqlerrd[2] - hvRecBefore;
+						hvRecBefore = sqlca.sqlerrd[2];
+						printf("\n hvRecThisTime :[%d] hvRecBefore :[%d]",hvRecThisTime,hvRecBefore);
+
+				}
+				else if (sqlca.sqlcode == 0)
+				{
+					printf("\n NO OF ROWS PROCESSING :[%d]",sqlca.sqlerrd[2]);
+					hvRecThisTime = sqlca.sqlerrd[2] - hvRecBefore;
+
+					hvRecBefore = sqlca.sqlerrd[2];
+
+					printf("\n hvRecThisTime :[%d] hvRecBefore :[%d]",hvRecThisTime,hvRecBefore);
+				}
+				else
+				IS_ANY_ORA_ERROR
+
+
+		int_l_counter+=1;
+
+        for(ArrayCounter = 0;ArrayCounter < hvRecThisTime; ArrayCounter++)
+        { 
+        hvMarginAmt = 0.0;
+        hvAvailCollatrl = 0.0;
+        hiPayinDate = 0;
+        //memset(hvPayinDate,APL_NULL_CHAR,sizeof(hvPayinDate));
+        hvCount = 0;
+        hvCount1 = 0;
+        l_revrs_amount = 0;
+        hvErlPyinCln[0] = '\0';
+        //hvLienReqd[0] = '\0';
+        hvSetValDt = 0;
+ 
+        /* Following Changes added for Lien Marking Changes - Priyanka Bhatkar - 24042015 - Start */	
+        sprintf(chr_g_log_buffer,"\n Inside Cursor:Deal_ref_no=|%s| Client=|%s| ",l_oblg_acc_ent_struct_h->h_identiy_no[ArrayCounter],l_oblg_acc_ent_struct_h->h_client[ArrayCounter]);
+	fprintf(g_flogfile,chr_g_log_buffer);
+        printf("\n PROCESSING REF NO:[%s]",l_oblg_acc_ent_struct_h->h_identiy_no[ArrayCounter]);
+        printf("\n Client is :[%s]",l_oblg_acc_ent_struct_h->h_client[ArrayCounter]);
+        printf("\n l_oblg_acc_ent_struct_h->h_deal_cd:[%s]",l_oblg_acc_ent_struct_h->h_deal_cd[ArrayCounter]);
+        printf("\n hvExArena:[%s]",l_oblg_acc_ent_struct_h->hvExArena[ArrayCounter]);
+        printf("\n hvDealClass:[%s]",l_oblg_acc_ent_struct_h->hvDealClass[ArrayCounter]);
+
+		
+	   if(flag!=1)
+       {	
+		//Added by Azhar K. for API NRI Accounting Entries - START
+		hvErlPyinCln[0] = '\0';
+		EXEC SQL SELECT GETCLIENTPARAMBYID('IGNORE_AE',:l_oblg_acc_ent_struct_h->h_client[ArrayCounter])
+				into :hvErlPyinCln
+				FROM DUAL;
+				IS_ANY_ORA_ERROR
+
+		printf("\n Param Value for IGNORE AE for Clients other than NRI :[%s]",hvErlPyinCln);
+				
+		if((strcmp(l_oblg_acc_ent_struct_h->h_cln_type[ArrayCounter],"N") == 0) || (strcmp(hvErlPyinCln,"Y") == 0))
+		{
+			printf("\n Client Type is NRI OR IGNORE_AE param is Y for Clients other than NRI so skipping Accounting Entries for client :[%s]",l_oblg_acc_ent_struct_h->h_client[ArrayCounter]);
+			fprintf(g_flogfile,"\n Client Type is NRI OR IGNORE_AE param is Y for Clients other than NRI so skipping Accounting Entries for client :[%s]",l_oblg_acc_ent_struct_h->h_client[ArrayCounter]);
+			
+			if(APL_FAILURE == DL_Proc_NRIAccEntries(l_oblg_acc_ent_struct_h,l_oblg_acc_ent_struct_i,ArrayCounter,l_intlenv_datastruct_h,l_debug_info_ptr))
+			{
+				fprintf(g_flogfile,"\n ***** NRI Accounting Entries Failed for Account=|%s| Indentiy_No=|%s| ***** \n",l_oblg_acc_ent_struct_h->h_client[ArrayCounter],l_oblg_acc_ent_struct_h->h_identiy_no[ArrayCounter]);
+				CO_ProcMonitor(g_flogfile,"Returned from DL_Proc_NRIAccEntries() with Failure\n",l_debug_info_ptr,l_intlenv_datastruct_h);
+				APL_GOBACK_FAIL
+			}
+			continue;
+		}
+		
+	  }
+	//Added by Azhar K. for API NRI Accounting Entries - End
+
+	IF_COND_EXISTS("DL_ACCTENT","DL_LIEN_ACCTENT_GEN")
+		{
+			printf("\n Country condition for DL_ACCTENT/DL_LIEN_ACCTENT_GEN is Set");
+			// For Onmarket Purchase Deals Changes Need To be Applied 
+
+			printf("\n Value of Deal code is [%s],Deal class [%s],Ex-Arena [%s]",l_oblg_acc_ent_struct_h->h_deal_cd[ArrayCounter],l_oblg_acc_ent_struct_h->hvDealClass[ArrayCounter],l_oblg_acc_ent_struct_h->hvExArena[ArrayCounter]);
+			if((strcmp(l_oblg_acc_ent_struct_h->h_deal_cd[ArrayCounter],"4") ==0) && (strcmp(l_oblg_acc_ent_struct_h->hvDealClass[ArrayCounter],"1")== 0) && (strcmp(l_oblg_acc_ent_struct_h->hvExArena[ArrayCounter],"1") == 0))
+			{
+				printf("\n Inside if Condition of deal code ,deal class and Ex arena");
+
+				hvErlPyinCln[0] = '\0';
+				EXEC SQL SELECT GETCLIENTPARAMBYID('EARLY_PAYIN_FND',:l_oblg_acc_ent_struct_h->h_client[ArrayCounter])
+				into :hvErlPyinCln
+				FROM DUAL;
+				IS_ANY_ORA_ERROR
+
+				printf("\n hvErlPyinCln :[%s]",hvErlPyinCln); 
+
+				// If Client Is Earlypayin Client Do Not check Payin Days from Billing Client setup && SysDate < Payin Date Only then proceed
+				// If Client is Non-Earlypayin Then Check MARGIN_REV_DAYS from client parameter
+				// 15022016 - As per the change during UAT , now payout date will be considered instead of Pay in date.
+
+				printf("\n hvSysDate :[%s]",hvSysDate); 
+				if(strcmp(hvErlPyinCln,"Y") == 0)
+					{
+						printf("\n Client Is EarlyPayin");
+
+						hiPayinDate = 0;
+						memset(hvPayinDate,APL_NULL_CHAR,sizeof(hvPayinDate));
+
+						// For EP client if System date < pay out date the proceed for AE else skip the record 
+						//EXEC SQL SELECT pay_in_dt INTO :hvPayinDate:hiPayinDate FROM mt_settl_cal
+						EXEC SQL SELECT pay_out_dt INTO :hvPayinDate:hiPayinDate FROM mt_settl_cal
+						WHERE settl_no=:l_oblg_acc_ent_struct_h->h_settlement_no[ArrayCounter]
+						AND SETTL_TYPE = :l_oblg_acc_ent_struct_h->h_mkt_type[ArrayCounter];
+						
+						printf("\n sqlcode after taking Payout date is |%d|",sqlca.sqlcode);
+
+						IS_ANY_ORA_ERROR;
+
+						printf("\n hvSysDate :[%s]",hvSysDate); 
+						printf("\n hvPayinDate :[%s]",hvPayinDate); 
+						int_l_diff1 = 0;
+
+						 if(CO_Pro_DateComp(hvPayinDate,hvSysDate,&int_l_diff1,l_debug_info_ptr) != APL_SUCCESS)  //int_l_diff1 =hvSysDate -hvPayinDate
+							 {
+								APL_GOBACK_FAIL 
+							 }
+							 printf("\n int_l_diff1 :[%d]",int_l_diff1);
+							 if(int_l_diff1 > 0)
+							 {
+								  printf("\n Skip This Record as System Date >= Payin Date");
+								  continue;
+							 }
+							 else
+							 {
+								 printf("\n FOR EP CLIENT ,IF SYSTEM DATE IS <= PAYIN DATE ,CONTINUEW WITH NORMAL AE PROCESS");
+								 hvSetValDt = 1;
+							 }
+
+					} //End of If Condition of Early Payin Client
+					else
+					{
+						 printf("\n Client Is Non-EarlyPayin");
+
+						 hvMrgnRevDays = 0;
+						 memset(hvPayinDate,APL_NULL_CHAR,sizeof(hvPayinDate));
+						 memset(hvDealMrgRevDate,APL_NULL_CHAR,sizeof(hvPayinDate));
+						 memset(hvBusiDay,APL_NULL_CHAR,sizeof(hvBusiDay));
+
+
+						 /*Taking Payout day instead of Payin date from Settlement Calendar*/
+						// EXEC SQL SELECT pay_in_dt INTO :hvPayinDate:hiPayinDate FROM mt_settl_cal
+						 EXEC SQL SELECT pay_out_dt INTO :hvPayinDate:hiPayinDate FROM mt_settl_cal
+						 WHERE settl_no=:l_oblg_acc_ent_struct_h->h_settlement_no[ArrayCounter]
+						 AND SETTL_TYPE = :l_oblg_acc_ent_struct_h->h_mkt_type[ArrayCounter];
+
+
+						 printf("\n Sqlcode after fetching the Payin date from Settlement Calender in case of Non-EarlyPayin Client |%d|",sqlca.sqlcode);
+						 IS_ANY_ORA_ERROR;
+
+						 printf("\n hvSysDate :[%s]",hvSysDate); 
+						 printf("\n hvPayinDate :[%s]",hvPayinDate); 
+
+
+						if(CO_Pro_DateComp(hvPayinDate,hvSysDate,&int_l_diff,l_debug_info_ptr) != APL_SUCCESS)
+						 {
+							 APL_GOBACK_FAIL 
+						 }
+						 printf("\n Difference between System date and Payin date :[%d]",int_l_diff); //int_l_diff = hvSysDate - hvPayinDate 
+						 if(int_l_diff < 0)  //system date < Payin date 
+						 {
+							//Margin AE function call
+							//sana bhatkar
+							Alert("batch sequence number we got is |%s|",chr_g_batch_no);
+                                                        if( !strcmp(chr_g_batch_no,APL_NULL_STRING) )
+                                                        {
+								printf("\n Since Batch Number is blank we are generating batch number thorugh IV_Proc_GenBatchNoFn()");
+								printf("\n g_get_batch_no_flg is %d",g_get_batch_no_flg);
+                                                        	if(       g_get_batch_no_flg == APL_SUCCESS)
+                                                        	{
+                                                        		if      (       IV_Proc_GenBatchNoFn(   chr_g_batch_no,
+                                                        		l_debug_info_ptr
+                                                        		)       ==      APL_FAILURE
+                                                        		)
+                                                        		{
+										printf("\n Could not obtain Batch Number");
+                                                        			fprintf(g_flogfile,"Could not obtain Batch Number");
+                                                        			APL_GOBACK_FAIL
+                                                        		}
+                                                        		else
+                                                        		{
+                                                        			int_g_run_seq_num = 1;
+                                                        			strcpy(int_g_seq_num,"1");
+                                                        			g_get_batch_no_flg = APL_FAILURE;
+										printf("\n Got Batch Number :[%s] Sequence Number :[%s]",chr_g_batch_no,int_g_seq_num);
+                                                        			sprintf(chr_g_log_buffer,"\n Got Batch Number :[%s] Sequence Number :[%s]",chr_g_batch_no,int_g_seq_num);
+                                                        			fprintf(g_flogfile,"%s",chr_g_log_buffer);
+                                                        		}
+									g_get_batch_no_flg = 0;
+                                                        	}
+                                                        }
+							Alert("Before calling Gen_MarginAE() we got int_g_run_seq_num=|%d| chr_g_batch_no=|%s|",int_g_run_seq_num, chr_g_batch_no);
+							if(Gen_MarginAE(l_oblg_acc_ent_struct_h,
+											 ArrayCounter,
+											 chr_g_batch_no,
+											 l_debug_info_ptr) ==APL_FAILURE)
+											   {
+												APL_GOBACK_FAIL
+											   }
+						 }
+						 if(int_l_diff == 0)  //system date = Payin date 
+						 {
+							  hvSetValDt = 1;
+							  //Normal AE 
+						 }
+					}
+
+				} //End of if Condition of deal code ,deal class and Ex arena
+				else
+					hvSetValDt =1; //03062015
+		}
+		else
+			hvSetValDt =1; //03062015
+       
+        /* Lien Marking Changes - Priyanka Bhatkar - 24042015 - End */	
+
+		/********************  FIRST ENTRY FOR GL  *********************************/
+
+		//Client is Early Payin then NormalAE will be generated if system Date less than Payin Date ,in case of NonEP system date=Payin Date
+		//if(((hvSetValDt ==1) &&((strcmp(hvLienReqd,"N") == 0))) || ((hvSetValDt ==1) && (int_l_diff1 < 0) && (strcmp(hvErlPyinCln,"Y") == 0)&&(strcmp(hvLienReqd,"Y") == 0)) || ((int_l_diff == 0) && (strcmp(hvErlPyinCln,"Y") != 0)&&(hvSetValDt ==1)))
+		if( ( (hvSetValDt ==1) && (int_l_diff1 <= 0) && (strcmp(hvErlPyinCln,"Y") == 0) ) || ((int_l_diff == 0) &&(hvSetValDt ==1) && (strcmp(hvErlPyinCln,"Y") != 0)))
+		{
+			printf("\n Inside Normal AE");
+			sprintf(chr_g_log_buffer,"\n Inside Cursor:Deal_ref_no=|%s| Client=|%s| ",l_oblg_acc_ent_struct_h->h_identiy_no[ArrayCounter],l_oblg_acc_ent_struct_h->h_client[ArrayCounter]);
+			fprintf(g_flogfile,chr_g_log_buffer);
+
+			/**** Amit :Changes are required here to use Broker Account for DVP other leg entry .If broker Acc is not present use Suspense Acc ****/
+
+		if(strcmp(l_oblg_acc_ent_struct_h->h_clh_flg[ArrayCounter],"D")==0)
+		{
+			fprintf(g_flogfile,"\n Selecting Bank Account For DVP Deal of Flag=|%s| of Broker=|%s|\n",l_oblg_acc_ent_struct_h->h_clh_flg[ArrayCounter],l_oblg_acc_ent_struct_h->h_brk_no[ArrayCounter]);
+
+
+
+		/*Changes done for -- Kotak Ench -- Account No Size change --ISKB_4802 --11072011  --Shweta*/			
+
+
+			EXEC SQL SELECT SUBSTR(pty_bnk_acc,9) INTO :chr_gl_account:chr_i_gl_account
+			FROM MT_PTY_FUND_DET
+			WHERE pty_code=:l_oblg_acc_ent_struct_h->h_brk_no[ArrayCounter]
+			AND STATUS = 'AA' ; 
+			
+			IS_ANY_ORA_ERROR
+			printf("\n368::chr_gl_account::|%s|", chr_gl_account);
+			
+			fprintf(g_flogfile,"\n Error getting Broker Acc=|%d| \n",sqlca.sqlcode);
+
+			IS_ANY_ORA_ERROR
+			
+			fprintf(g_flogfile,"\n Got Broker Acc=|%s| \n",chr_gl_account);
+
+		}
+
+		if(!strlen(chr_gl_account))
+		{
+			fprintf(g_flogfile,"\n Again fetching Suspense Acc because Suspense Acc=|%s| is Blank \n",chr_gl_account);
+
+
+		/* KB_5878 charuta MCS */
+			EXEC SQL SELECT DECODE(:l_oblg_acc_ent_struct_h->h_exch_code[ArrayCounter],'NSE',SUBSTR(a.NSECLH,9),'BSE',SUBSTR(a.BSECLH,9),'MCS',SUBSTR(a.MCSCLH,9),SUBSTR(a.CUSTSUS,9))
+				INTO :chr_gl_account:chr_i_gl_account
+				FROM IV_CLIENTGL a;
+			IS_ANY_ORA_ERROR
+		}
+
+		fprintf(g_flogfile,"\n So finally Acc for GL leg Entry=|%s| \n",chr_gl_account);
+
+                memset(l_gl_revrsl_acct,NULL,sizeof(l_gl_revrsl_acct));
+
+/* ******** START NEW CODE ADD POSITION SWAP	***************** */
+		printf("\n Batch Flag=|%d| \n",g_get_batch_no_flg);
+
+		if	(	g_get_batch_no_flg == APL_SUCCESS)
+		{
+			if	(	IV_Proc_GenBatchNoFn(	chr_g_batch_no,
+										l_debug_info_ptr
+										)	==	APL_FAILURE
+				)
+			{
+				fprintf(g_flogfile,"Could not obtain Batch Number");
+				APL_GOBACK_FAIL
+			}
+			else 
+			{
+				int_g_run_seq_num = 1; 
+				strcpy(int_g_seq_num,"1");
+				g_get_batch_no_flg = APL_FAILURE;
+				sprintf(chr_g_log_buffer,"\n Got Batch Number :[%s] Sequence Number :[%s]",chr_g_batch_no,int_g_seq_num);
+				fprintf(g_flogfile,"%s",chr_g_log_buffer);
+
+			}
+		}
+/* ******** END NEW CODE ADD POSITION SWAP	***************** */
+
+		printf("\n GL Account 2=|%s| \n",chr_gl_account);
+
+		chr_l_acc_typ_ind='G';
+		printf("\n IDENT NUM FOR GL IS :[%s]",int_g_seq_num);
+
+		if	(	CA_Pro_FillActEntStruct(	l_pro_dbacctent_struct_h,
+											l_pro_dbacctent_struct_i,
+											l_oblg_acc_ent_struct_h,
+											chr_l_acc_typ_ind,
+											ArrayCounter,
+											int_l_entry_no,
+											l_debug_info_ptr
+										)	==	APL_FAILURE
+			)
+		{
+			APL_GOBACK_FAIL
+		}
+
+
+		if(strcmp(l_oblg_acc_ent_struct_h->h_deal_cd[ArrayCounter],"4")==0)
+		{
+			l_pro_dbacctent_struct_h->db_cr_ind = '1';  //Debit_Credit Indicator 1 means Creadit
+			l_pro_dbacctent_struct_i->i_db_cr_flag = 0;
+		}
+		else if(strcmp(l_oblg_acc_ent_struct_h->h_deal_cd[ArrayCounter],"3")==0)
+		{
+			l_pro_dbacctent_struct_h->db_cr_ind = '0';  //Debit_Credit Indicator 0 means Debit
+			l_pro_dbacctent_struct_i->i_db_cr_flag = 0;
+		}
+		
+	
+		strcpy(l_pro_dbacctent_struct_h->client,chr_gl_account);
+
+		strcpy(l_leg_ind_gl,l_pro_dbacctent_struct_h->inden_num);
+
+	    sprintf(chr_g_log_buffer,"\n **** Before Compare 1 l_chr_compdate=|%s| Val_date=|%s| ***\n",l_chr_compdate,l_pro_dbacctent_struct_h->val_date);
+		fprintf(g_flogfile,"%s",chr_g_log_buffer);
+
+                printf("\n FOR GL DEBIT ACCT: hvSetValDt:[%d] and l_pro_dbacctent_struct_h->val_date is :[%s]",hvSetValDt,l_pro_dbacctent_struct_h->val_date);
+                //printf("\n 1 ::Before setting Val Date :: hvErlPyinCln :[%s] and hvLienReqd :[%s]",hvErlPyinCln,hvLienReqd); 
+				printf("\n 1 ::Before setting Val Date :: hvErlPyinCln :[%s]",hvErlPyinCln); 
+                //if((hvSetValDt == 1) &&(strcmp(hvErlPyinCln,"Y") == 0) || ((hvSetValDt == 1) &&(strcmp(hvLienReqd,"N") == 0))  ) // IF This is 1 means set val date as current system date
+				if( ( (hvSetValDt ==1) && (int_l_diff1 <= 0) && (strcmp(hvErlPyinCln,"Y") == 0) ) || ((int_l_diff == 0) &&(hvSetValDt ==1) && (strcmp(hvErlPyinCln,"Y") != 0)))
+                {
+					printf("1:Inside if condition");
+                   memset(l_pro_dbacctent_struct_h->val_date,APL_NULL_CHAR,sizeof(l_pro_dbacctent_struct_h->val_date));   
+                   strcpy(l_pro_dbacctent_struct_h->val_date,l_chr_compdate);
+                }
+          
+                printf("\n l_chr_compdate:[%s]",l_chr_compdate);
+                printf("\n l_pro_dbacctent_struct_h->val_date:[%s]",l_pro_dbacctent_struct_h->val_date);
+ 
+		if(strcmp(l_chr_compdate,l_pro_dbacctent_struct_h->val_date)== 0) 
+		{
+			sprintf(chr_g_log_buffer,"\n **** Before Insert  1 l_chr_compdate=|%s| Val_date=|%s| ***\n",l_chr_compdate,l_pro_dbacctent_struct_h->val_date);
+			fprintf(g_flogfile,"%s",chr_g_log_buffer);
+			if(strlen(l_pro_dbacctent_struct_h->inden_num) > 7)						//Changes done by Tushar for ISKB_10384
+			{
+				fprintf(g_flogfile,"\n\n***********************************************************************");
+				fprintf(g_flogfile,"\n Current Serial Number=|%s| exceeds Maximum available Serial Number=9999.",l_pro_dbacctent_struct_h->inden_num);
+				fprintf(g_flogfile,"\n Accounting Entries Can Not be Generated.");
+				fprintf(g_flogfile,"\n***********************************************************************\n\n");
+				APL_GOBACK_FAIL
+			}
+			if	(	IV_Mod_ActEntNew(l_pro_dbacctent_struct_h,
+										  l_debug_info_ptr
+										 )	== APL_FAILURE
+				)
+			{
+					APL_GOBACK_FAIL
+			}	 
+
+		}
+
+/*  ******************* SECOND ENTRY FOR CLIENT START ******************************** */		
+				
+		chr_l_acc_typ_ind='C';
+
+		int_g_run_seq_num = int_g_run_seq_num + 1;
+		sprintf(int_g_seq_num,"%d",int_g_run_seq_num);
+		printf("\n IDENT NUM FOR CLIENT IS :[%s]",int_g_seq_num);
+			
+		if	(	CA_Pro_FillActEntStruct(l_pro_cracctent_struct_h,
+												l_pro_cracctent_struct_i,
+												l_oblg_acc_ent_struct_h,
+												chr_l_acc_typ_ind,
+												ArrayCounter,
+												int_l_entry_no,
+												l_debug_info_ptr
+											  )	==	APL_FAILURE
+			)
+		{
+			APL_GOBACK_FAIL
+		}
+
+
+		if(strcmp(l_oblg_acc_ent_struct_h->h_deal_cd[ArrayCounter],"4")==0 )
+		{
+			l_pro_cracctent_struct_h->db_cr_ind = '0';
+			l_pro_cracctent_struct_i->i_db_cr_flag = 0;
+
+		}
+		else if(strcmp(l_oblg_acc_ent_struct_h->h_deal_cd[ArrayCounter],"3")==0 )
+		{
+			l_pro_cracctent_struct_h->db_cr_ind = '1';
+			l_pro_cracctent_struct_i->i_db_cr_flag = 0;
+		}
+
+		strcpy(l_leg_ind_clt,l_pro_cracctent_struct_h->inden_num);
+
+		sprintf(chr_g_log_buffer,"\n **** Before Compare 2  l_chr_compdate=|%s| Val_date=|%s| ***\n",l_chr_compdate,l_pro_cracctent_struct_h->val_date);
+		fprintf(g_flogfile,"%s",chr_g_log_buffer);
+
+                printf("\n FOR CLIENT CREDIT ACCT : hvSetValDt:[%d] l_pro_dbacctent_struct_h->val_date :[%s]",hvSetValDt,l_pro_dbacctent_struct_h->val_date);
+                //printf("\n 2::Before setting Val Date :: hvErlPyinCln :[%s] and hvLienReqd :[%s]",hvErlPyinCln,hvLienReqd); 
+				//if((hvSetValDt == 1) &&(strcmp(hvErlPyinCln,"Y") == 0) || ((hvSetValDt == 1) &&(strcmp(hvLienReqd,"N") == 0))  ) // IF This is 1 means set val date as current system date
+				printf("\n 2 ::Before setting Val Date :: hvErlPyinCln :[%s]",hvErlPyinCln); 
+				if( ( (hvSetValDt ==1) && (int_l_diff1 <= 0) && (strcmp(hvErlPyinCln,"Y") == 0) ) || ((int_l_diff == 0) &&(hvSetValDt ==1) && (strcmp(hvErlPyinCln,"Y") != 0)))
+                {
+					printf("2:Inside if condition");
+                   memset(l_pro_cracctent_struct_h->val_date,APL_NULL_CHAR,sizeof(l_pro_cracctent_struct_h->val_date));
+                   strcpy(l_pro_cracctent_struct_h->val_date,l_chr_compdate);
+                }
+                printf("\n l_chr_compdate:[%s]",l_chr_compdate);
+                printf("\n l_pro_cracctent_struct_h->val_date:[%s]",l_pro_cracctent_struct_h->val_date);
+
+		if(strcmp(l_chr_compdate,l_pro_cracctent_struct_h->val_date)== 0) 
+		{
+			sprintf(chr_g_log_buffer,"\n **** Before Insert 2  l_chr_compdate=|%s| Val_date=|%s| ***\n",l_chr_compdate,l_pro_cracctent_struct_h->val_date);
+			fprintf(g_flogfile,"%s",chr_g_log_buffer);
+			if(strlen(l_pro_cracctent_struct_h->inden_num) > 7)						//Changes done by Tushar for ISKB_10384
+			{
+				fprintf(g_flogfile,"\n\n***********************************************************************");
+				fprintf(g_flogfile,"\n Current Serial Number=|%s| exceeds Maximum available Serial Number=9999.",l_pro_cracctent_struct_h->inden_num);
+				fprintf(g_flogfile,"\n Accounting Entries Can Not be Generated.");
+				fprintf(g_flogfile,"\n***********************************************************************\n\n");
+				APL_GOBACK_FAIL
+			}
+			printf("\n>>>>inden_num is |%s|\n ",l_pro_cracctent_struct_h->inden_num);
+			if	(	IV_Mod_ActEntNew(	l_pro_cracctent_struct_h,
+											l_debug_info_ptr
+										 )	== APL_FAILURE
+				)
+			{
+				APL_GOBACK_FAIL
+			} 
+
+			EXEC SQL UPDATE pro_acctent SET leg_ind=:l_leg_ind_gl  WHERE inden_num=:l_pro_cracctent_struct_h->inden_num;
+			IS_ANY_ORA_ERROR	
+	
+			EXEC SQL UPDATE pro_acctent SET leg_ind=:l_leg_ind_clt WHERE inden_num=:l_pro_dbacctent_struct_h->inden_num;
+			IS_ANY_ORA_ERROR
+
+		
+		}
+
+/*  ******************* SECOND ENTRY FOR CLIENT END  ******************************** */		
+		
+	
+
+/*  ***************************************************************************** */
+/*  ******************* IF EXCHANGE IS NSE START ******************************** */
+/*  ***************************************************************************** */
+
+	
+		printf("\n For Client=|%s| Exchange=|%s| \n",l_oblg_acc_ent_struct_h->h_client[ArrayCounter],l_oblg_acc_ent_struct_h->h_exch_code[ArrayCounter]);
+		/* KB_5878 Charuta MCS */	
+		//12174 - Interoperability changes country cond added
+		if(strcmp(l_oblg_acc_ent_struct_h->h_clh_flg[ArrayCounter],"C")==0  && (strcmp(l_oblg_acc_ent_struct_h->h_exch_code[ArrayCounter],"NSE")==0 || strcmp(l_oblg_acc_ent_struct_h->h_exch_code[ArrayCounter],"MCS")==0) && l_interop_cond == 0)
+		{
+			chr_l_acc_typ_ind='B';
+		
+		if(l_oblg_acc_ent_struct_h->h_brokercomm[ArrayCounter] > 0)
+		{
+			
+		/****** This one for Suspense Account for Brokerage ***** */
+			
+			int_g_run_seq_num = int_g_run_seq_num + 1;
+			sprintf(int_g_seq_num,"%d",int_g_run_seq_num);
+			
+			int_l_entry_no=1;
+
+			if	(	CA_Pro_FillActEntStruct(	l_pro_dbacctent_struct_h,
+												l_pro_dbacctent_struct_i,
+												l_oblg_acc_ent_struct_h,
+												chr_l_acc_typ_ind,
+												ArrayCounter,
+												int_l_entry_no,
+												l_debug_info_ptr
+											)	==	APL_FAILURE
+				)
+			{
+				APL_GOBACK_FAIL
+			}
+			
+
+		strcpy(l_leg_ind_gl,l_pro_dbacctent_struct_h->inden_num);
+
+		/*Changes done for -- Kotak Ench -- Account No Size change--ISKB_4802--11072011--Shweta*/			
+		
+		/* KB_5878 Charuta MCS */
+				if(strcmp(l_oblg_acc_ent_struct_h->h_exch_code[ArrayCounter],"NSE")==0)
+				{
+					EXEC SQL SELECT SUBSTR(NSECLH,9) INTO :chr_gl_account:chr_i_gl_account  FROM iv_clientgl;
+					IS_ANY_ORA_ERROR
+				}
+				if(strcmp(l_oblg_acc_ent_struct_h->h_exch_code[ArrayCounter],"MCS")==0)
+				{
+					EXEC SQL SELECT SUBSTR(MCSCLH,9) INTO :chr_gl_account:chr_i_gl_account  FROM iv_clientgl;
+					IS_ANY_ORA_ERROR
+				}
+			
+		strcpy(l_pro_dbacctent_struct_h->client,chr_gl_account);
+
+		l_pro_dbacctent_struct_h->report_amt = l_oblg_acc_ent_struct_h->h_brokercomm[ArrayCounter];
+		l_pro_dbacctent_struct_h->lcl_amount=l_oblg_acc_ent_struct_h->h_brokercomm[ArrayCounter];
+		l_pro_dbacctent_struct_h->db_cr_ind = '0';
+		l_pro_dbacctent_struct_i->i_db_cr_flag = 0;
+	
+
+		sprintf(chr_g_log_buffer,"\n **** Before Compare 3  l_chr_compdate=|%s| Val_date=|%s| ***\n",l_chr_compdate,l_pro_dbacctent_struct_h->val_date);
+		fprintf(g_flogfile,"%s",chr_g_log_buffer);
+		//printf("\n 3::Before setting Val Date :: hvErlPyinCln :[%s] and hvLienReqd :[%s]",hvErlPyinCln,hvLienReqd); 
+			//if((hvSetValDt == 1) &&(strcmp(hvErlPyinCln,"Y") == 0) || ((hvSetValDt == 1) &&(strcmp(hvLienReqd,"N") == 0))) // IF This is 1 means set val date as current system date
+			printf("\n 3 ::Before setting Val Date :: hvErlPyinCln :[%s]",hvErlPyinCln); 
+				if( ( (hvSetValDt ==1) && (int_l_diff1 <= 0) && (strcmp(hvErlPyinCln,"Y") == 0) ) || ((int_l_diff == 0) &&(hvSetValDt ==1) && (strcmp(hvErlPyinCln,"Y") != 0)))
+				{
+					printf("\n 3:Inside if condition");
+					memset(l_pro_dbacctent_struct_h->val_date,APL_NULL_CHAR,sizeof(l_pro_dbacctent_struct_h->val_date));
+					strcpy(l_pro_dbacctent_struct_h->val_date,l_chr_compdate);
+				}
+
+                printf("\n After 3 :l_chr_compdate:[%s]",l_chr_compdate);
+                printf("\n After 3 :l_pro_dbacctent_struct_h->val_date:[%s]",l_pro_dbacctent_struct_h->val_date);
+
+
+
+		if(strcmp(l_chr_compdate,l_pro_dbacctent_struct_h->val_date)== 0)
+		{
+			sprintf(chr_g_log_buffer,"\n **** Before Insert 3  l_chr_compdate=|%s| Val_date=|%s| ***\n",l_chr_compdate,l_pro_dbacctent_struct_h->val_date);
+			fprintf(g_flogfile,"%s",chr_g_log_buffer);
+			if(strlen(l_pro_dbacctent_struct_h->inden_num) > 7)						//Changes done by Tushar for ISKB_10384
+			{
+				//printf("Prateek ::Inside fail condition of 3rd insert");
+				fprintf(g_flogfile,"\n\n***********************************************************************");
+				fprintf(g_flogfile,"\n Current Serial Number=|%s| exceeds Maximum available Serial Number=9999.",l_pro_dbacctent_struct_h->inden_num);
+				fprintf(g_flogfile,"\n Accounting Entries Can Not be Generated.");
+				fprintf(g_flogfile,"\n***********************************************************************\n\n");
+				APL_GOBACK_FAIL
+			}
+			
+			if	(	IV_Mod_ActEntNew(l_pro_dbacctent_struct_h,
+										  l_debug_info_ptr
+										 )	== APL_FAILURE
+				)
+			{
+					APL_GOBACK_FAIL
+			}
+
+		}	
+	
+			/****** This one for Credit Broker Account(if present) for Brokerage  ***** */
+			
+			int_g_run_seq_num = int_g_run_seq_num + 1;
+			sprintf(int_g_seq_num,"%d",int_g_run_seq_num);
+			int_l_entry_no=2;
+
+			if (CA_Pro_FillActEntStruct(l_pro_cracctent_struct_h,
+						l_pro_cracctent_struct_i,
+						l_oblg_acc_ent_struct_h,
+						chr_l_acc_typ_ind,
+						ArrayCounter ,
+						int_l_entry_no,
+						l_debug_info_ptr
+						)	== APL_FAILURE
+				)
+			{
+				APL_GOBACK_FAIL
+			}
+
+			
+			strcpy(l_leg_ind_clt,l_pro_cracctent_struct_h->inden_num);
+			l_pro_cracctent_struct_h->report_amt = l_oblg_acc_ent_struct_h->h_brokercomm[ArrayCounter];
+			l_pro_cracctent_struct_h->lcl_amount=l_oblg_acc_ent_struct_h->h_brokercomm[ArrayCounter];
+			l_pro_cracctent_struct_h->db_cr_ind = '1';
+			l_pro_cracctent_struct_i->i_db_cr_flag = 0;
+	
+		
+			sprintf(chr_g_log_buffer,"\n **** Before Compare 4  l_chr_compdate=|%s| Val_date=|%s| ***\n",l_chr_compdate,l_pro_cracctent_struct_h->val_date);
+			fprintf(g_flogfile,"%s",chr_g_log_buffer);	
+			//printf("\n 4::Before setting Val Date :: hvErlPyinCln :[%s] and hvLienReqd :[%s]",hvErlPyinCln,hvLienReqd); 
+			//if((hvSetValDt == 1) &&(strcmp(hvErlPyinCln,"Y") == 0) || ((hvSetValDt == 1) &&(strcmp(hvLienReqd,"N") == 0))  ) // IF This is 1 means set val date as current system date
+			printf("\n 4 ::Before setting Val Date :: hvErlPyinCln :[%s]",hvErlPyinCln); 
+			if( ( (hvSetValDt ==1) && (int_l_diff1 <= 0) && (strcmp(hvErlPyinCln,"Y") == 0) ) || ((int_l_diff == 0) &&(hvSetValDt ==1) && (strcmp(hvErlPyinCln,"Y") != 0)))
+				{
+					printf("4:Inside if condition");
+					memset(l_pro_cracctent_struct_h->val_date,APL_NULL_CHAR,sizeof(l_pro_cracctent_struct_h->val_date));
+					strcpy(l_pro_cracctent_struct_h->val_date,l_chr_compdate);
+				}
+				printf("\n After 4 :l_chr_compdate:[%s]",l_chr_compdate);
+                printf("\n After 4 :l_pro_cracctent_struct_h->val_date:[%s]",l_pro_cracctent_struct_h->val_date);
+			
+			if(strcmp(l_chr_compdate,l_pro_cracctent_struct_h->val_date)== 0)
+			{
+
+				sprintf(chr_g_log_buffer,"\n **** Before Insert 4  l_chr_compdate=|%s| Val_date=|%s| ***\n",l_chr_compdate,l_pro_cracctent_struct_h->val_date);
+				fprintf(g_flogfile,"%s",chr_g_log_buffer);	
+			if(strlen(l_pro_cracctent_struct_h->inden_num) > 7)						//Changes done by Tushar for ISKB_10384
+			{
+				//printf("Prateek ::Inside fail condition of 4th insert");
+				fprintf(g_flogfile,"\n\n***********************************************************************");
+				fprintf(g_flogfile,"\n Current Serial Number=|%s| exceeds Maximum available Serial Number=9999.",l_pro_cracctent_struct_h->inden_num);
+				fprintf(g_flogfile,"\n Accounting Entries Can Not be Generated.");
+				fprintf(g_flogfile,"\n***********************************************************************\n\n");
+				APL_GOBACK_FAIL
+			}
+
+				if (  IV_Mod_ActEntNew( l_pro_cracctent_struct_h,
+							l_debug_info_ptr
+							) == APL_FAILURE
+					)
+				{
+					APL_GOBACK_FAIL
+				}
+
+				EXEC SQL UPDATE pro_acctent SET leg_ind=:l_leg_ind_gl  WHERE inden_num=:l_pro_cracctent_struct_h->inden_num;
+				IS_ANY_ORA_ERROR	
+
+				EXEC SQL UPDATE pro_acctent SET leg_ind=:l_leg_ind_clt WHERE inden_num=:l_pro_dbacctent_struct_h->inden_num;
+				IS_ANY_ORA_ERROR
+
+			}
+
+		}
+		
+			
+
+		
+
+
+
+		if(l_oblg_acc_ent_struct_h->h_stx_comm[ArrayCounter] > 0)
+		{
+			
+		/****** This one for Debit Suspense Account for STT ***** */
+			
+		
+		 int_g_run_seq_num = int_g_run_seq_num + 1;
+		 sprintf(int_g_seq_num,"%d",int_g_run_seq_num);
+		 int_l_entry_no=1;
+		
+		
+			if	(	CA_Pro_FillActEntStruct(	l_pro_dbacctent_struct_h,
+												l_pro_dbacctent_struct_i,
+												l_oblg_acc_ent_struct_h,
+												chr_l_acc_typ_ind,
+												ArrayCounter,
+												int_l_entry_no,
+												l_debug_info_ptr
+											)	==	APL_FAILURE
+				)
+			{
+					APL_GOBACK_FAIL
+			}
+			
+		
+			strcpy(l_leg_ind_gl,l_pro_dbacctent_struct_h->inden_num);
+
+			/*Changes done for -- Kotak Ench -- Account No Size change --ISKB_4802--Shweta--11072011*/			
+			/* KB_5878 Charuta MCS */
+			if(strcmp(l_oblg_acc_ent_struct_h->h_exch_code[ArrayCounter],"NSE")==0)
+			{
+				EXEC SQL SELECT SUBSTR(NSECLH,9) INTO :chr_gl_account:chr_i_gl_account  FROM iv_clientgl;
+				IS_ANY_ORA_ERROR
+			}
+			if(strcmp(l_oblg_acc_ent_struct_h->h_exch_code[ArrayCounter],"MCS")==0)
+			{
+				EXEC SQL SELECT SUBSTR(MCSCLH,9) INTO :chr_gl_account:chr_i_gl_account  FROM iv_clientgl;
+				IS_ANY_ORA_ERROR
+			}
+		
+			strcpy(l_pro_dbacctent_struct_h->client,chr_gl_account);
+			l_pro_dbacctent_struct_h->report_amt = l_oblg_acc_ent_struct_h->h_stx_comm[ArrayCounter];
+			l_pro_dbacctent_struct_h->lcl_amount=l_oblg_acc_ent_struct_h->h_stx_comm[ArrayCounter];
+			l_pro_dbacctent_struct_h->db_cr_ind = '0';
+			l_pro_dbacctent_struct_i->i_db_cr_flag = 0;
+
+			
+			sprintf(chr_g_log_buffer,"\n **** Before Compare 5  l_chr_compdate=|%s| Val_date=|%s| ***\n",l_chr_compdate,l_pro_cracctent_struct_h->val_date);
+			fprintf(g_flogfile,"%s",chr_g_log_buffer);
+			//printf("\n 5::Before setting Val Date :: hvErlPyinCln :[%s] and hvLienReqd :[%s]",hvErlPyinCln,hvLienReqd); 
+			//if((hvSetValDt == 1) &&(strcmp(hvErlPyinCln,"Y") == 0) || ((hvSetValDt == 1) &&(strcmp(hvLienReqd,"N") == 0))  ) // IF This is 1 means set val date as current system date
+			 printf("\n 5 ::Before setting Val Date :: hvErlPyinCln :[%s]",hvErlPyinCln); 
+				if( ( (hvSetValDt ==1) && (int_l_diff1 <= 0) && (strcmp(hvErlPyinCln,"Y") == 0) ) || ((int_l_diff == 0) &&(hvSetValDt ==1) && (strcmp(hvErlPyinCln,"Y") != 0)))
+				{
+					printf("5:Inside if condition");
+					memset(l_pro_dbacctent_struct_h->val_date,APL_NULL_CHAR,sizeof(l_pro_dbacctent_struct_h->val_date));
+					strcpy(l_pro_dbacctent_struct_h->val_date,l_chr_compdate);
+				}
+				printf("\n After 5 :l_chr_compdate:[%s]",l_chr_compdate);
+				printf("\n After 5 :l_pro_dbacctent_struct_h->val_date:[%s]",l_pro_dbacctent_struct_h->val_date);
+
+
+			if(strcmp(l_chr_compdate,l_pro_dbacctent_struct_h->val_date)== 0)
+			{
+
+				sprintf(chr_g_log_buffer,"\n **** Before Insert 5  l_chr_compdate=|%s| Val_date=|%s| ***\n",l_chr_compdate,l_pro_cracctent_struct_h->val_date);
+				fprintf(g_flogfile,"%s",chr_g_log_buffer);
+			if(strlen(l_pro_dbacctent_struct_h->inden_num) > 7)						//Changes done by Tushar for ISKB_10384
+			{
+				//printf("Prateek ::Inside fail condition of 5th insert");
+				fprintf(g_flogfile,"\n\n***********************************************************************");
+				fprintf(g_flogfile,"\n Current Serial Number=|%s| exceeds Maximum available Serial Number=9999.",l_pro_dbacctent_struct_h->inden_num);
+				fprintf(g_flogfile,"\n Accounting Entries Can Not be Generated.");
+				fprintf(g_flogfile,"\n***********************************************************************\n\n");
+				APL_GOBACK_FAIL
+			}
+
+				if	(	IV_Mod_ActEntNew(l_pro_dbacctent_struct_h,
+										  l_debug_info_ptr
+										 )	== APL_FAILURE
+					)
+				{
+						APL_GOBACK_FAIL
+				}
+						
+			}	
+
+		/****** This one for Credit Broker Account(if present) for STT  ******/
+			
+			int_g_run_seq_num = int_g_run_seq_num + 1;
+			sprintf(int_g_seq_num,"%d",int_g_run_seq_num);
+			int_l_entry_no=2;
+
+			if (  CA_Pro_FillActEntStruct(l_pro_cracctent_struct_h,
+						l_pro_cracctent_struct_i,
+						l_oblg_acc_ent_struct_h,
+						chr_l_acc_typ_ind,
+						ArrayCounter,
+						int_l_entry_no,
+						l_debug_info_ptr
+						)   == APL_FAILURE
+				)
+			{
+				APL_GOBACK_FAIL
+			}
+
+		
+			strcpy(l_leg_ind_clt,l_pro_cracctent_struct_h->inden_num);
+			l_pro_cracctent_struct_h->report_amt = l_oblg_acc_ent_struct_h->h_stx_comm[ArrayCounter];
+			l_pro_cracctent_struct_h->lcl_amount=l_oblg_acc_ent_struct_h->h_stx_comm[ArrayCounter];
+			l_pro_dbacctent_struct_h->db_cr_ind = '1';
+			l_pro_dbacctent_struct_i->i_db_cr_flag = 0;
+	
+			sprintf(chr_g_log_buffer,"\n **** Before Compare 6  l_chr_compdate=|%s| Val_date=|%s| ***\n",l_chr_compdate,l_pro_cracctent_struct_h->val_date);
+			fprintf(g_flogfile,"%s",chr_g_log_buffer);	
+			//printf("\n 6::Before setting Val Date :: hvErlPyinCln :[%s] and hvLienReqd :[%s]",hvErlPyinCln,hvLienReqd); 
+			//if((hvSetValDt == 1) &&(strcmp(hvErlPyinCln,"Y") == 0) || ((hvSetValDt == 1) &&(strcmp(hvLienReqd,"N") == 0))  ) // IF This is 1 means set val date as current system date
+			printf("\n 6 ::Before setting Val Date :: hvErlPyinCln :[%s]",hvErlPyinCln); 
+			if( ( (hvSetValDt ==1) && (int_l_diff1 <= 0) && (strcmp(hvErlPyinCln,"Y") == 0) ) || ((int_l_diff == 0) &&(hvSetValDt ==1) && (strcmp(hvErlPyinCln,"Y") != 0)))
+				{
+					printf("6:Inside if condition");
+					memset(l_pro_cracctent_struct_h->val_date,APL_NULL_CHAR,sizeof(l_pro_cracctent_struct_h->val_date));
+					strcpy(l_pro_cracctent_struct_h->val_date,l_chr_compdate);
+				}
+				printf("\n After 6 :l_chr_compdate:[%s]",l_chr_compdate);
+				printf("\n After 6 :l_pro_cracctent_struct_h->val_date:[%s]",l_pro_cracctent_struct_h->val_date);
+				
+
+		if(strcmp(l_chr_compdate,l_pro_cracctent_struct_h->val_date)== 0)
+			{
+		
+				sprintf(chr_g_log_buffer,"\n **** Before Insert 6  l_chr_compdate=|%s| Val_date=|%s| ***\n",l_chr_compdate,l_pro_cracctent_struct_h->val_date);
+				fprintf(g_flogfile,"%s",chr_g_log_buffer);	
+			if(strlen(l_pro_cracctent_struct_h->inden_num) > 7)				//Changes done by Tushar for ISKB_10384
+			{
+				//printf("Prateek ::Inside fail condition of 6th insert");
+				fprintf(g_flogfile,"\n\n***********************************************************************");
+				fprintf(g_flogfile,"\n Current Serial Number=|%s| exceeds Maximum available Serial Number=9999.",l_pro_cracctent_struct_h->inden_num);
+				fprintf(g_flogfile,"\n Accounting Entries Can Not be Generated.");
+				fprintf(g_flogfile,"\n***********************************************************************\n\n");
+				APL_GOBACK_FAIL
+			}
+
+				if (  IV_Mod_ActEntNew( l_pro_cracctent_struct_h,
+							l_debug_info_ptr
+							) == APL_FAILURE
+					)
+				{
+					APL_GOBACK_FAIL
+				}
+		
+				EXEC SQL UPDATE pro_acctent SET leg_ind=:l_leg_ind_gl  WHERE inden_num=:l_pro_cracctent_struct_h->inden_num;
+				IS_ANY_ORA_ERROR	
+
+				EXEC SQL UPDATE pro_acctent SET leg_ind=:l_leg_ind_clt WHERE inden_num=:l_pro_dbacctent_struct_h->inden_num;
+				IS_ANY_ORA_ERROR
+		
+			}
+			
+		}
+				if(l_oblg_acc_ent_struct_h->h_stamp_duty[ArrayCounter] > 0)
+		{
+			
+		/****** This one for Debit Suspense Account for Stamp Duty ***** */
+			
+		
+		 int_g_run_seq_num = int_g_run_seq_num + 1;
+		 sprintf(int_g_seq_num,"%d",int_g_run_seq_num);
+		 int_l_entry_no=1;
+		
+		
+			if	(	CA_Pro_FillActEntStruct(	l_pro_dbacctent_struct_h,
+												l_pro_dbacctent_struct_i,
+												l_oblg_acc_ent_struct_h,
+												chr_l_acc_typ_ind,
+												ArrayCounter,
+												int_l_entry_no,
+												l_debug_info_ptr
+											)	==	APL_FAILURE
+				)
+			{
+					APL_GOBACK_FAIL
+			}
+			
+		
+			strcpy(l_leg_ind_gl,l_pro_dbacctent_struct_h->inden_num);
+
+			/*Changes done for -- Kotak Ench -- Account No Size change --ISKB_4802--Shweta--11072011*/			
+			/* KB_5878 Charuta MCS */
+			if(strcmp(l_oblg_acc_ent_struct_h->h_exch_code[ArrayCounter],"NSE")==0)
+			{
+				EXEC SQL SELECT SUBSTR(NSECLH,9) INTO :chr_gl_account:chr_i_gl_account  FROM iv_clientgl;
+				IS_ANY_ORA_ERROR
+			}
+			if(strcmp(l_oblg_acc_ent_struct_h->h_exch_code[ArrayCounter],"MCS")==0)
+			{
+				EXEC SQL SELECT SUBSTR(MCSCLH,9) INTO :chr_gl_account:chr_i_gl_account  FROM iv_clientgl;
+				IS_ANY_ORA_ERROR
+			}
+		
+			strcpy(l_pro_dbacctent_struct_h->client,chr_gl_account);
+			l_pro_dbacctent_struct_h->report_amt = l_oblg_acc_ent_struct_h->h_stamp_duty[ArrayCounter];
+			l_pro_dbacctent_struct_h->lcl_amount=l_oblg_acc_ent_struct_h->h_stamp_duty[ArrayCounter];
+			l_pro_dbacctent_struct_h->db_cr_ind = '0';
+			l_pro_dbacctent_struct_i->i_db_cr_flag = 0;
+
+			
+			sprintf(chr_g_log_buffer,"\n **** Before Compare 5  l_chr_compdate=|%s| Val_date=|%s| ***\n",l_chr_compdate,l_pro_cracctent_struct_h->val_date);
+			fprintf(g_flogfile,"%s",chr_g_log_buffer);
+			//printf("\n 5::Before setting Val Date :: hvErlPyinCln :[%s] and hvLienReqd :[%s]",hvErlPyinCln,hvLienReqd); 
+			//if((hvSetValDt == 1) &&(strcmp(hvErlPyinCln,"Y") == 0) || ((hvSetValDt == 1) &&(strcmp(hvLienReqd,"N") == 0))  ) // IF This is 1 means set val date as current system date
+			 printf("\n 5 ::Before setting Val Date :: hvErlPyinCln :[%s]",hvErlPyinCln); 
+				if( ( (hvSetValDt ==1) && (int_l_diff1 <= 0) && (strcmp(hvErlPyinCln,"Y") == 0) ) || ((int_l_diff == 0) &&(hvSetValDt ==1) && (strcmp(hvErlPyinCln,"Y") != 0)))
+				{
+					printf("5:Inside if condition");
+					memset(l_pro_dbacctent_struct_h->val_date,APL_NULL_CHAR,sizeof(l_pro_dbacctent_struct_h->val_date));
+					strcpy(l_pro_dbacctent_struct_h->val_date,l_chr_compdate);
+				}
+				printf("\n After 5 :l_chr_compdate:[%s]",l_chr_compdate);
+				printf("\n After 5 :l_pro_dbacctent_struct_h->val_date:[%s]",l_pro_dbacctent_struct_h->val_date);
+
+
+			if(strcmp(l_chr_compdate,l_pro_dbacctent_struct_h->val_date)== 0)
+			{
+
+				sprintf(chr_g_log_buffer,"\n **** Before Insert 5  l_chr_compdate=|%s| Val_date=|%s| ***\n",l_chr_compdate,l_pro_cracctent_struct_h->val_date);
+				fprintf(g_flogfile,"%s",chr_g_log_buffer);
+			if(strlen(l_pro_dbacctent_struct_h->inden_num) > 7)						//Changes done by Tushar for ISKB_10384
+			{
+				//printf("Prateek ::Inside fail condition of 5th insert");
+				fprintf(g_flogfile,"\n\n***********************************************************************");
+				fprintf(g_flogfile,"\n Current Serial Number=|%s| exceeds Maximum available Serial Number=9999.",l_pro_dbacctent_struct_h->inden_num);
+				fprintf(g_flogfile,"\n Accounting Entries Can Not be Generated.");
+				fprintf(g_flogfile,"\n***********************************************************************\n\n");
+				APL_GOBACK_FAIL
+			}
+
+				if	(	IV_Mod_ActEntNew(l_pro_dbacctent_struct_h,
+										  l_debug_info_ptr
+										 )	== APL_FAILURE
+					)
+				{
+						APL_GOBACK_FAIL
+				}
+						
+			}	
+
+		/****** This one for Credit Broker Account(if present) for Stamp Duty  ******/
+			
+			int_g_run_seq_num = int_g_run_seq_num + 1;
+			sprintf(int_g_seq_num,"%d",int_g_run_seq_num);
+			int_l_entry_no=2;
+
+			if (  CA_Pro_FillActEntStruct(l_pro_cracctent_struct_h,
+						l_pro_cracctent_struct_i,
+						l_oblg_acc_ent_struct_h,
+						chr_l_acc_typ_ind,
+						ArrayCounter,
+						int_l_entry_no,
+						l_debug_info_ptr
+						)   == APL_FAILURE
+				)
+			{
+				APL_GOBACK_FAIL
+			}
+
+		
+			strcpy(l_leg_ind_clt,l_pro_cracctent_struct_h->inden_num);
+			l_pro_cracctent_struct_h->report_amt = l_oblg_acc_ent_struct_h->h_stamp_duty[ArrayCounter];
+			l_pro_cracctent_struct_h->lcl_amount=l_oblg_acc_ent_struct_h->h_stamp_duty[ArrayCounter];
+			l_pro_dbacctent_struct_h->db_cr_ind = '1';
+			l_pro_dbacctent_struct_i->i_db_cr_flag = 0;
+	
+			sprintf(chr_g_log_buffer,"\n **** Before Compare 6  l_chr_compdate=|%s| Val_date=|%s| ***\n",l_chr_compdate,l_pro_cracctent_struct_h->val_date);
+			fprintf(g_flogfile,"%s",chr_g_log_buffer);	
+			//printf("\n 6::Before setting Val Date :: hvErlPyinCln :[%s] and hvLienReqd :[%s]",hvErlPyinCln,hvLienReqd); 
+			//if((hvSetValDt == 1) &&(strcmp(hvErlPyinCln,"Y") == 0) || ((hvSetValDt == 1) &&(strcmp(hvLienReqd,"N") == 0))  ) // IF This is 1 means set val date as current system date
+			printf("\n 6 ::Before setting Val Date :: hvErlPyinCln :[%s]",hvErlPyinCln); 
+			if( ( (hvSetValDt ==1) && (int_l_diff1 <= 0) && (strcmp(hvErlPyinCln,"Y") == 0) ) || ((int_l_diff == 0) &&(hvSetValDt ==1) && (strcmp(hvErlPyinCln,"Y") != 0)))
+				{
+					printf("6:Inside if condition");
+					memset(l_pro_cracctent_struct_h->val_date,APL_NULL_CHAR,sizeof(l_pro_cracctent_struct_h->val_date));
+					strcpy(l_pro_cracctent_struct_h->val_date,l_chr_compdate);
+				}
+				printf("\n After 6 :l_chr_compdate:[%s]",l_chr_compdate);
+				printf("\n After 6 :l_pro_cracctent_struct_h->val_date:[%s]",l_pro_cracctent_struct_h->val_date);
+				
+
+		if(strcmp(l_chr_compdate,l_pro_cracctent_struct_h->val_date)== 0)
+			{
+		
+				sprintf(chr_g_log_buffer,"\n **** Before Insert 6  l_chr_compdate=|%s| Val_date=|%s| ***\n",l_chr_compdate,l_pro_cracctent_struct_h->val_date);
+				fprintf(g_flogfile,"%s",chr_g_log_buffer);	
+			if(strlen(l_pro_cracctent_struct_h->inden_num) > 7)				//Changes done by Tushar for ISKB_10384
+			{
+				//printf("Prateek ::Inside fail condition of 6th insert");
+				fprintf(g_flogfile,"\n\n***********************************************************************");
+				fprintf(g_flogfile,"\n Current Serial Number=|%s| exceeds Maximum available Serial Number=9999.",l_pro_cracctent_struct_h->inden_num);
+				fprintf(g_flogfile,"\n Accounting Entries Can Not be Generated.");
+				fprintf(g_flogfile,"\n***********************************************************************\n\n");
+				APL_GOBACK_FAIL
+			}
+
+				if (  IV_Mod_ActEntNew( l_pro_cracctent_struct_h,
+							l_debug_info_ptr
+							) == APL_FAILURE
+					)
+				{
+					APL_GOBACK_FAIL
+				}
+		
+				EXEC SQL UPDATE pro_acctent SET leg_ind=:l_leg_ind_gl  WHERE inden_num=:l_pro_cracctent_struct_h->inden_num;
+				IS_ANY_ORA_ERROR	
+
+				EXEC SQL UPDATE pro_acctent SET leg_ind=:l_leg_ind_clt WHERE inden_num=:l_pro_dbacctent_struct_h->inden_num;
+				IS_ANY_ORA_ERROR
+		
+			}
+			
+		}
+		
+	
+	}
+			
+/**********************************************************************************/
+/******** Processing Brokerage and STT entries for DVP trades	*******************/
+/**********************************************************************************/
+
+/******************** IF EXCHANGE IS NSE END *********************************/
+
+		int_g_run_seq_num = int_g_run_seq_num + 1;
+		sprintf(int_g_seq_num,"%d",int_g_run_seq_num);
+
+	 sprintf(chr_g_log_buffer," \n Before Updating Host Date l_chr_compdate=|%s| l_pro_cracctent_struct_h->val_date=|%s| \n",l_chr_compdate,l_pro_cracctent_struct_h->val_date);
+ 	 fprintf(g_flogfile,"%s",chr_g_log_buffer);
+
+				//printf("\n :Before Updating Host Date:Before setting Val Date :: hvErlPyinCln :[%s] and hvLienReqd ::[%s]",hvErlPyinCln,hvLienReqd); 
+			//if((hvSetValDt == 1) &&(strcmp(hvErlPyinCln,"Y") == 0) || ((hvSetValDt == 1) &&(strcmp(hvLienReqd,"N") == 0))  ) // IF This is 1 means set val date as current system date
+			 if((hvSetValDt == 1) &&(strcmp(hvErlPyinCln,"Y") == 0))
+				{
+					memset(l_pro_cracctent_struct_h->val_date,APL_NULL_CHAR,sizeof(l_pro_cracctent_struct_h->val_date));
+					strcpy(l_pro_cracctent_struct_h->val_date,l_chr_compdate);
+				}
+				if(strcmp(l_chr_compdate,l_pro_cracctent_struct_h->val_date)== 0)
+				{
+					
+					sprintf(chr_g_log_buffer,"\n Now Actually Updating Host Date: l_chr_compdate=|%s| l_pro_cracctent_struct_h->val_date=|%s| \n",l_chr_compdate,l_pro_cracctent_struct_h->val_date);
+					fprintf(g_flogfile,"%s",chr_g_log_buffer);	
+
+					EXEC SQL UPDATE dl_deal SET host_date=sysdate
+							WHERE client=:l_oblg_acc_ent_struct_h->h_client[ArrayCounter]
+							AND identiy_no=:l_oblg_acc_ent_struct_h->h_identiy_no[ArrayCounter];
+
+					printf("\n Error Updating Host date =|%d| \n",sqlca.sqlcode);
+
+					IS_ANY_ORA_ERROR
+
+				}
+		} //End of If condition of Normal AE
+
+		}//End Of ArrayCounter For Loop
+
+	} //End of while Loop
+
+	
+
+		EXEC SQL CLOSE l_cur_acc_ent;
+		IS_ANY_ORA_ERROR
+
+
+	APL_GOBACK_SUCCESS
+
+      RETURN_SUCCESS  :
+      {
+		  fprintf(g_flogfile,"\n Leaving DL_Proc_GenActEnt() With Success");
+		  return (APL_SUCCESS);
+      }
+      RETURN_FAILURE  :
+      {
+		  CO_ProcMonitor(g_flogfile,"\n Leaving DL_Proc_GenActEnt() With Failure",l_debug_info_ptr,NULL);
+	      return (APL_FAILURE);
+	  }
+
+}
+
+// Added by Azhar K. for API NRI Acounting Entries - START
+int DL_Proc_NRIAccEntries(DL_OBLG_ACC_ENT_HSTRUCT_H  *l_oblg_acc_ent_struct_h,DL_OBLG_ACC_ENT_HSTRUCT_I *l_oblg_acc_ent_struct_i,
+                int ArrayCounter,INTL_ENV_DATA_STRUCT_H  *l_intlenv_datastruct_h,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	char pro_sys_date[21]= APL_NULL_STRING;
+	DL_DEAL_SSTDET_STRUCT_H *l_deal_sstdet_struct_h;
+	
+	l_deal_sstdet_struct_h = (DL_DEAL_SSTDET_STRUCT_H *)calloc(1,sizeof(DL_DEAL_SSTDET_STRUCT_H));
+ 	  memset(l_deal_sstdet_struct_h, NULL, sizeof(DL_DEAL_SSTDET_STRUCT_H));
+	  
+	  EXEC SQL BEGIN DECLARE SECTION;
+
+	  EXEC SQL VAR l_deal_sstdet_struct_h->h_dl_client IS STRING;
+	  EXEC SQL VAR l_deal_sstdet_struct_h->h_indentity_no IS STRING;
+	  
+	  EXEC SQL END DECLARE SECTION;
+	  
+	  if (  CO_RtvSysDt(pro_sys_date,l_debug_info_ptr) == APL_FAILURE )
+	 {
+		 APL_GOBACK_FAIL
+	 }
+	  
+	            strcpy(l_deal_sstdet_struct_h->h_indentity_no,l_oblg_acc_ent_struct_h->h_identiy_no[ArrayCounter]);
+				strcpy(l_deal_sstdet_struct_h->h_dl_client,l_oblg_acc_ent_struct_h->h_client[ArrayCounter]);
+
+				strcpy(l_deal_sstdet_struct_h->h_access_stamp,l_oblg_acc_ent_struct_h->h_access_stamp[ArrayCounter]);
+				strcpy(l_deal_sstdet_struct_h->h_ispart_, "N");
+				l_deal_sstdet_struct_h->h_newquantity = 0.0;
+				l_deal_sstdet_struct_h->h_newamount = 0.0;
+				strcpy(l_deal_sstdet_struct_h->h_newindentity_no, APL_NULL_STRING);
+				
+				if(l_oblg_acc_ent_struct_i->i_instrdate[ArrayCounter]!=-1)
+				{
+						strcpy(l_deal_sstdet_struct_h->h_instrdate,l_oblg_acc_ent_struct_h->h_instrdate[ArrayCounter]);
+				}
+				else
+				{
+					strcpy(l_deal_sstdet_struct_h->h_instrdate,APL_NULL_STRING);
+				}
+				if(l_oblg_acc_ent_struct_i->i_moneydate[ArrayCounter]!=-1)
+				{
+						strcpy(l_deal_sstdet_struct_h->h_moneydate,l_oblg_acc_ent_struct_h->h_moneydate[ArrayCounter]);
+				}
+				else
+				{
+					strcpy(l_deal_sstdet_struct_h->h_moneydate,pro_sys_date);
+				}
+				if(l_oblg_acc_ent_struct_i->i_cost[ArrayCounter]!=-1)
+				{
+						l_deal_sstdet_struct_h->h_pr = l_oblg_acc_ent_struct_h->h_cost[ArrayCounter];
+				}
+				else
+				{
+					l_deal_sstdet_struct_h->h_pr  = 0.0;
+				}
+				if(l_oblg_acc_ent_struct_i->i_brokercomm[ArrayCounter]!=-1)
+				{
+						l_deal_sstdet_struct_h->h_brokercomm = l_oblg_acc_ent_struct_h->h_brokercomm[ArrayCounter];
+				}
+				else
+				{
+					l_deal_sstdet_struct_h->h_rec_int_000 = 0.0;
+				}
+				if(l_oblg_acc_ent_struct_i->i_pendregquantity[ArrayCounter]!=-1)
+				{
+						l_deal_sstdet_struct_h->h_pendregquantity = l_oblg_acc_ent_struct_h->h_pendregquantity[ArrayCounter];
+				}
+				else
+				{
+					l_deal_sstdet_struct_h->h_pendregquantity= 0.0;
+				}
+				if(l_oblg_acc_ent_struct_i->i_marktrfquantity[ArrayCounter]!=-1)
+				{
+						l_deal_sstdet_struct_h->h_marktrfquantity = l_oblg_acc_ent_struct_h->h_marktrfquantity[ArrayCounter];
+				}
+				else
+				{
+					l_deal_sstdet_struct_h->h_marktrfquantity = 0.0;
+				}
+				if(l_oblg_acc_ent_struct_i->i_rec_int_000[ArrayCounter]!=-1)
+				{	
+					l_deal_sstdet_struct_h->h_rec_int_000 = l_oblg_acc_ent_struct_h->h_rec_int_000[ArrayCounter];
+				}
+				else
+				{
+					l_deal_sstdet_struct_h->h_rec_int_000 = 0.0;
+				}
+				if(l_oblg_acc_ent_struct_i->i_mcomplquantity[ArrayCounter]!=-1)
+				{
+						l_deal_sstdet_struct_h->h_mcomplquantity = l_oblg_acc_ent_struct_h->h_mcomplquantity[ArrayCounter];
+				}
+				else
+				{
+					l_deal_sstdet_struct_h->h_mcomplquantity = 0.0;
+				}
+				if(l_oblg_acc_ent_struct_i->i_delta_000[ArrayCounter]!=-1)
+				{
+						l_deal_sstdet_struct_h->h_delta_000 = l_oblg_acc_ent_struct_h->h_delta_000[ArrayCounter];
+				}
+				else
+				{
+					l_deal_sstdet_struct_h->h_delta_000 = 0.0;
+				}
+				if(l_oblg_acc_ent_struct_i->i_delta_001[ArrayCounter]!=-1)
+				{
+						l_deal_sstdet_struct_h->h_delta_001 = l_oblg_acc_ent_struct_h->h_delta_001[ArrayCounter];
+				}
+				else
+				{
+					l_deal_sstdet_struct_h->h_delta_001 = 0.0;
+				}
+				if(l_oblg_acc_ent_struct_i->i_delta_002[ArrayCounter]!=-1)
+				{
+						l_deal_sstdet_struct_h->h_delta_002 = l_oblg_acc_ent_struct_h->h_delta_002[ArrayCounter];
+				}
+				else
+				{
+					l_deal_sstdet_struct_h->h_delta_002 = 0.0;
+				}
+
+				printf("\n Before Calling Single Settlement Function Values Are \n");
+				fflush(stdout);
+				printf("\n Instr_dt=|%s|Mny_Dt=|%s|Cost=|%lf|Brkcomm=|%lf|PendQty=|%lf|MarkQty=|%lf|Rec_int=|%lf|ComplQty=|%lf|Delta0=|%lf|Delta1=|%lf|Delta2=|%lf|AccessStamp=|%s|\n",
+							l_deal_sstdet_struct_h->h_instrdate,
+							l_deal_sstdet_struct_h->h_moneydate,
+							l_deal_sstdet_struct_h->h_pr,
+							l_deal_sstdet_struct_h->h_brokercomm,
+							l_deal_sstdet_struct_h->h_pendregquantity,
+							l_deal_sstdet_struct_h->h_marktrfquantity,
+							l_deal_sstdet_struct_h->h_rec_int_000,
+							l_deal_sstdet_struct_h->h_mcomplquantity,
+							l_deal_sstdet_struct_h->h_delta_000,
+							l_deal_sstdet_struct_h->h_delta_001,
+							l_deal_sstdet_struct_h->h_delta_002,
+							l_deal_sstdet_struct_h->h_access_stamp);
+				fflush(stdout);
+				fprintf(g_flogfile,"\n Before Calling Single Settlement Values Are: \n");
+				fprintf(g_flogfile,"\n Instr_dt=|%s|Mny_Dt=|%s|Cost=|%lf|Brkcomm=|%lf|PendQty=|%lf|MarkQty=|%lf|Rec_int=|%lf|ComplQty=|%lf|Delta0=|%lf|Delta1=|%lf|Delta2=|%lf|AccessStamp=|%s| chr_l_deal_cd=|%s| chr_l_deal_stat=|%s| \n",
+							l_deal_sstdet_struct_h->h_instrdate,
+							l_deal_sstdet_struct_h->h_moneydate,
+							l_deal_sstdet_struct_h->h_pr,	
+							l_deal_sstdet_struct_h->h_brokercomm,	
+							l_deal_sstdet_struct_h->h_pendregquantity,
+							l_deal_sstdet_struct_h->h_marktrfquantity,
+							l_deal_sstdet_struct_h->h_rec_int_000,
+							l_deal_sstdet_struct_h->h_mcomplquantity,
+							l_deal_sstdet_struct_h->h_delta_000,
+							l_deal_sstdet_struct_h->h_delta_001,
+							l_deal_sstdet_struct_h->h_delta_002,
+							l_deal_sstdet_struct_h->h_access_stamp,
+							l_oblg_acc_ent_struct_h->h_deal_cd[ArrayCounter],
+							l_oblg_acc_ent_struct_h->h_deal_stat[ArrayCounter]);
+	  
+				if((strcmp(l_oblg_acc_ent_struct_h->h_deal_cd[ArrayCounter],"4")==0 && !strcmp(l_oblg_acc_ent_struct_h->h_deal_stat[ArrayCounter],"MS")==0) || (strcmp(l_oblg_acc_ent_struct_h->h_deal_cd[ArrayCounter],"3")==0 && !strcmp(l_oblg_acc_ent_struct_h->h_deal_stat[ArrayCounter],"CS")==0))
+				{						
+					fprintf(g_flogfile,"\n Actually Calling Single Settlement for NRI Client=|%s| Indentiy_No=|%s| \n",l_deal_sstdet_struct_h->h_dl_client,l_deal_sstdet_struct_h->h_indentity_no);
+
+					if(APL_FAILURE == DL_Proc_DLSetlSing(  l_deal_sstdet_struct_h,
+														  APL_NULL_STRING,
+															l_intlenv_datastruct_h,
+															l_debug_info_ptr ))
+					{
+						fprintf(g_flogfile,"\n ***** Single Settlement for NRI Failed for Account=|%s| Indentiy_No=|%s| ***** \n",l_deal_sstdet_struct_h->h_dl_client,l_deal_sstdet_struct_h->h_indentity_no);
+						CO_ProcMonitor(g_flogfile,"Returned from DL_Proc_DLSetlSing() with Failure\n",l_debug_info_ptr,l_intlenv_datastruct_h);
+						APL_GOBACK_FAIL
+					}		
+				
+					printf("\n After Calling Single Settlement Function \n");
+					fflush(stdout);
+				}
+				
+		APL_GOBACK_SUCCESS
+							
+		RETURN_SUCCESS:
+      {
+		  fprintf(g_flogfile,"\n Leaving DL_Proc_NRIAccEntries() With Success \n");
+		  return (APL_SUCCESS);
+      }
+      RETURN_FAILURE  :
+      {
+		  CO_ProcMonitor(g_flogfile,"\n Leaving DL_Proc_NRIAccEntries() With Failure \n",l_debug_info_ptr,NULL);
+	      return (APL_FAILURE);
+	  }
+}
+// Added by Azhar K. for API NRI Acounting Entries - END
+
+	int	CA_Pro_FillActEntStruct( PRO_ACCTENT_STRUCT_H			*p_iacctent_struct_h,
+									PRO_ACCTENT_STRUCT_I		*p_iacctent_struct_i,
+									DL_OBLG_ACC_ENT_HSTRUCT_H	p_oblg_acc_ent_struct_h[],
+									char						chr_p_acc_typ_ind,
+									int							RecCounter,
+									int							int_p_entry_no,
+									DEBUG_INFO_STRUCT_H			**l_debug_info_ptr
+								 )
+
+{
+
+	struct sqlca sqlca;
+	char chr_l_narration[APL_ACCTENT_NARR_LEN] = APL_NULL_STRING;
+	char deal_ident[APL_ACCTENT_DEAL_REF_LEN] = APL_NULL_STRING;
+	//char chr_l_pymt_dt[APL_DATE_LEN]=APL_NULL_STRING;
+	//char l_nxt_buss_day[APL_DATE_LEN]=APL_NULL_STRING;
+	char l_nxt_buss_day_new[10]=APL_NULL_STRING;
+	//char chr_l_pymt_acc[24]=APL_NULL_STRING;
+	char chr_h_fxinc_flg[APL_FLAG_LENGTH] = APL_NULL_STRING;
+	char chr_qty_paid[12]=APL_NULL_STRING;
+	char chr_l_acc_type[2]=APL_NULL_STRING;
+	char chr_l_payin_acc[24]=APL_NULL_STRING;
+	char chr_l_payout_acc[24]=APL_NULL_STRING;
+	char chr_l_bnk_acc[24]=APL_NULL_STRING;
+	char chr_l_broker_acc[24]=APL_NULL_STRING;
+	char l_chr_compdate[9]=APL_NULL_STRING;
+	char chr_l_req_date[APL_DATE_LEN]=APL_NULL_STRING;
+	char chr_l_payin_dt[APL_DATE_LEN]=APL_NULL_STRING;
+	char chr_l_payout_dt[APL_DATE_LEN]=APL_NULL_STRING;
+	int int_l_payindays=0;
+	int int_l_payoutdays=0;
+	//int  int_l_payday=0;
+	short i_broker_acc=0;
+	short	i_fxinc_flg =0;
+	//short i_pymt_dt=0;
+	short i_acc_type=0;
+	short i_bnk_acc=0;
+	short i_payout_acc=0;
+	short i_payin_acc=0;
+	//short i_payinday=0;
+	short i_nxt_buss_day_new=0;
+	short i_payindays=0;
+	short i_payoutdays=0;
+	double	amount = 0.0;
+	int dec_len=0;
+	/* Added by Gouse for payout days 3 issue - Start */
+	char 	l_temp_day[15] = APL_NULL_STRING;
+	char 	l_temp_day1[APL_DATE_LEN] = APL_NULL_STRING;
+	char 	chr_l_wkly_off[15] = APL_NULL_STRING;
+	/* Added by Gouse for payout days 3 issue - End */
+	
+	memset ( chr_qty_paid, APL_NULL_CHAR,12);
+	memset ( l_temp_day, APL_NULL_CHAR,15);
+	memset ( l_temp_day1, APL_NULL_CHAR,APL_DATE_LEN);
+	memset ( chr_l_wkly_off, APL_NULL_CHAR,15);
+
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+			EXEC SQL VAR chr_h_fxinc_flg IS STRING;
+			//EXEC SQL VAR chr_l_pymt_dt IS STRING;
+			//EXEC SQL VAR chr_l_pymt_acc IS STRING;
+			EXEC SQL VAR chr_qty_paid IS STRING;
+			EXEC SQL VAR chr_l_acc_type IS STRING;
+			EXEC SQL VAR chr_l_payin_acc IS STRING;
+			EXEC SQL VAR chr_l_payout_acc IS STRING;
+			EXEC SQL VAR chr_l_bnk_acc IS STRING;
+			EXEC SQL VAR chr_l_broker_acc IS STRING;
+			EXEC SQL VAR chr_l_req_date IS STRING;
+			EXEC SQL VAR l_temp_day IS STRING;
+			EXEC SQL VAR l_temp_day1 IS STRING;
+			EXEC SQL VAR chr_l_wkly_off IS STRING;
+
+	EXEC SQL END DECLARE SECTION;
+		
+
+
+//int k;
+
+	printf("\n *************  This call is for |%c| *********\n",chr_p_acc_typ_ind);
+	printf("\n *****************************************|%c|\n",chr_p_acc_typ_ind);//AIX Warning Removal
+
+		EXEC SQL SELECT pay_in_dt,pay_out_dt INTO :chr_l_payin_dt,:chr_l_payout_dt FROM mt_settl_cal 
+				WHERE settl_no=:p_oblg_acc_ent_struct_h->h_settlement_no[RecCounter]
+				AND SETTL_TYPE = :p_oblg_acc_ent_struct_h->h_mkt_type[RecCounter];/*Retro with HDFC to add Settl Type in Query - Rahul - 01-Apr-2007*/
+		IS_ANY_ORA_ERROR
+
+		printf("\n chr_l_payin_dt=|%s| chr_l_payout_dt=|%s| \n",chr_l_payin_dt,chr_l_payout_dt);
+
+		EXEC SQL SELECT DECODE(:p_oblg_acc_ent_struct_h->h_clh_flg[RecCounter],'D',0,'C',PAY_IN_DAY),DECODE(:p_oblg_acc_ent_struct_h->h_clh_flg[RecCounter],'D',0,'C',PAY_OUT_DAY)
+					INTO :int_l_payindays:i_payindays,:int_l_payoutdays:i_payoutdays
+					FROM iv_clientsetup
+					WHERE client=:p_oblg_acc_ent_struct_h->h_client[RecCounter];
+
+		IS_ANY_ORA_ERROR
+		
+		printf("\n int_l_payindays=|%d| int_l_payoutdays=|%d| \n",int_l_payindays,int_l_payoutdays);
+
+		printf("\n DEAL_CD=|%s| \n",p_oblg_acc_ent_struct_h->h_deal_cd[RecCounter]);
+
+		if (strcmp(p_oblg_acc_ent_struct_h->h_deal_cd[RecCounter],"2")==0 || strcmp(p_oblg_acc_ent_struct_h->h_deal_cd[RecCounter],"4")==0)
+		{
+			if(int_l_payindays == 1 )
+			{
+				strcpy(chr_l_req_date,chr_l_payin_dt);
+			}
+			else if (int_l_payindays == 2)
+			{
+				strcpy(chr_l_req_date,chr_l_payout_dt);
+			}
+
+		}
+		else if (strcmp(p_oblg_acc_ent_struct_h->h_deal_cd[RecCounter],"1")==0 || strcmp(p_oblg_acc_ent_struct_h->h_deal_cd[RecCounter],"3")==0)
+		{
+			if (int_l_payoutdays == 2)
+			{
+				strcpy(chr_l_req_date,chr_l_payout_dt);
+			}
+			if (int_l_payoutdays==3)
+			{
+				strcpy(chr_l_req_date,chr_l_payout_dt);
+				
+				printf("\n Before Calling Rtv_Nxt_BussDate \n");
+
+				printf("\n AMIT NEW CHANGES \n");
+
+				printf("\n Exchange Code=|%s| \n",p_oblg_acc_ent_struct_h->h_exch_code[RecCounter]);
+
+				if(Rtv_Nxt_BussDate( chr_l_payout_dt,
+						  chr_l_req_date,
+						  p_oblg_acc_ent_struct_h->h_exch_code[RecCounter],
+						  l_debug_info_ptr) == APL_FAILURE)
+				 {
+
+					  APL_GOBACK_FAIL
+				 }
+				/** Added by Gouse for payout days 3 - Start **/
+				IF_COND_EXISTS("DL_ACCTENT","WKLY_OFF")
+				{
+					EXEC SQL SELECT TRIM(TO_CHAR(to_date(:chr_l_req_date,'dd/mm/yyyy hh24:mi:ss'),'DAY')),TO_CHAR(to_date(:chr_l_req_date,'dd/mm/yyyy hh24:mi:ss')+1,'DD/MM/YYYY HH24:MI:SS') INTO :l_temp_day,:l_temp_day1  FROM DUAL;
+					printf("sqlca.sqlcode is |%d|",sqlca.sqlcode);
+					printf("l_temp_day is |%s|",l_temp_day);
+					printf("l_temp_day1 is |%s|",l_temp_day1);
+			
+					EXEC SQL SELECT FIELD_VAL INTO :chr_l_wkly_off
+								FROM PRO_GSSPLVAL 
+								WHERE MAIN_FUN = 'DL_ACCTENT'
+								AND SUB_PROCESS = 'WKLY_OFF'
+								AND NATION = :g_mt_commonsys_params_struct_h.nation_code;
+					printf("sqlca.sqlcode is |%d|",sqlca.sqlcode);
+					printf("chr_l_wkly_off is |%s|",chr_l_wkly_off);
+
+					if ( (strcmp(l_temp_day,chr_l_wkly_off) == 0) )
+					{
+						strcpy(chr_l_req_date,l_temp_day1);
+						if(Rtv_Nxt_BussDate( chr_l_req_date,
+								chr_l_req_date,
+								p_oblg_acc_ent_struct_h->h_exch_code[RecCounter],
+								l_debug_info_ptr) == APL_FAILURE)
+						{
+							APL_GOBACK_FAIL
+						}
+						printf("\n  chr_l_req_date=|%s| in payout day is saturday \n",chr_l_req_date);
+					}
+				}
+				/** Added by Gouse for payout days 3 - End **/
+
+			}
+		}
+
+	printf("\n Finally chr_l_req_date=|%s| \n",chr_l_req_date);
+
+	EXEC SQL SELECT TO_CHAR(:chr_l_req_date,'YYYYMMDD') INTO :l_nxt_buss_day_new:i_nxt_buss_day_new	FROM dual;
+
+	EXEC SQL SELECT TO_CHAR(TO_DATE(SUBSTR(:chr_l_req_date,1,10),'DD/MM/YYYY'),'YYYYMMDD') INTO :l_nxt_buss_day_new:i_nxt_buss_day_new	FROM dual;
+
+	IS_ANY_ORA_ERROR
+
+	printf("\n l_nxt_buss_day_new=|%s| \n",l_nxt_buss_day_new);
+
+	strcpy(deal_ident,p_oblg_acc_ent_struct_h->h_client[RecCounter]);
+	strcat(deal_ident,TXN_REF_DELIMITER);
+	strcat(deal_ident,p_oblg_acc_ent_struct_h->h_identiy_no[RecCounter]);
+	strcat(deal_ident,TXN_REF_DELIMITER);
+
+	
+	strcpy(chr_qty_paid,(char *)ltoa(p_oblg_acc_ent_struct_h->h_qty[RecCounter]));
+
+	if (strlen(chr_qty_paid) < 11)
+	{
+		CO_PadString(chr_qty_paid,'L',11,"0",l_debug_info_ptr);
+	}
+	
+	printf("\n Got Qty=|%s| Acc Type=|%c| \n",chr_qty_paid,chr_p_acc_typ_ind);
+
+
+	if(chr_p_acc_typ_ind=='C')
+	{
+		
+		printf("\n It should come here for 2nd time \n");
+		printf("\n PASSED CLIENT=|%s| \n",p_oblg_acc_ent_struct_h->h_client[RecCounter]);
+		
+	  
+		printf("\n Seleting Bank Account For Client=|%s|\n",p_oblg_acc_ent_struct_h->h_client[RecCounter]);
+
+
+	EXEC SQL SELECT A.ACC_TYP,SUBSTR(A.PAY_IN_ACC,9), SUBSTR(A.PAY_OUT_ACC,9), SUBSTR(A.BNK_ACC,9)
+					INTO :chr_l_acc_type:i_acc_type,
+						 :chr_l_payin_acc:i_payin_acc,
+						 :chr_l_payout_acc:i_payout_acc,
+						 :chr_l_bnk_acc:i_bnk_acc
+					FROM iv_clientsetup A
+					WHERE a.client =:p_oblg_acc_ent_struct_h->h_client[RecCounter]
+					AND stat_ind='A';
+
+		IS_ANY_ORA_ERROR
+		
+
+	printf("\n DEAL_CD=|%s| chr_l_acc_type=|%s| chr_l_payin_acc=|%s| chr_l_payout_acc=|%s| chr_l_bnk_acc=|%s| \n",p_oblg_acc_ent_struct_h->h_deal_cd[RecCounter],chr_l_acc_type,chr_l_payin_acc,chr_l_payout_acc,chr_l_bnk_acc);
+		
+			  
+		if(strcmp(chr_l_acc_type,"C")==0)
+		{	
+			if(strcmp(p_oblg_acc_ent_struct_h->h_deal_cd[RecCounter],"1")==0 || strcmp(p_oblg_acc_ent_struct_h->h_deal_cd[RecCounter],"3")==0)
+			{
+				printf("\n FOR SALE \n");
+
+				strcpy(p_iacctent_struct_h->client,chr_l_bnk_acc);
+
+			}
+			else if(strcmp(p_oblg_acc_ent_struct_h->h_deal_cd[RecCounter],"2")==0 || strcmp(p_oblg_acc_ent_struct_h->h_deal_cd[RecCounter],"4")==0)
+			{
+				printf("\n FOR PURCHASE \n");
+				strcpy(p_iacctent_struct_h->client,chr_l_bnk_acc);
+
+			}
+		}
+		else if(strcmp(chr_l_acc_type,"F")==0)
+		{
+			strcpy(p_iacctent_struct_h->client,chr_l_bnk_acc);
+		}
+
+		printf("\n i_acc_type=|%d| \n",i_acc_type);
+		printf("\n SQL Error =|%d| \n",sqlca.sqlcode);
+
+
+		if(strcmp(chr_l_acc_type,APL_NULL_STRING)==0)	/***** IF CLIENT TYPE IS NULL    ******/
+		{
+				printf("\n Inside NULL Value \n");
+				strcpy(p_iacctent_struct_h->client,chr_l_bnk_acc);
+		}	
+				
+	
+		printf("\n CLIENT ACC=|%s|  \n",p_iacctent_struct_h->client);
+
+
+		EXEC SQL SELECT CLN_FX_INC_IND
+		INTO :chr_h_fxinc_flg:i_fxinc_flg
+		FROM	MT_CLIENT
+		WHERE CLN_CODE = :p_oblg_acc_ent_struct_h->h_client[RecCounter];
+		
+		IS_ANY_ORA_ERROR
+	
+		strcpy(p_iacctent_struct_h->spl_clt_cd,chr_h_fxinc_flg);
+
+			if(strcmp(p_oblg_acc_ent_struct_h->h_clh_flg[RecCounter],"C")==0)
+			{
+				printf("\n HERE1 \n");
+				if(strcmp(p_oblg_acc_ent_struct_h->h_deal_cd[RecCounter],"4")==0  || strcmp(p_oblg_acc_ent_struct_h->h_deal_cd[RecCounter],"2")==0)
+				{
+					printf("\n HERE2 \n");
+					printf("\n DEAL QTY=|%lf| \n",p_oblg_acc_ent_struct_h->h_qty[RecCounter]);
+					printf("\n chr_qty_paid=|%s| \n",chr_qty_paid);
+
+					sprintf(chr_l_narration,"CLG %s QTY%s",p_oblg_acc_ent_struct_h->h_identiy_no[RecCounter],chr_qty_paid);
+				}
+				else if
+				(strcmp(p_oblg_acc_ent_struct_h->h_deal_cd[RecCounter],"3")==0 || strcmp(p_oblg_acc_ent_struct_h->h_deal_cd[RecCounter],"1")==0)
+				{
+					printf("\n HERE3 \n");
+					sprintf(chr_l_narration,"CLG %s QTY%s",p_oblg_acc_ent_struct_h->h_identiy_no[RecCounter],chr_qty_paid);
+				}
+
+				printf("\n CLIENT Narration1=|%s| \n",chr_l_narration);
+
+			}
+			if(strcmp(p_oblg_acc_ent_struct_h->h_clh_flg[RecCounter],"D")==0)
+			{
+				
+				if(strcmp(p_oblg_acc_ent_struct_h->h_deal_cd[RecCounter],"4")==0  || strcmp(p_oblg_acc_ent_struct_h->h_deal_cd[RecCounter],"2")==0)
+				{
+					sprintf(chr_l_narration,"DVP %s QTY%s",p_oblg_acc_ent_struct_h->h_identiy_no[RecCounter],chr_qty_paid);
+				}
+				else if
+				(strcmp(p_oblg_acc_ent_struct_h->h_deal_cd[RecCounter],"3")==0 || strcmp(p_oblg_acc_ent_struct_h->h_deal_cd[RecCounter],"1")==0)
+				{
+					sprintf(chr_l_narration,"DVP %s QTY%s",p_oblg_acc_ent_struct_h->h_identiy_no[RecCounter],chr_qty_paid);
+				}	
+				
+			}
+
+			 strcpy(p_iacctent_struct_h->acc_type,"C");	
+			 p_iacctent_struct_i->i_acc_type = 0;
+
+	}	
+	if(chr_p_acc_typ_ind=='G')
+	{
+			printf("\n For GL Narration \n");
+		
+			if(strcmp(p_oblg_acc_ent_struct_h->h_clh_flg[RecCounter],"C")==0)
+			{
+				printf("\n HERE11 \n");
+
+				if(strcmp(p_oblg_acc_ent_struct_h->h_deal_cd[RecCounter],"4")==0  || strcmp(p_oblg_acc_ent_struct_h->h_deal_cd[RecCounter],"2")==0)
+				{
+					printf("\n HERE12 \n");
+					sprintf(chr_l_narration,"CLG %s QTY%s",p_oblg_acc_ent_struct_h->h_client[RecCounter],chr_qty_paid);
+					
+					printf("\n GL Narration =|%s| \n",chr_l_narration);
+
+
+				}
+				else if
+				(strcmp(p_oblg_acc_ent_struct_h->h_deal_cd[RecCounter],"3")==0 || strcmp(p_oblg_acc_ent_struct_h->h_deal_cd[RecCounter],"1")==0)
+				{
+					printf("\n HERE13 \n");
+					sprintf(chr_l_narration,"CLG %s QTY%s",p_oblg_acc_ent_struct_h->h_client[RecCounter],chr_qty_paid);
+				}	
+	
+			}
+		
+			if(strcmp(p_oblg_acc_ent_struct_h->h_clh_flg[RecCounter],"D")==0)
+			{
+				
+				if(strcmp(p_oblg_acc_ent_struct_h->h_deal_cd[RecCounter],"4")==0  || strcmp(p_oblg_acc_ent_struct_h->h_deal_cd[RecCounter],"2")==0)
+				{
+					sprintf(chr_l_narration,"DVP %s QTY%s",p_oblg_acc_ent_struct_h->h_client[RecCounter],chr_qty_paid);
+				}
+				else if
+				(strcmp(p_oblg_acc_ent_struct_h->h_deal_cd[RecCounter],"3")==0 || strcmp(p_oblg_acc_ent_struct_h->h_deal_cd[RecCounter],"1")==0)
+				{
+					sprintf(chr_l_narration,"DVP %s QTY%s",p_oblg_acc_ent_struct_h->h_client[RecCounter],chr_qty_paid);
+				}	
+
+			}
+		
+				 strcpy(p_iacctent_struct_h->acc_type,"G");	
+				 p_iacctent_struct_i->i_acc_type = 0;
+	
+	}
+	
+	printf("\n ***************************************** \n");
+	printf("\n Broker IS=|%s| \n",p_oblg_acc_ent_struct_h->h_brk_no[RecCounter]);
+	printf("\n ***************************************** \n");
+
+	if(chr_p_acc_typ_ind=='B')
+	{
+			
+/*Changes done for -- Kotak Ench -- Account No Size change --ISKB_4802 --11072011--Shweta*/			
+
+         EXEC SQL SELECT SUBSTR(pty_bnk_acc,9) INTO :chr_l_broker_acc:i_broker_acc
+			  		FROM MT_PTY_FUND_DET
+					WHERE pty_code=:p_oblg_acc_ent_struct_h->h_brk_no[RecCounter]
+					AND status='AA';
+
+			IS_ANY_ORA_ERROR	
+
+			printf("\n Broker Account1=|%s| \n",chr_l_broker_acc);
+			printf("\n Broker Account Ind=|%d| \n",i_broker_acc);
+
+/****		Checking if GL entry,if yes, then set acc_type='G'		***** */				
+
+				if(int_p_entry_no == 1)
+				{
+					strcpy(p_iacctent_struct_h->acc_type,"G");	
+					p_iacctent_struct_i->i_acc_type = 0;
+				}
+/****		Checking if Broker entry,if yes & His Account is Present ,then set acc_type='C'		***** */
+
+				else if(int_p_entry_no == 2   && (i_broker_acc != -1 && sqlca.sqlcode != 1403))
+				{
+					strcpy(p_iacctent_struct_h->acc_type,"C");	
+					p_iacctent_struct_i->i_acc_type = 0;
+				}
+/****		Checking if Broker entry,if yes & His Account is Not Present ,then set acc_type='G'		***** */
+
+				else if(int_p_entry_no == 2   && (i_broker_acc == -1 || sqlca.sqlcode == 1403))
+				{
+					strcpy(p_iacctent_struct_h->acc_type,"G");	
+					p_iacctent_struct_i->i_acc_type = 0;
+				}
+		
+
+				printf("\n Broker Account2=|%s| \n",chr_l_broker_acc);
+				printf("\n Broker Entry:p_iacctent_struct_h->client=|%s| \n",p_iacctent_struct_h->client);
+
+			if(strcmp(p_oblg_acc_ent_struct_h->h_clh_flg[RecCounter],"C")==0)
+			{
+				if(int_p_entry_no == 1)
+				{
+					sprintf(chr_l_narration,"CLG %s QTY%s",p_oblg_acc_ent_struct_h->h_client[RecCounter],chr_qty_paid);
+				}
+				else if(int_p_entry_no == 2 && (i_broker_acc != -1 && sqlca.sqlcode != 1403))
+				{
+					sprintf(chr_l_narration,"CLG %s QTY%s",p_oblg_acc_ent_struct_h->h_identiy_no[RecCounter],chr_qty_paid);
+				}
+				else if(int_p_entry_no == 2  && (i_broker_acc == -1 || sqlca.sqlcode == 1403))
+				{
+					sprintf(chr_l_narration,"CLG %s QTY%s",p_oblg_acc_ent_struct_h->h_client[RecCounter],chr_qty_paid);
+				}
+
+			}
+			if(strcmp(p_oblg_acc_ent_struct_h->h_clh_flg[RecCounter],"D")==0)
+			{
+				if(int_p_entry_no == 1)
+				{
+					sprintf(chr_l_narration,"DVP %s QTY%s",p_oblg_acc_ent_struct_h->h_client[RecCounter],chr_qty_paid);
+				}
+				else if(int_p_entry_no == 2 && (i_broker_acc != -1 && sqlca.sqlcode != 1403))
+				{
+					sprintf(chr_l_narration,"DVP %s QTY%s",p_oblg_acc_ent_struct_h->h_identiy_no[RecCounter],chr_qty_paid);
+				}
+				else if(int_p_entry_no == 2  && (i_broker_acc == -1 || sqlca.sqlcode == 1403))
+				{
+					sprintf(chr_l_narration,"DVP %s QTY%s",p_oblg_acc_ent_struct_h->h_client[RecCounter],chr_qty_paid);
+				}
+				
+			}
+				
+				if((sqlca.sqlcode == 1403) || i_broker_acc == -1)
+				{
+				/*Changes done for -- Kotak Ench -- Account No Size change --ISKB_4802--11072011--Shweta*/			
+				/* KB_5878 MCS charuta */
+				if(!strcmp(p_oblg_acc_ent_struct_h->h_exch_code[RecCounter], "NSE"))				
+					{
+						EXEC SQL SELECT SUBSTR(NSECLH,9) INTO :chr_l_broker_acc:i_broker_acc
+						FROM iv_clientgl;
+
+						IS_ANY_ORA_ERROR
+					}
+				if(!strcmp(p_oblg_acc_ent_struct_h->h_exch_code[RecCounter], "MCS"))				
+					{
+						EXEC SQL SELECT SUBSTR(MCSCLH,9) INTO :chr_l_broker_acc:i_broker_acc
+						FROM iv_clientgl;
+
+						IS_ANY_ORA_ERROR
+					}
+				}
+
+				strcpy(p_iacctent_struct_h->client,chr_l_broker_acc);
+
+}
+		
+	
+		 p_iacctent_struct_h->module_ind = MODULE_IND_DL;
+
+
+	 	 strcpy(p_iacctent_struct_h->brnch_cd,g_mt_commonsys_params_struct_h.brnch_cd);
+
+	
+		 strcpy(p_iacctent_struct_h->inden_num,int_g_seq_num);
+		 p_iacctent_struct_i->i_sequence_num = 0;
+		 
+
+		 strcpy(p_iacctent_struct_h->curr_cd,LOCAL_CCY);
+
+		 	
+		 p_iacctent_struct_h->fccy_amt = 0;
+
+		 p_iacctent_struct_h->exchg_rt = 1;
+
+		 dec_len=2;
+			
+		printf("\n Amount before Rounding Off=|%lf| \n",p_oblg_acc_ent_struct_h->h_net_amt[RecCounter]);
+			
+		 CO_Round( p_oblg_acc_ent_struct_h->h_net_amt[RecCounter],
+				dec_len,
+				&amount);		
+
+		 printf("\n Amount after Rounding Off=|%lf| \n",amount);
+
+		 p_iacctent_struct_h->lcl_amount = amount;
+		
+		EXEC SQL SELECT TO_CHAR(sys_date,'YYYYMMDD') INTO :l_chr_compdate	FROM PRO_SYS_DATE;
+									
+		IS_ANY_ORA_ERROR
+
+		if(strcmp(p_oblg_acc_ent_struct_h->h_clh_flg[RecCounter],"D")==0)
+		{
+			strcpy(p_iacctent_struct_h->val_date,l_chr_compdate);
+			printf("D::Now value of Val Date in Fill strucrute is |%s|",p_iacctent_struct_h->val_date);
+		}
+		else
+		{
+			
+			 strcpy(p_iacctent_struct_h->val_date,l_nxt_buss_day_new);
+			 printf("C::Now value of Val Date in Fill strucrute is |%s|",p_iacctent_struct_h->val_date);
+		}
+		 
+		 p_iacctent_struct_i->i_value_date = 0;
+
+		 strcpy(p_iacctent_struct_h->deal_cd,AE_DLCD);
+		 p_iacctent_struct_i->i_deal_cd = 0;
+
+		 strcpy(p_iacctent_struct_h->spl_clt_cd,chr_h_fxinc_flg);
+		 p_iacctent_struct_i->i_spl_clt_cd = 0;
+
+		 strcpy(p_iacctent_struct_h->description,chr_l_narration);
+		 p_iacctent_struct_i->i_description = 0;
+
+		 p_iacctent_struct_h->status_ind = APL_ACCTENT_GEN_IND;
+
+		 strcpy(p_iacctent_struct_h->proc_num,chr_g_batch_no);
+
+		 p_iacctent_struct_h->report_amt = amount;
+		 strcpy(p_iacctent_struct_h->deal_ident,deal_ident);	
+		 p_iacctent_struct_i->i_deal_ident = 0;
+
+		 p_iacctent_struct_h->rec_refer	=	APL_ACCTENT_NORMENT;
+		 p_iacctent_struct_i->i_rec_identify = 0;
+
+		 p_iacctent_struct_h->rec_refer	=	APL_ACCTENT_NORMENT;
+
+		 strcpy(p_iacctent_struct_h->proc_dt,chr_g_sys_date);	
+		 p_iacctent_struct_i->i_batch_dt = 0;
+
+	
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS  :
+		{
+			fprintf(g_flogfile,"\n Leaving CA_Pro_FillActEntStruct() With Success");
+			return (APL_SUCCESS);
+		}
+	RETURN_FAILURE  :
+		{
+			
+			sprintf(chr_g_log_buffer,"\n Leaving CA_Pro_FillActEntStruct() With Failure ORA=|%d|",sqlca.sqlcode);
+			CO_ProcMonitor(g_flogfile,chr_g_log_buffer,l_debug_info_ptr,NULL);
+			return (APL_FAILURE);
+		}
+
+
+}
+
+/*******************************************************************************
+*Function Name	: Gen_MarginAE                                                 *
+*Author			: Prateek Singh                                                *
+*Date			: 26/05/2015                                                   *
+*Purpose		: Generation of Margin Accounting Entries                      *
+********************************************************************************/
+int Gen_MarginAE(DL_OBLG_ACC_ENT_HSTRUCT_H  p_oblg_acc_ent_struct_h[],
+                 int RecCounter,
+                 char *p_chr_batch_no,
+                 DEBUG_INFO_STRUCT_H  **l_debug_info_ptr)
+{
+
+	printf("\n At start of Gen_MarginAE() we got int_g_run_seq_num = |%d|",int_g_run_seq_num);
+
+	printf("\n Entered in function Gen_MarginAE with Batch Number [%s]",p_chr_batch_no);
+	
+	EXEC SQL BEGIN DECLARE SECTION;
+	double	l_margin_amt	= 0;
+	double  l_exch_margin_amt = 0;
+	double  l_m2m_margin_amt_bse = 0;
+	short 	i_m2m_margin_amt_bse=0;
+	/* Added for ISKB_1493-19102016 to read MTM margin from file for NSE/MCS -start*/
+	double  l_m2m_margin_nse_mcs = 0;
+	short 	i_m2m_margin_nse_mcs=0;	
+	/* Added for ISKB_1493-19102016 to read MTM margin from file for NSE/MCS -end*/
+	double	l_new_margin_amt= 0;
+	double	l_sys_margin_amt= 0;
+	short	i_sys_margin_amt= 0;
+	double	l_used_collateral= 0;
+	double	l_lien_amt		= 0;
+	double	l_collateral_amt = 0;
+	//short	i_sum_net_amt	= 0;
+	short	i_margin_amt	= 0;
+	//short	i_new_collateral= 0;
+	//short	i_lien_amt		= 0;
+	short	i_collateral_amt = 0;
+	int		l_count_margin_log =0;
+	short	i_count_margin_log =0;
+	char	l_gl_narration[APL_ACCTENT_NARR_LEN] = APL_NULL_STRING;
+	char	l_cl_narration[APL_ACCTENT_NARR_LEN] = APL_NULL_STRING;
+	char	l_gl_account[24] = APL_NULL_STRING;
+	short	i_gl_account=0;
+	char	l_bnk_acc[24]=APL_NULL_STRING;
+	short	i_bnk_acc =0;
+	char	l_deal_ident[APL_ACCTENT_DEAL_REF_LEN] = APL_NULL_STRING;
+	char	l_chr_val_dt[APL_DATE_LEN]=APL_NULL_STRING;
+	char	l_chr_sys_date[APL_DATE_LEN]=APL_NULL_STRING;
+	char	l_chr_sys_format_dt[APL_DATE_LEN]=APL_NULL_STRING;
+	char	l_h_fxinc_flg[APL_FLAG_LENGTH] = APL_NULL_STRING;
+	int		l_int_leg_ind = 0;
+	int		l_count_coll_mrgn_processed =0;
+	/*Added By Prateek on 21032016 for Checking if MG02/VERPT/DM/VAR/ELM file has been uploaded in System or Not - START*/
+	int		l_exch_margin_count=0;
+	int		l_sys_cal_margin_count=0;
+	int		l_int_exch_margin_ind = 0;
+	int		l_int_sys_margin_ind = 0;
+	/*Added By Prateek on 21032016 for Checking if MG02/VERPT/DM/VAR/ELM file has been uploaded in System or Not - END*/
+	EXEC SQL END DECLARE SECTION;
+
+	
+	strcpy(l_deal_ident,p_oblg_acc_ent_struct_h->h_client[RecCounter]);
+	strcat(l_deal_ident,TXN_REF_DELIMITER);
+	strcat(l_deal_ident,p_oblg_acc_ent_struct_h->h_exch_code[RecCounter]);
+	strcat(l_deal_ident,TXN_REF_DELIMITER);
+	strcat(l_deal_ident,p_oblg_acc_ent_struct_h->h_settlement_no[RecCounter]);
+	strcat(l_deal_ident,TXN_REF_DELIMITER);
+	strcat(l_deal_ident,p_oblg_acc_ent_struct_h->h_deal_date[RecCounter]);
+	strcat(l_deal_ident,TXN_REF_DELIMITER);
+
+	printf("\n Deal Ident is [%s]",l_deal_ident);
+
+	/*Added By Prateek on 21032016 for Checking if MG02/VERPT/DM/VAR/ELM file has been uploaded in System or Not - START*/
+
+	EXEC SQL SELECT count(*)
+	INTO :l_exch_margin_count
+	FROM EXCH_MARGIN
+	WHERE EXCH_CODE = :p_oblg_acc_ent_struct_h->h_exch_code[RecCounter] 
+	AND SETTLEMENT_NO=:p_oblg_acc_ent_struct_h->h_settlement_no[RecCounter] ;
+
+	printf("\n Sqlcode after Checking Count in Exch_Margin is |%d|",sqlca.sqlcode);
+	printf("\n Count in Exch_Margin is |%d|",l_exch_margin_count);
+	IS_ANY_ORA_ERROR;
+
+	if(l_exch_margin_count ==0)
+	{
+			l_int_exch_margin_ind = 1;
+			sprintf(chr_g_log_buffer,"\n EXCHANGE MARGIN FILE HAS NOT BEEN UPLOADED FOR EXCHANGE CODE :[%s] and SETTLEMENT NO [%s]",p_oblg_acc_ent_struct_h->h_exch_code[RecCounter],p_oblg_acc_ent_struct_h->h_settlement_no[RecCounter]);
+			fprintf(g_flogfile,"%s",chr_g_log_buffer);
+	}
+
+	EXEC SQL SELECT count(*)
+	INTO :l_sys_cal_margin_count
+	FROM RMS_MARGIN
+	WHERE EXCH_CODE = :p_oblg_acc_ent_struct_h->h_exch_code[RecCounter] 
+	AND SETTLEMENT_NO=:p_oblg_acc_ent_struct_h->h_settlement_no[RecCounter];
+
+	printf("\n Sqlcode after Checking Count in RMS_Margin is |%d|",sqlca.sqlcode);
+	printf("\n Count in RMS_MARGIN is |%d|",l_sys_cal_margin_count);
+	IS_ANY_ORA_ERROR;
+
+	if(l_sys_cal_margin_count ==0)
+	{
+			l_int_sys_margin_ind = 1;
+			sprintf(chr_g_log_buffer,"\n VAR/ELM MARGIN FILE HAS NOT BEEN UPLOADED FOR EXCHANGE CODE :[%s] and SETTLEMENT NO [%s]",p_oblg_acc_ent_struct_h->h_exch_code[RecCounter],p_oblg_acc_ent_struct_h->h_settlement_no[RecCounter]);
+			fprintf(g_flogfile,"%s",chr_g_log_buffer);
+	}
+
+	if(l_int_exch_margin_ind ==0 || l_int_sys_margin_ind ==0)
+	{
+	/*Added By Prateek on 21032016 for Checking if MG02/VERPT/DM/VAR/ELM file has been uploaded in System or Not - END*/
+
+	EXEC SQL SELECT CLN_FX_INC_IND INTO :l_h_fxinc_flg FROM MT_CLIENT WHERE CLN_CODE=:p_oblg_acc_ent_struct_h->h_client[RecCounter];
+
+	printf("\n Sqlcode after taking the Client FX indicator is |%d|",sqlca.sqlcode);
+	printf("\n Client FX indicator is [%s]",l_h_fxinc_flg);
+
+	IS_ANY_ORA_ERROR;
+
+
+	/*Taking Suspense Account -START*/
+	EXEC SQL SELECT DECODE(:p_oblg_acc_ent_struct_h->h_exch_code[RecCounter],'NSE',SUBSTR(a.NSECLH,9),'BSE',SUBSTR(a.BSECLH,9),'MCS',SUBSTR(a.MCSCLH,9))
+	INTO :l_gl_account:i_gl_account
+	FROM IV_CLIENTGL a;
+
+	printf("\n Sqlcode after taking the GL Account is |%d|",sqlca.sqlcode);
+	printf("\n GL Account is |%s|",l_gl_account);
+
+	IS_ANY_ORA_ERROR;
+	/*Taking Suspense Account -END*/
+	
+	/*Taking Client Account*/
+	EXEC SQL SELECT SUBSTR(A.BNK_ACC,9) INTO :l_bnk_acc:i_bnk_acc
+	FROM IV_CLIENTSETUP A WHERE A.CLIENT =:p_oblg_acc_ent_struct_h->h_client[RecCounter]
+	AND STAT_IND='A';
+
+	printf("\n Sqlcode after taking the Client Account is |%d|",sqlca.sqlcode);
+
+	printf("\n Client Account is |%s|",l_bnk_acc);
+
+	IS_ANY_ORA_ERROR;
+
+	/*Taking Client Account*/
+
+	EXEC SQL SELECT TO_CHAR(SYS_DATE,'YYYYMMDD'),SYS_DATE INTO :l_chr_sys_format_dt,:l_chr_sys_date FROM PRO_SYS_DATE;
+
+	printf("\n Sqlcode after taking the Systen Date is |%d|",sqlca.sqlcode);
+
+	printf("\n System Date is |%s| and |%s|",l_chr_sys_format_dt,l_chr_sys_date);
+
+	IS_ANY_ORA_ERROR;
+
+
+	strcpy(l_chr_val_dt,l_chr_sys_format_dt);
+	
+
+	EXEC SQL SELECT DECODE(:p_oblg_acc_ent_struct_h->h_exch_code[RecCounter],'NSE',NSE_COLLATERAL,'BSE',BSE_COLLATERAL,'MCS',MCS_COLLATERAL)
+	INTO :l_collateral_amt:i_collateral_amt
+	FROM MT_COLLATERAL 
+	WHERE CLIENT_CD = :p_oblg_acc_ent_struct_h->h_client[RecCounter];
+
+	printf("\n Sqlcode after fetching the Collateral is |%d|",sqlca.sqlcode);
+
+	IS_ANY_ORA_ERROR;
+
+	printf("\n Collateral Amount is :[%lf] for Client :[%s] and Exchange Code :[%s]",l_collateral_amt,p_oblg_acc_ent_struct_h->h_client[RecCounter],p_oblg_acc_ent_struct_h->h_exch_code[RecCounter]);
+
+	sprintf(chr_g_log_buffer,"\n COLLATERAL AMOUNT IS :[%lf] FOR CLIENT :[%s] AND EXCHANGE CODE :[%s]",l_collateral_amt,p_oblg_acc_ent_struct_h->h_client[RecCounter],p_oblg_acc_ent_struct_h->h_exch_code[RecCounter]);
+	fprintf(g_flogfile,"%s",chr_g_log_buffer);
+
+	EXEC SQL SELECT COUNT(*) INTO :l_count_coll_mrgn_processed 
+	FROM AE_MARGIN_COLLATERAL_PROCESSED 
+	WHERE CLIENT =:p_oblg_acc_ent_struct_h->h_client[RecCounter]
+	/*Commented and ReWritten by Prateek because collateral should not be processed dealwise(it should be processed once for a client for one batch) - START
+	//AND REF_NO = :p_oblg_acc_ent_struct_h->h_identiy_no[RecCounter]*/
+	 AND PROC_NUM =:p_chr_batch_no
+	/*Commented and ReWritten by Prateek because collateral should not be processed dealwise(it should be processed once for a client for one batch) - END*/
+	AND PROCESSED_FLG ='Y';
+
+	printf("\n Sqlcode after fetching the Count from AE_MARGIN_COLLATERAL_PROCESSED is |%d|",sqlca.sqlcode);
+
+	IS_ANY_ORA_ERROR;
+
+	if(l_count_coll_mrgn_processed == 0)
+	{
+		printf("\n MARGIN NOT PROCESSED for CLIENT [%s] AND REFERENCE NUMBER [%s] SO PROCEED FOR MARGIN AE",p_oblg_acc_ent_struct_h->h_client[RecCounter],p_oblg_acc_ent_struct_h->h_identiy_no[RecCounter]);
+
+	/*Added By Prateek on 20062016 for Considering M2M Margin in case of BSE - START*/
+
+	if(strcmp(p_oblg_acc_ent_struct_h->h_exch_code[RecCounter],"BSE")==0)
+	{
+
+		EXEC SQL SELECT SUM((NVL(MTM_MARGIN,0)))
+		INTO :l_m2m_margin_amt_bse:i_m2m_margin_amt_bse
+		FROM EXCH_MARGIN A
+		WHERE EXCH_CODE = :p_oblg_acc_ent_struct_h->h_exch_code[RecCounter] 
+		AND SETTLEMENT_NO=:p_oblg_acc_ent_struct_h->h_settlement_no[RecCounter]
+		AND EXISTS (SELECT 1 FROM MT_CLI_EXCH_MAP WHERE CLN_EXCH_MAP_CODE = A.CLN_EXCH_MAP_CODE and CLN_CODE =:p_oblg_acc_ent_struct_h->h_client[RecCounter] AND CLN_EXCH_CODE =:p_oblg_acc_ent_struct_h->h_exch_code[RecCounter]);
+
+		printf("\n BSE- M2M - Sqlcode after fetching the Margin is |%d|",sqlca.sqlcode);
+
+		IS_ANY_ORA_ERROR;
+
+		printf("\n M2M - Margin Amount is :[%lf] for Client :[%s] and Exchange Code :[%s]",l_m2m_margin_amt_bse,p_oblg_acc_ent_struct_h->h_client[RecCounter],p_oblg_acc_ent_struct_h->h_exch_code[RecCounter]);
+
+		/*As per the requirement if M2M margin is negative in uploaded file then only we have to consider it*/
+		if(l_m2m_margin_amt_bse < 0)
+		{
+			l_m2m_margin_amt_bse = -(l_m2m_margin_amt_bse);
+			printf("\nM2M - Margin Amount After negation is :[%lf] ",l_m2m_margin_amt_bse);
+		}
+			else
+		{
+			l_m2m_margin_amt_bse =0;
+			printf("\nM2M - Margin Amount is positive so considering it as 0 :[%lf] ",l_m2m_margin_amt_bse);
+		}
+
+	}
+	/*Added By Prateek on 20062016 for Considering M2M Margin in case of BSE - END*/
+	
+	/* Added for ISKB_1493 - 19102016 to read MTM margin from file for NSE/MCS -start */	
+		if(strcmp(p_oblg_acc_ent_struct_h->h_exch_code[RecCounter],"NSE")==0 ||  strcmp(p_oblg_acc_ent_struct_h->h_exch_code[RecCounter],"MCS")==0)
+	{
+
+		EXEC SQL SELECT SUM((NVL(MTM_MARGIN,0)))
+		INTO :l_m2m_margin_nse_mcs:i_m2m_margin_nse_mcs
+		FROM EXCH_MARGIN A
+		WHERE EXCH_CODE = :p_oblg_acc_ent_struct_h->h_exch_code[RecCounter] 
+		AND SETTLEMENT_NO=:p_oblg_acc_ent_struct_h->h_settlement_no[RecCounter]
+		AND EXISTS (SELECT 1 FROM MT_CLI_EXCH_MAP WHERE CLN_EXCH_MAP_CODE = A.CLN_EXCH_MAP_CODE and CLN_CODE =:p_oblg_acc_ent_struct_h->h_client[RecCounter] AND CLN_EXCH_CODE =:p_oblg_acc_ent_struct_h->h_exch_code[RecCounter]);
+
+		printf("\n NSE/MCS- M2M - Sqlcode after fetching the Margin is |%d|",sqlca.sqlcode);
+
+		IS_ANY_ORA_ERROR;
+
+		printf("\n M2M - Margin Amount is :[%lf] for Client :[%s] and Exchange Code :[%s]",l_m2m_margin_nse_mcs,p_oblg_acc_ent_struct_h->h_client[RecCounter],p_oblg_acc_ent_struct_h->h_exch_code[RecCounter]);
+
+		/*As per the requirement if M2M margin is negative in uploaded file then only we have to consider it*/
+		if(l_m2m_margin_nse_mcs < 0)
+		{
+			l_m2m_margin_nse_mcs = -(l_m2m_margin_nse_mcs);
+			printf("\n M2M - Margin Amount After negation is :[%lf] ",l_m2m_margin_nse_mcs);
+		}
+			else
+		{
+			l_m2m_margin_nse_mcs =0;
+			printf("\n M2M - Margin Amount is positive so considering it as 0 :[%lf] ",l_m2m_margin_nse_mcs);
+		}
+
+	}		
+	/* Added for ISKB_1493-19102016 to read MTM margin from file for NSE/MCS -end*/
+	
+	EXEC SQL SELECT SUM(DECODE(:p_oblg_acc_ent_struct_h->h_exch_code[RecCounter],'NSE',NVL(TOT_MARGIN,0),'BSE',NVL(SPL_MARGIN,0)+NVL(VAR_MARGIN,0)+NVL(ELM_MARGIN,0),'MCS',NVL(TOT_MARGIN,0)))
+	INTO :l_exch_margin_amt:i_margin_amt
+	FROM EXCH_MARGIN A
+	WHERE EXCH_CODE = :p_oblg_acc_ent_struct_h->h_exch_code[RecCounter] 
+	AND SETTLEMENT_NO=:p_oblg_acc_ent_struct_h->h_settlement_no[RecCounter]
+	//AND TRADING_DT = :p_oblg_acc_ent_struct_h->h_deal_date[RecCounter]
+	AND EXISTS (SELECT 1 FROM MT_CLI_EXCH_MAP WHERE CLN_EXCH_MAP_CODE = A.CLN_EXCH_MAP_CODE and CLN_CODE =:p_oblg_acc_ent_struct_h->h_client[RecCounter] AND CLN_EXCH_CODE =:p_oblg_acc_ent_struct_h->h_exch_code[RecCounter]);
+
+	printf("\n Sqlcode after fetching the Margin is |%d|",sqlca.sqlcode);
+
+	IS_ANY_ORA_ERROR;
+
+	if(strcmp(p_oblg_acc_ent_struct_h->h_exch_code[RecCounter],"BSE")==0)
+	{
+		printf("\n M2M - Margin Amount before addition of M2M is :[%lf] ",l_exch_margin_amt);
+		l_exch_margin_amt = (l_exch_margin_amt+l_m2m_margin_amt_bse);
+	}
+	
+	/* Added for ISKB_1493-19102016 to read MTM margin from file for NSE/MCS -start */	
+	if(strcmp(p_oblg_acc_ent_struct_h->h_exch_code[RecCounter],"NSE")==0 || strcmp(p_oblg_acc_ent_struct_h->h_exch_code[RecCounter],"MCS")==0)
+	{
+		printf("\n M2M - Margin Amount before addition of M2M is :[%lf] ",l_exch_margin_amt);
+		l_exch_margin_amt = (l_exch_margin_amt+l_m2m_margin_nse_mcs);	
+	}	
+	/* Added for ISKB_1493-19102016 to read MTM margin from file for NSE/MCS -end */
+
+	printf("\n Margin Amount is :[%lf] for Client :[%s] and Exchange Code :[%s]",l_exch_margin_amt,p_oblg_acc_ent_struct_h->h_client[RecCounter],p_oblg_acc_ent_struct_h->h_exch_code[RecCounter]);
+
+	sprintf(chr_g_log_buffer,"\n MARGIN AMOUNT IS :[%lf] FOR CLIENT :[%s] AND EXCHANGE CODE :[%s] and SETTLEMENT NO [%s]",l_exch_margin_amt,p_oblg_acc_ent_struct_h->h_client[RecCounter],p_oblg_acc_ent_struct_h->h_exch_code[RecCounter],p_oblg_acc_ent_struct_h->h_settlement_no[RecCounter]);
+	fprintf(g_flogfile,"%s",chr_g_log_buffer);
+
+	/*Added by Prateek for New Log File Creation- START*/
+		EXEC SQL SELECT NVL(SUM(DECODE(:p_oblg_acc_ent_struct_h->h_exch_code[RecCounter],'NSE',TOT_MARGIN,'BSE',MTM_MARGIN+VAR_MARGIN+ELM_MARGIN,'MCS',TOT_MARGIN)),0)
+		INTO :l_sys_margin_amt:i_sys_margin_amt
+		FROM RMS_MARGIN A
+		WHERE EXCH_CODE = :p_oblg_acc_ent_struct_h->h_exch_code[RecCounter] 
+		AND SETTLEMENT_NO=:p_oblg_acc_ent_struct_h->h_settlement_no[RecCounter]
+		AND EXISTS (SELECT 1 FROM MT_CLI_EXCH_MAP WHERE CLN_CODE = A.CLN_CODE and CLN_CODE =:p_oblg_acc_ent_struct_h->h_client[RecCounter] AND CLN_EXCH_CODE =:p_oblg_acc_ent_struct_h->h_exch_code[RecCounter]);
+
+		printf("\n Sqlcode after fetching the System calculated Margin is |%d|",sqlca.sqlcode);
+
+		IS_ANY_ORA_ERROR;
+
+		printf("\n System Calculated Margin Amount is :[%lf] for Client :[%s] and Exchange Code :[%s]",l_sys_margin_amt,p_oblg_acc_ent_struct_h->h_client[RecCounter],p_oblg_acc_ent_struct_h->h_exch_code[RecCounter]);
+
+	/*Added by Prateek for New Log File Creation- END*/
+
+	/*Added by Prateek on 11092015 for considering System Calculated Margin in Case Exchange Margin is 0 and System Cal Margin is Non Zero- START*/
+	//if((l_exch_margin_amt==0) && (l_sys_margin_amt >=0))
+	if(l_exch_margin_amt==0)
+		{
+			if(l_sys_margin_amt >0)
+			{
+				l_margin_amt =l_sys_margin_amt;
+				printf("\n Exchange Margin is 0 and System calculated Margin is Non Zero for client |%s|,So taking System Calculated Margin for Margin_AE Generation",p_oblg_acc_ent_struct_h->h_client[RecCounter]);
+			}
+		else
+			{
+					printf("\n Exchange Margin is 0 and System calculated Margin is Also 0 for client |%s|,So ",p_oblg_acc_ent_struct_h->h_client[RecCounter]);
+			}
+		}
+		else
+		{
+			l_margin_amt = l_exch_margin_amt;
+			printf("\n Exchange margin is non-zero hence taking final margin equal to exchange margin ");
+		}
+		printf("\n Now Value of Margin is |%lf|",l_margin_amt);
+	/*Added by Prateek on 11092015 for considering System Calculated Margin in Case Exchange Margin is 0 and System Cal Margin is Non Zero- End*/
+
+	if(l_margin_amt >0)
+	{
+
+		if(l_collateral_amt >=l_margin_amt)
+		{
+			printf("\n Collateral amount is greater than or equal to the Margin Amount");
+
+		sprintf(chr_g_log_buffer,"\n COLLATERAL AMOUNT :[%lf] IS > MARGIN AMT :[%lf] FOR CLIENT :[%s] AND EXCHANGE CODE :[%s],SO AE WILL NOT BE GENERATED",l_collateral_amt,l_margin_amt,p_oblg_acc_ent_struct_h->h_client[RecCounter],p_oblg_acc_ent_struct_h->h_exch_code[RecCounter]);
+		fprintf(g_flogfile,"%s",chr_g_log_buffer);
+
+
+			l_used_collateral = l_margin_amt ;
+			l_lien_amt = l_margin_amt;
+			l_new_margin_amt = 0;
+
+			printf("\n New Collateral Amount is :[%lf]",l_used_collateral);
+			printf("\n Lien Amount is :[%lf]",l_lien_amt);
+			printf("\n System Date is [%s]",l_chr_sys_date);
+
+			/*EXEC SQL UPDATE DL_DEAL SET HOST_DATE = :l_chr_sys_date
+			WHERE CLIENT = :p_oblg_acc_ent_struct_h->h_client[RecCounter]
+			AND EXCH_CODE = :p_oblg_acc_ent_struct_h->h_exch_code[RecCounter]
+			AND SETTLEMENT_NO=:p_oblg_acc_ent_struct_h->h_settlement_no[RecCounter]
+			AND DEAL_DATE =:p_oblg_acc_ent_struct_h->h_deal_date[RecCounter];
+
+			printf("\n Case 1 -Sqlcode after Updating the Host Date of Deals |%d|",sqlca.sqlcode);
+			printf("\n Case 1 -Updated |%d| row(s) in DL_DEAL table for Host Date",sqlca.sqlerrd[2]);
+
+			IS_ANY_ORA_ERROR;*/
+
+			if(strcmp(p_oblg_acc_ent_struct_h->h_exch_code[RecCounter],"NSE")==0)
+			{
+				/*Checking if record already exist for given combination*/
+				EXEC SQL SELECT COUNT(*) INTO :l_count_margin_log:i_count_margin_log FROM AE_MARGIN_LOG WHERE CLN_CODE=:p_oblg_acc_ent_struct_h->h_client[RecCounter]
+				AND DEAL_DATE=:p_oblg_acc_ent_struct_h->h_deal_date[RecCounter]
+				AND SETTLEMENT_NO=:p_oblg_acc_ent_struct_h->h_settlement_no[RecCounter]
+				AND EXCH_CODE=:p_oblg_acc_ent_struct_h->h_exch_code[RecCounter]
+				//AND STATUS ='G';
+				AND MARGIN_AMT > 0;
+
+				printf("\n NSE-Sqlcode after taking count in AE_MARGIN_LOG Table |%d|",sqlca.sqlcode);
+				printf("\n NSE-Count in AE_MARGIN_LOG Table |%d| ",l_count_margin_log);
+
+				IS_ANY_ORA_ERROR;
+
+				if (l_count_margin_log==0)
+				{
+
+				EXEC SQL UPDATE MT_COLLATERAL SET NSE_COLLATERAL = (NSE_COLLATERAL - :l_margin_amt),AVAILABLE_COLLATERAL =(AVAILABLE_COLLATERAL -:l_margin_amt) 
+				WHERE CLIENT_CD = :p_oblg_acc_ent_struct_h->h_client[RecCounter];
+
+				printf("\n Sqlcode after Updating the Collateral for NSE is |%d|",sqlca.sqlcode);
+
+				IS_ANY_ORA_ERROR;
+
+
+				EXEC SQL INSERT INTO AE_MARGIN_LOG VALUES (:p_oblg_acc_ent_struct_h->h_client[RecCounter],:p_oblg_acc_ent_struct_h->h_deal_date[RecCounter],:p_oblg_acc_ent_struct_h->h_exch_code[RecCounter],:p_oblg_acc_ent_struct_h->h_settlement_no[RecCounter],:l_collateral_amt,:l_used_collateral,:l_new_margin_amt,:l_lien_amt,'INR',:p_chr_batch_no,:chr_g_sys_date,'Gen_MarginAE','P','N');
+
+				printf("\n NSE-Sqlcode after Intertion in the AE_MARGIN_LOG Table |%d|",sqlca.sqlcode);
+
+				IS_ANY_ORA_ERROR;
+
+				EXEC SQL UPDATE AE_MARGIN_COLLATERAL_PROCESSED SET PROCESSED_FLG='Y',PROC_NUM=:p_chr_batch_no
+					WHERE CLIENT=:p_oblg_acc_ent_struct_h->h_client[RecCounter] 
+					AND REF_NO =:p_oblg_acc_ent_struct_h->h_identiy_no[RecCounter]; 
+
+				printf("\n NSE-Sqlcode after Updation in the AE_MARGIN_COLLATERAL_PROCESSED Table |%d|",sqlca.sqlcode);
+
+				IS_ANY_ORA_ERROR;
+
+				}
+
+			}
+			else if (strcmp(p_oblg_acc_ent_struct_h->h_exch_code[RecCounter],"BSE")==0)
+			{
+
+				/*Checkin if record already exist for given combination*/
+				EXEC SQL SELECT COUNT(*) INTO :l_count_margin_log:i_count_margin_log FROM AE_MARGIN_LOG WHERE CLN_CODE=:p_oblg_acc_ent_struct_h->h_client[RecCounter]
+				AND DEAL_DATE=:p_oblg_acc_ent_struct_h->h_deal_date[RecCounter]
+				AND SETTLEMENT_NO=:p_oblg_acc_ent_struct_h->h_settlement_no[RecCounter]
+				AND EXCH_CODE=:p_oblg_acc_ent_struct_h->h_exch_code[RecCounter]
+				AND MARGIN_AMT > 0;
+
+				printf("\n BSE-Sqlcode after taking count in AE_MARGIN_LOG Table |%d|",sqlca.sqlcode);
+				printf("\n BSE-Count in AE_MARGIN_LOG Table |%d| ",l_count_margin_log);
+
+				IS_ANY_ORA_ERROR;
+
+				if (l_count_margin_log==0)
+				{
+
+				EXEC SQL UPDATE MT_COLLATERAL SET BSE_COLLATERAL = (BSE_COLLATERAL - :l_margin_amt),AVAILABLE_COLLATERAL =(AVAILABLE_COLLATERAL -:l_margin_amt) 
+				WHERE CLIENT_CD = :p_oblg_acc_ent_struct_h->h_client[RecCounter];
+
+				printf("\n Sqlcode after Updating the Collateral for BSE is |%d|",sqlca.sqlcode);
+
+				IS_ANY_ORA_ERROR;
+
+				EXEC SQL INSERT INTO AE_MARGIN_LOG VALUES (:p_oblg_acc_ent_struct_h->h_client[RecCounter],:p_oblg_acc_ent_struct_h->h_deal_date[RecCounter],:p_oblg_acc_ent_struct_h->h_exch_code[RecCounter],:p_oblg_acc_ent_struct_h->h_settlement_no[RecCounter],:l_collateral_amt,:l_used_collateral,:l_new_margin_amt,:l_lien_amt,'INR',:p_chr_batch_no,:chr_g_sys_date,'Gen_MarginAE','P','N');
+				printf("\n BSE-Sqlcode after Intertion in the AE_MARGIN_LOG Table |%d|",sqlca.sqlcode);
+
+				IS_ANY_ORA_ERROR;
+
+				EXEC SQL UPDATE AE_MARGIN_COLLATERAL_PROCESSED SET PROCESSED_FLG='Y',PROC_NUM=:p_chr_batch_no
+					WHERE CLIENT=:p_oblg_acc_ent_struct_h->h_client[RecCounter] 
+					AND REF_NO =:p_oblg_acc_ent_struct_h->h_identiy_no[RecCounter]; 
+
+				printf("\n BSE-Sqlcode after Updation in the AE_MARGIN_COLLATERAL_PROCESSED Table |%d|",sqlca.sqlcode);
+
+				IS_ANY_ORA_ERROR;
+
+			  }
+			}
+			else if(strcmp(p_oblg_acc_ent_struct_h->h_exch_code[RecCounter],"MCS")==0)
+			{
+
+				/*Checkin if record already exist for given combination*/
+				EXEC SQL SELECT COUNT(*) INTO :l_count_margin_log:i_count_margin_log FROM AE_MARGIN_LOG WHERE CLN_CODE=:p_oblg_acc_ent_struct_h->h_client[RecCounter]
+				AND DEAL_DATE=:p_oblg_acc_ent_struct_h->h_deal_date[RecCounter]
+				AND SETTLEMENT_NO=:p_oblg_acc_ent_struct_h->h_settlement_no[RecCounter]
+				AND EXCH_CODE=:p_oblg_acc_ent_struct_h->h_exch_code[RecCounter]
+				AND MARGIN_AMT > 0;
+
+				printf("\n MCS-Sqlcode after taking count in AE_MARGIN_LOG Table |%d|",sqlca.sqlcode);
+				printf("\n MCS-Count in AE_MARGIN_LOG Table |%d| ",l_count_margin_log);
+
+				IS_ANY_ORA_ERROR;
+
+				if (l_count_margin_log==0)
+				{
+
+				EXEC SQL UPDATE MT_COLLATERAL SET MCS_COLLATERAL =(MCS_COLLATERAL - :l_margin_amt),AVAILABLE_COLLATERAL =(AVAILABLE_COLLATERAL -:l_margin_amt) 
+				WHERE CLIENT_CD = :p_oblg_acc_ent_struct_h->h_client[RecCounter];
+
+				printf("\n Sqlcode after updating the Collateral for MCS is |%d|",sqlca.sqlcode);
+
+				IS_ANY_ORA_ERROR;
+
+				EXEC SQL INSERT INTO AE_MARGIN_LOG VALUES (:p_oblg_acc_ent_struct_h->h_client[RecCounter],:p_oblg_acc_ent_struct_h->h_deal_date[RecCounter],:p_oblg_acc_ent_struct_h->h_exch_code[RecCounter],:p_oblg_acc_ent_struct_h->h_settlement_no[RecCounter],:l_collateral_amt,:l_used_collateral,:l_new_margin_amt,:l_lien_amt,'INR',:p_chr_batch_no,:chr_g_sys_date,'Gen_MarginAE','P','N');
+				printf("\n MCS-Sqlcode after Intertion in the AE_MARGIN_LOG Table |%d|",sqlca.sqlcode);
+
+				IS_ANY_ORA_ERROR;
+
+				EXEC SQL UPDATE AE_MARGIN_COLLATERAL_PROCESSED SET PROCESSED_FLG='Y',PROC_NUM=:p_chr_batch_no
+					WHERE CLIENT=:p_oblg_acc_ent_struct_h->h_client[RecCounter] 
+					AND REF_NO =:p_oblg_acc_ent_struct_h->h_identiy_no[RecCounter]; 
+
+				printf("\n MCS-Sqlcode after Updation in the AE_MARGIN_COLLATERAL_PROCESSED Table |%d|",sqlca.sqlcode);
+
+				IS_ANY_ORA_ERROR;
+
+				}
+			}
+			else
+			{
+				printf("\n Incorrect Value of Exchange Code");
+			}
+
+			//sprintf(chr_g_ml_log_buffer,"      %s          %s            %lf                     %lf           %lf        %lf     %lf  \n",p_oblg_acc_ent_struct_h->h_client[RecCounter],p_oblg_acc_ent_struct_h->h_exch_code[RecCounter],
+			sprintf(chr_g_ml_log_buffer,"%s,%s,%lf,%lf,%lf,%lf,%lf\n",p_oblg_acc_ent_struct_h->h_client[RecCounter],p_oblg_acc_ent_struct_h->h_exch_code[RecCounter],
+			l_sys_margin_amt,l_exch_margin_amt,l_collateral_amt,(l_collateral_amt-l_margin_amt),l_margin_amt);
+	fprintf(g_ml_flogfile,chr_g_ml_log_buffer,NULL,NULL);
+	fflush(g_ml_flogfile);
+
+		}
+		else
+		{
+			printf("\n Collateral amount is less than the Margin Amount");
+
+			l_lien_amt = l_margin_amt;
+			l_new_margin_amt=l_margin_amt - l_collateral_amt;
+			l_used_collateral = l_margin_amt -l_new_margin_amt;
+
+			printf("\n Lien Amount is :[%lf]",l_lien_amt);
+			printf("\n Accounting Entry will be generated for Amount :[%lf]",l_new_margin_amt);
+			printf("\n Used Collateral is :[%lf]",l_used_collateral);
+
+				/*EXEC SQL UPDATE DL_DEAL SET HOST_DATE = :l_chr_sys_date
+				WHERE CLIENT = :p_oblg_acc_ent_struct_h->h_client[RecCounter]
+				AND EXCH_CODE = :p_oblg_acc_ent_struct_h->h_exch_code[RecCounter]
+				AND SETTLEMENT_NO=:p_oblg_acc_ent_struct_h->h_settlement_no[RecCounter]
+				AND DEAL_DATE =:p_oblg_acc_ent_struct_h->h_deal_date[RecCounter];
+
+				printf("\n Case 2 -Sqlcode after Updating the Host Date of Deals |%d|",sqlca.sqlcode);
+				printf("\n Case 2 -Updated |%d| row(s) in DL_DEAL table for Host Date",sqlca.sqlerrd[2]);
+
+				IS_ANY_ORA_ERROR;*/
+
+				strcpy(l_gl_narration,"GL_MARGINPAYIN");
+				strcat(l_gl_narration," ");
+				strcat(l_gl_narration,p_oblg_acc_ent_struct_h->h_client[RecCounter]);
+				strcat(l_gl_narration," ");
+				strcat(l_gl_narration,p_oblg_acc_ent_struct_h->h_exch_code[RecCounter]);
+				strcat(l_gl_narration," ");
+				strcat(l_gl_narration,p_oblg_acc_ent_struct_h->h_settlement_no[RecCounter]);
+				strcpy(l_cl_narration,"CL_MARGINPAYIN");
+				strcat(l_cl_narration," ");
+				strcat(l_cl_narration,p_oblg_acc_ent_struct_h->h_client[RecCounter]);
+				strcat(l_cl_narration," ");
+				strcat(l_cl_narration,p_oblg_acc_ent_struct_h->h_exch_code[RecCounter]);
+				strcat(l_cl_narration," ");
+				strcat(l_cl_narration,p_oblg_acc_ent_struct_h->h_settlement_no[RecCounter]);
+
+				printf("\n Narration for GL Account and Client Account is [%s] and [%s] ",l_gl_narration,l_cl_narration);
+
+
+			if(strcmp(p_oblg_acc_ent_struct_h->h_exch_code[RecCounter],"NSE")==0)
+			{
+
+				/*Checkin if record already exist for given combination*/
+				EXEC SQL SELECT COUNT(*) INTO :l_count_margin_log:i_count_margin_log FROM AE_MARGIN_LOG WHERE CLN_CODE=:p_oblg_acc_ent_struct_h->h_client[RecCounter]
+				AND DEAL_DATE=:p_oblg_acc_ent_struct_h->h_deal_date[RecCounter]
+				AND SETTLEMENT_NO=:p_oblg_acc_ent_struct_h->h_settlement_no[RecCounter]
+				AND EXCH_CODE=:p_oblg_acc_ent_struct_h->h_exch_code[RecCounter]
+				AND MARGIN_AMT >0;
+
+				printf("\n Case 2 NSE-Sqlcode after taking count in AE_MARGIN_LOG Table |%d|",sqlca.sqlcode);
+				printf("\n Case 2 NSE-Count in AE_MARGIN_LOG Table |%d| ",l_count_margin_log);
+
+				IS_ANY_ORA_ERROR;
+
+				if (l_count_margin_log==0)
+				{
+
+				EXEC SQL UPDATE MT_COLLATERAL SET NSE_COLLATERAL = (NSE_COLLATERAL - :l_used_collateral),AVAILABLE_COLLATERAL =(AVAILABLE_COLLATERAL - :l_used_collateral) 
+				WHERE CLIENT_CD = :p_oblg_acc_ent_struct_h->h_client[RecCounter];
+
+				printf("\n Sqlcode after Updating the Collateral for NSE is |%d|",sqlca.sqlcode);
+
+				IS_ANY_ORA_ERROR;
+
+
+				EXEC SQL INSERT INTO AE_MARGIN_LOG VALUES (:p_oblg_acc_ent_struct_h->h_client[RecCounter],:p_oblg_acc_ent_struct_h->h_deal_date[RecCounter],:p_oblg_acc_ent_struct_h->h_exch_code[RecCounter],:p_oblg_acc_ent_struct_h->h_settlement_no[RecCounter],:l_collateral_amt,:l_used_collateral,:l_new_margin_amt,:l_lien_amt,'INR',:p_chr_batch_no,:chr_g_sys_date,'Gen_MarginAE','G','N');
+				printf("\n NSE-Sqlcode after Intertion in the AE_MARGIN_LOG Table |%d|",sqlca.sqlcode);
+
+				IS_ANY_ORA_ERROR;
+
+				/*Entries in PRO_ACCTENT Table for GL and Client Account*/
+				/* leg indicator set to plus 1 of g_seq_num */
+				l_int_leg_ind = int_g_run_seq_num + 1;
+
+				printf("\n 1st Leg ::::: l_int_leg_ind = |%d| int_g_run_seq_num = |%d|",l_int_leg_ind,int_g_run_seq_num);
+
+	EXEC SQL INSERT INTO PRO_ACCTENT VALUES ('C',:g_mt_commonsys_params_struct_h.brnch_cd,:int_g_run_seq_num,:l_gl_account,'INR',null,1,:l_new_margin_amt,:l_chr_val_dt,'930',null,'1',:l_gl_narration,'G',:p_chr_batch_no,:l_new_margin_amt,null,null,null,0,'2',:chr_g_sys_date,:l_deal_ident,:l_int_leg_ind,'G',null,null,null,null,null,null,null);
+
+				printf("\n NSE-Sqlcode after Intertion in the PRO_ACCTENT Table for GL Acc|%d|",sqlca.sqlcode);
+				IS_ANY_ORA_ERROR;
+
+				l_int_leg_ind = int_g_run_seq_num;
+				int_g_run_seq_num = int_g_run_seq_num+1;
+				sprintf(int_g_seq_num,"%d",int_g_run_seq_num);
+
+				printf("\n 2nd Leg ::::: l_int_leg_ind = |%d| int_g_run_seq_num = |%d|",l_int_leg_ind,int_g_run_seq_num);
+
+    EXEC SQL INSERT INTO PRO_ACCTENT VALUES ('C',:g_mt_commonsys_params_struct_h.brnch_cd,:int_g_run_seq_num,:l_bnk_acc,'INR',null,1,:l_new_margin_amt,:l_chr_val_dt,'930',:l_h_fxinc_flg,'0',:l_cl_narration,'G',:p_chr_batch_no,:l_new_margin_amt,null,null,null,0,'2',:chr_g_sys_date,:l_deal_ident,:l_int_leg_ind,'C',null,null,null,null,null,null,null);
+
+				printf("\n NSE-Sqlcode after Intertion in the PRO_ACCTENT Table for Client Acc |%d|",sqlca.sqlcode);
+				IS_ANY_ORA_ERROR;
+
+				l_int_leg_ind = int_g_run_seq_num;
+				int_g_run_seq_num = int_g_run_seq_num+1;
+				sprintf(int_g_seq_num,"%d",int_g_run_seq_num);
+
+				/*Entries in PRO_ACCTENT Table for GL and Client Account*/
+
+
+				EXEC SQL UPDATE AE_MARGIN_COLLATERAL_PROCESSED SET PROCESSED_FLG='Y',PROC_NUM=:p_chr_batch_no
+					WHERE CLIENT=:p_oblg_acc_ent_struct_h->h_client[RecCounter] 
+					AND REF_NO =:p_oblg_acc_ent_struct_h->h_identiy_no[RecCounter]; 
+
+				printf("\n NSE-Sqlcode after Updation in the AE_MARGIN_COLLATERAL_PROCESSED Table |%d|",sqlca.sqlcode);
+
+				IS_ANY_ORA_ERROR;
+
+				}
+
+				}
+
+			else if (strcmp(p_oblg_acc_ent_struct_h->h_exch_code[RecCounter],"BSE")==0)
+			{
+
+				/*Checkin if record already exist for given combination*/
+				EXEC SQL SELECT COUNT(*) INTO :l_count_margin_log:i_count_margin_log FROM AE_MARGIN_LOG WHERE CLN_CODE=:p_oblg_acc_ent_struct_h->h_client[RecCounter]
+				AND DEAL_DATE=:p_oblg_acc_ent_struct_h->h_deal_date[RecCounter]
+				AND SETTLEMENT_NO=:p_oblg_acc_ent_struct_h->h_settlement_no[RecCounter]
+				AND EXCH_CODE=:p_oblg_acc_ent_struct_h->h_exch_code[RecCounter]
+				AND MARGIN_AMT >0;
+
+				printf("\n Case 2 BSE-Sqlcode after taking count in AE_MARGIN_LOG Table |%d|",sqlca.sqlcode);
+				printf("\n Case 2 BSE-Count in AE_MARGIN_LOG Table |%d| ",l_count_margin_log);
+
+				IS_ANY_ORA_ERROR;
+
+				if (l_count_margin_log==0)
+				{
+
+				EXEC SQL UPDATE MT_COLLATERAL SET BSE_COLLATERAL = (BSE_COLLATERAL - :l_used_collateral),AVAILABLE_COLLATERAL =(AVAILABLE_COLLATERAL -:l_used_collateral) 
+				WHERE CLIENT_CD = :p_oblg_acc_ent_struct_h->h_client[RecCounter];
+
+				printf("\n Sqlcode after Updating the Collateral for BSE is |%d|",sqlca.sqlcode);
+
+				IS_ANY_ORA_ERROR;
+
+				EXEC SQL INSERT INTO AE_MARGIN_LOG VALUES (:p_oblg_acc_ent_struct_h->h_client[RecCounter],:p_oblg_acc_ent_struct_h->h_deal_date[RecCounter],:p_oblg_acc_ent_struct_h->h_exch_code[RecCounter],:p_oblg_acc_ent_struct_h->h_settlement_no[RecCounter],:l_collateral_amt,:l_used_collateral,:l_new_margin_amt,:l_lien_amt,'INR',:p_chr_batch_no,:chr_g_sys_date,'Gen_MarginAE','G','N');
+
+				printf("\n BSE-Sqlcode after Intertion in the AE_MARGIN_LOG Table |%d|",sqlca.sqlcode);
+
+				IS_ANY_ORA_ERROR;
+
+				/*Entries in PRO_ACCTENT Table for GL and Client Account*/
+
+				l_int_leg_ind = int_g_run_seq_num + 1;
+				printf("\n 1st Leg ::::: l_int_leg_ind = |%d| int_g_run_seq_num = |%d|",l_int_leg_ind,int_g_run_seq_num);
+
+	EXEC SQL INSERT INTO PRO_ACCTENT VALUES ('C',:g_mt_commonsys_params_struct_h.brnch_cd,:int_g_run_seq_num,:l_gl_account,'INR',null,1,:l_new_margin_amt,:l_chr_val_dt,'930',null,'1',:l_gl_narration,'G',:p_chr_batch_no,:l_new_margin_amt,null,null,null,0,'2',:chr_g_sys_date,:l_deal_ident,:l_int_leg_ind,'G',null,null,null,null,null,null,null);
+
+				printf("\n BSE-Sqlcode after Intertion in the PRO_ACCTENT Table for GL Acc|%d|",sqlca.sqlcode);
+				IS_ANY_ORA_ERROR;
+
+				l_int_leg_ind = int_g_run_seq_num;
+				int_g_run_seq_num = int_g_run_seq_num+1;
+				sprintf(int_g_seq_num,"%d",int_g_run_seq_num);
+
+				printf("\n 2nd Leg ::::: l_int_leg_ind = |%d| int_g_run_seq_num = |%d|",l_int_leg_ind,int_g_run_seq_num);
+
+	EXEC SQL INSERT INTO PRO_ACCTENT VALUES ('C',:g_mt_commonsys_params_struct_h.brnch_cd,:int_g_run_seq_num,:l_bnk_acc,'INR',null,1,:l_new_margin_amt,:l_chr_val_dt,'930',:l_h_fxinc_flg,'0',:l_cl_narration,'G',:p_chr_batch_no,:l_new_margin_amt,null,null,null,0,'2',:chr_g_sys_date,:l_deal_ident,:l_int_leg_ind,'C',null,null,null,null,null,null,null);
+
+				printf("\n BSE-Sqlcode after Intertion in the PRO_ACCTENT Table for Client Acc |%d|",sqlca.sqlcode);
+				IS_ANY_ORA_ERROR;
+
+				l_int_leg_ind = int_g_run_seq_num;
+				int_g_run_seq_num = int_g_run_seq_num+1;
+				sprintf(int_g_seq_num,"%d",int_g_run_seq_num);
+
+				/*Entries in PRO_ACCTENT Table for GL and Client Account*/
+
+				EXEC SQL UPDATE AE_MARGIN_COLLATERAL_PROCESSED SET PROCESSED_FLG='Y',PROC_NUM=:p_chr_batch_no
+					WHERE CLIENT=:p_oblg_acc_ent_struct_h->h_client[RecCounter] 
+					AND REF_NO =:p_oblg_acc_ent_struct_h->h_identiy_no[RecCounter]; 
+
+				printf("\n BSE-Sqlcode after Updation in the AE_MARGIN_COLLATERAL_PROCESSED Table |%d|",sqlca.sqlcode);
+
+				IS_ANY_ORA_ERROR;
+
+				}
+			}
+			else if(strcmp(p_oblg_acc_ent_struct_h->h_exch_code[RecCounter],"MCS")==0)
+			{
+
+				/*Checkin if record already exist for given combination*/
+				EXEC SQL SELECT COUNT(*) INTO :l_count_margin_log:i_count_margin_log FROM AE_MARGIN_LOG WHERE CLN_CODE=:p_oblg_acc_ent_struct_h->h_client[RecCounter]
+				AND DEAL_DATE=:p_oblg_acc_ent_struct_h->h_deal_date[RecCounter]
+				AND SETTLEMENT_NO=:p_oblg_acc_ent_struct_h->h_settlement_no[RecCounter]
+				AND EXCH_CODE=:p_oblg_acc_ent_struct_h->h_exch_code[RecCounter]
+				AND MARGIN_AMT >0;
+
+				printf("\n Case 2 MCS-Sqlcode after taking count in AE_MARGIN_LOG Table |%d|",sqlca.sqlcode);
+				printf("\n Case 2 MCS-Count in AE_MARGIN_LOG Table |%d| ",l_count_margin_log);
+
+				IS_ANY_ORA_ERROR;
+
+				if (l_count_margin_log==0)
+				{
+				EXEC SQL UPDATE MT_COLLATERAL SET MCS_COLLATERAL =(MCS_COLLATERAL - :l_used_collateral),AVAILABLE_COLLATERAL =(AVAILABLE_COLLATERAL -:l_used_collateral) 
+				WHERE CLIENT_CD = :p_oblg_acc_ent_struct_h->h_client[RecCounter];
+
+				printf("\n Sqlcode after updating the Collateral for MCS is |%d|",sqlca.sqlcode);
+
+				IS_ANY_ORA_ERROR;
+
+				EXEC SQL INSERT INTO AE_MARGIN_LOG VALUES (:p_oblg_acc_ent_struct_h->h_client[RecCounter],:p_oblg_acc_ent_struct_h->h_deal_date[RecCounter],:p_oblg_acc_ent_struct_h->h_exch_code[RecCounter],:p_oblg_acc_ent_struct_h->h_settlement_no[RecCounter],:l_collateral_amt,:l_used_collateral,:l_new_margin_amt,:l_lien_amt,'INR',:p_chr_batch_no,:chr_g_sys_date,'Gen_MarginAE','G','N');
+
+				printf("\n MCS-Sqlcode after Intertion in the AE_MARGIN_LOG Table |%d|",sqlca.sqlcode);
+
+				IS_ANY_ORA_ERROR;
+
+				/*Entries in PRO_ACCTENT Table for GL and Client Account*/
+
+				l_int_leg_ind = int_g_run_seq_num + 1;
+				printf("\n 1st Leg ::::: l_int_leg_ind = |%d| int_g_run_seq_num = |%d|",l_int_leg_ind,int_g_run_seq_num);
+
+	EXEC SQL INSERT INTO PRO_ACCTENT VALUES ('C',:g_mt_commonsys_params_struct_h.brnch_cd,:int_g_run_seq_num,:l_gl_account,'INR',null,1,:l_new_margin_amt,:l_chr_val_dt,'930',null,'1',:l_gl_narration,'G',:p_chr_batch_no,:l_new_margin_amt,null,null,null,0,'2',:chr_g_sys_date,:l_deal_ident,:l_int_leg_ind,'G',null,null,null,null,null,null,null);
+
+				printf("\n MCS-Sqlcode after Intertion in the PRO_ACCTENT Table for GL Acc|%d|",sqlca.sqlcode);
+				IS_ANY_ORA_ERROR;
+
+				l_int_leg_ind = int_g_run_seq_num;
+				int_g_run_seq_num = int_g_run_seq_num+1;
+				sprintf(int_g_seq_num,"%d",int_g_run_seq_num);
+
+				printf("\n 2nd Leg ::::: l_int_leg_ind = |%d| int_g_run_seq_num = |%d|",l_int_leg_ind,int_g_run_seq_num);
+
+	EXEC SQL INSERT INTO PRO_ACCTENT VALUES ('C',:g_mt_commonsys_params_struct_h.brnch_cd,:int_g_run_seq_num,:l_bnk_acc,'INR',null,1,:l_new_margin_amt,:l_chr_val_dt,'930',:l_h_fxinc_flg,'0',:l_cl_narration,'G',:p_chr_batch_no,:l_new_margin_amt,null,null,null,0,'2',:chr_g_sys_date,:l_deal_ident,:l_int_leg_ind,'C',null,null,null,null,null,null,null);
+
+				printf("\n MCS-Sqlcode after Intertion in the PRO_ACCTENT Table for Client Acc |%d|",sqlca.sqlcode);
+				IS_ANY_ORA_ERROR;
+
+				l_int_leg_ind = int_g_run_seq_num;
+				int_g_run_seq_num = int_g_run_seq_num+1;
+				sprintf(int_g_seq_num,"%d",int_g_run_seq_num);
+
+				/*Entries in PRO_ACCTENT Table for GL and Client Account*/
+
+				EXEC SQL UPDATE AE_MARGIN_COLLATERAL_PROCESSED SET PROCESSED_FLG='Y',PROC_NUM=:p_chr_batch_no
+					WHERE CLIENT=:p_oblg_acc_ent_struct_h->h_client[RecCounter] 
+					AND REF_NO =:p_oblg_acc_ent_struct_h->h_identiy_no[RecCounter]; 
+
+				printf("\n MCS-Sqlcode after Updation in the AE_MARGIN_COLLATERAL_PROCESSED Table |%d|",sqlca.sqlcode);
+
+				IS_ANY_ORA_ERROR;
+
+				}
+			}
+			else
+			{
+				printf("\n Incorrect Value of Exchange Code");
+			}
+
+			//sprintf(chr_g_ml_log_buffer,"   %s          %s            %lf                     %lf           %lf        %lf     %lf  \n",p_oblg_acc_ent_struct_h->h_client[RecCounter],p_oblg_acc_ent_struct_h->h_exch_code[RecCounter],
+     		/*	sprintf(chr_g_ml_log_buffer,"%s,%s,%lf,%lf,%lf,%lf,%lf\n",p_oblg_acc_ent_struct_h->h_client[RecCounter],p_oblg_acc_ent_struct_h->h_exch_code[RecCounter],
+			l_sys_margin_amt,l_exch_margin_amt,l_collateral_amt,(l_margin_amt-l_collateral_amt),l_margin_amt); */
+			/*Commented and re-written ISKB_1493 -20072016- system should show new collateral as ‘0’ and Utilised Collateral should be actual collateral used from available collateral*/
+			sprintf(chr_g_ml_log_buffer,"%s,%s,%lf,%lf,%lf,%lf,%lf\n",p_oblg_acc_ent_struct_h->h_client[RecCounter],p_oblg_acc_ent_struct_h->h_exch_code[RecCounter],
+			l_sys_margin_amt,l_exch_margin_amt,l_collateral_amt,(l_collateral_amt-l_used_collateral),l_used_collateral);
+	fprintf(g_ml_flogfile,chr_g_ml_log_buffer,NULL,NULL);
+fflush(g_ml_flogfile);
+
+		}
+	}
+	else if (l_margin_amt == 0)
+	{
+		//printf("Do Nothing");
+		printf("\n Margin amount is 0..Skipping record for Margin AE Generation");
+
+	}
+	else
+	{
+		printf("\n Margin amount is Negative..Skipping record for Margin AE Generation");
+	}
+	
+	}
+	else 
+	{
+		sprintf(chr_g_log_buffer,"\n MARGIN/COLLATERAL ALREADY PROCESSED FOR CLIENT :[%s] AND REFERENCE NUMBER :[%s]",p_oblg_acc_ent_struct_h->h_client[RecCounter],p_oblg_acc_ent_struct_h->h_identiy_no[RecCounter]);
+		fprintf(g_flogfile,"%s",chr_g_log_buffer);
+	}
+	
+	/*Added By Prateek on 21032016 for Checking if MG02/VERPT/DM/VAR/ELM file has been uploaded in System or Not - START*/
+	}
+	else
+	{
+		sprintf(chr_g_log_buffer,"\n (MG02/VERPT/DM),(VAR/ELM) FILE HAS NOT BEEN UPLOADED OR MARGIN CALCULATION PROCESS PENDING FOR EXCHANGE CODE :[%s] and SETTLEMENT NO [%s]",p_oblg_acc_ent_struct_h->h_exch_code[RecCounter],p_oblg_acc_ent_struct_h->h_settlement_no[RecCounter]);
+		fprintf(g_flogfile,"%s",chr_g_log_buffer);
+	}
+	/*Added By Prateek on 21032016 for Checking if MG02/VERPT/DM/VAR/ELM file has been uploaded in System or Not - END*/
+	
+
+	APL_GOBACK_SUCCESS
+
+      RETURN_SUCCESS  :
+      {
+              fprintf(g_flogfile,"\n Leaving Gen_MarginAE() With Success");
+              //fprintf(g_ml_flogfile,"\n Leaving Gen_MarginAE() With Success");
+              return (APL_SUCCESS);
+      }
+      RETURN_FAILURE  :
+      {
+
+              sprintf(chr_g_log_buffer,"\n Leaving Gen_MarginAE() With Failure ORA=|%d|",sqlca.sqlcode);
+              //CO_ProcMonitor(g_ml_flogfile,"\n Leaving Gen_MarginAE() With Failure",l_debug_info_ptr,NULL);
+              CO_ProcMonitor(g_flogfile,chr_g_log_buffer,l_debug_info_ptr,NULL);
+              return (APL_FAILURE);
+      }
+
+
+}
+
+int main(int argc,char **argv)  //AIX-Warnings Removal
+{
+
+	DEBUG_INFO_STRUCT_H	**l_debug_info_ptr				=  NULL;
+	//INTL_ENV_DATA_STRUCT_H	*l_intlenv_datastruct_h		=  NULL;
+	INTL_ENV_DATA_STRUCT_H   l_intlenv_datastruct_h;
+	struct sqlca sqlca;
+
+	char l_chr_deal_date[11]		= APL_NULL_STRING;
+	char l_chr_exchange[4]			= APL_NULL_STRING;
+	char l_chr_settlement_no[16]	= APL_NULL_STRING;
+	char l_chr_mkt_type[4]			= APL_NULL_STRING;
+	char l_chr_clh_flg[2]			= APL_NULL_STRING;
+	char l_chr_deal_cd[2]			= APL_NULL_STRING;
+	char l_chr_instr_subtype[4]		= APL_NULL_STRING;
+	int l_int_num = 0;
+	char **l_chr_arglist=NULL;
+	int int_l_rec_cnt=0;
+	char *int_pos;
+	char chr_l_process_name[BT_PROCESS_NAME_LEN]=APL_NULL_STRING;
+	char chr_l_process_key[BT_PROCESS_KEY_LEN]=APL_NULL_STRING;
+	char chr_l_start_date[20]=APL_NULL_STRING;
+	/* Added by Ram for Equity Fund - START*/
+	//char l_chr_cln_grp[40]= APL_NULL_STRING;
+    //char l_chr_cln_master[40]= APL_NULL_STRING;
+    //char l_chr_cln_code[40]= APL_NULL_STRING;
+	char l_status1[3]=APL_NULL_STRING;
+    char l_cln_code[10]=APL_NULL_STRING;
+    char *chr_l_stmt;
+   /* Added by Ram for Equity Fund - END*/
+
+	l_debug_info_ptr = (DEBUG_INFO_STRUCT_H **)calloc(1,sizeof(DEBUG_INFO_STRUCT_H *));	
+
+   //Added By Azhar K. for NRI Accounting Entries - START
+	memset(&l_intlenv_datastruct_h,NULL,sizeof(INTL_ENV_DATA_STRUCT_H));
+
+	strcpy(l_intlenv_datastruct_h.usr,argv[3]);
+    strcpy(l_intlenv_datastruct_h.h_mode, argv[4]);
+    strcpy(l_intlenv_datastruct_h.processtion, argv[5]);
+    strcpy(l_intlenv_datastruct_h.auth_req, argv[6]);
+    strcpy(l_intlenv_datastruct_h.subprocess, argv[7]);
+    strcpy(l_intlenv_datastruct_h.h_process, argv[8]);
+
+	printf("\n Env Values Are: \n");
+	printf("\n l_intlenv_datastruct_h.usr=|%s| \n",l_intlenv_datastruct_h.usr);
+	printf("\n l_intlenv_datastruct_h.h_mode=|%s| \n",l_intlenv_datastruct_h.h_mode);
+	printf("\n l_intlenv_datastruct_h.processtion=|%s| \n",l_intlenv_datastruct_h.processtion);
+	printf("\n l_intlenv_datastruct_h.auth_req=|%s| \n",l_intlenv_datastruct_h.auth_req);
+	printf("\n l_intlenv_datastruct_h.subprocess=|%s| \n",l_intlenv_datastruct_h.subprocess);
+	printf("\n l_intlenv_datastruct_h.h_process=|%s| \n",l_intlenv_datastruct_h.h_process);
+   //Added By Azhar K. for NRI Accounting Entries - END
+
+	if(CO_Get_DBConnect(l_debug_info_ptr) == APL_FAILURE)
+	{
+		APL_GOBACK_FAIL
+	}
+
+	if (APL_FAILURE == CO_Rtv_RptFileName( "DLActGen",
+				APL_LOGFILE_DESC,
+				100,
+				argv[5],
+				argv,
+				&g_flogfile,
+				&l_debug_info_ptr ) ) 
+	{
+		printf("\n Error in CO_Rtv_RptFileName \n");
+		APL_GOBACK_FAIL
+	}
+
+		if (APL_FAILURE == CO_Rtv_RptFileName( "MLC",
+				APL_LOGFILE_DESC,
+				100,
+				argv[5],
+				argv,
+				&g_ml_flogfile,
+				&l_debug_info_ptr ) ) 
+	{
+		printf("\n Error in CO_Rtv_RptFileName \n");
+		APL_GOBACK_FAIL
+	}
+
+	//sprintf(chr_g_ml_log_buffer,"\n                 CLIENT          EXCHANGE       SYSTEM CALCULATED MARGIN          EXCHANGE MARGIN      AVAILABLE COLLATERAL    NEW COLLATERAL     LIEN AMOUNT  \n",chr_l_mcl_detail_file_name);
+	//sprintf(chr_g_ml_log_buffer,"\nCLIENT \t EXCHANGE \t SYSTEM CALCULATED MARGIN \t EXCHANGE MARGIN \t AVAILABLE COLLATERAL \t NEW COLLATERAL \t UTILISED COLLATERAL\n",chr_l_mcl_detail_file_name);
+	sprintf(chr_g_ml_log_buffer,"\nCLIENT,EXCHANGE,SYSTEM CALCULATED MARGIN,EXCHANGE MARGIN,AVAILABLE COLLATERAL,NEW COLLATERAL,UTILISED COLLATERAL\n",chr_l_mcl_detail_file_name);
+	fprintf(g_ml_flogfile,chr_g_ml_log_buffer,NULL,NULL);
+	//sprintf(chr_g_ml_log_buffer,"=====================================================================================================================================\n");
+	//fprintf(g_ml_flogfile,chr_g_ml_log_buffer,NULL,NULL);
+
+
+	 EXEC SQL COMMIT;
+	 IS_ANY_ORA_ERROR
+
+	 if(BT_Status_Update(argv[0],
+				 argv[1],
+				 argv[2],
+				 APL_STARTED_STATUS,
+				 l_debug_info_ptr) ==APL_FAILURE)
+	 {
+		 APL_GOBACK_FAIL
+	 }
+	 
+	 
+	if ( CO_RtvSysDtTime(chr_g_sys_date_time,l_debug_info_ptr) == APL_FAILURE )
+	APL_GOBACK_FAIL
+
+	if ( CO_RtvSysParams(l_debug_info_ptr) == APL_FAILURE)
+	APL_GOBACK_FAIL
+	
+
+		strcpy(chr_g_sys_date,chr_g_sys_date_time);
+		strcpy(chr_g_sys_date,strtok_r(chr_g_sys_date," ",&int_pos));
+		strcat(chr_g_sys_date,APL_NULL_TIME);
+
+		strcpy(chr_l_process_name,argv[0]);
+		strcpy(chr_l_process_key,argv[1]);
+		strcpy(chr_l_start_date,argv[2]);
+
+		
+	if ( argc < 10 )
+	{
+		fprintf(g_flogfile,"All Arguments expected by  program not passed \n");
+		APL_GOBACK_FAIL
+	}
+
+	strcpy(chr_g_progname,   argv[0]);
+	strcpy(chr_g_key,        argv[1]);
+	strcpy(chr_g_start_date, argv[2]);	
+
+
+
+	if(APL_FAILURE == CO_SplitStr(argv[9],
+									'|',
+									&l_int_num,
+									&l_chr_arglist))
+		{
+			fprintf(g_flogfile, "Failure from StrSplitFn \n");
+			APL_GOBACK_FAIL
+		}
+
+	if (l_int_num != 7)
+	{
+		printf("\n Total no of arguments are |%d|", l_int_num);
+		fprintf(g_flogfile, "Improper Number of arguements \n");
+		APL_GOBACK_FAIL
+	}
+	
+	
+	memset ( l_chr_deal_date, APL_NULL_CHAR,11);
+	memset ( l_chr_settlement_no, APL_NULL_CHAR,16);
+	memset ( l_chr_exchange, APL_NULL_CHAR,4);
+	memset ( l_chr_mkt_type, APL_NULL_CHAR,4);
+	memset ( l_chr_clh_flg, APL_NULL_CHAR,2);
+	memset ( l_chr_deal_cd, APL_NULL_CHAR,2);
+	memset ( l_chr_instr_subtype, APL_NULL_CHAR,4);
+	memset(chr_g_log_buffer,APL_NULL_CHAR,BUFFER_LEN);
+
+	/* Added by Ram for Equity Fund - START*/
+	
+	chr_l_stmt = (char *)calloc(15000,sizeof(char));
+	memset(chr_l_stmt,APL_NULL_CHAR,15000);
+
+
+    strcpy(l_chr_clh_flg,l_chr_arglist[4]);
+	strcpy(l_chr_deal_date, l_chr_arglist[0]);
+	strcpy(l_chr_settlement_no, l_chr_arglist[1]);
+	strcpy(l_chr_exchange, l_chr_arglist[2]);
+	strcpy(l_chr_mkt_type, l_chr_arglist[3]);
+	//strcpy(l_chr_clh_flg,l_chr_arglist[4]);
+	strcpy(l_chr_deal_cd,l_chr_arglist[5]);
+	strcpy(l_chr_instr_subtype,l_chr_arglist[6]);
+	
+	
+	printf("\n Selected Deal Date is  |%s|",l_chr_deal_date);
+	printf("\n Selected Settlment Number is  |%s|",l_chr_settlement_no);
+	printf("\n Selected Exchange Code is  |%s|",l_chr_exchange);
+	printf("\n Selected Market Type is  |%s|", l_chr_mkt_type);
+	printf("\n Selected CLH FLAG is  |%s|",l_chr_clh_flg);
+	printf("\n Selectet DEAL CODE is  |%s|",l_chr_deal_cd);
+	printf("\n Selected Instrument SubType is  |%s|",l_chr_instr_subtype);
+	/*printf("\n Client Group is is  |%s|",l_chr_cln_grp);
+	printf("\n Client Master is  |%s|",l_chr_cln_master);
+	printf("\n Client code is  |%s|",l_chr_cln_code); */
+	
+   /* Added by Ram for Equity Fund - END*/
+
+	if (!strlen(l_chr_arglist[0]))
+	{
+		fprintf(g_flogfile, "Mandatory Data Missing: Deal Date");
+		APL_GOBACK_FAIL
+	}
+
+
+	if(strcmp(l_chr_settlement_no,APL_NULL_STRING) == 0)
+		strcpy(l_chr_settlement_no,"%");
+	if(strcmp(l_chr_mkt_type,APL_NULL_STRING) == 0)
+		strcpy(l_chr_mkt_type,"%");
+	if(strcmp(l_chr_exchange,APL_NULL_STRING) == 0)
+		strcpy(l_chr_exchange,"%");
+	if(strcmp(l_chr_clh_flg,APL_NULL_STRING) == 0)
+		strcpy(l_chr_clh_flg,"%");
+	if(strcmp(l_chr_deal_cd,APL_NULL_STRING) == 0)
+		strcpy(l_chr_deal_cd,"%");
+	if(strcmp(l_chr_instr_subtype,APL_NULL_STRING) == 0)
+		strcpy(l_chr_instr_subtype,"%");
+
+    /* Added by Ram for Equity Fund - START*/
+
+	if(strcmp(l_chr_clh_flg,"E") == 0)
+	{
+	
+      	fprintf(g_flogfile,"\n ******************** Processing For Early Payin CLients*****************\n");
+		
+				EXEC SQL SELECT count(*) into :int_l_rec_cnt FROM MT_CLIENT I,dl_deal d WHERE D.CLIENT =I.CLN_CODE AND D.DEAL_CD ='4' AND D.DEAL_STAT  ='PM' AND  D.SETTLEMENT_NO like :l_chr_settlement_no AND D.EXCH_CODE like :l_chr_exchange AND  to_char(D.DEAL_DATE,'dd/mm/yyyy')= :l_chr_deal_date ;
+		
+
+		IS_ANY_ORA_ERROR
+
+				EXEC SQL update dl_deal set host_date=sysdate, PLTOPL_FLG='S' 
+						where to_char(DEAL_DATE,'dd/mm/yyyy')= :l_chr_deal_date and settlement_no like :l_chr_settlement_no and deal_stat='PM' and deal_cd='4' 
+						and EXCH_CODE like :l_chr_exchange
+						and ((dl_deal.client = (select cln_code from mt_client where cln_code=dl_deal.client and cln_type='N'))
+						or (GETCLIENTPARAMBYID('IGNORE_AE',dl_deal.client)='Y'))
+						and GETCLIENTPARAMBYID('EARLY_PAYIN_FND',dl_deal.client)='Y';
+	  IS_ANY_ORA_ERROR
+	
+		printf("count value is %d",int_l_rec_cnt);
+		 if(int_l_rec_cnt <=0)	
+		 {
+		   printf("\n\n No Records found matching your Criteria !\n\n");
+    	    fprintf(g_flogfile,"\n No Records found matching your Criteria !\n");
+		   APL_GOBACK_FAIL
+		 }
+		 else
+		 {
+          	strcpy(chr_l_stmt,"SELECT CLIENT FROM MT_CLIENT I,DL_DEAL D WHERE ");
+			strcat(chr_l_stmt," D.CLIENT =I.CLN_CODE AND D.DEAL_CD ='4' AND D.DEAL_STAT ='PM'");
+			strcat(chr_l_stmt," AND D.SETTLEMENT_NO like '");
+			strcat(chr_l_stmt,l_chr_settlement_no);
+			strcat(chr_l_stmt,"' AND D.EXCH_CODE like'");
+			strcat(chr_l_stmt,l_chr_exchange);
+			strcat(chr_l_stmt,"' AND TO_CHAR(D.DEAL_DATE,'dd/mm/yyyy')='");
+			strcat(chr_l_stmt,l_chr_deal_date);
+			strcat(chr_l_stmt,"'");
+
+
+			IS_ANY_ORA_ERROR
+
+			
+			EXEC SQL PREPARE S1 FROM :chr_l_stmt;
+			IS_ANY_ORA_ERROR
+		
+			EXEC SQL DECLARE Check_Client CURSOR FOR S1;
+			
+
+			EXEC SQL OPEN Check_Client;
+			IS_ANY_ORA_ERROR
+			
+			for(;;)
+			{
+			
+				EXEC SQL FETCH Check_Client INTO :l_cln_code;
+
+				if(APL_ZERO_RESULT_SET)
+				{
+					break;
+				} 
+
+				if(strlen(l_cln_code)>=0)
+				{	
+					EXEC SQL SELECT getclientparambyid_ae('EARLY_PAYIN_FND',:l_cln_code) into :l_status1 FROM DUAL;
+					printf("\nParam value is %s   %s ",l_status1,l_cln_code);
+
+					if(strcmp(l_status1,"N")==0)
+					{
+						fprintf(g_flogfile,"\n  Client |%s| cannot be processesd since it is marked as Non Early Payin (N) in client param master \n",l_cln_code);
+					}
+					else if(strcmp(l_status1,"C")==0)
+					{
+						fprintf(g_flogfile,"\n  Client |%s| cannot be processesd since it is Unautorize in client param master \n",l_cln_code);
+					}
+		
+				}
+			
+			}
+			
+			EXEC SQL CLOSE Check_Client;
+			
+		    chr_l_stmt="";
+		  
+		  /*  fprintf(g_flogfile, "DL_MarginReversal started for Early Payin");
+		   
+            if (APL_FAILURE == DL_MarginReversal(l_chr_deal_date,
+										 l_chr_settlement_no,
+										 l_chr_exchange,
+										 l_chr_mkt_type,
+										 l_chr_clh_flg,
+										 l_chr_deal_cd,
+										 l_chr_instr_subtype,
+										 chr_g_progname,
+										 chr_g_key,
+										 chr_g_start_date,
+										 &l_intlenv_datastruct_h,
+										 l_debug_info_ptr))
+			{
+			  CO_ProcMonitor(g_flogfile,"\n Exiting out of the DL_MarginReversal() Unsuccessfully.",l_debug_info_ptr,NULL);
+			  EXEC SQL ROLLBACK;
+			  IS_ANY_ORA_ERROR
+			  APL_GOBACK_FAIL
+			}		  
+		   */
+		    fprintf(g_flogfile, "Deal Accounting Entry started for Early Payin");
+
+	
+		    if (APL_FAILURE == DL_Proc_GenActEnt(l_chr_deal_date,
+													 l_chr_settlement_no,
+													 l_chr_exchange,
+													 l_chr_mkt_type,
+													 l_chr_clh_flg,
+													 l_chr_deal_cd,
+													 l_chr_instr_subtype,
+													 chr_g_progname,
+													 chr_g_key,
+													 chr_g_start_date,
+													 &l_intlenv_datastruct_h,
+													 l_debug_info_ptr))
+		    {	
+			 CO_ProcMonitor(g_flogfile,"\n Exiting out of the DL_Proc_GenActEnt() Unsuccessfully. \n So Accounting Entries Generation fails. \n",l_debug_info_ptr,NULL);
+			 EXEC SQL ROLLBACK;
+			 IS_ANY_ORA_ERROR
+			 APL_GOBACK_FAIL
+	   	    }
+		  
+		 }		  
+		
+	}
+	else
+	{
+
+
+			EXEC SQL SELECT COUNT(*) INTO :int_l_rec_cnt FROM dl_deal
+			WHERE to_char(deal_date,'DD/MM/YYYY')=:l_chr_deal_date
+			AND exch_code LIKE :l_chr_exchange
+			AND mkt_type LIKE :l_chr_mkt_type
+			AND settlement_no LIKE :l_chr_settlement_no;
+
+			IS_ANY_ORA_ERROR
+
+		if(int_l_rec_cnt <=0)
+		{
+			fprintf(g_flogfile, "NO Record found matching your Criteria !");
+			printf("\n\n No Records found matching your Criteria !\n\n");
+			APL_GOBACK_FAIL
+		}
+			
+	
+	/* Added For Margin Reversal Acct Entries - 02062015 -START*/
+	if (APL_FAILURE == DL_MarginReversal(l_chr_deal_date,
+										 l_chr_settlement_no,
+										 l_chr_exchange,
+										 l_chr_mkt_type,
+										 l_chr_clh_flg,
+										 l_chr_deal_cd,
+										 l_chr_instr_subtype,
+										 chr_g_progname,
+										 chr_g_key,
+										 chr_g_start_date,
+										 &l_intlenv_datastruct_h,
+										 l_debug_info_ptr))
+	{
+	CO_ProcMonitor(g_flogfile,"\n Exiting out of the DL_MarginReversal() Unsuccessfully.",l_debug_info_ptr,NULL);
+	EXEC SQL ROLLBACK;
+	IS_ANY_ORA_ERROR
+	APL_GOBACK_FAIL
+	}
+	/* Added For Margin Reversal Acct Entries - 02062015 -END*/
+
+
+	
+	if (APL_FAILURE == DL_Proc_GenActEnt(l_chr_deal_date,
+													 l_chr_settlement_no,
+													 l_chr_exchange,
+													 l_chr_mkt_type,
+													 l_chr_clh_flg,
+													 l_chr_deal_cd,
+													 l_chr_instr_subtype,
+													 chr_g_progname,
+													 chr_g_key,
+													 chr_g_start_date,
+													 &l_intlenv_datastruct_h,
+													 l_debug_info_ptr))
+		{
+			CO_ProcMonitor(g_flogfile,"\n Exiting out of the DL_Proc_GenActEnt() Unsuccessfully.",l_debug_info_ptr,NULL);
+			EXEC SQL ROLLBACK;
+			IS_ANY_ORA_ERROR
+			APL_GOBACK_FAIL
+		}
+	}
+	
+	/* Added by Ram for Equity Fund - END*/
+
+APL_GOBACK_SUCCESS
+ 
+	RETURN_SUCCESS:
+	{ 
+			if(BT_Status_Completed(argv[0],
+			argv[1],
+			argv[2],
+			l_debug_info_ptr)   ==  APL_FAILURE )
+		{
+		 APL_GOBACK_FAIL
+		}
+
+		EXEC SQL COMMIT WORK;
+		if(sqlca.sqlcode != 0)
+		APL_GOBACK_FAIL
+		fprintf(g_flogfile, "\n Exiting Successfully from Deal Accounting Entries Generation");
+		fprintf(g_ml_flogfile, "\n Exiting Successfully from Margin Accounting Entries Generation/Collateral Utilization");
+		exit(0);
+	}
+	RETURN_FAILURE:
+	{
+		CO_ProcMonitor(g_flogfile,"\n Failed to Generate Deal Accounting Entries.",l_debug_info_ptr,NULL);
+		printf("\n Failed to Generate Deal Accounting Entries.");
+		CO_Proc_RptClose(g_flogfile,l_debug_info_ptr);
+		CO_Proc_RptClose(g_ml_flogfile,l_debug_info_ptr);
+		exit(-1);
+	}
+}
+int DL_MarginReversal( char *p_chr_deal_date,
+												 char *p_chr_settlement_no,
+												 char *p_chr_exchange,
+												 char *p_chr_mkt_type,
+												 char *p_chr_clh_flg,
+												 char *p_chr_deal_cd,
+												 char *p_chr_instr_subtype,
+												 char *p_process_name,
+												 char *p_process_key,
+												 char *p_start_date,
+												 INTL_ENV_DATA_STRUCT_H  *l_intlenv_datastruct_h,
+												 DEBUG_INFO_STRUCT_H      **l_debug_info_ptr)
+{
+
+	double hvMrginAmt = 0.0;
+	double hvLienAmt = 0.0;
+	char   l_clientcd[11] = APL_NULL_STRING;
+	char   l_exch_code[4] = APL_NULL_STRING;
+	char   l_settmnt_no[DL_SETTLEMENT_NO_LEN] = APL_NULL_STRING;
+	double l_old_collt_amt = 0.0;
+	double l_used_collateral_amt = 0.0;
+	char   l_curr_cd[4] = APL_NULL_STRING;
+	char   l_dealCd[DL_DEAL_CD_LEN] = APL_NULL_STRING;
+	int int_rev_counter=0;
+
+	char *chr_MrgnRev_stmt;
+	char hvSplCltCd[APL_FLAG_LENGTH] = APL_NULL_STRING;
+
+	double intReverseAmt = 0.0;
+	PRO_ACCTENT_STRUCT_H    *l_pro_cl_acctent_struct_h = NULL;
+	PRO_ACCTENT_STRUCT_I    *l_pro_cl_acctent_struct_i = NULL;
+	PRO_ACCTENT_STRUCT_H    *l_pro_gl_acctent_struct_h = NULL;
+	PRO_ACCTENT_STRUCT_I    *l_pro_gl_acctent_struct_i = NULL;
+
+	printf("\n Inside DL_MarginReversal Func\n");
+	printf("\n deal_date :[%s]",p_chr_deal_date);
+	printf("\n h_exch_code :[%s]",p_chr_exchange);
+	printf("\n h_settlement_no :[%s]",p_chr_settlement_no);
+	printf("\n h_settlement_no :[%s]",p_chr_settlement_no);
+	printf("\n p_chr_mkt_type :[%s]",p_chr_mkt_type);
+	printf("\n p_chr_clh_flg :[%s]",p_chr_clh_flg);
+	printf("\n p_chr_deal_cd :[%s]",p_chr_deal_cd);
+	printf("\n p_chr_instr_subtype :[%s]",p_chr_instr_subtype);
+
+	chr_MrgnRev_stmt = (char *)calloc(15000,sizeof(char));
+	memset(chr_MrgnRev_stmt,APL_NULL_CHAR,15000);
+
+	l_pro_cl_acctent_struct_h = ( PRO_ACCTENT_STRUCT_H * )calloc ( 1, sizeof ( PRO_ACCTENT_STRUCT_H) );
+	APL_MALLOC_FAIL(l_pro_cl_acctent_struct_h);
+	l_pro_gl_acctent_struct_h = ( PRO_ACCTENT_STRUCT_H * )calloc ( 1, sizeof ( PRO_ACCTENT_STRUCT_H) );
+	APL_MALLOC_FAIL(l_pro_gl_acctent_struct_h);
+	l_pro_cl_acctent_struct_i = ( PRO_ACCTENT_STRUCT_I * )calloc ( 1, sizeof ( PRO_ACCTENT_STRUCT_I) );
+	APL_MALLOC_FAIL(l_pro_cl_acctent_struct_i);
+	l_pro_gl_acctent_struct_i = ( PRO_ACCTENT_STRUCT_I * )calloc ( 1, sizeof ( PRO_ACCTENT_STRUCT_I) );
+	APL_MALLOC_FAIL(l_pro_gl_acctent_struct_i);
+
+	memset(l_pro_cl_acctent_struct_i,-1,sizeof( PRO_ACCTENT_STRUCT_I) );
+	memset(l_pro_gl_acctent_struct_i,-1,sizeof( PRO_ACCTENT_STRUCT_I) );
+
+	EXEC SQL VAR hvSplCltCd IS STRING;
+	EXEC SQL VAR l_clientcd IS STRING;
+	EXEC SQL VAR l_exch_code IS STRING;
+	EXEC SQL VAR l_settmnt_no IS STRING;
+	EXEC SQL VAR l_curr_cd IS STRING;
+	EXEC SQL VAR l_dealCd IS STRING;
+
+	if (APL_FAILURE == CO_Rtv_NxtBatchSeq(	MODULE_IND_DL,
+											chr_g_batch_no,
+											int_g_seq_num,
+											l_debug_info_ptr) )
+	{
+		printf("\n Error in CO_Rtv_RptFileName \n");
+		APL_GOBACK_FAIL
+	}
+
+
+	if(CO_Rtv_NxtBatchSeq(MODULE_IND_DL,
+					chr_g_batch_no,
+					int_g_seq_num,
+					l_debug_info_ptr
+					)==APL_FAILURE
+		)
+	{
+		fprintf(g_flogfile,"Could not obtain Batch Number");
+		APL_GOBACK_FAIL
+	}
+	else
+	{
+		if( !strcmp(chr_g_batch_no,APL_NULL_STRING) )
+		{
+			g_get_batch_no_flg = APL_SUCCESS;
+		}
+		else
+		{
+			int_g_run_seq_num = atoi(int_g_seq_num);
+			int_g_run_seq_num = int_g_run_seq_num + 1;
+			sprintf(int_g_seq_num,"%d",int_g_run_seq_num);
+			sprintf(chr_g_log_buffer,"\n Got Batch Number :[%s] Sequence Number :[%s]",chr_g_batch_no,int_g_seq_num);
+			CO_ProcMonitor(g_flogfile,chr_g_log_buffer,NULL,NULL);
+		}
+
+	}
+
+		printf("\n Batch No in Margin Reversal is :[%s]\n int_g_seq_num:[%s]",chr_g_batch_no,int_g_seq_num);
+
+		strcpy(chr_MrgnRev_stmt,"SELECT distinct a.CLN_CODE,a.EXCH_CODE,a.SETTLEMENT_NO,a.OLD_COLLATERAL_AMT,a.NEW_COLLATERAL_AMT,a.MARGIN_AMT,a.LIEN_AMT,a.CURR_CD");
+		strcat(chr_MrgnRev_stmt," ,b.deal_cd FROM AE_MARGIN_LOG a, DL_DEAL b,pro_sys_date c,mt_instrument d,MT_SETTL_CAL E WHERE a.CLN_CODE = b.CLIENT and  a.DEAL_DATE = b.DEAL_DATE");
+		strcat(chr_MrgnRev_stmt," and a.EXCH_CODE = b.EXCH_CODE and a.SETTLEMENT_NO = b.SETTLEMENT_NO and b.instr_code=d.instr_code and a.STATUS = 'P' and a.PROCESS_NAME = 'Gen_MarginAE'");
+		/*Added By Prateek on 02072015 for ISKB_1493(Taking [PAY_OUT_DT + MARGIN REVERSAL DAYS] instead of [DEAL_DATE +MARGIN REVERSAL DAYS]) -START*/
+		strcat(chr_MrgnRev_stmt," and E.EXCH_CODE = b.EXCH_CODE and E.SETTL_NO = b.SETTLEMENT_NO and E.SETTL_TYPE=b.MKT_TYPE");
+		/*Added By Prateek on 02072015 for ISKB_1493(Taking [PAY_OUT_DT + MARGIN REVERSAL DAYS] instead of [DEAL_DATE +MARGIN REVERSAL DAYS]) -END*/
+		strcat(chr_MrgnRev_stmt," and TO_CHAR(a.deal_date,'DD/MM/YYYY')='");
+		strcat(chr_MrgnRev_stmt,p_chr_deal_date);
+		strcat(chr_MrgnRev_stmt,"' AND a.settlement_no LIKE '");
+		strcat(chr_MrgnRev_stmt,p_chr_settlement_no);
+		strcat(chr_MrgnRev_stmt,"' AND a.exch_code LIKE '");
+		strcat(chr_MrgnRev_stmt,p_chr_exchange);
+		strcat(chr_MrgnRev_stmt,"' AND b.mkt_type LIKE '");
+		strcat(chr_MrgnRev_stmt,p_chr_mkt_type);
+		strcat(chr_MrgnRev_stmt,"' AND b.clh_flg LIKE '");
+		strcat(chr_MrgnRev_stmt,p_chr_clh_flg);
+		strcat(chr_MrgnRev_stmt,"' AND b.deal_cd LIKE '");
+		strcat(chr_MrgnRev_stmt,p_chr_deal_cd);
+		strcat(chr_MrgnRev_stmt,"' AND d.instr_sub_type LIKE '");
+		strcat(chr_MrgnRev_stmt,p_chr_instr_subtype);
+
+
+               /* Commented by swathi V- start
+		if(strcmp(p_chr_clh_flg,"C")==0)
+		{
+			printf("\n FOR C:p_chr_clh_flg=|%s| \n",p_chr_clh_flg);
+			strcat(chr_MrgnRev_stmt,"' AND b.deal_stat=DECODE('");
+			strcat(chr_MrgnRev_stmt,p_chr_clh_flg);
+			strcat(chr_MrgnRev_stmt,"','C',DECODE(b.deal_cd,'3','SS','4','CC'))");
+			strcat(chr_MrgnRev_stmt," AND b.mkt_type not in ('7','18','19','20','23','24','25')");
+		}
+		else if(strcmp(p_chr_clh_flg,"D")==0)
+		{
+			printf("\n FOR D:p_chr_clh_flg=|%s| \n",p_chr_clh_flg);
+			strcat(chr_MrgnRev_stmt,"' AND b.deal_stat=DECODE('");
+			strcat(chr_MrgnRev_stmt,p_chr_clh_flg);
+			strcat(chr_MrgnRev_stmt,"','D',DECODE(b.deal_cd,'3','CC','4','SS'))");
+		}
+		else if(strcmp(p_chr_clh_flg,"%")==0)
+		{
+			printf("\n FOR both:p_chr_clh_flg=|%s| \n",p_chr_clh_flg);
+			strcat(chr_MrgnRev_stmt,"' AND ((b.deal_cd='3' AND b.deal_stat='SS' AND b.clh_flg='C') OR (b.deal_cd='4' AND b.deal_stat='CC' AND b.clh_flg= 'C') OR (b.deal_cd='3' AND b.deal_stat='CC' AND b.clh_flg='D') OR (b.deal_cd='4' AND b.deal_stat='SS' AND b.clh_flg='D')) ");
+		}
+                Commented by swathi V ends */
+
+                      /*Re-Written by swathi - start- */ 
+                 strcat(chr_MrgnRev_stmt,"'  AND b.deal_cd ='4' AND b.deal_stat in ('CC','MS','CS')");
+                 strcat(chr_MrgnRev_stmt," AND to_date(c.SYS_DATE,'dd/mm/yyyy hh24:mi:ss') >= to_date(E.PAY_OUT_DT,'dd/mm/yyyy hh24:mi:ss') + to_number(GETCLIENTPARAMBYID('MARGIN_REV_DAYS',a.CLN_CODE))") ; 
+                     /*Re-Written by swathi - end- */ 
+
+		/*Commented and Rewritten By Prateek on 02072015 for ISKB_1493(Taking [PAY_OUT_DT + MARGIN REVERSAL DAYS] instead of [DEAL_DATE +MARGIN REVERSAL DAYS]) -START
+		strcat(chr_MrgnRev_stmt," and to_date(a.deal_date,'dd/mm/yyyy hh24:mi:ss') + to_number(GETCLIENTPARAMBYID('MARGIN_REV_DAYS',a.CLN_CODE)) >= to_date(c.SYS_DATE,'dd/mm/yyyy hh24:mi:ss')");*/
+		//strcat(chr_MrgnRev_stmt," and to_date(E.PAY_OUT_DT,'dd/mm/yyyy hh24:mi:ss') + to_number(GETCLIENTPARAMBYID('MARGIN_REV_DAYS',a.CLN_CODE)) >= to_date(c.SYS_DATE,'dd/mm/yyyy hh24:mi:ss')");
+         //Commented by swathi
+	//strcat(chr_MrgnRev_stmt," and to_date(c.SYS_DATE,'dd/mm/yyyy hh24:mi:ss') >= to_date(E.PAY_OUT_DT,'dd/mm/yyyy hh24:mi:ss') + to_number(GETCLIENTPARAMBYID('MARGIN_REV_DAYS',a.CLN_CODE))");
+		
+		/*Commented and Rewritten By Prateek on 02072015 for ISKB_1493(Taking [PAY_OUT_DT + MARGIN REVERSAL DAYS] instead of [DEAL_DATE +MARGIN REVERSAL DAYS]) -END*/
+
+		printf("\n Cursor For MARGIN REVERSAL IS :[%s]",chr_MrgnRev_stmt);
+		sprintf(chr_g_log_buffer1," Dynamic SQL For MARGIN REVERSAL IS ...=|%s|",chr_MrgnRev_stmt);
+		fprintf(g_flogfile,"%s",chr_g_log_buffer1);
+
+		EXEC SQL PREPARE S FROM :chr_MrgnRev_stmt;
+		IS_ANY_ORA_ERROR
+
+		EXEC SQL DECLARE CUR_MRGN_REVRSL CURSOR FOR S;
+		IS_ANY_ORA_ERROR
+
+		EXEC SQL OPEN CUR_MRGN_REVRSL;
+		IS_ANY_ORA_ERROR
+
+
+		for(;;)
+		{
+			memset(l_clientcd,APL_NULL_CHAR,sizeof(l_clientcd));
+			memset(l_exch_code,APL_NULL_CHAR,sizeof(l_exch_code));
+			memset(l_settmnt_no,APL_NULL_CHAR,sizeof(l_settmnt_no));
+			memset(l_dealCd,APL_NULL_CHAR,sizeof(l_dealCd));
+
+			l_old_collt_amt = 0.0;
+			l_used_collateral_amt = 0.0;
+			hvMrginAmt = 0.0;
+			hvLienAmt = 0.0;
+
+			EXEC SQL FETCH CUR_MRGN_REVRSL
+			INTO  :l_clientcd,
+					:l_exch_code,
+					:l_settmnt_no,
+					:l_old_collt_amt,
+					:l_used_collateral_amt,
+					:hvMrginAmt,
+					:hvLienAmt,
+					:l_curr_cd,
+					:l_dealCd;
+			printf("\n SQLCA.SQLCODE of CUR_MRGN_REVRSL :[%d]", sqlca.sqlcode);
+			IS_ANY_ORA_ERROR
+
+			if(APL_ZERO_RESULT_SET)
+			{
+				if(int_rev_counter==0)
+				{
+					fprintf(g_flogfile,"\n\n NO RECORDS FOUND IN THE CUR_MRGN_REVRSL CURSOR!\n");
+				}
+			break;
+			}
+
+		int_rev_counter++;
+		printf("\n Record counter number: |%d|",int_rev_counter);
+		printf("\n 	hvLienAmt : [%lf] ,hvMrginAmt : [%lf]",hvLienAmt,hvMrginAmt);
+		/*Changes done by swathi- to increment the indent number/CR Leg indicator of next record picked in margin reversal cursor(ISKB_1493)- 12/07/2016-STARTS*/
+		if(int_rev_counter > 1 && ((hvLienAmt>0)   && (hvMrginAmt>0) ) ) //To increment counter only for those Records whose Reversal is Required
+		{
+			printf("\n When records fetched more than 1");
+			printf("\n Before increment>> int_g_run_seq_num |%d|",int_g_run_seq_num);
+			int_g_run_seq_num = int_g_run_seq_num + 1;
+			printf("\n after increment>> int_g_run_seq_num |%d|",int_g_run_seq_num);
+			sprintf(int_g_seq_num,"%d",int_g_run_seq_num);
+			printf("\n int_g_seq_num iss: |%s| ",int_g_seq_num);
+		}
+		
+	        printf("\n Sequence number for Leg/Indent Number: |%s| ",int_g_seq_num);
+		/*Changes done by swathi- to increment the indent number/CR Leg indicator of next record picked in margin reversal cursor(ISKB_1493)- 12/07/2016-ENDS*/	
+
+		sprintf(chr_g_log_buffer,"\n MARGIN REVERSAL FOR \n CLIENT :[%s] LCL AMOUNT : [%lf] MARGIN AMT:[%lf] USED COLLT AMT:[%lf] ",l_clientcd,hvMrginAmt,hvLienAmt,l_used_collateral_amt);
+		fprintf(g_flogfile,chr_g_log_buffer);
+
+		printf("\n l_clientcd :[%s]\n l_exch_code :[%s]\n l_settmnt_no:[%s]\n l_curr_cd :[%s]",l_clientcd,l_exch_code,l_settmnt_no,l_curr_cd);
+		printf("\n OLD COLLATERAL AMT :[%lf]\n USED COLLATERAL AMT :[%lf]\n LIEN AMT :[%lf]\n MARGIN AMT:[%lf]",l_old_collt_amt,l_used_collateral_amt,hvMrginAmt,hvLienAmt);
+
+		if(strcmp(l_exch_code,"BSE") == 0)
+		{
+			EXEC SQL UPDATE MT_COLLATERAL
+			SET  BSE_COLLATERAL = BSE_COLLATERAL + :l_used_collateral_amt ,
+			AVAILABLE_COLLATERAL = AVAILABLE_COLLATERAL + :l_used_collateral_amt
+			WHERE CLIENT_CD = :l_clientcd;
+
+			IS_ANY_ORA_ERROR
+		}
+		else if(strcmp(l_exch_code,"NSE") == 0)
+		{
+			EXEC SQL UPDATE MT_COLLATERAL
+			SET NSE_COLLATERAL = NSE_COLLATERAL + :l_used_collateral_amt ,
+			AVAILABLE_COLLATERAL = AVAILABLE_COLLATERAL + :l_used_collateral_amt
+			WHERE CLIENT_CD = :l_clientcd;
+
+			IS_ANY_ORA_ERROR
+		}
+		else if(strcmp(l_exch_code,"MCS") == 0)
+		{
+			EXEC SQL UPDATE MT_COLLATERAL
+			SET MCS_COLLATERAL = MCS_COLLATERAL + :l_used_collateral_amt ,
+			AVAILABLE_COLLATERAL = AVAILABLE_COLLATERAL + :l_used_collateral_amt
+			WHERE CLIENT_CD = :l_clientcd;
+
+			IS_ANY_ORA_ERROR
+		}
+		else
+		{
+			sprintf(chr_g_log_buffer,"\n Invalid Exchange Code In Margin Reversal");
+			CO_ProcMonitor(g_flogfile,chr_g_log_buffer,l_debug_info_ptr,NULL);
+			APL_GOBACK_FAIL
+		}
+
+		if( (hvLienAmt>0)   && (hvMrginAmt>0) )
+		{
+			fprintf(g_flogfile,"\n MARGIN AMT AND LIEN AMT ARE > 0 ,SO PROCESSING AE GENERATION");
+			intReverseAmt = hvMrginAmt;
+			printf("\n intReverseAmt:[%lf]",intReverseAmt);
+
+			/** Generate AE For Credit Of Client account and Debit of GL Account **/
+  
+			EXEC SQL SELECT NVL(CLN_FX_INC_IND,'N') INTO :hvSplCltCd FROM MT_CLIENT WHERE CLN_CODE=:l_clientcd;
+			IS_ANY_ORA_ERROR;
+
+			printf("\n Client FX indicator is [%s]",l_pro_cl_acctent_struct_h->spl_clt_cd);
+
+			/*Taking Suspense Account*/
+			EXEC SQL SELECT DECODE(:l_exch_code,'NSE',SUBSTR(a.NSECLH,9),'BSE',SUBSTR(a.BSECLH,9),'MCS',SUBSTR(a.MCSCLH,9))
+			INTO :l_pro_gl_acctent_struct_h->client:l_pro_gl_acctent_struct_i->i_dl_client
+			FROM IV_CLIENTGL a;
+
+			printf("\n Sqlcode after taking the GL Account is |%d|",sqlca.sqlcode);
+			IS_ANY_ORA_ERROR;
+
+			printf("\n GL Account is |%s|",l_pro_gl_acctent_struct_h->client);
+			/*Taking Client Account*/
+
+			EXEC SQL SELECT SUBSTR(A.BNK_ACC,9) INTO :l_pro_cl_acctent_struct_h->client :l_pro_cl_acctent_struct_i->i_dl_client
+			FROM IV_CLIENTSETUP A WHERE A.CLIENT =:l_clientcd
+			AND STAT_IND='A';
+
+			printf("\n Sqlcode after taking the Client Account is |%d|",sqlca.sqlcode);
+			IS_ANY_ORA_ERROR;
+ 
+			printf("\n Client Account is |%s|",l_pro_cl_acctent_struct_h->client);
+
+			l_pro_cl_acctent_struct_h->module_ind = MODULE_IND_DL;
+			l_pro_gl_acctent_struct_h->module_ind = MODULE_IND_DL;
+			l_pro_cl_acctent_struct_i->i_module_ind = 0;
+			l_pro_gl_acctent_struct_i->i_module_ind = 0;
+
+			strcpy(l_pro_cl_acctent_struct_h->brnch_cd,g_mt_commonsys_params_struct_h.brnch_cd);
+			strcpy(l_pro_gl_acctent_struct_h->brnch_cd,g_mt_commonsys_params_struct_h.brnch_cd);
+			l_pro_cl_acctent_struct_i->i_brnch_cd = 0;
+			l_pro_gl_acctent_struct_i->i_brnch_cd = 0;
+
+			printf("\n Batch Flag=|%d| \n",g_get_batch_no_flg);
+
+			if(g_get_batch_no_flg == APL_SUCCESS)
+			{
+				if(IV_Proc_GenBatchNoFn(chr_g_batch_no,
+										l_debug_info_ptr
+										)==APL_FAILURE)
+					{
+							fprintf(g_flogfile,"Could not obtain Batch Number");
+							APL_GOBACK_FAIL
+					}
+				else
+					{
+					int_g_run_seq_num = 1;
+					strcpy(int_g_seq_num,"1");
+					g_get_batch_no_flg = APL_FAILURE;
+					sprintf(chr_g_log_buffer,"\n Got Batch Number :[%s] Sequence Number :[%s]",chr_g_batch_no,int_g_seq_num);
+					fprintf(g_flogfile,"%s",chr_g_log_buffer);
+
+					}
+			}
+
+			printf("\n IndentA-Before Copying sequence to inden/leg ,int_g_seq_num |%s|, int_g_run_seq_num |%d|",int_g_seq_num,int_g_run_seq_num);
+
+			/*Commented and Rewritten by Prateek on 20122016 for Changing the order of Client and GL entry - START*/
+			//strcpy(l_pro_cl_acctent_struct_h->inden_num,int_g_seq_num);
+			//strcpy(l_pro_gl_acctent_struct_h->leg_ind,int_g_seq_num);
+			//printf("\n For Margin Client Ident No is:[%s]",l_pro_cl_acctent_struct_h->inden_num);
+			//printf("\n For Margin GL Leg_IND is:[%s]",l_pro_gl_acctent_struct_h->leg_ind);
+			strcpy(l_pro_gl_acctent_struct_h->inden_num,int_g_seq_num);
+			strcpy(l_pro_cl_acctent_struct_h->leg_ind,int_g_seq_num);
+			printf("\n For Margin GL Ident No is:[%s]",l_pro_gl_acctent_struct_h->inden_num);
+			printf("\n For Margin client Leg_IND is:[%s]",l_pro_cl_acctent_struct_h->leg_ind);
+			/*Commented and Rewritten by Prateek on 20122016 for Changing the order of Client and GL entry - END*/
+
+			int_g_run_seq_num = int_g_run_seq_num + 1;
+			sprintf(int_g_seq_num,"%d",int_g_run_seq_num);
+
+			printf("\n IndentB-Before Copying sequence to inden/leg ,int_g_seq_num |%s|, int_g_run_seq_num |%d|",int_g_seq_num,int_g_run_seq_num);
+			/*Commented and Rewritten by Prateek on 20122016 for Changing the order of Client and GL entry - START*/
+			//strcpy(l_pro_gl_acctent_struct_h->inden_num,int_g_seq_num);
+			//strcpy(l_pro_cl_acctent_struct_h->leg_ind,int_g_seq_num);
+			//printf("\n For Margin GL Ident No is:[%s]",l_pro_gl_acctent_struct_h->inden_num);
+			//printf("\n For Margin client Leg_IND is:[%s]",l_pro_cl_acctent_struct_h->leg_ind);
+			strcpy(l_pro_cl_acctent_struct_h->inden_num,int_g_seq_num);
+			strcpy(l_pro_gl_acctent_struct_h->leg_ind,int_g_seq_num);
+			printf("\n For Margin Client Ident No is:[%s]",l_pro_cl_acctent_struct_h->inden_num);
+			printf("\n For Margin GL Leg_IND is:[%s]",l_pro_gl_acctent_struct_h->leg_ind);
+			/*Commented and Rewritten by Prateek on 20122016 for Changing the order of Client and GL entry - END*/
+
+			l_pro_cl_acctent_struct_i->i_sequence_num = 0;
+			l_pro_gl_acctent_struct_i->i_sequence_num = 0;
+
+			strcpy(l_pro_cl_acctent_struct_h->curr_cd,LOCAL_CCY);
+			strcpy(l_pro_gl_acctent_struct_h->curr_cd,LOCAL_CCY);
+			l_pro_cl_acctent_struct_i->i_curr_cd = 0;
+			l_pro_gl_acctent_struct_i->i_curr_cd = 0;
+
+			l_pro_cl_acctent_struct_h->fccy_amt = 0;
+			l_pro_gl_acctent_struct_h->fccy_amt = 0;
+			l_pro_cl_acctent_struct_i->i_fcy_amt = 0;
+			l_pro_gl_acctent_struct_i->i_fcy_amt = 0;
+
+			l_pro_cl_acctent_struct_h->exchg_rt = 1;
+			l_pro_gl_acctent_struct_h->exchg_rt = 1;
+			l_pro_cl_acctent_struct_i->i_exch_rt = 0;
+			l_pro_gl_acctent_struct_i->i_exch_rt = 0;
+
+			l_pro_cl_acctent_struct_h->lcl_amount = intReverseAmt;
+			l_pro_gl_acctent_struct_h->lcl_amount = intReverseAmt;
+			l_pro_cl_acctent_struct_i->i_lcy_amount = 0;
+			l_pro_gl_acctent_struct_i->i_lcy_amount = 0;
+
+			EXEC SQL SELECT TO_CHAR(sys_date,'YYYYMMDD') INTO :l_pro_cl_acctent_struct_h->val_date:l_pro_cl_acctent_struct_i->i_value_date FROM PRO_SYS_DATE;
+			IS_ANY_ORA_ERROR
+			strcpy(l_pro_gl_acctent_struct_h->val_date,l_pro_cl_acctent_struct_h->val_date);
+			l_pro_gl_acctent_struct_i->i_value_date = 0;
+
+			/*Added by Prateek on 08082105 for avoiding ORA 1480 - SIT issue -START*/
+			strcpy(l_pro_cl_acctent_struct_h->val_date,l_pro_cl_acctent_struct_h->val_date);
+			l_pro_cl_acctent_struct_i->i_value_date = 0;
+			/*Added by Prateek on 08082105 for avoiding ORA 1480 - SIT issue -END*/
+
+			strcpy(l_pro_cl_acctent_struct_h->deal_cd,AE_DLCD);
+			strcpy(l_pro_gl_acctent_struct_h->deal_cd,AE_DLCD);
+			l_pro_cl_acctent_struct_i->i_deal_cd = 0;
+			l_pro_gl_acctent_struct_i->i_deal_cd = 0;
+
+			strcpy(l_pro_cl_acctent_struct_h->spl_clt_cd,hvSplCltCd);
+			strcpy(l_pro_gl_acctent_struct_h->spl_clt_cd,APL_NULL_CHAR);
+			l_pro_cl_acctent_struct_i->i_spl_clt_cd = 0;
+			l_pro_gl_acctent_struct_i->i_spl_clt_cd = 0;
+
+			if(strcmp(l_dealCd ,"4")==0)
+			{
+				l_pro_cl_acctent_struct_h->db_cr_ind='1';
+				l_pro_gl_acctent_struct_h->db_cr_ind='0';
+			}
+			else if(strcmp(l_dealCd ,"3")==0)
+			{
+				l_pro_cl_acctent_struct_h->db_cr_ind='0';
+				l_pro_gl_acctent_struct_h->db_cr_ind='1';
+			}
+			l_pro_cl_acctent_struct_i->i_db_cr_flag = 0;
+			l_pro_gl_acctent_struct_i->i_db_cr_flag = 0;
+
+			/*Commented and Rewritten by Prateek on 26082015 for Adding the exchange code and Settlment no in Narrative -START
+			sprintf(l_pro_cl_acctent_struct_h->description,"CL_MARGINPAYOUT %s ",l_clientcd);
+			sprintf(l_pro_gl_acctent_struct_h->description,"GL_MARGINPAYOUT %s ",l_clientcd);
+			sprintf(l_pro_cl_acctent_struct_h->description,"CL_MARGINPAYOUT %s %s %s",l_clientcd,l_exch_code,l_settmnt_no);
+			sprintf(l_pro_gl_acctent_struct_h->description,"GL_MARGINPAYOUT %s %s %s",l_clientcd,l_exch_code,l_settmnt_no);*/
+			sprintf(l_pro_cl_acctent_struct_h->description,"CL_MARGIN_REV %s %s %s",l_clientcd,l_exch_code,l_settmnt_no);
+			sprintf(l_pro_gl_acctent_struct_h->description,"GL_MARGIN_REV %s %s %s",l_clientcd,l_exch_code,l_settmnt_no);
+			/*Commented and Rewritten by Prateek on 26082015 for Adding the exchange code and Settlment no in Narrative - END*/
+			l_pro_cl_acctent_struct_i->i_description = 0;
+			l_pro_gl_acctent_struct_i->i_description = 0;
+
+			l_pro_cl_acctent_struct_h->status_ind = APL_ACCTENT_GEN_IND;
+			l_pro_gl_acctent_struct_h->status_ind = APL_ACCTENT_GEN_IND;
+			l_pro_cl_acctent_struct_i->i_status_ind = 0;
+			l_pro_gl_acctent_struct_i->i_status_ind = 0;
+
+			strcpy(l_pro_cl_acctent_struct_h->proc_num,chr_g_batch_no);
+			strcpy(l_pro_gl_acctent_struct_h->proc_num,chr_g_batch_no);
+			l_pro_cl_acctent_struct_i->i_proc_num = 0;
+			l_pro_gl_acctent_struct_i->i_proc_num = 0;
+
+			l_pro_cl_acctent_struct_h->report_amt = intReverseAmt;
+			l_pro_gl_acctent_struct_h->report_amt = intReverseAmt;
+			l_pro_cl_acctent_struct_i->i_rep_amount = 0;
+			l_pro_gl_acctent_struct_i->i_rep_amount = 0;
+
+			/*Added by Prateek For SIT issue- START*/
+			l_pro_cl_acctent_struct_h->report_clt =0;
+			l_pro_cl_acctent_struct_h->report_tax =0;
+			l_pro_cl_acctent_struct_h->report_ser = 0;
+			l_pro_cl_acctent_struct_h->rep_exg_rt =0;
+
+			l_pro_gl_acctent_struct_h->report_clt =0;
+			l_pro_gl_acctent_struct_h->report_tax =0;
+			l_pro_gl_acctent_struct_h->report_ser =0;
+			l_pro_gl_acctent_struct_h->rep_exg_rt =0;
+			/*Added by Prateek For SIT issue- END*/
+
+			strcpy(l_pro_cl_acctent_struct_h->deal_ident,l_clientcd);
+			strcat(l_pro_cl_acctent_struct_h->deal_ident,TXN_REF_DELIMITER);
+			strcat(l_pro_cl_acctent_struct_h->deal_ident,l_exch_code);
+			strcat(l_pro_cl_acctent_struct_h->deal_ident,TXN_REF_DELIMITER);
+			strcat(l_pro_cl_acctent_struct_h->deal_ident,l_settmnt_no);
+			strcat(l_pro_cl_acctent_struct_h->deal_ident,TXN_REF_DELIMITER);
+			strcat(l_pro_cl_acctent_struct_h->deal_ident,p_chr_deal_date);
+			strcat(l_pro_cl_acctent_struct_h->deal_ident,TXN_REF_DELIMITER);
+
+			//strcat(l_pro_gl_acctent_struct_h->deal_ident,l_pro_cl_acctent_struct_h->deal_ident);
+			strcpy(l_pro_gl_acctent_struct_h->deal_ident,l_pro_cl_acctent_struct_h->deal_ident);
+			l_pro_cl_acctent_struct_i->i_deal_ident = 0;
+			l_pro_gl_acctent_struct_i->i_deal_ident = 0;
+
+			l_pro_cl_acctent_struct_h->rec_refer =       APL_ACCTENT_NORMENT;
+			l_pro_gl_acctent_struct_h->rec_refer =       APL_ACCTENT_NORMENT;
+			l_pro_cl_acctent_struct_i->i_rec_identify = 0;
+			l_pro_gl_acctent_struct_i->i_rec_identify = 0;
+
+			strcpy(l_pro_cl_acctent_struct_h->proc_dt,chr_g_sys_date);
+			strcpy(l_pro_gl_acctent_struct_h->proc_dt,chr_g_sys_date);
+			l_pro_cl_acctent_struct_i->i_batch_dt = 0;
+			l_pro_gl_acctent_struct_i->i_batch_dt = 0;
+
+			strcpy(l_pro_cl_acctent_struct_h->acc_type,"C");
+			strcpy(l_pro_gl_acctent_struct_h->acc_type,"G");
+			l_pro_cl_acctent_struct_i->i_acc_type = 0;
+			l_pro_gl_acctent_struct_i->i_acc_type = 0;
+
+			l_pro_cl_acctent_struct_i->i_leg_ind = 0;
+			l_pro_gl_acctent_struct_i->i_leg_ind = 0;
+
+			
+			strcpy(l_pro_gl_acctent_struct_h->passed_through,APL_NULL_CHAR);
+			strcpy(l_pro_gl_acctent_struct_h->api_status,APL_NULL_CHAR);
+			strcpy(l_pro_gl_acctent_struct_h->api_reason_code,APL_NULL_CHAR);
+			strcpy(l_pro_gl_acctent_struct_h->api_reason_desc,APL_NULL_CHAR);
+			strcpy(l_pro_gl_acctent_struct_h->finacle_tran_id,APL_NULL_CHAR);
+			strcpy(l_pro_gl_acctent_struct_h->finacle_tran_date,APL_NULL_CHAR);
+			strcpy(l_pro_gl_acctent_struct_h->api_request_id,APL_NULL_CHAR);
+
+			strcpy(l_pro_cl_acctent_struct_h->passed_through,APL_NULL_CHAR);
+			strcpy(l_pro_cl_acctent_struct_h->api_status,APL_NULL_CHAR);
+			strcpy(l_pro_cl_acctent_struct_h->api_reason_code,APL_NULL_CHAR);
+			strcpy(l_pro_cl_acctent_struct_h->api_reason_desc,APL_NULL_CHAR);
+			strcpy(l_pro_cl_acctent_struct_h->finacle_tran_id,APL_NULL_CHAR);
+			strcpy(l_pro_cl_acctent_struct_h->finacle_tran_date,APL_NULL_CHAR);
+			strcpy(l_pro_cl_acctent_struct_h->api_request_id,APL_NULL_CHAR);
+
+			printf("\n BEFORE INSERTING DATA FOR GL"); 
+			printf("\n =============GL - VALUES -START======================");
+			printf("\n GL - MODULE_IND |%s|",l_pro_gl_acctent_struct_h->module_ind);
+			printf("\n GL - BRNCH_CD |%s|",l_pro_gl_acctent_struct_h->brnch_cd);
+			printf("\n GL - INDEN_NUM |%s|",l_pro_gl_acctent_struct_h->inden_num);
+			printf("\n GL - CLIENT |%s|",l_pro_gl_acctent_struct_h->client);
+			printf("\n GL - CURR_CD |%s|",l_pro_gl_acctent_struct_h->curr_cd);
+			printf("\n GL - FCCY_AMT |%lf|",l_pro_gl_acctent_struct_h->fccy_amt);
+			printf("\n GL - EXCHG_RT |%lf|",l_pro_gl_acctent_struct_h->exchg_rt);
+			printf("\n GL - LCL_AMOUNT |%lf|",l_pro_gl_acctent_struct_h->lcl_amount);
+			printf("\n GL - VAL_DATE |%s|",l_pro_gl_acctent_struct_h->val_date);
+			printf("\n GL - DEAL_CD|%s|",l_pro_gl_acctent_struct_h->deal_cd);
+			printf("\n GL - SPL_CLT_CD |%s|",l_pro_gl_acctent_struct_h->spl_clt_cd);
+			printf("\n GL - DB_CR_IND |%s|",l_pro_gl_acctent_struct_h->db_cr_ind);
+			printf("\n GL - NARRATIVE |%s|",l_pro_gl_acctent_struct_h->description);
+			printf("\n GL - STATUS_IND |%s|",l_pro_gl_acctent_struct_h->status_ind);
+			printf("\n GL - PROC_NUM |%s|",l_pro_gl_acctent_struct_h->proc_num);
+			printf("\n GL - REPORT_AMT|%lf|",l_pro_gl_acctent_struct_h->report_amt);
+			printf("\n GL - REPORT_CLT |%lf|",l_pro_gl_acctent_struct_h->report_clt =0);
+			printf("\n GL - REPORT_TAX |%lf|",l_pro_gl_acctent_struct_h->report_tax =0);
+			printf("\n GL - REPORT_SER|%lf|",l_pro_gl_acctent_struct_h->report_ser = 0);
+			printf("\n GL - REP_EXG_RT |%lf|",l_pro_gl_acctent_struct_h->rep_exg_rt =0);
+			printf("\n GL - REC_REFER |%s|",l_pro_gl_acctent_struct_h->rec_refer);
+			printf("\n GL - DEAL_IDENT|%s|",l_pro_gl_acctent_struct_h->deal_ident);
+			printf("\n GL - LEG_IND |%s|",l_pro_gl_acctent_struct_h->leg_ind);
+			printf("\n GL - ACC_TYPE |%s|",l_pro_gl_acctent_struct_h->acc_type);
+			printf("\n =============GL - VALUES -END======================");
+
+			EXEC SQL INSERT INTO PRO_ACCTENT values(:l_pro_gl_acctent_struct_h);
+			IS_ANY_ORA_ERROR;  
+
+
+			printf("\n BEFORE INSERTING DATA FOR CLIENT"); 
+			printf("\n =============CLIENT - VALUES -START===================="); 
+			printf("\n CLIENT - MODULE_IND |%s|",l_pro_cl_acctent_struct_h->module_ind);
+			printf("\n CLIENT - BRNCH_CD |%s|",l_pro_cl_acctent_struct_h->brnch_cd);
+			printf("\n CLIENT - INDEN_NUM |%s|",l_pro_cl_acctent_struct_h->inden_num);
+			printf("\n CLIENT - CLIENT |%s|",l_pro_cl_acctent_struct_h->client);
+			printf("\n CLIENT - CURR_CD |%s|",l_pro_cl_acctent_struct_h->curr_cd);
+			printf("\n CLIENT - FCCY_AMT |%lf|",l_pro_cl_acctent_struct_h->fccy_amt);
+			printf("\n CLIENT - EXCHG_RT |%lf|",l_pro_cl_acctent_struct_h->exchg_rt);
+			printf("\n CLIENT - LCL_AMOUNT |%lf|",l_pro_cl_acctent_struct_h->lcl_amount);
+			printf("\n CLIENT - VAL_DATE |%s|",l_pro_cl_acctent_struct_h->val_date);
+			printf("\n CLIENT - DEAL_CD|%s|",l_pro_cl_acctent_struct_h->deal_cd);
+			printf("\n CLIENT - SPL_CLT_CD |%s|",l_pro_cl_acctent_struct_h->spl_clt_cd);
+			printf("\n CLIENT - DB_CR_IND |%s|",l_pro_cl_acctent_struct_h->db_cr_ind);
+			printf("\n CLIENT - NARRATIVE |%s|",l_pro_cl_acctent_struct_h->description);
+			printf("\n CLIENT - STATUS_IND |%s|",l_pro_cl_acctent_struct_h->status_ind);
+			printf("\n CLIENT - PROC_NUM |%s|",l_pro_cl_acctent_struct_h->proc_num);
+			printf("\n CLIENT - REPORT_AMT|%lf|",l_pro_cl_acctent_struct_h->report_amt);
+			printf("\n CLIENT - REPORT_CLT |%lf|",l_pro_cl_acctent_struct_h->report_clt =0);
+			printf("\n CLIENT - REPORT_TAX |%lf|",l_pro_cl_acctent_struct_h->report_tax =0);
+			printf("\n CLIENT - REPORT_SER|%lf|",l_pro_cl_acctent_struct_h->report_ser = 0);
+			printf("\n CLIENT - REP_EXG_RT |%lf|",l_pro_cl_acctent_struct_h->rep_exg_rt =0);
+			printf("\n CLIENT - REC_REFER |%s|",l_pro_cl_acctent_struct_h->rec_refer);
+			printf("\n CLIENT - DEAL_IDENT|%s|",l_pro_cl_acctent_struct_h->deal_ident);
+			printf("\n CLIENT - LEG_IND |%s|",l_pro_cl_acctent_struct_h->leg_ind);
+			printf("\n CLIENT - ACC_TYPE |%s|",l_pro_cl_acctent_struct_h->acc_type);
+			printf("\n =============CLIENT - VALUES -END======================");
+
+			EXEC SQL INSERT INTO PRO_ACCTENT values(:l_pro_cl_acctent_struct_h);
+			IS_ANY_ORA_ERROR;
+
+			printf("\n UPDATING AE_MARGIN_LOG ");
+			EXEC SQL UPDATE AE_MARGIN_LOG
+			SET STATUS = 'R'
+			WHERE CLN_CODE =:l_clientcd
+			AND TO_CHAR(DEAL_DATE,'DD/MM/YYYY') = :p_chr_deal_date
+			AND EXCH_CODE = :l_exch_code
+			AND SETTLEMENT_NO = :l_settmnt_no;
+			IS_ANY_ORA_ERROR
+		}
+		else
+		{
+			//fprintf(g_flogfile,"\n MARGIN AMT not > COLLATRL AMT , AE Reversal not required");  
+			fprintf(g_flogfile,"\n MARGIN AMT OR LIEN AMT IS ZERO  , AE REVERSAL NOT REQUIRED");  
+
+			printf("\n UPDATING AE_MARGIN_LOG WHEN LIEN AMOUNT IS 0 ");
+
+			EXEC SQL UPDATE AE_MARGIN_LOG
+			SET STATUS = 'R'
+			WHERE CLN_CODE =:l_clientcd
+			AND TO_CHAR(DEAL_DATE,'DD/MM/YYYY') = :p_chr_deal_date
+			AND EXCH_CODE = :l_exch_code
+			AND SETTLEMENT_NO = :l_settmnt_no;
+			IS_ANY_ORA_ERROR
+			}
+		}
+		EXEC SQL CLOSE CUR_MRGN_REVRSL;
+		IS_ANY_ORA_ERROR
+
+		APL_GOBACK_SUCCESS
+
+		RETURN_SUCCESS  :
+		{
+			fprintf(g_flogfile,"\n Leaving DL_MarginReversal() With Success");
+			return (APL_SUCCESS);
+		}
+		RETURN_FAILURE  :
+		{
+			sprintf(chr_g_log_buffer,"\n Leaving DL_MarginReversal() With Failure ORA=|%d|",sqlca.sqlcode);
+			CO_ProcMonitor(g_flogfile,chr_g_log_buffer,l_debug_info_ptr,NULL);
+			return (APL_FAILURE);
+		}
+
+}

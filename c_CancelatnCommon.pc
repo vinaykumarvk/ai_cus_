@@ -1,0 +1,364 @@
+ 									 
+ 									 
+ 
+ #include "stdio_64.h"
+ #include "string.h"
+ #include "CR_Common.h"
+ #include "Intellect_Interface.h"
+ #include "Intellect_Common.h"
+ 
+ #include "Df_Fe.h"
+ #include "MS_Swift.h"
+ #include "Intellect_Interface.h"
+ 
+ EXEC SQL INCLUDE SQLCA;
+ 
+ #define DEFORMAT_IF_DEBUG if ( 1 )
+ 
+ 
+ 
+ int CDBFailReasChk(	MESSAGE_STRUCT		**p_message_list,
+ 							char					*p_msg_no,
+ 							char					*chr_p_client,
+ 							char					*chr_p_refno,
+ 							DEBUG_INFO_STRUCT_H   	**l_debug_info_ptr )
+ {
+ 	char		chr_l_settledt_a[7]					=	APL_NULL_STRING;
+ 	char     l_settledt1[APL_DATE_LEN]  =  APL_NULL_STRING;
+ 	char		chr_l_tradedt[7]					=	APL_NULL_STRING;
+ 	char		l_tradedt1[APL_DATE_LEN] 	=  APL_NULL_STRING;
+ 	char		l_recvd_on[APL_DATE_LEN]	=  APL_NULL_STRING;
+ 	char		chr_l_isin[13]						=  APL_NULL_STRING;
+ 	char		l_seccode[9]					=	APL_NULL_STRING;
+ 	char		l_secdec[131]					=  APL_NULL_STRING;
+ 	char     *l_secdec1						=  APL_NULL_STRING;
+ 	char		chr_l_tiposec[4]					=  APL_NULL_STRING;
+ 	char		l_tiposecqty[34]				=  APL_NULL_STRING;
+ 	char		dbl_l_amount_a[26]					=	APL_NULL_STRING;
+ 	char		int_l_domcpac[11]					=	APL_NULL_STRING;
+ 	char		chr_l_cname[66]						=	APL_NULL_STRING;
+ 	char		l_seme[150]						=  APL_NULL_STRING;	
+ 	char		chr_h_param_str[PARAM_STR_LEN]	=  APL_NULL_STRING;
+ 	char		int_l_temp[400]						=  APL_NULL_STRING;
+ 	char		chr_l_client_a[APL_CLIENT_LENGTH]	=  APL_NULL_STRING;
+ 	char		chr_l_refno_a[APL_TXNREFNO_LEN]	=  APL_NULL_STRING;
+ 	char		l_fail_description[131]		=  APL_NULL_STRING;
+ 	double	l_quantity								=	0.0;
+ 	int		l_fail_reason					=	0;
+ 	short		i_setldt						=	0;
+ 	short		i_dealdt						=	0;
+ 	short		i_fail_description			=	0;				
+ 	short		i_fail_reason					=	0;
+ 
+    void  CO_Rtv_DataString(char *chr_p_str, char *p_lbl,char *p_data_value);
+    void  CO_Rtv_DataDbl(char *chr_p_str, char *p_lbl,double *p_data_value);
+    void  CO_Rtv_DataInt(char *chr_p_str, char *p_lbl,int *p_data_value);
+ 
+ 	EXEC SQL BEGIN DECLARE SECTION;
+ 	
+ 	EXEC SQL VAR chr_l_client_a IS STRING;
+ 	EXEC SQL VAR chr_l_refno_a	IS STRING;
+ 	EXEC SQL VAR l_fail_description IS STRING;
+ 	EXEC SQL VAR chr_l_settledt_a IS STRING;
+ 	EXEC SQL VAR l_settledt1 IS STRING;
+ 	EXEC SQL VAR chr_l_tradedt IS STRING;
+ 	EXEC SQL VAR l_tradedt1 IS STRING;
+ 	EXEC SQL VAR l_recvd_on IS STRING;
+ 	EXEC SQL VAR chr_l_isin IS STRING;
+ 	
+ 	EXEC SQL END DECLARE SECTION;
+ 	
+ 	if( strcmp(chr_p_client,APL_NULL_STRING) == 0 )
+ 	{
+ 		APL_GOBACK_SUCCESS
+ 	}
+ 	
+ 	if( strcmp(chr_p_refno,APL_NULL_STRING) == 0 )
+ 	{
+ 		APL_GOBACK_SUCCESS
+ 	}
+ 
+ 	strcpy(chr_l_client_a,chr_p_client);
+ 	strcpy(chr_l_refno_a,chr_p_refno);
+ 
+ 	if (APL_FAILURE == CO_RtvSysDtTime(l_recvd_on,l_debug_info_ptr))
+    {
+    	APL_GOBACK_FAIL
+    }
+ 
+ 	I_GetVal(p_message_list,":35B:","SEC_ISIN",chr_l_isin,"B","1");
+ 
+ 		
+ 	EXEC SQL SELECT CMNRPT.FAILURE_REASON into :l_fail_description:i_fail_description  
+ 	FROM (SELECT FAILURE_REASON 
+       	FROM DF_COMMON_MSGRPT 
+       	WHERE ACCOUNT = :chr_l_client_a
+       	AND REF_NO = :chr_l_refno_a
+ 			AND to_char(RECEIVED_ON,'DD/MM/YYYY') = to_char(to_date(:l_recvd_on,'DD/MM/YYYY HH24:MI:SS'),'DD/MM/YYYY') order by RECEIVED_ON desc )CMNRPT WHERE rownum < 2;
+ 	
+ 	IS_ANY_ORA_ERROR
+ 	
+ 	if( APL_ZERO_RESULT_SET )
+ 	{
+ 		APL_GOBACK_FAIL
+ 	}
+ 		
+ 	EXEC SQL SELECT FAIL_REASON into :l_fail_reason:i_fail_reason
+ 	FROM CSFAIL_REASON
+ 	WHERE UPPER(FAIL_DESCRIPTION) = UPPER(:l_fail_description)
+ 	AND (	(COUNTRY_CODE IN ( 	SELECT CNTRYCODE 
+ 										FROM MT_INSTRUMENT 
+ 										WHERE ISIN = :chr_l_isin))
+ 		OR	(COUNTRY_CODE = 'XX'))
+ 	AND rownum < 2;	
+ 	IS_ANY_ORA_ERROR	
+ 	
+ 	if( APL_ZERO_RESULT_SET )
+ 	{
+ 		APL_GOBACK_FAIL
+ 	}	
+ 	
+ 	strcpy(chr_l_isin,APL_NULL_STRING);
+ 
+ 	if( l_fail_reason == 4 )
+ 	{
+ 
+ 	
+ 		memset(chr_h_param_str,APL_NULL_CHAR,sizeof(PARAM_STR_LEN));
+ 
+ 		if( APL_FAILURE == GetParamString(p_message_list,chr_h_param_str,"FR4",l_debug_info_ptr))
+ 		{
+ 			APL_GOBACK_FAIL
+ 		}
+ 	
+ 		CO_Rtv_DataString(chr_h_param_str,"DEAL_DATE",l_tradedt1);
+ 		CO_Rtv_DataString(chr_h_param_str,"SETL_DATE",l_settledt1);
+ 		CO_Rtv_DataString(chr_h_param_str,"SEC_ISIN",chr_l_isin);
+ 		CO_Rtv_DataString(chr_h_param_str,"SEC_DET",l_secdec);
+ 		CO_Rtv_DataString(chr_h_param_str,"SECURITY_TYPE",chr_l_tiposec);
+ 		CO_Rtv_DataString(chr_h_param_str,"DOMESTIC_CPCLT",int_l_domcpac);
+ 		CO_Rtv_DataString(chr_h_param_str,"CLNT_NAME",chr_l_cname);
+ 		CO_Rtv_DataString(chr_h_param_str,"AMOUNT",dbl_l_amount_a);
+ 		CO_Rtv_DataString(chr_h_param_str,"SEME",l_seme);
+ 		CO_Rtv_DataDbl(chr_h_param_str,"QTY",&l_quantity);
+ 		
+ 		
+ 		EXEC SQL SELECT to_char(to_date(:l_settledt1,'dd/chr_mm/chr_yyyy hh24:mi:ss'),'yymmdd') 
+ 		INTO :chr_l_settledt_a:i_setldt
+ 		FROM DUAL;
+ 		IS_ANY_ORA_ERROR
+ 
+ 		EXEC SQL SELECT to_char(to_date(:l_tradedt1,'dd/chr_mm/chr_yyyy hh24:mi:ss'),'yymmdd') 
+ 		INTO :chr_l_tradedt:i_dealdt
+ 		FROM DUAL;
+ 		IS_ANY_ORA_ERROR	
+ 		
+ 		DEFORMAT_IF_DEBUG
+ 		{
+ 			printf("\n\n chr_h_param_str is || %s ||",chr_h_param_str);
+ 		}			
+ 	
+ 	
+       while(strstr(l_secdec,"\r") !=APL_NULL_CHAR)
+       {
+       	strtok_r(l_secdec,"\r",&l_secdec1);
+          strcat(l_secdec,l_secdec1);
+       }
+ 
+       while(strstr(l_secdec,"\n") !=APL_NULL_CHAR)
+       {
+       	strtok_r(l_secdec,"\n",&l_secdec1);
+          strcat(l_secdec,l_secdec1);
+       }		
+ 		memset(chr_h_param_str,APL_NULL_CHAR,sizeof(PARAM_STR_LEN));
+ 
+ 		strcpy(chr_h_param_str,chr_l_settledt_a);
+ 		strcat(chr_h_param_str,";");
+ 		strcat(chr_h_param_str,chr_l_tradedt);
+ 		strcat(chr_h_param_str,";");
+ 		strcat(chr_h_param_str,chr_l_isin);
+ 		strcat(chr_h_param_str,";");
+ 		strcat(chr_h_param_str,l_secdec);
+ 		strcat(chr_h_param_str,";");
+ 		
+ 		strcpy(l_tiposecqty,chr_l_tiposec);
+ 		memset(int_l_temp,APL_NULL_CHAR,400);
+ 		sprintf(int_l_temp,"%lf",*(&l_quantity));
+ 	
+ 		strcat(l_tiposecqty,int_l_temp);
+ 
+ 		strcat(chr_h_param_str,l_tiposecqty);
+ 		strcat(chr_h_param_str,";");
+ 		strcat(chr_h_param_str,int_l_domcpac);
+ 		strcat(chr_h_param_str,";");
+ 		strcat(chr_h_param_str,chr_l_cname);
+ 		strcat(chr_h_param_str,";");
+ 		strcat(chr_h_param_str,dbl_l_amount_a);
+ 		strcat(chr_h_param_str,";");		
+ 		strcat(chr_h_param_str,p_msg_no);
+ 		strcat(chr_h_param_str,";");
+ 		strcat(chr_h_param_str,";");
+ 		strcat(chr_h_param_str,";");
+ 		strcat(chr_h_param_str,"1");
+ 		strcat(chr_h_param_str,";");
+ 		strcat(chr_h_param_str,ltoa(l_fail_reason));
+ 		strcat(chr_h_param_str,";");
+ 		strcat(chr_h_param_str,l_seme);
+ 		strcat(chr_h_param_str,";");
+ 			
+ 		DEFORMAT_IF_DEBUG
+ 		{
+ 			printf("\n\n\nh_param_str is || %s ||",chr_h_param_str);
+ 		}	
+ 		if(APL_FAILURE == GBDbInsIMSGENT("596N01",chr_p_refno,chr_p_client, 'Y', chr_h_param_str,l_debug_info_ptr) )
+ 		{
+ 			DEFORMAT_IF_DEBUG
+ 			{
+ 				printf("\n\n Failed to insert in IMSGENT table");
+ 				APL_GOBACK_FAIL
+ 			}
+ 		}
+ 		DEFORMAT_IF_DEBUG
+ 		{
+ 			printf("\n\n Sending 548N06 Message....");
+ 		}
+ 	}
+ 	
+ 	if( l_fail_reason == 6 	||
+ 		 l_fail_reason	==	9	||
+ 		 l_fail_reason	==	10	||
+ 		 l_fail_reason	==	20 )
+ 	{
+ 		memset(chr_h_param_str,APL_NULL_CHAR,sizeof(PARAM_STR_LEN));
+ 	
+ 		I_GetVal(p_message_list,":20C:",":SEME/",l_seme,"A","1");
+ 
+ 		strcpy(chr_h_param_str,p_msg_no);
+ 		strcat(chr_h_param_str,";");
+ 		strcat(chr_h_param_str,ltoa(l_fail_reason));
+ 		strcat(chr_h_param_str,";");
+ 		strcat(chr_h_param_str,l_seme);
+ 		strcat(chr_h_param_str,";");
+ 
+ 		if(APL_FAILURE == GBDbInsIMSGENT("596N02",chr_p_refno,chr_p_client, 'Y', chr_h_param_str,l_debug_info_ptr) )
+ 		{
+ 			DEFORMAT_IF_DEBUG
+ 			{
+ 				printf("\n\n Failed to insert in IMSGENT table");
+ 				APL_GOBACK_FAIL
+ 			}
+ 		}
+ 		DEFORMAT_IF_DEBUG
+ 		{
+ 			printf("\n\n Sending 548N07 Message....");
+ 		}
+ 	}
+    
+ 
+ 	APL_GOBACK_SUCCESS
+ 
+    RETURN_SUCCESS:
+    DEFORMAT_IF_DEBUG
+    {
+       printf("\n\n Leaving CDBFailReaschk processtion with Success");
+    }
+    return APL_SUCCESS;
+ 
+    RETURN_FAILURE:
+    DEFORMAT_IF_DEBUG
+    {
+       printf("\n\n  Leaving CDBFailReaschk processtion with Failure");
+    }
+    return APL_FAILURE;
+ }	
+ 
+ 
+ int CDBDelTrdInRpr(	char				*chr_p_client,
+ 							char				*chr_p_refno,
+ 							char				*int_p_retval,
+ 							DEBUG_INFO_STRUCT_H   **l_debug_info_ptr)
+ {
+ 	char     chr_l_client_a[APL_CLIENT_LENGTH] =  APL_NULL_STRING;
+ 	char     chr_l_refno_a[APL_TXNREFNO_LEN]  =  APL_NULL_STRING;
+ 	char		chr_l_rowid_A[APL_ROWID_LEN]		=	APL_NULL_STRING;
+ 	long 		int_l_seq_num 						=	0;
+ 	short		i_sequence_num						=	0; 		
+ 	short		i_ora_rowid							=  0;
+ 
+ 	EXEC SQL BEGIN DECLARE SECTION;
+ 	
+ 	EXEC SQL VAR chr_l_client_a IS STRING;
+ 	EXEC SQL VAR chr_l_refno_a	  IS STRING;
+ 	EXEC SQL VAR chr_l_rowid_A	  IS STRING;		
+ 
+ 	EXEC SQL END DECLARE SECTION;
+ 	
+ 	strcpy(chr_l_client_a,chr_p_client);
+ 	strcpy(chr_l_refno_a,chr_p_refno);
+ 	
+ 	EXEC SQL SELECT * 
+ 	FROM CMSGREPAIR 
+ 	WHERE ACCOUNT = :chr_l_client_a
+ 	AND REFNO = :chr_l_refno_a 
+ 	AND TRADE_STATUS = 'UU';
+ 	IS_ANY_ORA_ERROR
+ 	
+ 	if (APL_ZERO_RESULT_SET)
+ 	{
+ 		strcpy(int_p_retval,"NO ENTRY IN CMSGREPAIR");
+ 		APL_GOBACK_FAIL
+ 	}	
+ 
+ 	EXEC SQL DELETE 
+ 	FROM CMSGREPAIR
+ 	WHERE rowid in (  SELECT   rowid
+ 							FROM CMSGREPAIR
+ 							WHERE ACCOUNT = :chr_l_client_a
+ 							AND REFNO = :chr_l_refno_a
+ 							AND TRADE_STATUS = 'UU'); 
+ 	IS_ANY_ORA_ERROR
+ 	
+ 	EXEC SQL DELETE 
+ 	FROM CTRANSAUDIT
+ 	WHERE rowid in ( 	SELECT	rowid 
+ 							FROM CTRANSAUDIT
+ 							WHERE ACCOUNT = :chr_l_client_a
+ 							AND REFNO = :chr_l_refno_a);
+ 	IS_ANY_ORA_ERROR
+ 
+ 	EXEC SQL SELECT SEQ_NUM into :int_l_seq_num:i_sequence_num  
+ 	FROM CMSGLINK
+ 	WHERE  ACCOUNT = :chr_l_client_a
+ 	AND REFNO = :chr_l_refno_a;
+ 	IS_ANY_ORA_ERROR
+ 	
+ 	EXEC SQL DELETE
+ 	FROM CMSGLINKDET
+ 	WHERE	SEQ_NUM = :int_l_seq_num;
+ 	IS_ANY_ORA_ERROR
+ 
+ 	EXEC SQL DELETE
+    FROM CMSGLINK
+    WHERE rowid in (  SELECT   rowid
+                      FROM CMSGLINK
+                      WHERE ACCOUNT = :chr_l_client_a
+                      AND REFNO = :chr_l_refno_a);
+    IS_ANY_ORA_ERROR							
+ 	
+ 	APL_GOBACK_SUCCESS
+    
+ 	RETURN_SUCCESS:
+    DEFORMAT_IF_DEBUG
+    {
+       printf("\n\n Leaving CDBDelTrdInRpr processtion with Success");
+    }
+    return APL_SUCCESS;
+ 
+    RETURN_FAILURE:
+    DEFORMAT_IF_DEBUG
+    {
+       printf("\n\n  Leaving CDBDelTrdInRpr processtion with Failure");
+    }
+    return APL_FAILURE;	
+ }
+ 

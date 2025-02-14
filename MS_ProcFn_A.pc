@@ -1,0 +1,1835 @@
+
+
+
+
+
+#include "IV_Control_A.h"
+#include "MS_Swift.h"
+#include "CO_Commdef.h"
+#include <string.h>
+#define COMMIT_COUNT_D 500
+
+EXEC SQL INCLUDE SQLCA;
+EXEC SQL INCLUDE ORACA;
+
+#define REC_LOCK_ORA_ERROR -54
+
+
+
+
+
+int MS_Proc_MsgMain(char *p_ora_rowid,FILE *chr_finifile,FILE *l_errfile,FILE *l_techfile,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)// CHanges done for AIX Migration
+{
+
+
+
+extern int MS_Rtv_MsgTags(MS_MSGENT_STRUCT,MS_TAG_ELM_STRUCT_H **,int *,char,int *,DEBUG_INFO_STRUCT_H **);
+
+extern int IMsgSeqLoad(MS_MSGENT_STRUCT,MS_SEQ_ELM_STRUCT_H **,int *,char,int *,DEBUG_INFO_STRUCT_H **);
+
+extern int MS_Proc_Msg(char *,MS_TAG_ELM_STRUCT_H **,int,MS_SEQ_ELM_STRUCT_H **,int,MS_VAL_ELM_STRUCT_H **,int *,FILE *,int *,char *,char,MS_CALC_ELM_STRUCT_H **,int,MS_STATIC_VAL *,FILE *,char *,int *,DEBUG_INFO_STRUCT_H **);
+
+extern int MS_Proc_MsgFormat(MS_SEQ_ELM_STRUCT_H *,int ,MS_VAL_ELM_STRUCT_H *,int ,char *,char);
+
+extern int MT_Rtv_Base(MS_BASENO_STRUCT_H *,int *,DEBUG_INFO_STRUCT_H **);
+
+extern int filecp(char *, char *, char *,char *,DEBUG_INFO_STRUCT_H **);
+
+extern int CO_RtvNxtSeqNum(PRO_GSEQNUM_STRUCT_H *, DEBUG_INFO_STRUCT_H **);
+
+extern int IGenMsgFileName(char *,DEBUG_INFO_STRUCT_H **);
+
+extern int MS_Mod_MsgEnt(MS_MSGENT_STRUCT,int *,DEBUG_INFO_STRUCT_H **);
+
+extern int MS_Mod_MsgLogAdd(MS_MSGLOG_STRUCT,int *,DEBUG_INFO_STRUCT_H **);
+
+extern int MS_Mod_MsgStat(MS_MSGSTAT_STRUCT,int *,DEBUG_INFO_STRUCT_H **);
+
+struct sqlca sqlca;
+
+EXEC SQL BEGIN DECLARE SECTION;
+MS_MSGENT_STRUCT l_ms_msgent_structa;
+I_MS_MSGENT_STRUCT l_i_ms_msgent_struct;
+char h_swift_addr[12],h_infolex[12],h_gcn_addr[6],h_fax_addr[15],h_swift_tlx_gcn,chr_l_sfe_swftlx,chr_curr_swftlx,h_schedule[5],chr_h_eod_flg;
+short i_sfe_swftlx = 0;
+char h_dl_client[APL_CLIENT_LENGTH],chr_h_prev_client[APL_CLIENT_LENGTH],chr_h_key[61],chr_h_msg_type,h_identify[41],chr_h_trefer[41],h_comb_msg,h_ora_rowid[APL_ROWID_LEN],chr_h_restart_data[51],h_status_ind[16];
+short i_swift_addr=0,i_infolex=0,i_gcn_addr=0,i_fax_addr=0,i_swift_tlx_gcn=0,i_identify=0,i_comb_msg=0,i_schedule=0,i_trefer=0,i_eod_flg=0,i_ora_rowid = 0,i_restart_info=0,i_status_ind=0;
+short l_gr_52xind = 0, l_52xflg = 0;
+
+
+char h_ca_event[3] = APL_NULL_STRING;
+char l_temp_status[2] = APL_NULL_STRING;
+short l_ce_typ_found = 0;
+char chr_l_old_priority1 = APL_NULL_CHAR;
+char  chr_h_priority_new = APL_NULL_CHAR;
+short i_priority_new = 0;
+
+char chr_h_crf_no[3] =APL_NULL_STRING;
+short int_i_crf_no = 0;
+
+EXEC SQL VAR h_swift_addr IS STRING;
+EXEC SQL VAR h_ora_rowid IS STRING;
+EXEC SQL VAR chr_h_key IS STRING;
+EXEC SQL VAR h_infolex IS STRING;
+EXEC SQL VAR h_gcn_addr IS STRING;
+EXEC SQL VAR h_fax_addr IS STRING;
+EXEC SQL VAR l_ms_msgent_structa.client IS STRING;
+EXEC SQL VAR l_ms_msgent_structa.swift_msg_no IS STRING;
+EXEC SQL VAR l_ms_msgent_structa.proc_init IS STRING;
+EXEC SQL VAR l_ms_msgent_structa.info_file IS STRING;
+EXEC SQL VAR h_dl_client IS STRING;
+EXEC SQL VAR chr_h_prev_client IS STRING;
+EXEC SQL VAR h_identify IS STRING;
+EXEC SQL VAR h_schedule IS STRING;
+EXEC SQL VAR chr_h_crf_no IS STRING;
+EXEC SQL END DECLARE SECTION;
+
+
+int int_returnval = 0,int_retstat = 0,int_tot_tag=0,int_tot_seq=0,int_tot_val=0,int_l_sw_rownum=1;
+int int_msg_type_ctr=0,int_l_calc_ctr=0,int_msg_process=0,int_init=0,int_clsstat=0;
+int int_commit_ctr=0;
+int int_msg_exist=0,int_msg_gen_no=0,int_l_tlx_rownum=1,int_l_fax_rownum=1,int_l_gcn_rownum=1;
+char chr_l_addrseq_num[6];
+char chr_l_msgtype='S',chr_prev_swftlx,chr_h_eof[2],chr_h_iscc[2],chr_h_subclient[11];
+char chr_msg_addr_sel[2000],chr_l_msg_file[31],chr_l_msg_pathfname[100],chr_f_swftlx[2];
+char chr_l_date_time[APL_DATE_LEN],chr_l_msg_frm_file[31],chr_l_msg_pathfname1[100];
+char chr_inifile[100],chr_l_data_pathfname[100],chr_l_data_path[100],chr_l_msg_path[100];
+char message_class[5],chr_l_log_path[100],chr_l_log_name[100],chr_l_tech_name[100],chr_h_parm[2];
+char chr_t_address[15],chr_l_sys_date[APL_DATE_LEN],chr_l_txn_msg[7],chr_curr_msg_no[7];
+char	chr_l_sys_date_time[APL_DATE_LEN];
+char chr_l_consmsg = APL_NULL_CHAR;
+MS_MSGLOG_STRUCT l_ms_msglog_struct;
+MS_MSGSTAT_STRUCT l_ms_msgstat_structa;
+MS_BASENO_STRUCT_H l_ms_baseno_struct_ha;
+char chr_l_address[15],chr_l_address1[15],chr_l_statinfo[61];
+char h_holdings[APL_FLAG_LENGTH]=APL_NULL_STRING;
+short i_holdings = 0;
+short mhold = 0;
+int int_l_rownum_inc=0;
+int int_l_sw_oldrownum = 0;
+int      int_l_h_addrseq_num               = 0;
+short    l_i_addrseq_num               = 0;
+
+
+short l_gcn_tr_mode = 0 ;
+
+
+
+MS_TAG_ELM_STRUCT_H *l_ms_tag_elm_struct_i = NULL;
+MS_TAG_ELM_STRUCT_H *l_ms_tag_elm_struct_h_t = NULL;
+
+MS_SEQ_ELM_STRUCT_H *l_ms_seq_elm_struct_h = NULL;
+MS_SEQ_ELM_STRUCT_H *l_ms_seq_elm_struct_h_t = NULL;
+
+MS_VAL_ELM_STRUCT_H *l_ms_val_elm_struct_h = NULL;
+MS_VAL_ELM_STRUCT_H *l_ms_val_elm_struct_h_ta = NULL;
+
+MS_CALC_ELM_STRUCT_H *l_ms_calc_elm_struct_h = NULL;
+MS_CALC_ELM_STRUCT_H *l_ms_calc_elm_struct_h_t = NULL;
+
+MS_STATIC_VAL *l_ms_static_val = NULL;
+MS_STATIC_VAL *l_ms_static_val_b = NULL;
+
+
+FILE *l_data_file=NULL;
+l_ms_msgent_structa.swift_count=0;
+l_ms_msgent_structa.telex_count=0;
+l_ms_msgent_structa.fax_count=0;
+l_ms_msgent_structa.gcn_count=0;
+
+chr_curr_swftlx = APL_NULL_CHAR;
+
+
+l_ms_tag_elm_struct_h_t = l_ms_tag_elm_struct_i = (MS_TAG_ELM_STRUCT_H *)calloc(MAX_TAGS,sizeof(MS_TAG_ELM_STRUCT_H));
+APL_MALLOC_FAIL(l_ms_tag_elm_struct_i);
+
+l_ms_seq_elm_struct_h_t = l_ms_seq_elm_struct_h = (MS_SEQ_ELM_STRUCT_H *)calloc(1,sizeof(MS_SEQ_ELM_STRUCT_H));
+APL_MALLOC_FAIL(l_ms_seq_elm_struct_h);
+
+l_ms_val_elm_struct_h_ta = l_ms_val_elm_struct_h = (MS_VAL_ELM_STRUCT_H *)calloc(1,sizeof(MS_VAL_ELM_STRUCT_H));
+APL_MALLOC_FAIL(l_ms_val_elm_struct_h);
+
+l_ms_calc_elm_struct_h_t  = l_ms_calc_elm_struct_h = (MS_CALC_ELM_STRUCT_H *)calloc(20,sizeof(MS_CALC_ELM_STRUCT_H));
+APL_MALLOC_FAIL(l_ms_calc_elm_struct_h);
+
+l_ms_static_val_b = l_ms_static_val = (MS_STATIC_VAL *)calloc(10,sizeof(MS_STATIC_VAL));
+APL_MALLOC_FAIL(l_ms_static_val);
+
+ memset(h_dl_client,APL_NULL_CHAR,APL_CLIENT_LENGTH);
+ memset(chr_l_statinfo,APL_NULL_CHAR,61);
+ memset(chr_msg_addr_sel,APL_NULL_CHAR,2000);
+ memset(chr_t_address,APL_NULL_CHAR,15);
+ memset(l_ms_msglog_struct.client,APL_NULL_CHAR,APL_CLIENT_LENGTH);
+ memset(l_ms_msglog_struct.swift_msg_no,APL_NULL_CHAR,7);
+ memset(l_ms_msglog_struct.maker,APL_NULL_CHAR,APL_USERID_LEN);
+ memset(l_ms_msglog_struct.maker_dt,APL_NULL_CHAR,APL_DATE_LEN);
+ memset(l_ms_msglog_struct.msg,APL_NULL_CHAR,31);
+ memset(l_ms_msglog_struct.contact_details,APL_NULL_CHAR,15);
+ memset(l_ms_msglog_struct.contact_details1,APL_NULL_CHAR,15);
+ memset(l_ms_msglog_struct.baseid,APL_NULL_CHAR,7);
+ memset(l_ms_msglog_struct.message_ind,APL_NULL_CHAR,61);
+ memset(l_ms_msgstat_structa.proc_init,APL_NULL_CHAR,61);
+ memset(l_ms_msglog_struct.swift_msg_ident,APL_NULL_CHAR,17); 
+ memset(chr_h_key,APL_NULL_CHAR,61);
+ memset(chr_l_msg_pathfname,APL_NULL_CHAR,100);
+ memset(chr_l_msg_pathfname1,APL_NULL_CHAR,100);
+ memset(chr_l_data_pathfname,APL_NULL_CHAR,100);
+ memset(chr_l_data_path,APL_NULL_CHAR,100);
+ memset(chr_l_msg_path,APL_NULL_CHAR,100);
+ memset(chr_l_log_path,APL_NULL_CHAR,100);
+ memset(chr_l_log_name,APL_NULL_CHAR,100);
+ memset(chr_l_tech_name,APL_NULL_CHAR,100);
+ memset(chr_inifile,APL_NULL_CHAR,100);
+ memset(message_class,APL_NULL_CHAR,5);
+ memset(chr_l_address,APL_NULL_CHAR,15);
+ memset(chr_l_address1,APL_NULL_CHAR,15);
+ memset(chr_l_sys_date,APL_NULL_CHAR,APL_DATE_LEN);
+ memset(chr_l_txn_msg,APL_NULL_CHAR,7);
+ memset(l_ms_baseno_struct_ha.baseid,APL_NULL_CHAR,7);
+ memset(l_ms_baseno_struct_ha.contact_details,APL_NULL_CHAR,15);
+ memset(l_ms_baseno_struct_ha.access_stamp,APL_NULL_CHAR,APL_DATE_LEN);
+ l_ms_baseno_struct_ha.swift_tlx_gcn = APL_NULL_CHAR;
+ memset(chr_curr_msg_no,APL_NULL_CHAR,7);
+ memset(chr_h_subclient,APL_NULL_CHAR,APL_CLIENT_LENGTH);
+ memset(chr_h_iscc,APL_NULL_CHAR,2);
+ memset(chr_h_parm,APL_NULL_CHAR,2);
+ memset(chr_l_addrseq_num,APL_NULL_CHAR,6);
+ memset(chr_f_swftlx,APL_NULL_CHAR,2);
+ memset(l_ms_msglog_struct.swift_msg_ident,APL_NULL_CHAR,17);
+ memset(chr_h_crf_no,APL_NULL_CHAR,3);
+
+
+
+message_class[0] = 'S';
+message_class[1] = 'Q';
+message_class[2] = 'C';
+message_class[3] = 'M';
+message_class[4] = 'T';
+
+
+if (CO_ReadToken(chr_finifile,"INTL_MS_SND_PATH",chr_l_msg_path,l_debug_info_ptr)
+                == APL_FAILURE )
+                        APL_GOBACK_FAIL;
+
+if (CO_ReadToken(chr_finifile,"INTL_MS_DATA_PATH",chr_l_data_path,l_debug_info_ptr)
+                == APL_FAILURE )
+                        APL_GOBACK_FAIL;
+        if(APL_FAILURE == CO_RtvSysParams(l_debug_info_ptr))
+                APL_GOBACK_FAIL;
+	
+		  
+		 		  			
+
+		
+
+
+        EXEC SQL DECLARE msg_addr_cur CURSOR FOR 
+        SELECT SWIFT_ADDR,TELEX_ADDR,GCN_ADDR,FAX_ADDR,
+			decode(swift_tlx_gcn,'Q','S','M','C',SWIFT_TLX_GCN),SWIFT_TLX_GCN,substr(IDENTIFY,1,25),IDENTIFY,
+	       SCHEDULE, COMB_MSG, HOLDINGS,PRIORITY_IND,MSG_IDENT_NO
+        FROM MT_MSGADDRESS_VEW WHERE cln_code = :h_dl_client AND
+        MSG_IDENT_NO = (	SELECT MAX(to_number(MSG_IDENT_NO)) from MT_MSGADDRESS_VEW where 
+						cln_code = :h_dl_client and MSG_IDENT_NO in 
+					(select rtrim(MSG_MAP_NO) FROM MS_MSGCRF WHERE swift_msg_no = :l_ms_msgent_structa.swift_msg_no))
+        AND SWIFT_TLX_GCN = :chr_h_msg_type
+	AND PRIORITY_IND !='9'
+		AND (CONTACTSEQ = :int_l_h_addrseq_num OR :int_l_h_addrseq_num = 0)
+		AND ISO_MSG_FORMAT !='Y'
+		ORDER BY PRIORITY_IND,SCHEDULE;
+
+
+	
+
+	if (APL_FAILURE == CO_Chk_CntryEnabled(	"MSG_52X",
+														"GEN_52X_FOR_BOG",
+														&l_gr_52xind,
+														l_debug_info_ptr ))
+	{
+		APL_GOBACK_FAIL
+	}
+
+	if (!l_gr_52xind) 
+	{
+		if (APL_FAILURE == CO_Chk_CntryEnabled(	"MSG_52X",
+														"GEN_52X_FOR_VTB",
+														&l_gr_52xind,
+														l_debug_info_ptr ))
+		{
+			APL_GOBACK_FAIL
+		}
+	}
+
+	if (l_gr_52xind)
+	{
+		EXEC SQL DECLARE msg_addr_cur_52x CURSOR FOR
+		SELECT MS_VTB_MSG_ADDR FROM MT_MESSAGE_SYS_PARAMS;
+	}
+
+	EXEC SQL DECLARE msg_cur CURSOR FOR
+                 SELECT	swift_msg_no,proc_init,swift_msg_seqno,client,info_file,
+                        swift_count,telex_count,fax_count,gcn_count,
+                        clts_count,status,auto_tran_ind,proc_data,rowid 
+		 FROM MS_MSGENT
+                 WHERE status = 'D' 
+		 ORDER BY SWIFT_MSG_SEQNO;
+
+
+
+        EXEC SQL OPEN msg_cur;
+       	
+
+	for( ; ; )
+	{
+		 int int_g_curr_rec_no=0; /** Added int For Linux Mig-Kotubabu-Start */						  
+		 int g_curr_rec_start = 0;				
+		 int g_prev_rec_start = 0;  /** Added int For Linux Mig-End */
+
+	   chr_h_msg_type = message_class[int_msg_type_ctr];
+           if(int_msg_type_ctr == 0 || int_msg_process == 1)
+           {
+       	  	EXEC SQL FETCH msg_cur INTO l_ms_msgent_structa:l_i_ms_msgent_struct;
+                
+ 	        memset(chr_curr_msg_no,APL_NULL_CHAR,7);
+                strcpy(chr_curr_msg_no,l_ms_msgent_structa.swift_msg_no);
+           }
+
+
+           if(l_i_ms_msgent_struct.i_swift_msg_no == -1)
+		strcpy(l_ms_msgent_structa.swift_msg_no," ");
+
+	   if (sqlca.sqlcode < 0)
+           {
+                        fprintf(l_errfile,"Error in fetching from msg_cur Cursor");
+        		EXEC SQL CLOSE msg_cur;
+                	break; 
+           }
+
+	   if(sqlca.sqlcode == 1403)
+		break;
+
+				
+           if(l_i_ms_msgent_struct.i_swift_count == -1)
+				l_ms_msgent_structa.swift_count=0;
+	
+           if(l_i_ms_msgent_struct.i_telex_count == -1)
+				l_ms_msgent_structa.telex_count=0;
+
+           if(l_i_ms_msgent_struct.i_no_of_fax_addr == -1)
+				l_ms_msgent_structa.fax_count=0;
+	
+           if(l_i_ms_msgent_struct.i_no_of_gcn_addr == -1)
+				l_ms_msgent_structa.gcn_count=0;
+
+		
+		
+
+		EXEC SQL SELECT status into :l_temp_status FROM MS_MSGENT WHERE ROWID = :l_ms_msgent_structa.rowid
+					FOR UPDATE OF status NOWAIT;
+		if (sqlca.sqlcode == REC_LOCK_ORA_ERROR )
+		{
+			sqlca.sqlcode = 0;
+			continue;
+		}
+		IS_ANY_ORA_ERROR;
+
+       	   memset(chr_l_data_pathfname,APL_NULL_CHAR,100);
+           strcpy(chr_l_data_pathfname,chr_l_data_path);
+           strcat(chr_l_data_pathfname,l_ms_msgent_structa.info_file);
+           int g_cur_pos = 0; /** Added int For Linux Mig-Kotubabu */
+           int g_prev_pos =0; /** Added int For Linux Mig-Kotubabu */
+           printf("No of Open Files : %d",int_fnoopen);
+	   if( (l_data_file = fopen(chr_l_data_pathfname,"r")) == NULL)
+           {
+                        int_msg_process = 1;
+                        fprintf(l_errfile,"Error in opening datafile %s for msg %s\n",l_ms_msgent_structa.info_file,l_ms_msgent_structa.swift_msg_no);
+                	continue; 
+           }
+			  printf("The Opened DataFile Name is : %s \n",l_ms_msgent_structa.info_file);   
+           int_fnoopen++;
+           int_returnval = 0;
+ 	   memset(h_dl_client,APL_NULL_CHAR,APL_CLIENT_LENGTH);
+	   int_returnval = MS_Rtv_TabVal(int_l_sw_rownum,"CLIENT",l_data_file,
+                                      &h_dl_client,0);
+           if(int_returnval == APL_FAILURE)
+           {
+		fprintf(l_errfile,"Processing Datafile :  %s : Failure in fetching client for msg %s %s \n",l_ms_msgent_structa.info_file,l_ms_msgent_structa.swift_msg_no,l_ms_msgent_structa.proc_init);
+		continue;
+	   }
+
+           int_returnval = 0;
+	   int_returnval = MS_Rtv_TabVal(int_l_sw_rownum,"PROC_INIT",l_data_file,
+                                      &chr_h_key,0);
+           if(int_returnval == APL_FAILURE)
+           {
+		fprintf(l_errfile,"Processing Datafile : %s : Failure in fetching proc_init for msg %s \n",l_ms_msgent_structa.info_file,l_ms_msgent_structa.swift_msg_no);
+		continue;
+	   }
+           
+           if( strncmp(l_ms_msgent_structa.swift_msg_no,"571",3) == 0 )
+           {
+               int_returnval = 0;
+	       int_returnval = MS_Rtv_TabVal(int_l_sw_rownum,"NOHOLDGS",l_data_file,
+                                      &chr_h_parm,0);
+               if(int_returnval == APL_FAILURE)
+               {
+		 fprintf(l_errfile,"Processing Datafile : %s : Failure in fetching noholdings parameter for msg %s \n",l_ms_msgent_structa.info_file,l_ms_msgent_structa.swift_msg_no);
+		 continue;
+	       }
+               int_returnval = 0;
+	       int_returnval = MS_Rtv_TabVal(int_l_sw_rownum,"SWIFT_TLX_GCN",l_data_file,
+                                      &chr_f_swftlx,0);
+               if(int_returnval == APL_FAILURE)
+               {
+		 fprintf(l_errfile,"Processing Datafile : %s : Failure in fetching swift_tlx_gcn parameter for msg %s \n",l_ms_msgent_structa.info_file,l_ms_msgent_structa.swift_msg_no);
+		 continue;
+	       }
+           }
+           if( !strcmp(l_ms_msgent_structa.swift_msg_no,"572") )
+           {
+               int_returnval = 0;
+	       int_returnval = MS_Rtv_TabVal(int_l_sw_rownum,"NIL_MOV_IND",l_data_file,
+                                      &chr_h_parm,0);
+               if(int_returnval == APL_FAILURE)
+               {
+		 fprintf(l_errfile,"Processing Datafile : %s : Failure in fetching no movements parameter  for msg %s \n",l_ms_msgent_structa.info_file,l_ms_msgent_structa.swift_msg_no);
+		 continue;
+	       }
+           }
+           if( !strcmp(l_ms_msgent_structa.swift_msg_no,"573") )
+           {
+               int_returnval = 0;
+	       int_returnval = MS_Rtv_TabVal(int_l_sw_rownum,"NOPENDGS",l_data_file,
+                            &chr_h_parm,0);
+               if(int_returnval == APL_FAILURE)
+               {
+		 fprintf(l_errfile,"Processing Datafile : %s : Failure in fetching nopendings parameter for msg %s \n",l_ms_msgent_structa.info_file,l_ms_msgent_structa.swift_msg_no);
+		 continue;
+	       }
+           }
+
+
+           while(strlen(h_dl_client) != 0)
+           {
+				fprintf(l_techfile,"Processing Datafile : %s : record with sequence no :%d:\n",l_ms_msgent_structa.info_file,int_l_sw_rownum);
+         clearerr(l_techfile);
+         clearerr(l_data_file);
+				  int_l_sw_oldrownum = int_l_sw_rownum;
+ 					memset(chr_l_addrseq_num,APL_NULL_CHAR,6);
+				
+              
+             if (!strncmp(l_ms_msgent_structa.swift_msg_no,"571",3) || !strncmp(l_ms_msgent_structa.swift_msg_no,"572",3) || !strncmp(l_ms_msgent_structa.swift_msg_no,"573",3))			
+					{
+					printf("\n Calling MS_Rtv_TabVal for ADDRSEQ_NUM for seq int_num %d and client %s ",int_l_sw_rownum,h_dl_client);   
+				 	int_returnval = MS_Rtv_TabVal(int_l_sw_rownum,"CONTACTSEQ",l_data_file, &chr_l_addrseq_num,0);	
+					} 
+					if(!strlen(chr_l_addrseq_num))
+							int_l_h_addrseq_num = 0;
+					else
+							int_l_h_addrseq_num = atoi(chr_l_addrseq_num);
+					
+
+				  
+              
+				  if ((l_gr_52xind) && ((!strcmp(l_ms_msgent_structa.swift_msg_no,"52x")) || (!strcmp(l_ms_msgent_structa.swift_msg_no,"592"))))
+				  {
+						l_52xflg = 1;
+						EXEC SQL OPEN msg_addr_cur_52x;
+				  }
+				  else
+				  {
+						l_52xflg = 2;
+              		EXEC SQL OPEN msg_addr_cur; 
+				  }
+
+              if(sqlca.sqlcode < 0)
+                 fprintf(l_errfile,"Processing Datafile : %s : Error in accessing msg addresses for msg %s for client %s\n",l_ms_msgent_structa.info_file,l_ms_msgent_structa.swift_msg_no,h_dl_client);
+              
+              IS_ANY_ORA_ERROR
+
+              chr_prev_swftlx = APL_NULL_CHAR;
+              int_msg_exist = 0;  
+				  mhold = 0;
+	        	  l_ce_typ_found = 0;
+				chr_l_old_priority1 = APL_NULL_CHAR;
+              for( ; ; )
+              {
+					 
+					 
+					 memset(h_swift_addr, NULL, 12);
+					 memset(h_infolex, NULL, 12);
+					 memset(h_gcn_addr, NULL, 6);
+					 memset(h_fax_addr, NULL, 15);
+					 h_swift_tlx_gcn = APL_NULL_CHAR;
+					 chr_l_sfe_swftlx=APL_NULL_CHAR;
+					 memset(h_identify, NULL, 41);
+					 memset(chr_h_trefer, NULL, 41);
+					 memset(h_schedule, NULL, 5);
+					 memset(chr_h_crf_no,APL_NULL_CHAR,3);
+					 h_comb_msg = APL_NULL_CHAR;
+					 i_swift_addr = 0;
+					 i_infolex = 0;
+					 i_gcn_addr = 0;
+					 i_fax_addr = 0;
+					 i_swift_tlx_gcn = 0;
+					 i_identify = 0;
+					 i_trefer = 0;
+					 i_schedule = 0;
+					 i_comb_msg = 0;
+					 int_i_crf_no = 0;
+
+					 if (l_52xflg == 1)
+					 {
+							EXEC SQL FETCH msg_addr_cur_52x INTO :h_swift_addr:i_swift_addr;
+							IS_ANY_ORA_ERROR
+
+							
+
+							h_swift_tlx_gcn = 'S';
+							int_msg_type_ctr = 4;
+					 }
+					 else
+					 {
+                		EXEC SQL FETCH 	msg_addr_cur INTO :h_swift_addr:i_swift_addr,
+                     		                              :h_infolex:i_infolex,
+                           		                        :h_gcn_addr:i_gcn_addr,
+                                 		                  :h_fax_addr:i_fax_addr,
+                                       		            :h_swift_tlx_gcn:i_swift_tlx_gcn,
+																			:chr_l_sfe_swftlx:i_sfe_swftlx,
+						  													:h_identify:i_identify,
+						  													:chr_h_trefer:i_trefer,
+						  													:h_schedule:i_schedule,
+						  													:h_comb_msg:i_comb_msg,
+																			:h_holdings:i_holdings,
+																			:chr_h_priority_new:i_priority_new,
+																		   :chr_h_crf_no:int_i_crf_no;	
+					 }
+
+                if(i_swift_addr == -1)
+			strcpy(h_swift_addr,APL_NULL_STRING);
+                else
+			strcpy(chr_t_address,h_swift_addr);
+
+		if(i_infolex == -1)
+			strcpy(h_infolex,APL_NULL_STRING);
+                else
+			strcpy(chr_t_address,h_infolex);
+
+		if(i_gcn_addr == -1)
+			strcpy(h_gcn_addr,APL_NULL_STRING);
+
+		if(i_fax_addr == -1)
+			strcpy(h_fax_addr,APL_NULL_STRING); 
+                else
+			strcpy(chr_t_address,h_fax_addr);
+
+		if(i_schedule == -1)
+			strcpy(h_schedule,APL_NULL_STRING); 
+
+		if(i_identify  == -1)
+			strcpy(h_identify,APL_NULL_STRING); 
+
+		if(i_trefer  == -1)
+			strcpy(chr_h_trefer,APL_NULL_STRING); 
+
+
+                strcpy(l_ms_static_val[0].link_val,"IDENTIFY");
+                strcpy(l_ms_static_val[0].link_tag,h_identify);
+                strcpy(l_ms_static_val[1].link_val,"MCATEGORY");
+                strcpy(l_ms_static_val[1].link_tag,h_schedule);
+                strcpy(l_ms_static_val[2].link_val," ");
+                strcpy(l_ms_static_val[3].link_val,"TELEX_ADDR");
+                strcpy(l_ms_static_val[3].link_tag,chr_t_address);
+                strcpy(l_ms_static_val[4].link_val,"TREFER");
+                strcpy(l_ms_static_val[4].link_tag,chr_h_trefer);
+                strcpy(l_ms_static_val[5].link_val,"");
+
+
+                if(sqlca.sqlcode)
+                {
+                    if(int_msg_exist == 0)
+		    {
+                       int_returnval = 0;
+ 	   	       memset(chr_h_eof,APL_NULL_CHAR,2);
+	               int_returnval = MS_Rtv_TabVal(int_l_sw_rownum,"EOF",l_data_file,
+                                      &chr_h_eof,0);
+                       if(feof(l_data_file) == 0)
+                          fgetpos(l_data_file,&g_cur_pos);
+                       if(strcmp(chr_h_eof,"T") == 0)
+                         break;
+                       int_l_sw_rownum++;
+			if (sqlca.sqlcode==1403)
+				fprintf(l_errfile,"Processing Datafile : %s : No addresses set up for client %s for msg %s\n",l_ms_msgent_structa.info_file,h_dl_client,l_ms_msgent_structa.swift_msg_no);
+			else
+				//fprintf(l_errfile,"Processing Datafile : %s : got sqlca.sqlcode %d for client %s for msg %s\n",sqlca.sqlcode,l_ms_msgent_structa.info_file,h_dl_client,l_ms_msgent_structa.swift_msg_no);Changes done for AIX Migration
+				fprintf(l_errfile,"Processing Datafile : %d : got sqlca.sqlcode %s for client %s for msg %s\n",sqlca.sqlcode,l_ms_msgent_structa.info_file,h_dl_client,l_ms_msgent_structa.swift_msg_no);
+		    }
+					if (mhold)
+					{
+                       int_l_sw_rownum = int_l_sw_oldrownum + 1 ;
+								mhold = 0;
+					}
+		    break;
+		}
+
+      if (chr_l_old_priority1 != chr_h_priority_new)
+         l_ce_typ_found=0;
+      chr_l_old_priority1 = chr_h_priority_new;
+
+      
+      if (strcmp(chr_h_crf_no,"3")==0)
+      {
+      int_returnval = 0;
+      int_returnval = MS_Rtv_TabVal(int_l_sw_rownum,"CA_EVENT",l_data_file,
+                                      &h_ca_event,0);
+		if ( (strcmp(l_ms_msgent_structa.swift_msg_no,"563N05") == 0 ) || (strcmp(h_ca_event,"RP") == 0 )  || (strcmp(h_ca_event,"RL") == 0 ))
+				strcmp(h_ca_event,"RT");
+
+      printf(" after GetTable Value h_ca_event is %s\n",h_ca_event);
+      if(int_returnval == APL_FAILURE)
+      {
+      fprintf(l_errfile,"Processing Datafile :  %s : Failure in fetching Event Type for msg %s%s \n",l_ms_msgent_structa.info_file,l_ms_msgent_structa.swift_msg_no,l_ms_msgent_structa.proc_init);
+      continue;
+      }
+
+      if ((strncmp(h_schedule,h_ca_event,2) != 0) && (strcmp(h_schedule,"ZZZZ") != 0))
+         continue;
+      else if ((strcmp(h_schedule,"ZZZZ") == 0)  && (l_ce_typ_found == 1))
+         continue;
+      else if(strncmp(h_schedule,h_ca_event,2) == 0)
+             l_ce_typ_found = 1;
+
+      }
+      
+				if (mhold)
+					 mhold = 0;	
+				else
+                int_msg_exist++;
+		fflush(l_errfile);
+
+				
+
+                if(h_swift_tlx_gcn == 'S')
+                {
+						strcpy(chr_l_address,h_swift_addr);
+						strcpy(chr_l_address1,APL_NULL_STRING);
+                }
+
+                if(h_swift_tlx_gcn == 'C')
+                {
+                        strcpy(chr_l_address,h_gcn_addr);
+								strcpy(chr_l_address1,h_swift_addr);
+                }
+                
+		if(h_swift_tlx_gcn == 'T')
+                {
+                        strcpy(chr_l_address,h_infolex);
+			strcpy(chr_l_address1,h_gcn_addr);
+                }
+		
+		if(h_swift_tlx_gcn == 'F')
+                {
+                        strcpy(chr_l_address,h_fax_addr);
+			strcpy(chr_l_address1,APL_NULL_STRING);
+                }
+
+                strcpy(l_ms_baseno_struct_ha.contact_details,chr_l_address);
+                l_ms_baseno_struct_ha.swift_tlx_gcn = h_swift_tlx_gcn;
+
+                if(chr_prev_swftlx == h_swift_tlx_gcn) 
+                {
+		 
+
+		  if(strncmp(l_ms_msgent_structa.swift_msg_no,"572",3) == 0)
+		  {
+		     if(strcmp(chr_h_parm,"Y") == 0 && h_swift_tlx_gcn == 'T')
+		     {
+			int_msg_exist--;
+			continue;
+		     }
+		  }
+
+
+		  
+                  if(!strcmp(chr_curr_msg_no,"571B"))
+                  {
+                       if( (h_comb_msg == 'N') ||
+                           (h_swift_tlx_gcn == 'T' && h_swift_tlx_gcn != chr_f_swftlx[0]) 
+									|| ( (h_swift_tlx_gcn == 'C' || h_swift_tlx_gcn == 'S')
+											&& chr_f_swftlx[0] == 'T') )
+		       {
+			 int_msg_exist--;
+			 continue;
+		       }
+		       strcpy(l_ms_msgent_structa.swift_msg_no,"571B");
+                  }
+                  if(!strcmp(chr_curr_msg_no,"571"))
+                  {
+                       if(h_comb_msg == 'Y')
+		       {
+			 int_msg_exist--;
+			 continue;
+		       }
+		       strcpy(l_ms_msgent_structa.swift_msg_no,"571");
+                     }
+
+                     
+                     if(strcmp(chr_h_parm,"Y") == 0  &&
+                        strcmp(chr_curr_msg_no,"571A") == 0)
+                     {
+                      int_returnval = 0;
+							 
+                      int_returnval = MS_Rtv_TabVal(int_l_sw_rownum,"COMB_MSG",l_data_file,&chr_l_consmsg,0);
+                      if(int_returnval == APL_FAILURE)
+                      {
+            		fprintf(l_errfile,"Processing Datafile : %s : Failure in fetching consmsg chr_token for msg %s\n",l_ms_msgent_structa.info_file,l_ms_msgent_structa.swift_msg_no);
+            		int_msg_exist--;
+            		continue;
+                      }
+                      if(chr_l_consmsg != h_comb_msg)
+                      {
+            		int_msg_exist--;
+            		continue;
+                      }
+
+                      int_returnval = 0;
+		      memset(chr_h_iscc,APL_NULL_CHAR,2);
+                      int_returnval = MS_Rtv_TabVal(int_l_sw_oldrownum,"ISCC",l_data_file,&chr_h_iscc,0);
+                      if(int_returnval == APL_FAILURE)
+                      {
+              		fprintf(l_errfile,"Processing Datafile : %s : Failure in fetching iscc chr_token for msg %s \n",l_ms_msgent_structa.info_file,l_ms_msgent_structa.swift_msg_no);
+            		int_msg_exist--;
+            		continue;
+                      }
+                      int_returnval = 0;
+		      memset(chr_h_subclient,APL_NULL_CHAR,11);
+                      int_returnval = MS_Rtv_TabVal(int_l_sw_oldrownum,"SUBACCOUNT",l_data_file,&chr_h_subclient,0);
+                      if(int_returnval == APL_FAILURE)
+                      {
+            		fprintf(l_errfile,"Processing Datafile : %s : Failure in fetching subaccount chr_token for msg %s\n",l_ms_msgent_structa.info_file,l_ms_msgent_structa.swift_msg_no);
+            		int_msg_exist--;
+            		continue;
+                      }
+						
+
+          	      
+							if ((!strcmp(h_dl_client,chr_h_subclient)) &&
+								 (h_holdings[0] == 'N'))
+                      {
+								mhold=1;
+            		continue;
+                      }
+		      strcpy(l_ms_msgent_structa.swift_msg_no,"571A");
+
+		  }
+
+                  int_returnval = 0;
+		  memset(l_ms_baseno_struct_ha.baseid,APL_NULL_CHAR,7);
+		  if((strcmp(l_mt_message_sys_params_struct_h.ccs_int_ind,"N") == 0) && (chr_l_sfe_swftlx !='Q') && (chr_l_sfe_swftlx != 'M'))
+		  {
+                  int_returnval = MT_Rtv_Base(&l_ms_baseno_struct_ha,&int_retstat,l_debug_info_ptr);
+                  
+                  if(int_returnval == APL_FAILURE)
+                  {
+			fprintf(l_errfile,"Processing Datafile : %s : Failure in fetching base no. for contact_details %c %s \n",l_ms_msgent_structa.info_file,h_swift_tlx_gcn,l_ms_msgent_structa.swift_msg_no);
+                        int_msg_exist--;
+			continue;
+	          }
+		  } 
+
+                  if(!strncmp(l_ms_msgent_structa.swift_msg_no,"571",3))
+		      strcpy(l_ms_msgent_structa.swift_msg_no,"571");
+                  if(!strncmp(l_ms_msgent_structa.swift_msg_no,"572",3))
+		      strcpy(l_ms_msgent_structa.swift_msg_no,"572");
+                  if(!strncmp(l_ms_msgent_structa.swift_msg_no,"573",3))
+		      strcpy(l_ms_msgent_structa.swift_msg_no,"573");
+
+                  int_returnval = 0;
+			
+                  int_returnval = IGenMsgFileName(chr_l_msg_file,l_debug_info_ptr);
+					   fprintf(l_techfile,"Generating TBS :%s: for seq no :%d:\n\n",chr_l_msg_file,int_l_sw_rownum);
+         clearerr(l_techfile);
+         clearerr(l_data_file);
+                  int_msg_gen_no++;
+
+ 		  memset(l_ms_msglog_struct.client,APL_NULL_CHAR,APL_CLIENT_LENGTH);
+ 		  memset(l_ms_msglog_struct.swift_msg_no,APL_NULL_CHAR,7);
+ 		  memset(l_ms_msglog_struct.maker,APL_NULL_CHAR,APL_USERID_LEN);
+ 		  memset(l_ms_msglog_struct.maker_dt,APL_NULL_CHAR,APL_DATE_LEN);
+ 		  memset(l_ms_msglog_struct.msg,APL_NULL_CHAR,31);
+ 		  memset(l_ms_msglog_struct.contact_details,APL_NULL_CHAR,15);
+ 		  memset(l_ms_msglog_struct.contact_details1,APL_NULL_CHAR,15);
+ 		  memset(l_ms_msglog_struct.baseid,APL_NULL_CHAR,7);
+ 		  memset(l_ms_msglog_struct.message_ind,APL_NULL_CHAR,61);
+		  memset(l_ms_msglog_struct.swift_msg_ident,APL_NULL_CHAR,17);
+                  strcpy(l_ms_msglog_struct.client,h_dl_client);
+		  if(strncmp(l_ms_msgent_structa.swift_msg_no,"53x",3) !=0 &&
+		     strcmp(l_ms_msgent_structa.swift_msg_no,"52x") !=0)
+                  	strncpy(l_ms_msglog_struct.swift_msg_no,l_ms_msgent_structa.swift_msg_no,3);
+		  else
+			strcpy(l_ms_msglog_struct.swift_msg_no,chr_l_txn_msg);
+		  strcat(l_ms_msglog_struct.swift_msg_no,APL_NULL_STRING);
+		  strcpy(l_ms_msglog_struct.maker,"SYSTEM");
+
+                  int_returnval = 0;
+				
+                  int_returnval = CO_RtvSysDt(chr_l_sys_date,l_debug_info_ptr);
+                  if(int_returnval == APL_FAILURE)
+                  {
+			fprintf(l_errfile,"Processing Datafile : %s : Failure in fetching system chr_date\n",l_ms_msgent_structa.info_file);
+			int_msg_exist--;
+			continue;
+	          }
+		  strcpy(l_ms_msglog_struct.maker_dt,chr_l_sys_date);
+		  
+
+
+
+	l_gcn_tr_mode = 0;
+
+	
+
+        if (APL_FAILURE ==  CO_Chk_CntryEnabled( "MSG_TRANSMIT","NO_BID_FILE",&l_gcn_tr_mode, l_debug_info_ptr))
+        {
+				APL_GOBACK_FAIL
+        }
+		  if ( !l_gcn_tr_mode  )
+        {
+		     if ((strcmp(h_gcn_addr,FTP_ADD1)==0) || (strcmp(h_gcn_addr,FTP_ADD2)==0))
+		     {
+		        l_ms_msglog_struct.status_ind = 'F';
+		     }
+		     else
+		        l_ms_msglog_struct.status_ind = 'Z';
+        }
+        else 
+              l_ms_msglog_struct.status_ind = 'Z';
+
+			l_ms_msglog_struct.msg_in_out_ind = 'O';
+
+         if (chr_l_sfe_swftlx == 'Q')
+					l_ms_msglog_struct.message_class = 'Q';
+			else if (chr_l_sfe_swftlx == 'M')
+					l_ms_msglog_struct.message_class = 'M';
+			else 
+		  		l_ms_msglog_struct.message_class = h_swift_tlx_gcn;
+
+		  strcpy(l_ms_msglog_struct.msg,chr_l_msg_file);
+		  strcpy(l_ms_msglog_struct.contact_details,chr_l_address);
+		  strcpy(l_ms_msglog_struct.contact_details1,chr_l_address1);
+		  strcpy(l_ms_msglog_struct.baseid,l_ms_baseno_struct_ha.baseid);
+		  strcpy(l_ms_msglog_struct.message_ind,ltoa(l_ms_msgent_structa.swift_msg_seqno));
+		  strcpy(l_ms_msglog_struct.swift_msg_ident,APL_NULL_STRING); 
+		   
+                  int_returnval = 0;
+                  int_returnval = MS_Mod_MsgLogAdd(l_ms_msglog_struct,&int_retstat,l_debug_info_ptr); 
+                  if(int_returnval == APL_FAILURE)
+                  {
+			fprintf(l_errfile,"Processing Datafile : %s : Failure in updating chr_log table for msg %s of type %c for client %s\n",l_ms_msgent_structa.info_file,l_ms_msgent_structa.swift_msg_no,chr_l_sfe_swftlx,h_dl_client);
+			int_msg_exist--;
+			
+							
+			continue;
+	          }
+                  
+
+                  if(h_swift_tlx_gcn == 'S')
+			l_ms_msgent_structa.swift_count++;
+                  else if(h_swift_tlx_gcn == 'T')
+			l_ms_msgent_structa.telex_count++;
+		  else if(h_swift_tlx_gcn == 'F')
+			l_ms_msgent_structa.fax_count++;
+		  else if(h_swift_tlx_gcn == 'C')
+			l_ms_msgent_structa.gcn_count++;
+                  memset(chr_l_msg_pathfname1,APL_NULL_CHAR,100);
+                  strcpy(chr_l_msg_pathfname1,chr_l_msg_path);
+                  strcat(chr_l_msg_pathfname1,chr_l_msg_file);
+                  int_returnval = 0;
+                  int_returnval = filecp(h_identify, h_infolex, chr_l_msg_pathfname,chr_l_msg_pathfname1,l_debug_info_ptr);
+ 		  if(int_returnval == APL_FAILURE)
+                  {
+		    //fprintf(l_errfile,"Processing Datafile : %s : Message not generated for %s of type %s %s %s\n",l_ms_msgent_structa.info_file,l_ms_msgent_structa.swift_msg_no,h_swift_tlx_gcn,h_dl_client,chr_h_key);Changes done for AIX Migration
+		    fprintf(l_errfile,"Processing Datafile : %s : Message not generated for %s of type %c %s %s\n",l_ms_msgent_structa.info_file,l_ms_msgent_structa.swift_msg_no,h_swift_tlx_gcn,h_dl_client,chr_h_key);
+		    int_msg_exist--;
+			 
+					  
+		    continue;
+	          }
+          	  else
+	  	  {
+	            
+
+				 if( APL_FAILURE == CO_RtvSysDtTime(chr_l_sys_date_time, l_debug_info_ptr))
+							APL_GOBACK_FAIL;
+	   	    memset(chr_l_statinfo,APL_NULL_CHAR,61);
+	   	    strcpy(chr_l_statinfo, chr_l_sys_date_time);
+	   	    strcat(chr_l_statinfo," : Processed ");
+	   	    strcat(chr_l_statinfo,h_dl_client);
+	   	    strcat(chr_l_statinfo," msg ");
+	   	    strcat(chr_l_statinfo,l_ms_msgent_structa.swift_msg_no);
+
+	   	    EXEC SQL UPDATE SYS_BATCHPROC 
+		             SET STAT_DET = :chr_l_statinfo
+		             WHERE ROWID = :p_ora_rowid;
+
+	   	    if(sqlca.sqlcode < 0 ||
+                       sqlca.sqlcode == 1403)
+                    {
+			fprintf(l_errfile,"Failure in updating status_ind information in batch table\n");
+		        int_msg_exist--;
+                        EXEC SQL ROLLBACK WORK;
+                        continue;
+                    }
+	  	  }
+                  int_commit_ctr++;
+                  if(int_commit_ctr > COMMIT_COUNT_D)
+                  {
+                       EXEC SQL COMMIT WORK;
+					        fprintf(l_techfile,"\n************ COMMIT ***********\n");
+         clearerr(l_techfile);
+         clearerr(l_data_file);
+		       int_commit_ctr = 0;
+
+		  EXEC SQL SELECT processing_status,status
+			   INTO :chr_h_restart_data:i_restart_info,
+				:h_status_ind:i_status_ind
+			   FROM SYS_BATCHPROC
+			   WHERE ROWID = :p_ora_rowid
+			   FOR UPDATE OF STATUS,PROCESSING_STATUS;
+
+		  if(sqlca.sqlcode < 0)
+			fprintf(l_errfile,"Batch Table cannot be locked\n");
+
+		  IS_ANY_ORA_ERROR;
+                  }
+                  
+                  continue;	
+                }
+
+                
+                     if(!strcmp(chr_curr_msg_no,"571B"))
+                     {
+                       if( (h_comb_msg == 'N') ||
+                           (h_swift_tlx_gcn == 'T' && h_swift_tlx_gcn != chr_f_swftlx[0]) 
+									|| ( (h_swift_tlx_gcn == 'C' || h_swift_tlx_gcn == 'S')
+											&& chr_f_swftlx[0] == 'T') )
+		       {
+			 int_msg_exist--;
+			 continue;
+		       }
+		       strcpy(l_ms_msgent_structa.swift_msg_no,"571B");
+                     }
+                     if(!strcmp(chr_curr_msg_no,"571"))
+                     {
+                       if(h_comb_msg == 'Y')
+		       {
+			 int_msg_exist--;
+			 continue;
+		       }
+		       strcpy(l_ms_msgent_structa.swift_msg_no,"571");
+                     }
+		     
+                     if(strcmp(chr_h_parm,"Y") == 0  &&
+                        strcmp(chr_curr_msg_no,"571A") == 0)
+                     {
+                      int_returnval = 0;
+							 
+                      int_returnval = MS_Rtv_TabVal(int_l_sw_rownum,"COMB_MSG",l_data_file,&chr_l_consmsg,0);
+                      if(int_returnval == APL_FAILURE)
+                      {
+            		fprintf(l_errfile,"Processing Datafile : %s : Failure in fetching consmsg chr_token for msg %s\n",l_ms_msgent_structa.info_file,l_ms_msgent_structa.swift_msg_no);
+            		int_msg_exist--;
+            		continue;
+                      }
+                      if(chr_l_consmsg != h_comb_msg)
+                      {
+            		int_msg_exist--;
+            		continue;
+                      }
+
+                      int_returnval = 0;
+		      memset(chr_h_iscc,APL_NULL_CHAR,2);
+                      int_returnval = MS_Rtv_TabVal(int_l_sw_oldrownum,"ISCC",l_data_file,&chr_h_iscc,0);
+                      if(int_returnval == APL_FAILURE)
+                      {
+                        fprintf(l_errfile,"Processing Datafile : %s : Failure in fetching iscc chr_token for msg %s \n",l_ms_msgent_structa.info_file,l_ms_msgent_structa.swift_msg_no);
+                        int_msg_exist--;
+                        continue;
+                      }
+                      int_returnval = 0;
+		      memset(chr_h_subclient,APL_NULL_CHAR,11);
+                      int_returnval = MS_Rtv_TabVal(int_l_sw_oldrownum,"SUBACCOUNT",l_data_file,&chr_h_subclient,0);
+                      if(int_returnval == APL_FAILURE)
+                      {
+                        fprintf(l_errfile,"Processing Datafile : %s : Failure in fetching subaccount chr_token for msg %s\n",l_ms_msgent_structa.info_file,l_ms_msgent_structa.swift_msg_no);
+                        int_msg_exist--;
+                        continue;
+                      }
+
+							 
+
+                      
+
+							if ((!strcmp(h_dl_client,chr_h_subclient)) &&
+								 (h_holdings[0] == 'N'))
+                      {
+								mhold=1;
+                        continue;
+                      }
+		      strcpy(l_ms_msgent_structa.swift_msg_no,"571A");
+
+                  }
+		  
+
+
+
+                     if(!strcmp(l_ms_msgent_structa.swift_msg_no,"572"))
+                     {
+                        if(strcmp(chr_h_parm,"Y") == 0 && (h_swift_tlx_gcn == 'S' || h_swift_tlx_gcn == 'C'))
+                        {
+                         strcpy(l_ms_msgent_structa.swift_msg_no,"572A");
+                        }
+			else if(strcmp(chr_h_parm,"Y") == 0 && h_swift_tlx_gcn == 'T')
+                        {
+			 int_msg_exist--;
+                         continue;
+                        }
+		     }
+                     if(!strcmp(l_ms_msgent_structa.swift_msg_no,"573"))
+                     {
+                        if(strcmp(chr_h_parm,"Y") == 0 )
+                        {
+                         strcpy(l_ms_msgent_structa.swift_msg_no,"573A");
+                        }
+		     }
+                     int_returnval = 0;
+                     if(h_swift_tlx_gcn == 'C')
+                     {
+			  chr_curr_swftlx = 'C';
+                          h_swift_tlx_gcn = 'S';
+                     }
+							
+	             			int_returnval = MS_Rtv_MsgTags(l_ms_msgent_structa,&l_ms_tag_elm_struct_i,&int_tot_tag,
+                                             h_swift_tlx_gcn,&int_retstat,l_debug_info_ptr);
+							
+                     if(int_returnval == APL_FAILURE)
+                     {
+			fprintf(l_errfile,"Processing Datafile : %s : Failure in accessing tags for msg %s of type %c \n",l_ms_msgent_structa.info_file,l_ms_msgent_structa.swift_msg_no,h_swift_tlx_gcn);
+			APL_GOBACK_FAIL
+	             }
+	  
+                     int_returnval = 0;
+	  	     int_returnval = IMsgSeqLoad(l_ms_msgent_structa,&l_ms_seq_elm_struct_h,&int_tot_seq,
+                                             h_swift_tlx_gcn,&int_retstat,l_debug_info_ptr);
+          	     if(int_returnval == APL_FAILURE)
+          	     {
+			fprintf(l_errfile,"Processing Datafile : %s : Failure in accessing sequence for msg %s of type %c \n",l_ms_msgent_structa.info_file,l_ms_msgent_structa.swift_msg_no,h_swift_tlx_gcn);
+			APL_GOBACK_FAIL
+	  	     }
+           
+							strcpy(l_ms_calc_elm_struct_h[0].link_val,"PAGENO");
+                     strcpy(l_ms_calc_elm_struct_h[1].link_val,"PARTNO");
+                     strcpy(l_ms_calc_elm_struct_h[2].link_val,"PORTFOLIO_AMT");
+                     strcpy(l_ms_calc_elm_struct_h[3].link_val,"TR3TOT");
+                     strcpy(l_ms_calc_elm_struct_h[4].link_val,"TR4TOT");
+                     strcpy(l_ms_calc_elm_struct_h[5].link_val,"TOTNET");
+                     strcpy(l_ms_calc_elm_struct_h[6].link_val,"START_SAFEK");
+                     strcpy(l_ms_calc_elm_struct_h[7].link_val,"TOTALDRAMT");
+                     strcpy(l_ms_calc_elm_struct_h[8].link_val,"TOTALCRAMT");
+                     strcpy(l_ms_calc_elm_struct_h[9].link_val,"NETDCAMT");
+                     strcpy(l_ms_calc_elm_struct_h[10].link_val,"OPNBAL");
+                     strcpy(l_ms_calc_elm_struct_h[11].link_val,"CLOSING_BAL");
+                     strcpy(l_ms_calc_elm_struct_h[12].link_val,"CURRBAL");
+                     int_l_calc_ctr = 13;
+
+		     for(int_init = 1;int_init <= 10;int_init++)
+		     {
+			l_ms_calc_elm_struct_h[int_init].link_tag = 0;
+			l_ms_calc_elm_struct_h[int_init].PREV_VAL = 0;
+			memset(l_ms_calc_elm_struct_h[int_init].inc_iv_cond,APL_NULL_CHAR,201);
+			memset(l_ms_calc_elm_struct_h[int_init].res_iv_cond,APL_NULL_CHAR,201);
+		     }
+           
+
+
+                     int_returnval = 0;
+ 		     memset(l_ms_baseno_struct_ha.baseid,APL_NULL_CHAR,7);
+		if((strcmp(l_mt_message_sys_params_struct_h.ccs_int_ind,"N") == 0) && (chr_l_sfe_swftlx !='Q') && (chr_l_sfe_swftlx != 'M'))
+		     {
+		     int_returnval = MT_Rtv_Base(&l_ms_baseno_struct_ha,&int_retstat,l_debug_info_ptr);
+                  
+                     if(int_returnval == APL_FAILURE)
+                     {
+			fprintf(l_errfile,"Processing Datafile : %s : Failure in fetching base no. for contact_details %c %s \n",l_ms_msgent_structa.info_file,h_swift_tlx_gcn,l_ms_msgent_structa.swift_msg_no);
+		        int_msg_exist--;
+			continue;
+	             }
+		     } 
+
+                     int_returnval = 0;
+			
+                     int_returnval = IGenMsgFileName(chr_l_msg_file,l_debug_info_ptr);
+					      fprintf(l_techfile,"Generating TBS :%s: for seq no :%d:\n\n",chr_l_msg_file,int_l_sw_rownum);
+         clearerr(l_techfile);
+         clearerr(l_data_file);
+                     int_msg_gen_no++;
+		     memset(chr_l_msg_pathfname,APL_NULL_CHAR,100);
+                     strcpy(chr_l_msg_pathfname,chr_l_msg_path);
+                     strcat(chr_l_msg_pathfname,chr_l_msg_file);
+
+          	     
+                     int_returnval = 0;
+		     memset(chr_l_txn_msg,APL_NULL_CHAR,7);
+			  int_l_sw_oldrownum=int_l_sw_rownum;
+	  	     int_returnval = MS_Proc_Msg(l_ms_msgent_structa.swift_msg_no,&l_ms_tag_elm_struct_i,
+                                               int_tot_tag,&l_ms_seq_elm_struct_h,
+                                               int_tot_seq,&l_ms_val_elm_struct_h,&int_tot_val,
+                                               l_data_file,
+					       &int_l_sw_rownum,
+					       chr_l_msg_pathfname,
+					       h_swift_tlx_gcn,
+					       &l_ms_calc_elm_struct_h,
+					       int_l_calc_ctr,
+                                               l_ms_static_val,
+					       l_errfile,
+                                               chr_l_txn_msg,
+                                               &int_retstat,
+                                               l_debug_info_ptr);
+
+                     free(l_ms_val_elm_struct_h);
+							
+		     l_ms_val_elm_struct_h = (MS_VAL_ELM_STRUCT_H *)calloc(1,sizeof(MS_VAL_ELM_STRUCT_H));
+			  APL_MALLOC_FAIL(l_ms_val_elm_struct_h);
+				
+				free(l_ms_seq_elm_struct_h);
+				l_ms_seq_elm_struct_h = (MS_SEQ_ELM_STRUCT_H *)calloc(1,sizeof(MS_SEQ_ELM_STRUCT_H));
+				APL_MALLOC_FAIL(l_ms_seq_elm_struct_h);
+				
+                     
+                     if(chr_curr_swftlx == 'C')
+                     {
+                          h_swift_tlx_gcn = 'C';
+                          chr_curr_swftlx = APL_NULL_CHAR;
+                     }
+
+          	     if(int_returnval == APL_FAILURE)
+          	     {
+		        
+           			CO_ProcMonitor(l_errfile,APL_NULL_STRING,l_debug_info_ptr,NULL);
+           			CO_FreeErrLst(l_debug_info_ptr);
+        		
+
+			fprintf(l_errfile,"Processing Datafile : %s : Failure in generating msg %s of type %c  %s %s\n",l_ms_msgent_structa.info_file,l_ms_msgent_structa.swift_msg_no,h_swift_tlx_gcn,h_dl_client,chr_h_key);
+		        int_msg_exist--;
+			continue;
+	  	     }
+
+                     if(!strncmp(l_ms_msgent_structa.swift_msg_no,"571",3))
+			strcpy(l_ms_msgent_structa.swift_msg_no,"571");
+                     if(!strncmp(l_ms_msgent_structa.swift_msg_no,"572",3))
+			strcpy(l_ms_msgent_structa.swift_msg_no,"572");
+                     if(!strncmp(l_ms_msgent_structa.swift_msg_no,"573",3))
+			strcpy(l_ms_msgent_structa.swift_msg_no,"573");
+                
+ 		     memset(l_ms_msglog_struct.client,APL_NULL_CHAR,APL_CLIENT_LENGTH);
+ 		     memset(l_ms_msglog_struct.swift_msg_no,APL_NULL_CHAR,7);
+ 		     memset(l_ms_msglog_struct.maker,APL_NULL_CHAR,APL_USERID_LEN);
+ 		     memset(l_ms_msglog_struct.maker_dt,APL_NULL_CHAR,APL_DATE_LEN);
+ 		     memset(chr_l_sys_date,APL_NULL_CHAR,APL_DATE_LEN);
+ 		     memset(l_ms_msglog_struct.msg,APL_NULL_CHAR,31);
+ 		     memset(l_ms_msglog_struct.contact_details,APL_NULL_CHAR,15);
+ 		     memset(l_ms_msglog_struct.contact_details1,APL_NULL_CHAR,15);
+ 		     memset(l_ms_msglog_struct.baseid,APL_NULL_CHAR,7);
+ 		     memset(l_ms_msglog_struct.message_ind,APL_NULL_CHAR,61);
+
+
+                     strcpy(l_ms_msglog_struct.client,h_dl_client);
+                     
+							l_ms_msglog_struct.client[strlen(l_ms_msglog_struct.client)] = APL_NULL_CHAR;
+		     if(strncmp(l_ms_msgent_structa.swift_msg_no,"53x",3) !=0 &&
+		        strcmp(l_ms_msgent_structa.swift_msg_no,"52x") !=0)
+                     	strncpy(l_ms_msglog_struct.swift_msg_no,l_ms_msgent_structa.swift_msg_no,3);
+		     else
+			strcpy(l_ms_msglog_struct.swift_msg_no,chr_l_txn_msg);
+                      
+							 l_ms_msglog_struct.swift_msg_no[strlen(l_ms_msglog_struct.swift_msg_no)] = APL_NULL_CHAR;
+		     strcpy(l_ms_msglog_struct.maker,"SYSTEM");
+
+			  l_ms_msglog_struct.maker[strlen(l_ms_msglog_struct.maker)]	= APL_NULL_CHAR;
+	
+                     int_returnval = 0;
+				
+                     int_returnval = CO_RtvSysDt(chr_l_sys_date,l_debug_info_ptr);
+                     if(int_returnval == APL_FAILURE)
+                     {
+			fprintf(l_errfile,"Processing Datafile : %s : Failure in fetching system chr_date\n",l_ms_msgent_structa.info_file);
+			int_msg_exist--;
+			continue;
+	             }
+		     strcpy(l_ms_msglog_struct.maker_dt,chr_l_sys_date);
+		    
+
+
+
+	l_gcn_tr_mode = 0;
+
+	
+
+        if (APL_FAILURE ==  CO_Chk_CntryEnabled( "MSG_TRANSMIT","NO_BID_FILE",&l_gcn_tr_mode, l_debug_info_ptr))
+        {
+				APL_GOBACK_FAIL
+        }
+
+		     if (!l_gcn_tr_mode  )
+           {
+		        if ((strcmp(h_gcn_addr,FTP_ADD1)==0) || (strcmp(h_gcn_addr,FTP_ADD2)==0))
+		        {
+		           l_ms_msglog_struct.status_ind = 'F';
+		        }
+		        else
+		           l_ms_msglog_struct.status_ind = 'Z';
+           }
+           else 
+              l_ms_msglog_struct.status_ind = 'Z';
+
+		     l_ms_msglog_struct.msg_in_out_ind = 'O';
+
+			if (chr_l_sfe_swftlx == 'Q')
+				l_ms_msglog_struct.message_class = 'Q';
+			else if (chr_l_sfe_swftlx == 'M')
+				l_ms_msglog_struct.message_class = 'M';
+			else
+		     	l_ms_msglog_struct.message_class = h_swift_tlx_gcn;
+
+		     strcpy(l_ms_msglog_struct.msg,chr_l_msg_file);
+		     
+			  l_ms_msglog_struct.msg[strlen(l_ms_msglog_struct.msg)] = APL_NULL_CHAR;
+		     strcpy(l_ms_msglog_struct.contact_details,chr_l_address);
+		     
+			  l_ms_msglog_struct.contact_details[strlen(l_ms_msglog_struct.contact_details)] = APL_NULL_CHAR;
+		     strcpy(l_ms_msglog_struct.contact_details1,chr_l_address1);
+
+			  l_ms_msglog_struct.contact_details1[strlen(l_ms_msglog_struct.contact_details1)] = APL_NULL_CHAR;
+		     strcpy(l_ms_msglog_struct.baseid,l_ms_baseno_struct_ha.baseid);
+		     
+			  l_ms_msglog_struct.baseid[strlen(l_ms_msglog_struct.baseid)] = APL_NULL_CHAR;
+		     strcpy(l_ms_msglog_struct.message_ind,ltoa(l_ms_msgent_structa.swift_msg_seqno));
+		     
+			  l_ms_msglog_struct.message_ind[strlen(l_ms_msglog_struct.message_ind)] = APL_NULL_CHAR;
+			strcpy(l_ms_msglog_struct.swift_msg_ident,APL_NULL_STRING); 
+		   
+               	     int_returnval = 0;
+                     int_returnval = MS_Mod_MsgLogAdd(l_ms_msglog_struct,&int_retstat,l_debug_info_ptr); 
+                     if(int_returnval == APL_FAILURE)
+                     {
+			fprintf(l_errfile,"Processing Datafile : %s : Failure in updating chr_log table for msg %s of type %c for client %s\n",l_ms_msgent_structa.info_file,l_ms_msgent_structa.swift_msg_no,h_swift_tlx_gcn,h_dl_client);
+		        int_msg_exist--;
+			
+						
+			continue;
+	             }
+                     int_commit_ctr++;
+                     if(int_commit_ctr > COMMIT_COUNT_D)
+                     {
+                       EXEC SQL COMMIT WORK;
+					        fprintf(l_techfile,"\n************ COMMIT ***********\n");
+         clearerr(l_techfile);
+         clearerr(l_data_file);
+		       int_commit_ctr = 0;
+
+		     EXEC SQL SELECT processing_status,status
+			   INTO :chr_h_restart_data:i_restart_info,
+				:h_status_ind:i_status_ind
+			   FROM SYS_BATCHPROC
+			   WHERE ROWID = :p_ora_rowid
+			   FOR UPDATE OF STATUS,PROCESSING_STATUS;
+
+		     if(sqlca.sqlcode < 0)
+			fprintf(l_errfile,"Batch Table cannot be locked\n");
+                     }
+
+                     if(h_swift_tlx_gcn == 'S')
+			l_ms_msgent_structa.swift_count++;
+                     else if(h_swift_tlx_gcn == 'T')
+			l_ms_msgent_structa.telex_count++;
+		     else if(h_swift_tlx_gcn == 'F')
+			l_ms_msgent_structa.fax_count++;
+		     else if(h_swift_tlx_gcn == 'C')
+			l_ms_msgent_structa.gcn_count++;
+
+                     strcpy(chr_l_msg_frm_file,chr_l_msg_file);
+                     chr_prev_swftlx = h_swift_tlx_gcn;
+                
+            } 
+        
+				
+
+				if (l_52xflg == 1)
+				{
+					EXEC SQL CLOSE msg_addr_cur_52x;
+					IS_ANY_ORA_ERROR
+				}
+				else
+				{
+            	EXEC SQL CLOSE msg_addr_cur;
+					IS_ANY_ORA_ERROR
+				}
+
+            
+
+            int_returnval = 0;
+ 	    memset(chr_h_eof,APL_NULL_CHAR,2);
+	    int_returnval = MS_Rtv_TabVal(int_l_sw_rownum,"EOF",l_data_file,
+                                      &chr_h_eof,0);
+
+            if(feof(l_data_file) == 0)
+            	fgetpos(l_data_file,&g_cur_pos);
+            if(strcmp(chr_h_eof,"T") == 0)
+                break;
+            
+           	
+            int_returnval = 0;
+		
+ 	    memset(chr_h_prev_client,APL_NULL_CHAR,APL_CLIENT_LENGTH);
+		 strcpy(chr_h_prev_client,h_dl_client);
+ 	    
+		 memset(h_dl_client,APL_NULL_CHAR,APL_CLIENT_LENGTH);
+	    int_returnval = MS_Rtv_TabVal(int_l_sw_rownum,"CLIENT",l_data_file,
+                                      &h_dl_client,0);
+	 	 if(int_msg_exist==0)
+		 {
+         if(strcmp(l_ms_msgent_structa.client,h_dl_client)==0)
+				break;
+		 	while((strcmp(h_dl_client,chr_h_prev_client)==0))
+			{
+				if(feof(l_data_file) == 0)
+            	fgetpos(l_data_file,&g_cur_pos);
+ 	    		int_returnval=0;
+				memset(chr_h_eof,APL_NULL_CHAR,2);
+				printf("\n******* Called from the inner while block ******* \n");
+	    		int_returnval = MS_Rtv_TabVal(int_l_sw_rownum,"EOF",l_data_file,
+                                      &chr_h_eof,0);
+            if(strcmp(chr_h_eof,"T") == 0)
+                break;
+	    		int_returnval = MS_Rtv_TabVal(int_l_sw_rownum,
+													"CLIENT",
+													l_data_file,
+                                      &h_dl_client,0);
+				if(strcmp(h_dl_client,chr_h_prev_client)==0)
+				{
+					int_l_sw_rownum++;
+				}
+			}
+		 }
+       
+             
+            int_returnval = 0;
+            int_returnval = MS_Rtv_TabVal(int_l_sw_rownum,"PROC_INIT",l_data_file,
+                                      &chr_h_key,0);
+
+            if( strncmp(l_ms_msgent_structa.swift_msg_no,"571",3 ) == 0)
+            {
+               int_returnval = 0;
+	       int_returnval = MS_Rtv_TabVal(int_l_sw_rownum,"NOHOLDGS",l_data_file,
+                                      &chr_h_parm,0);
+               if(int_returnval == APL_FAILURE)
+               {
+		 fprintf(l_errfile,"Processing Datafile : %s : Failure in fetching noholdings parameter  from data h_file  for msg %s\n",l_ms_msgent_structa.info_file,l_ms_msgent_structa.swift_msg_no);
+		 continue;
+	       }
+               int_returnval = 0;
+	       int_returnval = MS_Rtv_TabVal(int_l_sw_rownum,"SWIFT_TLX_GCN",l_data_file,
+                                      &chr_f_swftlx,0);
+               if(int_returnval == APL_FAILURE)
+               {
+		 fprintf(l_errfile,"Processing Datafile : %s : Failure in fetching swift_tlx_gcn parameter  from data h_file  for msg %s\n",l_ms_msgent_structa.info_file,l_ms_msgent_structa.swift_msg_no);
+		 continue;
+	       }
+            }
+           if( !strcmp(l_ms_msgent_structa.swift_msg_no,"572") )
+           {
+               int_returnval = 0;
+	       int_returnval = MS_Rtv_TabVal(int_l_sw_rownum,"NIL_MOV_IND",l_data_file,
+                                      &chr_h_parm,0);
+               if(int_returnval == APL_FAILURE)
+               {
+		 fprintf(l_errfile,"Processing Datafile : %s : Failure in fetching no movements parameter  for msg %s \n",l_ms_msgent_structa.info_file,l_ms_msgent_structa.swift_msg_no);
+		 continue;
+	       }
+           }
+           if( !strcmp(l_ms_msgent_structa.swift_msg_no,"573") )
+           {
+               int_returnval = 0;
+	       int_returnval = MS_Rtv_TabVal(int_l_sw_rownum,"NOPENDGS",l_data_file,
+                                      &chr_h_parm,0);
+               if(int_returnval == APL_FAILURE)
+               {
+		 fprintf(l_errfile,"Processing Datafile : %s : Failure in fetching nopendings parameter for msg %s \n",l_ms_msgent_structa.info_file,l_ms_msgent_structa.swift_msg_no);
+		 continue;
+	       }
+           }
+
+          }  
+          int_msg_type_ctr++;
+          if(int_msg_type_ctr > 4)
+		int_msg_type_ctr = 0;
+          int_msg_process = 0;
+          int_l_sw_rownum = 1;
+          g_cur_pos = 0;
+          g_prev_pos = 0;
+          if(int_msg_type_ctr == 0 || int_msg_process == 1)
+          {
+	    //if(l_ms_msgent_structa.auto_tran_ind == 'Y')//AIX - Warnings Removal
+	    if(l_ms_msgent_structa.auto_tran_ind[0] == 'Y')
+            {
+				
+                EXEC SQL UPDATE MS_MSGLOG 
+                         SET status = 'P'
+                         WHERE message_ind = to_char(:l_ms_msgent_structa.swift_msg_seqno) 
+								and status != 'F'; 
+                if(sqlca.sqlcode < 0 )
+                {
+				
+				
+                //fprintf(l_errfile,"Error in updating imsglog for msg %s for record no. %d\n",l_ms_msgent_structa.swift_msg_no,l_ms_msgent_structa.swift_msg_seqno);Changes done for AIX Migration
+                fprintf(l_errfile,"Error in updating imsglog for msg %s for record no. %ld\n",l_ms_msgent_structa.swift_msg_no,l_ms_msgent_structa.swift_msg_seqno);
+                continue;
+                }
+            }
+	     else
+            {
+				
+                EXEC SQL UPDATE MS_MSGLOG 
+                         SET status = 'G'
+                         WHERE message_ind = to_char(:l_ms_msgent_structa.swift_msg_seqno) 
+								and status != 'F';  
+                if(sqlca.sqlcode < 0)
+                {
+			
+				 
+                //fprintf(l_errfile,"Error in updating imsglog for msg %s for record no. %d\n",l_ms_msgent_structa.swift_msg_no,l_ms_msgent_structa.swift_msg_seqno); Changes done for AIX Migration
+                fprintf(l_errfile,"Error in updating imsglog for msg %s for record no. %ld\n",l_ms_msgent_structa.swift_msg_no,l_ms_msgent_structa.swift_msg_seqno);
+                continue;
+                }
+            }
+             int_returnval = 0;
+	     strcpy(l_ms_msgent_structa.status_ind , "P");
+             int_returnval = MS_Mod_MsgEnt(l_ms_msgent_structa,&int_retstat,l_debug_info_ptr);
+ 	     if(int_returnval == APL_FAILURE)
+             {
+				
+               if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+               {
+                 CO_ProcMonitor(l_errfile,APL_NULL_STRING,l_debug_info_ptr,NULL);
+                 CO_FreeErrLst(l_debug_info_ptr);
+               }
+	     }
+             else
+	     {
+	         
+
+	   	memset(chr_l_statinfo,APL_NULL_CHAR,61);
+	   	strcpy(chr_l_statinfo,"Processed ");
+	   	strcat(chr_l_statinfo,h_dl_client);
+	   	strcat(chr_l_statinfo," msg ");
+	   	strcat(chr_l_statinfo,l_ms_msgent_structa.swift_msg_no);
+
+	   	EXEC SQL UPDATE SYS_BATCHPROC 
+		    SET STAT_DET = :chr_l_statinfo
+		    WHERE ROWID = :p_ora_rowid;
+
+	   	if(sqlca.sqlcode < 0 ||
+                   sqlca.sqlcode == 1403)
+                {
+			fprintf(l_errfile,"Failure in updating status_ind information in batch table\n");
+                        EXEC SQL ROLLBACK;
+
+	   	        IS_ANY_ORA_ERROR
+                }
+
+
+               EXEC SQL COMMIT WORK;
+					fprintf(l_techfile,"\n************ COMMIT ***********\n");
+         clearerr(l_techfile);
+         clearerr(l_data_file);
+
+	       EXEC SQL SELECT rowid
+			   INTO :h_ora_rowid:i_ora_rowid 
+			   FROM SYS_BATCHPROC
+			   WHERE ROWID = :p_ora_rowid;
+
+		  if(sqlca.sqlcode < 0)
+			fprintf(l_errfile,"Batch Table cannot be locked\n");
+
+		  IS_ANY_ORA_ERROR;
+	     }
+           }
+        int_clsstat = fclose(l_data_file);
+        if(int_clsstat == 0)
+        int_fnoopen--;
+	} 
+
+        EXEC SQL CLOSE msg_cur;
+
+        APL_GOBACK_SUCCESS
+		
+
+RETURN_SUCCESS:
+
+	CO_ProcMonitor(APL_OUT_FILE,"Exiting successfully  out of MS_Proc_MsgMain()\n",NULL,NULL);
+        fclose(l_techfile);
+        fclose(l_errfile);
+        free(l_ms_static_val_b);
+        free(l_ms_tag_elm_struct_h_t);
+        free(l_ms_seq_elm_struct_h);
+        free(l_ms_calc_elm_struct_h_t);
+        free(l_ms_val_elm_struct_h);
+	return APL_SUCCESS;
+	
+RETURN_FAILURE:
+	CO_ProcMonitor(APL_OUT_FILE,"Exiting unsuccesfully out of MS_Proc_MsgMain()\n",NULL,NULL);
+        fclose(l_techfile);
+        fclose(l_errfile);
+        free(l_ms_static_val_b);
+        free(l_ms_tag_elm_struct_h_t);
+        free(l_ms_seq_elm_struct_h);
+        free(l_ms_calc_elm_struct_h_t);
+        free(l_ms_val_elm_struct_h);
+	return APL_FAILURE;
+}
+
+
+
+int MS_Rtv_MsgTags(MS_MSGENT_STRUCT p_ms_msgent_struct,MS_TAG_ELM_STRUCT_H **p_ms_tag_elm_struct_h,int *p_tot_tag,char p_swftlx,int *int_p_retstat,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+EXEC SQL BEGIN DECLARE SECTION;
+MS_MSGENT_STRUCT l_ms_msgent_structa;
+I_MS_MSGENT_STRUCT l_i_ms_msgent_struct;
+MS_TAG_ELM_STRUCT_H l_ms_tag_elm_struct_h;
+MS_MAP_TAG_STRUCT_H l_ms_map_tag_struct_h;
+EXEC SQL VAR l_ms_tag_elm_struct_h.msg_tag IS STRING;
+EXEC SQL VAR l_ms_tag_elm_struct_h.info_elem IS STRING;
+EXEC SQL VAR l_ms_tag_elm_struct_h.msg_tag_cond IS STRING;
+EXEC SQL END DECLARE SECTION;
+
+struct sqlca sqlca;
+int int_tag_ctr=0,i=0;
+
+MS_TAG_ELM_STRUCT_H *l_ms_tag_elm_struct_i = NULL;
+MS_TAG_ELM_STRUCT_H *l_ms_tag_elm_struct_h_t = NULL;
+l_ms_tag_elm_struct_h_t = l_ms_tag_elm_struct_i = (MS_TAG_ELM_STRUCT_H *)calloc(MAX_TAGS,sizeof(MS_TAG_ELM_STRUCT_H));
+APL_MALLOC_FAIL(l_ms_tag_elm_struct_i);
+
+l_ms_msgent_structa = p_ms_msgent_struct;
+
+
+
+       EXEC SQL DECLARE tag_cur CURSOR FOR
+	        SELECT msg_tag,identity_no,INFO_ELEM,info_type,HEAD_CONT_NEWLINE,MSG_TAG_COND
+		,SRL_NUM,PRINT_CD
+                FROM MS_DETAILSMAP
+	        WHERE swift_msg_no = :l_ms_msgent_structa.swift_msg_no AND
+                      message_class = :p_swftlx
+                ORDER BY SRL_NUM;
+
+       EXEC SQL OPEN tag_cur;
+       if(sqlca.sqlcode < 0)
+       {
+         return APL_FAILURE;
+       }
+
+       for( ; ; )
+       {
+
+	  EXEC SQL FETCH tag_cur INTO :l_ms_tag_elm_struct_h:l_ms_map_tag_struct_h;
+          if(sqlca.sqlcode == 1403)
+		break;
+	  strcpy(l_ms_tag_elm_struct_i[int_tag_ctr].msg_tag,l_ms_tag_elm_struct_h.msg_tag);
+	  strcpy(l_ms_tag_elm_struct_i[int_tag_ctr].info_elem,l_ms_tag_elm_struct_h.info_elem);
+	  l_ms_tag_elm_struct_i[int_tag_ctr].info_type = l_ms_tag_elm_struct_h.info_type;
+	  l_ms_tag_elm_struct_i[int_tag_ctr].head_cont_newline = l_ms_tag_elm_struct_h.head_cont_newline;
+	  strcpy(l_ms_tag_elm_struct_i[int_tag_ctr].msg_tag_cond,l_ms_tag_elm_struct_h.msg_tag_cond);
+	  l_ms_tag_elm_struct_i[int_tag_ctr].identity_no = l_ms_tag_elm_struct_h.identity_no;
+
+	  l_ms_tag_elm_struct_i[int_tag_ctr].srl_num = l_ms_tag_elm_struct_h.srl_num;
+
+	  l_ms_tag_elm_struct_i[int_tag_ctr].print_cd = l_ms_tag_elm_struct_h.print_cd;
+
+          int_tag_ctr++;
+       }
+	EXEC SQL CLOSE tag_cur;
+
+       if(int_tag_ctr == 0)
+	  APL_GOBACK_FAIL
+
+
+for(i=0;i<int_tag_ctr;i++)
+{
+	  strcpy((*p_ms_tag_elm_struct_h)[i].msg_tag,l_ms_tag_elm_struct_i[i].msg_tag);
+	  strcpy((*p_ms_tag_elm_struct_h)[i].info_elem,l_ms_tag_elm_struct_i[i].info_elem);
+	  (*p_ms_tag_elm_struct_h)[i].info_type = l_ms_tag_elm_struct_i[i].info_type;
+	  (*p_ms_tag_elm_struct_h)[i].head_cont_newline = l_ms_tag_elm_struct_i[i].head_cont_newline;
+	  strcpy((*p_ms_tag_elm_struct_h)[i].msg_tag_cond,l_ms_tag_elm_struct_i[i].msg_tag_cond);
+	  (*p_ms_tag_elm_struct_h)[i].identity_no = l_ms_tag_elm_struct_i[i].identity_no;
+
+	  (*p_ms_tag_elm_struct_h)[i].srl_num = l_ms_tag_elm_struct_i[i].srl_num;
+
+	  (*p_ms_tag_elm_struct_h)[i].print_cd = l_ms_tag_elm_struct_i[i].print_cd;
+}
+
+*p_tot_tag = int_tag_ctr;
+APL_GOBACK_SUCCESS;       
+
+RETURN_SUCCESS:
+
+        CO_ProcMonitor(APL_OUT_FILE,"Exiting successfully  out of MS_Rtv_MsgTags()\n",NULL,NULL);
+        free(l_ms_tag_elm_struct_h_t); 
+        return APL_SUCCESS;
+
+RETURN_FAILURE:
+        CO_ProcMonitor(APL_OUT_FILE,"Exiting unsuccesfully out of MS_Rtv_MsgTags()\n",NULL,NULL);
+        free(l_ms_tag_elm_struct_h_t);
+        return APL_FAILURE;
+
+}
+
+
+
+
+int IMsgSeqLoad(MS_MSGENT_STRUCT p_ms_msgent_struct,MS_SEQ_ELM_STRUCT_H **p_ms_seq_elm_struct_h,int *p_tot_seq,char p_swftlx,int *int_p_retstat,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+EXEC SQL BEGIN DECLARE SECTION;
+MS_MSGENT_STRUCT l_ms_msgent_structa;
+char chr_h_seq_cond[201],chr_h_seq_flg[3];
+int h_sequence_no,int_h_par_seq_no;
+short i_sequence_no,i_seq_flg,i_seq_cond,i_par_seq_no;
+EXEC SQL VAR chr_h_seq_cond IS STRING;
+EXEC SQL VAR chr_h_seq_flg IS STRING;
+EXEC SQL END DECLARE SECTION;
+
+struct sqlca sqlca;
+
+int int_seq_ctr=0,i=0;
+MS_SEQ_ELM_STRUCT_H *l_ms_seq_elm_struct_h=NULL;
+MS_SEQ_ELM_STRUCT_H *l_ms_seq_elm_struct_h_t=NULL;
+l_ms_seq_elm_struct_h_t = l_ms_seq_elm_struct_h = (MS_SEQ_ELM_STRUCT_H *)calloc(1,sizeof(MS_SEQ_ELM_STRUCT_H));
+APL_MALLOC_FAIL(l_ms_seq_elm_struct_h);
+
+l_ms_msgent_structa = p_ms_msgent_struct;
+
+	EXEC SQL DECLARE seq_cur CURSOR FOR
+		 SELECT identity_no,SEQ_IND,SEQ_CONDITION,PAR_SEQNO
+		 FROM MS_SEQUENCEMAP
+		 WHERE SWIFT_MSG_NO = :l_ms_msgent_structa.swift_msg_no AND
+                       MESSAGE_CLASS = :p_swftlx
+                 ORDER BY identity_no;
+
+	EXEC SQL OPEN seq_cur;
+
+        if(sqlca.sqlcode < 0)
+		return APL_FAILURE;
+
+	for( ; ; )
+	{
+
+	   EXEC SQL FETCH seq_cur INTO :h_sequence_no:i_sequence_no,
+                                       :chr_h_seq_flg:i_seq_flg,
+                                       :chr_h_seq_cond:i_seq_cond,
+				       :int_h_par_seq_no:i_par_seq_no;
+	   if(sqlca.sqlcode == 1403)
+		break;
+	   l_ms_seq_elm_struct_h[int_seq_ctr].identity_no = h_sequence_no;
+	   strcpy(l_ms_seq_elm_struct_h[int_seq_ctr].ind,chr_h_seq_flg);
+	   if(i_par_seq_no != -1)
+	         strcpy(l_ms_seq_elm_struct_h[int_seq_ctr].seq_condition,chr_h_seq_cond);
+	   l_ms_seq_elm_struct_h[int_seq_ctr].par_seqno = int_h_par_seq_no;
+           int_seq_ctr++;
+
+	   l_ms_seq_elm_struct_h_t = l_ms_seq_elm_struct_h = (MS_SEQ_ELM_STRUCT_H *)realloc(l_ms_seq_elm_struct_h,sizeof(MS_SEQ_ELM_STRUCT_H)*(int_seq_ctr+1));
+	   
+	}
+	EXEC SQL CLOSE seq_cur;
+
+        if(int_seq_ctr == 0)
+		APL_GOBACK_FAIL
+
+for(i=0;i<=int_seq_ctr;i++)
+{
+printf("IMsgSeqLoad - chr_value of i is %d\n",i);
+printf("IMsgSeqLoad - chr_value of p_ms_seq_elm_struct_h)[i].identity_no is  %d\n",(*p_ms_seq_elm_struct_h)[i].identity_no);
+printf("IMsgSeqLoad - chr_value of p_ms_seq_elm_struct_h)[i].sequence_rep_no is  %d\n",(*p_ms_seq_elm_struct_h)[i].sequence_rep_no);
+}
+
+for(i=0;i<int_seq_ctr;i++)
+{
+
+
+	   (*p_ms_seq_elm_struct_h)[i].identity_no = l_ms_seq_elm_struct_h[i].identity_no;
+	   strcpy((*p_ms_seq_elm_struct_h)[i].ind,l_ms_seq_elm_struct_h[i].ind);
+	   strcpy((*p_ms_seq_elm_struct_h)[i].seq_condition,l_ms_seq_elm_struct_h[i].seq_condition);
+	   (*p_ms_seq_elm_struct_h)[i].par_seqno = l_ms_seq_elm_struct_h[i].par_seqno;
+	   (*p_ms_seq_elm_struct_h)[i].sequence_rep_no = 0;
+	   (*p_ms_seq_elm_struct_h)[i].child_sequence_rep_no = 0;
+            *p_ms_seq_elm_struct_h = (MS_SEQ_ELM_STRUCT_H *)realloc(*p_ms_seq_elm_struct_h,sizeof(MS_SEQ_ELM_STRUCT_H)*(i+2)); 
+}
+      (*p_ms_seq_elm_struct_h)[int_seq_ctr].identity_no =  0;
+      strcpy((*p_ms_seq_elm_struct_h)[int_seq_ctr].ind,APL_NULL_STRING);
+      strcpy((*p_ms_seq_elm_struct_h)[int_seq_ctr].seq_condition,APL_NULL_STRING);
+      (*p_ms_seq_elm_struct_h)[int_seq_ctr].par_seqno = 0;
+      (*p_ms_seq_elm_struct_h)[int_seq_ctr].sequence_rep_no = 0;
+      (*p_ms_seq_elm_struct_h)[int_seq_ctr].child_sequence_rep_no = 0;
+
+
+
+*p_tot_seq = int_seq_ctr;
+
+APL_GOBACK_SUCCESS;
+RETURN_SUCCESS:
+
+        CO_ProcMonitor(APL_OUT_FILE,"Exiting successfully  out of IMsgSeqLoad()\n",NULL,NULL);
+        free(l_ms_seq_elm_struct_h_t);
+        return APL_SUCCESS;
+
+RETURN_FAILURE:
+        CO_ProcMonitor(APL_OUT_FILE,"Exiting unsuccesfully out of IMsgSeqLoad()\n",NULL,NULL);
+        free(l_ms_seq_elm_struct_h_t);
+        return APL_FAILURE;
+
+}
+
+
+
+
+int IGenMsgFileName(char *chr_p_filename,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+PRO_GSEQNUM_STRUCT_H l_pro_gseqnum_struct_h_msg;
+int int_returnval=0;
+
+strcpy(l_pro_gseqnum_struct_h_msg.sequencename,"MSGFILE");
+strcpy(l_pro_gseqnum_struct_h_msg.seq_attrb_a,APL_NULL_STRING);
+strcpy(l_pro_gseqnum_struct_h_msg.seq_attrb_b,APL_NULL_STRING);
+strcpy(l_pro_gseqnum_struct_h_msg.seq_attrb_c,APL_NULL_STRING);
+
+                l_pro_gseqnum_struct_h_msg.seq_stepby = 1;
+                l_pro_gseqnum_struct_h_msg.seq_start = ST_FM_MSG;
+                l_pro_gseqnum_struct_h_msg.last_seqnum = EN_FM_MSG;
+
+      int_returnval = CO_RtvNxtSeqNum(&l_pro_gseqnum_struct_h_msg,l_debug_info_ptr);
+
+      if(int_returnval != APL_FAILURE)
+      {
+                                         
+	     strcpy(chr_p_filename,g_mt_commonsys_params_struct_h.nation_code);
+	     strcat(chr_p_filename,"00");
+             strcat(chr_p_filename,ltoa(int_returnval));
+             strcat(chr_p_filename,".TBS");
+      }
+      else
+             APL_GOBACK_FAIL;
+
+APL_GOBACK_SUCCESS // AIX Warnings
+
+RETURN_SUCCESS:
+
+        CO_ProcMonitor(APL_OUT_FILE,"Exiting successfully  out of IGenMsgFilename\n",NULL,NULL);
+
+        return APL_SUCCESS;
+
+RETURN_FAILURE:
+        CO_ProcMonitor(APL_OUT_FILE,"Exiting unsuccesfully out of IGenMsgFilename\n",NULL,NULL);
+        return APL_FAILURE;
+
+
+}
+
+
+
+int filecp(char *p_refer, char *p_notelex, char *p_msg_frm_file,char *p_msg_to_file,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+  char chr_l_str[301],chr_fname[101],chr_fname1[101],*identify =NULL, *chr_refer_t=NULL;
+  char chr_l_shortname[301], *chr_last;
+  char chr_l_prefix[6] = APL_NULL_STRING;
+  FILE *fpr,*fpw;
+  int int_clsstat = 0;
+  chr_refer_t = identify = (char *)calloc(300,sizeof(char));
+  APL_MALLOC_FAIL(identify);
+
+  memset(chr_fname,APL_NULL_CHAR,100);
+  memset(chr_fname1,APL_NULL_CHAR,100);
+
+  strcpy(chr_fname,p_msg_frm_file);
+  strcpy(chr_fname1,p_msg_to_file);
+  if( (fpr = fopen(chr_fname,"r")) == NULL)
+  {
+	APL_GOBACK_FAIL;
+  }
+  int_fnoopen++;
+  if( (fpw = fopen(chr_fname1,"w")) == NULL)
+  {
+	APL_GOBACK_FAIL;
+  }
+  int_fnoopen++;
+  
+  while(feof(fpr) == 0)
+  {
+      memset(chr_l_str,'\0',300);
+      if (fgets(chr_l_str,300,fpr))
+      {
+			  if(strstr(chr_l_str,"ATTN.") == NULL && strstr(chr_l_str,"TLX") == NULL)
+					  fputs(chr_l_str,fpw);
+			  else if(strstr(chr_l_str,"ATTN.") != NULL)
+			  {
+					
+					if (strlen(chr_l_str) == strlen(strstr(chr_l_str, "ATTN.")))
+					{
+						strcpy(chr_l_prefix, APL_NULL_STRING);
+					}
+					else
+					{
+						strncpy(chr_l_prefix, chr_l_str, strlen(chr_l_str)-strlen(strstr(chr_l_str, "ATTN.")));
+						chr_l_prefix[strlen(chr_l_str)-strlen(strstr(chr_l_str, "ATTN."))]='\0';
+					}
+					fprintf(fpw,"%s%s%s\n",chr_l_prefix,"ATTN. ",p_refer);
+				}
+			  else if(strstr(chr_l_str,"TLX") != NULL)
+				  {
+						
+						strcat(strcat(strcpy(chr_l_shortname, p_notelex)," "), strtok_r(strstr(chr_l_str+5, " " ), " ", &chr_last));
+						strcpy(chr_l_str, APL_NULL_STRING);
+						strcat(strcpy(chr_l_str, "TLX "), chr_l_shortname);	
+						fprintf(fpw,"%s", chr_l_str);
+				  }
+      }
+
+  }
+  APL_GOBACK_SUCCESS;
+
+RETURN_SUCCESS:
+
+		  free(chr_refer_t);
+        CO_ProcMonitor(APL_OUT_FILE,"Exiting successfully  out of filecp \n",NULL,NULL);
+        int_clsstat = fclose(fpw);
+        if (int_clsstat == 0)
+           int_fnoopen--;
+        int_clsstat = fclose(fpr);
+        if (int_clsstat == 0)
+           int_fnoopen--;
+
+        return APL_SUCCESS;
+
+RETURN_FAILURE:
+		  free(chr_refer_t);
+        CO_ProcMonitor(APL_OUT_FILE,"Exiting unsuccesfully out of filecp \n",NULL,NULL);
+        int_clsstat = fclose(fpw);
+        if (int_clsstat == 0)
+           int_fnoopen--;
+        int_clsstat = fclose(fpr);
+        if (int_clsstat == 0)
+           int_fnoopen--;
+        return APL_FAILURE;
+
+}
+
+

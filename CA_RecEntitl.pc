@@ -1,0 +1,489 @@
+/*
+ *    COPYRIGHT NOTICE
+ *
+ *   Copyright 2005 Polaris Software Lab Limited. All rights reserved.
+ *
+ *   These materials are confidential and proprietary to
+ *    Polaris Software Lab Limited and no part of these materials should
+ *    be reproduced, published, transmitted or distributed in any form or
+ *    by any means, electronic, mechanical, photocopying, recording or
+ *    otherwise, or stored in any information storage or retrieval system
+ *    of any nature nor should the materials be disclosed to third parties
+ *    or used in any other manner for which this is not authorized, without
+ *    the prior express written authorization of Polaris Software Lab Limited.
+ */
+/*********************************************************************
+ *
+ * Module Name         :      Corporate Actions
+ *
+ * File Name           :      CA_RecEntitl.pc
+ *
+ * Description         :      Contains Functions Related to CA Entitl Recon
+ *
+ *
+ *
+ *            Version Control Block
+ *
+ * Date        Version     Author           Description        RFS No.
+ * ---------   --------  ---------------  ------------------   ---------
+ * 18/01/2006   1.2        Smita Bhat        New File          Base Version
+ * 08/02/2006	 1.3			Smita Bhat			Chgs related to 	HDFCCA Base Version
+ * 														Col Names
+ *************************************************************************/
+
+
+
+
+
+#include "CO_HostStructdef.h" 
+#include "CA_Common.h"
+#define 	P_STATIC_AFTER	"FLAT.BRRECON"
+#define 	P_STATIC_QA_PRIOR	"GDY."
+#define 	P_STATIC_PR_PRIOR	"GDU."
+
+#define	RTV_SYSTEM_DATA
+#define  PAGELENGTH 55
+#define  APL_FILENAME_LENGTH 50 
+#define  APL_MAXLINE_SIZE 451 
+#define  BUFFER_LEN_A 224
+EXEC SQL INCLUDE SQLCA.H;
+
+
+int CA_EntitlReconcilation( FILE *p_fp_inifile,
+                  FILE *p_fp_logfile,
+                  char **argv,
+                  DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+
+//main(int argc,char **argv)
+int main(int argc,char **argv)//Changes done for AIX Migration
+{
+	struct sqlca sqlca;
+   DEBUG_INFO_STRUCT_H *l_debug_info_ptr = (DEBUG_INFO_STRUCT_H *) NULL;
+	FILE *p_fp_logfile;
+	FILE *p_fp_inifile;
+	
+	
+	char	chr_p_progname[APL_BATCH_PROGNAME_LEN]= APL_NULL_STRING;
+	char	chr_p_key_a[APL_BATCH_KEY_LEN]= APL_NULL_STRING;
+	char	chr_p_start_date[APL_DATE_LEN]= APL_NULL_STRING;
+	char  chr_p_funccode[CA_FUNC_CD_LEN]= APL_NULL_STRING;
+	
+	
+	
+	char  chr_p_log_buff[MSG_LENGTH]= APL_NULL_STRING; 
+	char 	p_dt[APL_DATE_LEN]=APL_NULL_STRING;
+	char 	chr_uname[APL_USERID_LEN] = APL_NULL_STRING;
+   char 	chr_custody_id_b[APL_USERID_LEN] = APL_NULL_STRING;
+   char 	chr_passwd[APL_USERID_LEN] = APL_NULL_STRING;
+	char 	chr_p_logdir[PATH_LENGTH] = APL_NULL_STRING;
+	char 	chr_p_inifile[PATH_LENGTH] = APL_NULL_STRING;
+	int 	int_h_prog_status=0;
+	int 	int_p_retval=0;
+   EXEC SQL VAR chr_uname IS STRING;
+   EXEC SQL VAR chr_passwd IS STRING;
+
+	
+	strcpy(chr_p_inifile,getenv("INTL_ROOT_PATH"));
+	strcat(chr_p_inifile,"intl_sun.cfg");
+	
+	if ( ( p_fp_inifile=fopen(chr_p_inifile,"r") ) == NULL)
+	exit(-1);
+  
+  
+   APL_FETCH_DB_LOGIN_DETAILS(p_fp_inifile, chr_custody_id_b, chr_uname, chr_passwd, APL_OUT_FILE, &l_debug_info_ptr)
+
+   EXEC SQL CONNECT :chr_uname IDENTIFIED BY :chr_passwd;
+
+   if (sqlca.sqlcode)
+   {
+   	APL_GOBACK_FAIL
+   }
+   else
+   {
+
+		 strcpy(chr_p_progname,argv[0]);
+		 strcpy(chr_p_key_a,argv[1]);
+		 strcpy(chr_p_start_date,argv[2]);
+		 strcpy(chr_p_funccode,argv[5]);
+
+   	if (APL_FAILURE == CO_Rtv_RptFileName(	"2Z", 
+				APL_LOGFILE_DESC,
+				100,
+				argv[5],
+				argv,
+				&p_fp_logfile,
+				&l_debug_info_ptr ))
+      {
+         	APL_GOBACK_FAIL
+      }
+      
+		printf("Just after gdbgenrep\n");	
+      EXEC SQL COMMIT WORK;
+
+      if (sqlca.sqlcode)
+      {
+         CO_ProcMonitor(p_fp_logfile, "Could not commit after opening chr_log file", NULL, NULL);
+         	APL_GOBACK_FAIL
+      }
+	
+		
+
+		if (APL_FAILURE == CO_RtvSysParams(&l_debug_info_ptr))
+		{
+				fprintf(p_fp_logfile, "\nFailed in Get System Params\n");
+         	APL_GOBACK_FAIL
+		}
+		printf("Just after get system params\n");	
+		EXEC SQL select count(*)
+   	INTO  :int_h_prog_status
+   	FROM  SYS_BATCHPROC
+   	WHERE PROCESS_NAME=:argv[0]
+   	AND   PROC_INIT=:argv[1]
+   	AND   TO_CHAR(TO_DATE(STARTDATE),'ddmmyy')=TO_CHAR(TO_DATE(:argv[2]),'ddmmyy')
+   	AND   STATUS='completed';
+
+   	IS_ANY_ORA_ERROR
+
+  	 	if (int_h_prog_status != 0)
+   	{
+      	CO_ProcMonitor(p_fp_logfile, "Program Already Completed for Today", NULL, NULL);
+      	APL_GOBACK_SUCCESS
+   	}
+		printf("Just before calling wrapper processtion\n");	
+
+
+     	int_p_retval = CA_EntitlReconcilation( p_fp_inifile,
+										p_fp_logfile, 
+										argv,										
+										&l_debug_info_ptr);
+
+     	if ( int_p_retval == APL_FAILURE )
+     	{
+			fprintf(p_fp_logfile, "Unsuccessful in CA_EntitlReconcilation Exiting from main\n");
+			APL_GOBACK_FAIL
+     	}
+     	else
+     	{
+
+     	 	EXEC SQL UPDATE SYS_BATCHPROC
+     		SET  status = 'completed'
+  			WHERE PROCESS_NAME=:argv[0]
+  			AND   PROC_INIT=:argv[1]
+  			AND   STARTDATE=:argv[2]
+  			AND   STATUS='started';
+
+        	EXEC SQL COMMIT WORK RELEASE;
+			fprintf(p_fp_logfile, "Record Committed. \n CA_EntitlReconcilation Successful , Exiting from main\n");
+        	APL_GOBACK_SUCCESS
+     	}
+	}
+
+  RETURN_SUCCESS:
+  {
+  fflush(p_fp_logfile);
+   	CO_Proc_RptClose(p_fp_logfile, &l_debug_info_ptr); 
+		exit(0);
+  }
+  RETURN_FAILURE:
+  {	
+  fflush(p_fp_logfile);
+   	CO_Proc_RptClose(p_fp_logfile, &l_debug_info_ptr); 
+  		exit(-1);
+  }
+}
+int CA_EntitlReconcilation(	FILE *p_fp_inifile,
+						FILE *p_fp_logfile,
+						char **argv,
+						DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	struct sqlca sqlca;
+	
+	
+	typedef struct  {
+	char		h_nation_code[APL_STATUS_LEN];
+	char		h_inc_ind[APL_CCYCODE_LEN];
+	char		h_instr_isin[APL_ISIN_LEN];
+	char		h_corp_id[CORP_ID_LEN];
+	char		h_dl_client[APL_CLIENT_LENGTH];
+	char		h_ex_date[9];
+	char		h_rec_date[9];
+	char		h_pymt_dt[9];
+	char		h_maker_dt[9];
+	char		h_gross_net_income[2];
+	char		h_entitl_ccy[APL_CCYCODE_LEN];
+	double 		h_earnings_rt;
+	double  	h_earnings;
+	double  	h_entitl_pos;
+	double  	h_instr_inc_bal;
+	float		h_tax_rate;
+	char		h_entitl_stat[APL_STATUS_LEN];
+	}A_AENTITLRECON_STRUCT_H;
+
+	typedef struct  {
+	short		i_nation_code;
+	short		i_inc_ind;
+	short		i_instr_isin;
+	short		i_corp_id;
+	short		i_dl_client;
+	short		i_ex_date;
+	short		i_rec_date;
+	short		i_pymt_dt;
+	short		i_maker_dt;
+	short		i_gross_net_income;
+	short		i_entitl_ccy;
+	short 	i_earnings_rt;
+	short  	i_earnings;
+	short  	i_entitl_pos;
+	short  	i_instr_inc_bal;
+	short		i_tax_rate;
+	short		i_entitl_stat;
+	}A_AENTITLRECON_STRUCT_I;
+
+	typedef struct  {
+	char	h_instr_isin[APL_ISIN_LEN];
+	char	h_corp_id[CORP_ID_LEN];
+	char	h_dl_client[APL_CLIENT_LENGTH];
+	}A_AENTITLPROC_STRUCT_H;
+
+
+	typedef struct  {
+	short	h_instr_isin[13];
+	short	h_corp_id[21];
+	short	h_dl_client[11];
+	}A_AENTITLPROC_STRUCT_I;
+	
+	A_AENTITLPROC_STRUCT_H	h_entitlproc;
+	A_AENTITLPROC_STRUCT_I	i_entitlproc;
+	A_AENTITLRECON_STRUCT_H	h_entitlrecon;
+	A_AENTITLRECON_STRUCT_I	i_entitlrecon;
+
+	FILE 		*p_fp_recon   = NULL;
+	char		chr_p_inifile[PATH_LENGTH];
+	char 		chr_p_reconfile_name[PATH_LENGTH] = APL_NULL_STRING;
+	char 		chr_p_reconfinal_name[PATH_LENGTH] = APL_NULL_STRING;
+	char 		chr_p_recon[PATH_LENGTH] = APL_NULL_STRING;
+	char 		chr_p_filename_a[APL_FILENAME_LENGTH]=APL_NULL_STRING;
+	char  	chr_p_buf[BUFFER_LEN_A]=APL_NULL_STRING;
+	char		chr_p_recon_string[BUFFER_LEN_A]=APL_NULL_STRING;
+	char		chr_h_qa_prod[3]=APL_NULL_STRING;
+	char		l_processing_status[51];
+ short		i_processing_status = 0;
+	double	h_tax_amount=0.0;
+	short i_tax_amount=0;
+	int 	int_l_error_flag = APL_SUCCESS;
+	INTL_REPT_STRUCT_H *l_intl_rept_struct_ha = NULL;	
+	sqlca.sqlcode = 0;
+
+
+	memset(chr_p_filename_a,APL_NULL_CHAR,APL_FILENAME_LENGTH);
+	memset(&h_entitlproc,NULL,sizeof(A_AENTITLPROC_STRUCT_H));	
+	memset(&i_entitlproc,NULL,sizeof(A_AENTITLPROC_STRUCT_I));	
+	memset(&h_entitlrecon,NULL,sizeof(A_AENTITLRECON_STRUCT_H));	
+	memset(&i_entitlrecon,NULL,sizeof(A_AENTITLRECON_STRUCT_I));	
+	memset(chr_h_qa_prod,APL_NULL_CHAR,3);	
+	
+	EXEC SQL VAR h_entitlrecon.h_gross_net_income is STRING;
+	EXEC SQL VAR h_entitlrecon.h_dl_client is STRING;
+	EXEC SQL VAR h_entitlrecon.h_corp_id is STRING;
+	
+	
+	EXEC SQL SELECT FIELD_VAL INTO :chr_h_qa_prod
+	FROM PRO_GSSPLVAL
+	WHERE MAIN_FUN='AENTITL'
+	and SUB_PROCESS='RECON'
+	and NATION=:g_mt_commonsys_params_struct_h.nation_code;
+	IS_ANY_ORA_ERROR
+	
+
+	if (strcmp(chr_h_qa_prod,"QA")==0)
+	{		
+		strcpy(chr_p_filename_a,P_STATIC_QA_PRIOR);
+	}
+	else
+	{
+		 strcpy(chr_p_filename_a,P_STATIC_PR_PRIOR);
+	}
+	
+	strcat(chr_p_filename_a,g_mt_commonsys_params_struct_h.nation_code);
+	strcat(chr_p_filename_a,P_STATIC_AFTER);
+	
+	
+	strcpy(chr_p_inifile,getenv("INTL_ROOT_PATH"));
+	strcat(chr_p_inifile,"intl_sun.cfg");
+	printf(" Before reading chr_token for upload\n");	
+
+	printf(" Before reading chr_token for hoff\n");	
+	
+	if ( APL_FAILURE == CO_ReadToken(p_fp_inifile,"SESAM_ENTLRECON_DIR",chr_p_recon,l_debug_info_ptr))		
+	{
+		CO_ProcMonitor(p_fp_logfile,"E:Could not read the ENTLRECON directory from intl_sun.cfg",NULL,NULL);
+		APL_GOBACK_FAIL	
+	}
+	printf("After reading chr_token for hoff\n");	
+
+   
+   strcpy(chr_p_reconfile_name, chr_p_recon);
+   strcat(chr_p_reconfile_name, chr_p_filename_a);
+	strcat(chr_p_reconfile_name,".tmp");
+
+	printf("Just checking the h_file names \n");
+	if ((strcmp(chr_p_reconfile_name,APL_NULL_STRING) == 0))
+	{
+  		if (CO_InsertErr
+  				(l_debug_info_ptr,
+  				ERR_FDFILE_NOTVALID,
+  				
+  				APL_NULL_STRING,
+  				APL_NULL_STRING,
+  				APL_NULL_STRING,
+  				__LINE__,
+  				__FILE__
+  				) != APL_SUCCESS)
+  				APL_GOBACK_FAIL
+	}
+	printf("Argument0 is %s \n",argv[0]);
+	printf("Argument1 is %s \n",argv[1]);
+	printf("Argument2 is %s \n",argv[2]);
+
+
+  EXEC SQL SELECT PROCESSING_STATUS INTO :l_processing_status:i_processing_status
+     FROM SYS_BATCHPROC
+     WHERE PROCESS_NAME=:argv[0]
+        AND   PROC_INIT=:argv[1]
+        AND   STARTDATE=:argv[2]
+        AND   STATUS='started'
+     FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+
+  if(APL_ZERO_RESULT_SET)
+   {
+      CO_ProcMonitor(p_fp_logfile,"E:No entry in batch_in_proc",NULL,NULL);
+      APL_GOBACK_FAIL
+   }
+
+  	IS_ANY_ORA_ERROR
+
+   fprintf(p_fp_logfile, "AENTLRECONFn successfully locked the batch record\n");
+
+
+
+   if (APL_FAILURE == int_l_error_flag) 
+	{	
+		APL_GOBACK_FAIL
+	}
+
+     /*Changed Col Name - Smita - HDFCCA Base Version*/ 
+	EXEC SQL insert into CAENTITLMENT_VER (
+	select :g_mt_commonsys_params_struct_h.nation_code,'INC',d.INSTR_ISIN,a.corp_id,a.client,c.EX_DATE,c.REC_DATE,
+	c.dateof_payment,a.MAKER_DT,NULL,a.CCY_FOR_ENTITL,decode(c.CA_EVENT,'CD',0,decode(nvl(c.EARNINGS_RATE,0),0,(nvl(c.EARNINGS,0)/d.NOMINAL_VALUE)*100,c.EARNINGS_RATE )),decode(c.CA_EVENT,'BI',0,nvl(c.EARNINGS,0)),
+	decode(d.INSTR_TYPE,'BON',decode(b.CLN_FMT_RPTIND,'Y',abs(nvl(a.ELIG_ENTITL_POS,0))*d.NOMINAL_VALUE,abs(nvl(a.ELIG_ENTITL_POS,0))),abs(nvl(a.ELIG_ENTITL_POS,0))),nvl(a.INSTR_INC_BAL,0),0.0,a.STATUS
+	from CAENTITLEMENT a, MT_CLIENT b, CAEVENT c,MT_INSTRUMENT d, MT_COMMON_SYS_PARAMS e
+	where a.client=b.cln_code
+	and a.corp_id=c.corp_id
+	and c.CA_EVENT in ('CD','BI')
+	and c.instr_code=d.instr_code
+	and a.STATUS in ('RP','PP','RV'));
+	IS_ANY_ORA_ERROR
+	
+	printf(" Inserting into AENTITL_RECON with sqlcode as :%d:\n",sqlca.sqlcode);
+
+	
+	if(  (p_fp_recon  = fopen(chr_p_reconfile_name, "w+" ) ) == NULL )
+	{
+		printf("Error Opening the h_file in write h_mode\n");
+	}
+
+	EXEC SQL DECLARE CAENTITLMENT_VER CURSOR FOR
+	SELECT nation_code,INSTR_INC_IND,instr_isin,corp_id,client,to_char(EX_DATE,'yyyymmdd'),to_char(REC_DATE,'yyyymmdd'),
+	to_char(dateof_payment,'yyyymmdd'),to_char(MAKER_DT,'yyyymmdd'),GROSS_NET_INCOME,CCY_FOR_ENTITL,INSTR_INC_RATE,earnings,elig_entitl_pos, 
+	INSTR_INC_BAL,custody_tax_rt,status
+	FROM CAENTITLMENT_VER
+	order by corp_id,client;
+      printf(" 5:%d:\n",sqlca.sqlcode);
+	IS_ANY_ORA_ERROR
+
+	
+	EXEC SQL OPEN CAENTITLMENT_VER;
+      printf(" 6:%d:\n",sqlca.sqlcode);
+	IS_ANY_ORA_ERROR
+	
+	
+		
+	
+	for(;;)
+	{
+		printf(" Inside 2nd for Loop \n");
+		memset(&h_entitlrecon,NULL,sizeof(A_AENTITLRECON_STRUCT_H));	
+		memset(&i_entitlrecon,NULL,sizeof(A_AENTITLRECON_STRUCT_I));	
+		
+		EXEC SQL FETCH	CAENTITLMENT_VER INTO :h_entitlrecon:i_entitlrecon;
+		IS_ANY_ORA_ERROR
+	    if ( APL_ZERO_RESULT_SET )
+            {
+               break;
+            }	
+
+		/*Changes - Structure Member h_ent_pos to h_entitl_pos*/			
+		sprintf(chr_p_recon_string,"%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%.3lf,%.12lf,%.4lf,%.3lf,%.3lf,%s",h_entitlrecon.h_nation_code,h_entitlrecon.h_inc_ind,h_entitlrecon.h_instr_isin,h_entitlrecon.h_dl_client,h_entitlrecon.h_ex_date,h_entitlrecon.h_rec_date,h_entitlrecon.h_pymt_dt,h_entitlrecon.h_maker_dt,h_entitlrecon.h_gross_net_income,h_entitlrecon.h_entitl_ccy,h_entitlrecon.h_earnings_rt,h_entitlrecon.h_earnings,h_entitlrecon.h_entitl_pos,h_entitlrecon.h_instr_inc_bal,h_entitlrecon.h_tax_rate,h_entitlrecon.h_entitl_stat);		
+
+		fprintf(p_fp_recon,"%s\n",chr_p_recon_string);
+	
+	}
+	printf(" Out of 2nd for Loop \n");
+	
+	EXEC SQL DELETE FROM CAENTITLMENT_VER;
+	IS_ANY_ORA_ERROR
+	
+	CO_Proc_RptClose(p_fp_recon, &l_debug_info_ptr);
+	strcpy(chr_p_reconfinal_name, chr_p_recon);
+   strcat(chr_p_reconfinal_name, chr_p_filename_a);
+	printf("Before the handoff h_file movement\n");	
+	memset(chr_p_buf,APL_NULL_CHAR,BUFFER_LEN_A);
+	sprintf(chr_p_buf,"rm -f %s",chr_p_reconfinal_name);
+	system(chr_p_buf);
+
+	link(chr_p_reconfile_name,chr_p_reconfinal_name);
+	unlink(chr_p_reconfile_name);
+	printf(" After UNLINK\n");	
+	
+	l_intl_rept_struct_ha = (INTL_REPT_STRUCT_H *)calloc(1, sizeof(INTL_REPT_STRUCT_H));
+   APL_MALLOC_FAIL(l_intl_rept_struct_ha) ;
+   
+   strncpy(l_intl_rept_struct_ha->report_name, chr_p_filename_a, APL_REPNAME_LENGTH + 2);
+   l_intl_rept_struct_ha->report_name[APL_REPNAME_LENGTH + 3] = '\0';
+   strncpy(l_intl_rept_struct_ha->report_desc, APL_HOFF_FILE_DESC, APL_REPDESC_LENGTH - 1);
+   l_intl_rept_struct_ha->report_desc[APL_REPDESC_LENGTH - 1] = '\0';
+   strcpy(l_intl_rept_struct_ha->report_date,argv[2]);
+   l_intl_rept_struct_ha->report_width = 100;
+   strcpy(l_intl_rept_struct_ha->task_desc,argv[5]);
+   strcpy(l_intl_rept_struct_ha->fe_be_ind, APL_BE_IND);
+   strcpy(l_intl_rept_struct_ha->usr,argv[3]);
+   EXEC SQL DELETE FROM PRO_COMMON_REPORT WHERE REPORT_NAME = :chr_p_filename_a;
+   IS_ANY_ORA_ERROR
+	printf(" Before CO_Proc_RptInsNew\n");	
+   if (APL_FAILURE == CO_Proc_RptInsNew( l_intl_rept_struct_ha,"ENTLRECON_DIR", l_debug_info_ptr))
+   {
+     APL_GOBACK_FAIL
+	printf(" Failure CO_Proc_RptInsNew\n");	
+   }
+	printf(" After CO_Proc_RptInsNew\n");	
+
+   APL_GOBACK_SUCCESS
+
+   RETURN_SUCCESS :
+	{
+		CO_ProcMonitor(p_fp_logfile," Successful ! in AENTLRECON",l_debug_info_ptr,NULL);
+		CO_Proc_RptClose(p_fp_recon, &l_debug_info_ptr);
+		printf(" SUCCESS AT LAST \n");
+   	return(APL_SUCCESS);
+	}
+   RETURN_FAILURE :
+	{
+		CO_ProcMonitor(p_fp_logfile," Failure in AENTLRECON",l_debug_info_ptr,NULL);
+		CO_Proc_RptClose(p_fp_recon, &l_debug_info_ptr);	
+		printf(" FAILURE.... TRY AGAIN\n");
+   	return(APL_FAILURE);
+	}
+}

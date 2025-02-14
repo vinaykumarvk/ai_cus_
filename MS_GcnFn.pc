@@ -1,0 +1,1522 @@
+
+
+
+
+
+#include "CR_Common.h"
+#define SLEEP_TIME 300     
+#define MIN_SLEEP_TIME 1 
+#include <unistd.h>
+#include "CO_Commdef.h"
+#include "Intellect_Interface.h"
+#include "Intellect_Error.h"
+#include "dirent.h"
+#define S_USERID "SYSTEM"
+#define S_MODE "A"
+#define S_AUTH_REQ "A"
+#define S_SUBFUN "S"
+#define S_ACTION "A"
+#define S_FUNCPARAMS " "
+#define TESTNR2   "TEST NR"
+#define TESTNR1   "TEST Y AMT"
+#define  SWIFT "SWIFT_ADDR"
+#define  SWIFT_GR "ATHAR"
+#define SWIFTADDRCONST  "X 00000"
+#define GCNADDRCONST    "X00000"
+#define GCNPREFIXCONST  "0000 00"
+#define REC_LOCK_ORA_ERR -54
+#define FTP_HDR_LEN 58
+#define FILERR_EXT_LENGTH  5
+#define FILERR_LENGTH  22
+
+#define BIDS_CONF_FILE_START "BIDC" 
+#define BIDS_OTHR_FILE_START "BIDO" 
+
+#define BIDS_CONF_FILES_MAX 100
+#define BIDS_OTHR_FILES_MAX 100
+
+EXEC SQL INCLUDE SQLCA.H;
+//AIX - Warnings Removal - Static variables intialized
+static char            chr_h_restart_data[50]=APL_NULL_STRING; //,chr_h_eod_flg=APL_NULL_CHAR;
+static char            h_ora_rowid[APL_ROWID_LEN]=APL_NULL_STRING;
+static short   i_ora_rowid=0,i_restart=0; //,i_eod_flg=0;
+static char chr_g_swflineid[21]=APL_NULL_STRING;
+
+typedef struct {
+ char client[11];                       
+ char message_ind[61];                    
+ char swift_msg_no[7];                       
+ char maker[15];           
+ char maker_dt[APL_DATE_LEN];
+ char status_ind[2];
+ char msg_in_out_ind[2];
+ char msg[31];
+ char contact_details[201];
+ char contact_details1[201];
+ char baseid[7];
+ char message_class[2];
+ char swift_msg_ident[17];
+ } imsglog;
+typedef struct {
+ short client;                       
+ short message_ind;                    
+ short swift_msg_no;                       
+ short maker;           
+ short maker_dt;
+ short status_ind;
+ short msg_in_out_ind;
+ short msg;
+ short contact_details;
+ short contact_details1;
+ short baseid;
+ short message_class;
+ short swift_msg_ident;
+ } l_ms_msglog_i_struct;
+
+int CreateHdr(FILE *fp,imsglog *p_ms_logstruct,l_ms_msglog_i_struct *ind, DEBUG_INFO_STRUCT_H **l_debug_info_ptr) {
+   char chr_l_tmp_swift_code[12]  =  APL_NULL_STRING;
+   short int_l_condexists_A         =  0;
+    
+   int int_noelem=0;
+   double l_header_num=0.0;
+   int int_l_final_value          =  0;
+   char **chr_l_param ;
+   char chr_l_param_str[201] = APL_NULL_STRING;
+   char chr_l_swflineid[21] = APL_NULL_STRING;
+   char chr_l_grd_ccycode[4]      =  {APL_GRD_CCYCODE};
+   char chr_l_emu_ccycode[4]      =  {APL_EMU_CCYCODE};
+        char chr_l_firstpart[9]         =  APL_NULL_STRING;
+        char chr_l_secondpart[4]       =  APL_NULL_STRING;
+   double l_exchggrt           =  1.0 ;
+   int i =0,j=0;
+
+   EXEC SQL VAR chr_l_param_str  IS STRING ;
+   EXEC SQL VAR chr_l_swflineid  IS STRING ;
+   EXEC SQL VAR chr_l_grd_ccycode IS STRING;
+   EXEC SQL VAR chr_l_emu_ccycode IS STRING;
+
+   if(!strcmp(l_mt_message_sys_params_struct_h.ccs_int_ind, "Y")) 
+   {
+      
+      
+
+      
+        
+        if((p_ms_logstruct->message_class[0]=='S'))
+        {
+            fprintf(fp, "%s....\n", chr_g_swflineid);
+
+            
+
+            if (APL_FAILURE == CO_Chk_CntryEnabled(  "TRANSMITTER_HDR",
+                                                   "SWIFTHDR_2ND_LINE",
+                                                   &int_l_condexists_A,
+                                                   l_debug_info_ptr) )
+            {
+               return(APL_FAILURE);
+            }
+            else
+            {
+               if ( int_l_condexists_A == 0 )
+               {
+                  fprintf(fp, "%s\n", SWIFT);
+               }
+               else
+               {
+                  fprintf(fp, "%s\n", SWIFT_GR);
+               }
+            }
+        }
+        else if(p_ms_logstruct->message_class[0]=='C')
+        {
+           fprintf(fp, "%s....\n", l_mt_message_sys_params_struct_h.line_ind);
+           fprintf(fp, "%s\n", p_ms_logstruct->contact_details);
+        }
+        else if(p_ms_logstruct->message_class[0]=='T')
+        {
+           fprintf(fp, "%s....\n", l_mt_message_sys_params_struct_h.line_ind);
+           fprintf(fp, "%s\n", p_ms_logstruct->contact_details1);
+        }
+
+      
+         fprintf(fp, ".%sCB\n", l_mt_message_sys_params_struct_h.gcn_cd);
+
+      
+         if (strcmp(p_ms_logstruct->swift_msg_no,"100")==0)
+         {
+            EXEC SQL SELECT proc_data  INTO :chr_l_param_str
+            FROM MS_MSGENT
+            WHERE swift_msg_seqno=:p_ms_logstruct->message_ind;
+
+            
+
+      if (sqlca.sqlcode < 0)
+         return(APL_FAILURE);
+
+      CO_SplitStr(chr_l_param_str,
+                           ';', &int_noelem, &chr_l_param);
+      l_header_num = atof(chr_l_param[3]);
+
+      if ( strcmp(chr_l_param[1],chr_l_param[2]) != 0 )
+         {
+          if( strcmp(l_mt_core_sys_params_struct_h.dir_indir_fxqt_ind,"I") == 0)
+            {
+              EXEC SQL SELECT
+              a.EXCHGRT INTO :l_exchggrt
+              FROM MT_EXCHRATE a
+              WHERE a.DENOM_CCY = :chr_l_emu_ccycode
+              AND a.currency_cd = :chr_l_grd_ccycode
+              AND a.RATE_DATE = ( SELECT MAX(b.RATE_DATE)
+                               FROM MT_EXCHRATE b
+                               WHERE b.DENOM_CCY = :chr_l_emu_ccycode
+                               AND b.currency_cd = :chr_l_grd_ccycode
+                             );
+            }
+          else if( strcmp(l_mt_core_sys_params_struct_h.dir_indir_fxqt_ind,"D") == 0)
+           {
+             EXEC SQL SELECT
+             a.EXCHGRT INTO :l_exchggrt
+             FROM MT_EXCHRATE a
+             WHERE a.DENOM_CCY = :chr_l_grd_ccycode
+             AND a.currency_cd = :chr_l_emu_ccycode
+             AND a.RATE_DATE = ( SELECT MAX(b.RATE_DATE)
+                              FROM MT_EXCHRATE b
+                              WHERE b.DENOM_CCY = :chr_l_grd_ccycode
+                              AND b.currency_cd = :chr_l_emu_ccycode
+                            );
+           }
+        }
+       else
+          l_exchggrt = 1.0;
+
+       if (sqlca.sqlcode < 0)
+          return(APL_FAILURE);
+
+       l_header_num=l_header_num/l_exchggrt;
+
+       EXEC SQL select trunc(:l_header_num) into :int_l_final_value
+               from dual;
+
+       if (sqlca.sqlcode < 0)
+          return(APL_FAILURE);
+
+       fprintf(fp,"%s %d\n",TESTNR1,int_l_final_value);
+      }
+      else
+      {
+
+      
+         fprintf(fp, "%s\n", TESTNR2);
+      }
+
+            
+
+      if(p_ms_logstruct->message_class[0] != 'T') 
+      {
+      
+
+         if(p_ms_logstruct->message_class[0]=='S')
+         {
+         
+
+         if (APL_FAILURE == CO_Chk_CntryEnabled("TRANSMITTER_HDR",  "SWIFTHDR_5TH_LINE",&int_l_condexists_A,l_debug_info_ptr) )
+         {
+            return(APL_FAILURE);
+         }
+         else
+         {
+             if ( int_l_condexists_A == 1 )
+             {
+            for(i=0;i<8;i++)
+              chr_l_firstpart[i] = l_mt_message_sys_params_struct_h.swift_cd[i];
+              chr_l_firstpart[i+1]='\0';
+                printf("The int_first part is %s",chr_l_firstpart);
+            for (j=0,i=8;i<11;i++,j++)
+               chr_l_secondpart[j] = l_mt_message_sys_params_struct_h.swift_cd[i];
+               chr_l_secondpart[j+1]='\0';
+            printf("The Instrond part is %s",chr_l_secondpart);
+                               fprintf(fp, "%sA%s 00000\n", chr_l_firstpart,chr_l_secondpart);
+         }
+             else
+                  {
+            if(strlen(p_ms_logstruct->contact_details) != 8) 
+            {
+               strcpy(chr_l_tmp_swift_code, l_mt_message_sys_params_struct_h.swift_cd);
+               if(APL_FAILURE==CO_PadString(chr_l_tmp_swift_code, 'R', 11, "X", l_debug_info_ptr))
+                  return(APL_FAILURE);
+               fprintf(fp, "%s%s\n", chr_l_tmp_swift_code, SWIFTADDRCONST);
+            }
+            else
+            {
+               fprintf(fp, "%sAXX%s\n", l_mt_message_sys_params_struct_h.swift_cd, SWIFTADDRCONST);
+            }
+               }
+         }
+         }
+
+
+         else if(p_ms_logstruct->message_class[0]=='C' && ind->contact_details1 != -1)
+         {
+            
+            
+            if(strlen(p_ms_logstruct->contact_details1) != 8)
+            {
+               strcpy(chr_l_tmp_swift_code, p_ms_logstruct->contact_details1);
+               if(APL_FAILURE==CO_PadString(chr_l_tmp_swift_code, 'R', 5, "X", l_debug_info_ptr))
+                  return(APL_FAILURE);
+             
+               fprintf(fp, "%s%s%s\n", GCNPREFIXCONST, chr_l_tmp_swift_code, GCNADDRCONST);
+            }
+            else
+               
+               fprintf(fp, "%s%sAXX%s\n", GCNPREFIXCONST, p_ms_logstruct->contact_details1, GCNADDRCONST);
+
+            
+            if(strlen(l_mt_message_sys_params_struct_h.swift_cd) != 8)
+            {
+               strcpy(chr_l_tmp_swift_code, l_mt_message_sys_params_struct_h.swift_cd);
+               if(APL_FAILURE==CO_PadString(chr_l_tmp_swift_code, 'R', 11, "X", l_debug_info_ptr))
+                  return(APL_FAILURE);
+            
+               fprintf(fp, "%s%s%s\n", GCNPREFIXCONST, chr_l_tmp_swift_code, GCNADDRCONST);
+            }
+            else
+               
+              fprintf(fp, "%s%sAXX%s\n", GCNPREFIXCONST, l_mt_message_sys_params_struct_h.swift_cd, GCNADDRCONST);
+      }
+      
+         fprintf(fp, "%s 02\n", p_ms_logstruct->swift_msg_no);
+
+      
+        if(p_ms_logstruct->message_class[0]=='S')
+         {
+            strcpy(chr_l_tmp_swift_code, p_ms_logstruct->contact_details);
+            if(APL_FAILURE==CO_PadString(chr_l_tmp_swift_code, 'R', 11, "X", l_debug_info_ptr))
+                  return(APL_FAILURE);
+           fprintf(fp, "%s\n", chr_l_tmp_swift_code);
+         }
+      }
+   }
+   else
+   {
+ 
+        
+
+
+        if(p_ms_logstruct->message_class[0]=='C'||p_ms_logstruct->message_class[0]=='T')
+        {
+          fprintf(fp,"TELEX/GCN/SWIFT: %c\n\n",'G');
+        }
+        else
+        {
+          fprintf(fp,"TELEX/GCN/SWIFT: %s\n\n",p_ms_logstruct->message_class);
+        }
+        
+        if ( (p_ms_logstruct->message_class[0]=='T') && ( strlen(p_ms_logstruct->contact_details1) > 0 ) )
+            { fprintf(fp,"ADDRESS: %s\n\n",p_ms_logstruct->contact_details1); }
+        else
+            { fprintf(fp,"ADDRESS: %s\n\n",p_ms_logstruct->contact_details); }
+        
+     if(p_ms_logstruct->message_class[0]=='C'||p_ms_logstruct->message_class[0]=='S')
+           fprintf(fp,"MESSAGE TYPE: %s\n\n",p_ms_logstruct->swift_msg_no);
+        else
+           
+           fprintf(fp,"MESSAGE TYPE: %s\n\n","999");
+        fprintf(fp,"TEST: N\n\n");
+        fprintf(fp,"CCY:\n\n");
+        fprintf(fp,"AMOUNT:\n\n");
+   
+        if((strlen(p_ms_logstruct->baseid) == 0))
+        {
+         fprintf(fp,"BASE NO.:%s\n\n",p_ms_logstruct->baseid);
+        }
+        else
+        {
+         fprintf(fp,"BASE NO.: %s\n\n",p_ms_logstruct->baseid);
+         }
+        if((p_ms_logstruct->message_class[0]=='C')&&(ind->message_class!=-1))
+        {
+         if((strlen(p_ms_logstruct->contact_details1)==0))
+         {
+            fprintf(fp,"CITIDEX:%s\n\n",p_ms_logstruct->contact_details1);
+         }
+         else
+         {
+            fprintf(fp,"CITIDEX: %s\n\n",p_ms_logstruct->contact_details1);
+         }
+        }
+        else
+        
+        fprintf(fp,"CITIDEX:\n\n");
+        fprintf(fp,"PRIORITY:\n\n");
+
+ 
+   }
+return(APL_SUCCESS);
+}
+
+
+
+
+
+	 
+int Ftp_message(     int *p_time_count,
+							int *p_rec_count,
+							char *p_gcnfiledir,
+							char *p_gcnftpdir,
+							char *p_msgoutdir,
+							FILE *l_gcnftpfile,
+							char *l_file_temp,
+							char *l_file_final,
+							FILE *chr_logfile,
+							char **argv,
+							DEBUG_INFO_STRUCT_H **l_debug_info_ptr,
+							INTL_ENV_DATA_STRUCT_H *p_intlenv_data_struct_h) {
+	
+	FILE *MsgOutFile=NULL;
+	char chr_l_file[FILERR_LENGTH]				= APL_NULL_STRING;
+	
+	
+	char chr_l_file_ext[FILERR_EXT_LENGTH]		= APL_NULL_STRING;
+	char chr_l_temp_file[2*PATH_LENGTH] 	= APL_NULL_STRING;
+	char chr_l_final_file[2*PATH_LENGTH] = APL_NULL_STRING;
+	char chr_l_file_ftp[2*PATH_LENGTH] = APL_NULL_STRING;
+	char chr_l_sysdatetime_A[APL_DATE_LEN] = APL_NULL_STRING;
+	char chr_l_sysdatetime1[APL_DATE_LEN] = APL_NULL_STRING;
+	char chr_chartemp[1000]					= APL_NULL_STRING;
+	char chr_h_rowid_a[APL_ROWID_LEN]		= APL_NULL_STRING;
+	char chr_inifile[PATH_LENGTH]			= APL_NULL_STRING;
+	char *chr_tempchar=NULL;
+	char chr_msgch;
+	char chr_l_msgoutfile[PATH_LENGTH]	= APL_NULL_STRING;
+	char chr_l_gcnfiletemp[PATH_LENGTH]	= APL_NULL_STRING;
+	char chr_test[4] 							= APL_NULL_STRING;
+	DIR *dp;
+	struct dirent *dir=NULL;
+
+	short i_sysdatetime = 0;
+
+	imsglog messageStruct;
+	l_ms_msglog_i_struct i_indicator_msg;
+
+   if(!chr_logfile)
+	{
+	  if(CO_Rtv_RptFileName("4Q",
+								APL_LOGFILE_DESC,
+								100,
+								argv[5],
+								argv,
+								&chr_logfile,
+								l_debug_info_ptr)==APL_FAILURE)
+		 {
+				 return(APL_FAILURE);
+		 }
+   }
+
+	EXEC SQL VAR messageStruct.client IS STRING;
+	EXEC SQL VAR chr_h_rowid_a IS STRING;
+	EXEC SQL VAR messageStruct.message_ind IS STRING;
+	EXEC SQL VAR messageStruct.swift_msg_no IS STRING;
+	EXEC SQL VAR messageStruct.maker IS STRING;
+	EXEC SQL VAR messageStruct.maker_dt IS STRING;
+	EXEC SQL VAR messageStruct.status_ind IS STRING;
+	EXEC SQL VAR messageStruct.msg_in_out_ind IS STRING;
+	EXEC SQL VAR messageStruct.msg IS STRING;
+	EXEC SQL VAR messageStruct.contact_details IS STRING;
+	EXEC SQL VAR messageStruct.contact_details1 IS STRING;
+	EXEC SQL VAR messageStruct.baseid IS STRING;
+	EXEC SQL VAR messageStruct.message_class IS STRING;
+
+	
+	
+
+	EXEC SQL DECLARE ftpmsgCursor_conf CURSOR FOR
+		SELECT MS_MSGLOG.*,ROWID
+			FROM MS_MSGLOG
+				WHERE STATUS='F' AND SWIFT_MSG_NO IN ('530', '531', '532', '533', '534', '596')
+			FOR UPDATE OF STATUS;
+	IS_ANY_ORA_ERROR
+
+	EXEC SQL OPEN ftpmsgCursor_conf;
+	IS_ANY_ORA_ERROR
+
+	while(1)
+		{
+			EXEC SQL FETCH ftpmsgCursor_conf INTO :messageStruct :i_indicator_msg,:chr_h_rowid_a;
+			IS_ANY_ORA_ERROR
+
+			if((APL_ZERO_RESULT_SET) && (*p_time_count != 13))
+			{
+				
+				if(*p_time_count == 0)
+				*p_time_count =  *p_time_count + 1;
+
+				fprintf(chr_logfile,"No more records in Imsglog for processing ...\n"); 
+				fprintf(chr_logfile,"Time Lapsed  :: %d      Rec. Processed  :: %d\n",((*p_time_count - 1 ) * 5),*p_rec_count); 
+				fprintf(chr_logfile,"Breaking....\n"); 
+
+			
+				break;
+			}		
+
+			if(*p_time_count == 13)
+			{
+				memset(chr_l_temp_file,APL_NULL_CHAR,2*PATH_LENGTH);
+				memset(chr_l_final_file,APL_NULL_CHAR,2*PATH_LENGTH);
+            
+            fflush(l_gcnftpfile);
+            fclose(l_gcnftpfile);
+            fclose(MsgOutFile);
+
+				
+				dp=opendir(p_gcnfiledir);
+
+				
+					strcpy(chr_l_temp_file,p_gcnfiledir);
+					strcat(chr_l_temp_file,l_file_temp);
+
+				
+					strcpy(chr_l_final_file,p_gcnfiledir);
+					strcat(chr_l_final_file,l_file_final);
+
+				
+					strcpy(chr_l_file_ftp,p_gcnftpdir);
+					strcat(chr_l_file_ftp,l_file_final);
+
+					if(*p_rec_count > 0 )
+					{
+						
+						link(chr_l_temp_file,chr_l_final_file);
+						unlink(chr_l_temp_file);
+
+
+						
+						link(chr_l_final_file,chr_l_file_ftp);
+                  
+                  unlink(chr_l_final_file);
+
+						fprintf(chr_logfile,"Final File Created after 1 hr  :: %s\n",chr_l_final_file);
+						printf("Final h_file created : %s \n",chr_l_final_file);
+					}
+					else
+						unlink(chr_l_temp_file);
+
+				closedir(dp);
+					
+				fprintf(chr_logfile,"Resetting ....  Time & Records processed .... \n");
+				*p_time_count = 0;
+				*p_rec_count  = 0;
+
+
+
+                 EXEC SQL UPDATE MS_MSGLOG
+                    SET STATUS='A'
+                    WHERE STATUS='C';
+                 IS_ANY_ORA_ERROR;
+
+				EXEC SQL COMMIT;
+ 				IS_ANY_ORA_ERROR
+				fprintf(chr_logfile, "Committing .... for Time : CONF \n");
+
+				break;
+
+			}
+
+			
+
+		   if(p_msgoutdir[strlen(p_msgoutdir)-1] == '/')
+         	sprintf(chr_l_msgoutfile,"%s%s",p_msgoutdir,messageStruct.msg);
+      	else
+         	sprintf(chr_l_msgoutfile,"%s/%s",p_msgoutdir,messageStruct.msg);
+
+      	if(!(MsgOutFile=fopen(chr_l_msgoutfile,"r")))
+      	{
+         	fprintf(chr_logfile,"Could not find %s\n",chr_l_msgoutfile);
+         	fflush(chr_logfile);
+         	continue;
+      	}
+
+			if(Ftp_MsgHdr(l_gcnftpfile,messageStruct.swift_msg_no,l_debug_info_ptr) == APL_FAILURE)
+			{
+				fprintf(chr_logfile,"Failure During writting Ftp Message Header \n");
+				APL_GOBACK_FAIL
+			}
+
+			
+			
+
+			
+			
+			fprintf(chr_logfile,"Processed File ::  %s \n",messageStruct.msg);
+				
+			while(fgets(chr_chartemp,1000,MsgOutFile))
+         fprintf(l_gcnftpfile,"%s",chr_chartemp);
+
+			
+
+			fprintf(l_gcnftpfile,"-}\n"); 
+
+      
+         fclose(MsgOutFile);
+
+			
+				 
+
+         EXEC SQL UPDATE MS_MSGLOG 
+						SET STATUS = 'C'
+						WHERE ROWID = :chr_h_rowid_a;
+         IS_ANY_ORA_ERROR;
+
+			
+			
+
+			*p_rec_count = *p_rec_count + 1;
+			fflush(l_gcnftpfile);
+
+
+         if (*p_rec_count == BIDS_CONF_FILES_MAX )
+			{
+				fflush(l_gcnftpfile);
+				fclose(l_gcnftpfile);
+				fclose(MsgOutFile);	
+				*p_time_count = 0;
+				*p_rec_count = 0;
+
+				memset(chr_l_temp_file,APL_NULL_CHAR,2*PATH_LENGTH);
+				memset(chr_l_final_file,APL_NULL_CHAR,2*PATH_LENGTH);
+
+				
+				dp=opendir(p_gcnfiledir);
+
+				
+					strcpy(chr_l_temp_file,p_gcnfiledir);
+					strcat(chr_l_temp_file,l_file_temp);
+
+				
+					strcpy(chr_l_final_file,p_gcnfiledir);
+					strcat(chr_l_final_file,l_file_final);
+
+				
+					strcpy(chr_l_file_ftp,p_gcnftpdir);
+					strcat(chr_l_file_ftp,l_file_final);
+
+
+				
+					link(chr_l_temp_file,chr_l_final_file);
+					unlink(chr_l_temp_file);
+
+				
+					link(chr_l_final_file,chr_l_file_ftp);
+                  
+                  unlink(chr_l_final_file);
+
+
+               fprintf(chr_logfile,"Final File Created after %d Records  :: %s\n",BIDS_CONF_FILES_MAX,chr_l_final_file);
+					printf("Final h_file created : %s \n",chr_l_final_file);
+				closedir(dp);
+
+				
+
+				
+
+	
+                 EXEC SQL UPDATE MS_MSGLOG
+                    SET STATUS='A'
+                    WHERE STATUS='C';
+                 IS_ANY_ORA_ERROR;
+
+				
+
+				EXEC SQL COMMIT;
+ 				IS_ANY_ORA_ERROR
+            fprintf(chr_logfile, "Committing .... for Max Records : CONF \n");
+				break;
+			}	
+		}
+
+APL_GOBACK_SUCCESS // AIX - Warnings
+			
+RETURN_SUCCESS:
+{
+	EXEC SQL CLOSE ftpmsgCursor_conf;
+	IS_ANY_ORA_ERROR
+   
+   fflush(l_gcnftpfile);
+	fflush(chr_logfile);
+	return APL_SUCCESS;
+}
+RETURN_FAILURE:
+{
+	EXEC SQL CLOSE ftpmsgCursor_conf;
+	IS_ANY_ORA_ERROR
+   
+   fflush(l_gcnftpfile);
+	fflush(chr_logfile);
+	return APL_FAILURE;
+}
+}
+
+
+
+
+int Ftp_MsgHdr(FILE *p_gcnftpfile,
+					char *p_msg_no,
+					DEBUG_INFO_STRUCT_H **p_debug_info_struct_h_a)
+{
+	char chr_l_hdr[FTP_HDR_LEN] = APL_NULL_STRING;
+	char chr_l_bic_code[12] 		= APL_NULL_STRING;
+
+	memset(chr_l_hdr,APL_NULL_CHAR,FTP_HDR_LEN);
+	memset(chr_l_bic_code,APL_NULL_CHAR,12);
+
+	strcpy(chr_l_bic_code,l_mt_message_sys_params_struct_h.swift_cd);
+
+	if(APL_FAILURE == CO_PadString(chr_l_bic_code,'R',11,"X",p_debug_info_struct_h_a))
+	APL_GOBACK_FAIL
+
+	strcpy(chr_l_hdr,"{1:F01");
+	strcat(chr_l_hdr,chr_l_bic_code);
+	strcat(chr_l_hdr,"IFP0000000000}");
+	strcat(chr_l_hdr,"{2:I");
+	strcat(chr_l_hdr,p_msg_no);
+	strcat(chr_l_hdr,chr_l_bic_code);
+	strcat(chr_l_hdr,"IFPN}{4:");
+
+	fprintf(p_gcnftpfile,"%s\n",chr_l_hdr);
+
+APL_GOBACK_SUCCESS // AIX - Warnings
+
+RETURN_SUCCESS:
+	return(APL_SUCCESS);
+
+RETURN_FAILURE:
+	return APL_FAILURE;
+}
+
+	 
+int Ftp_message_Oth( int *p_time_count,
+							int *p_rec_count,
+							char *p_gcnfiledir,
+							char *p_gcnftpdir,
+							char *p_msgoutdir,
+							FILE *l_gcnftpfile,
+							char *l_file_temp,
+							char *l_file_final,
+							FILE *chr_logfile,
+							char **argv,
+							DEBUG_INFO_STRUCT_H **l_debug_info_ptr,
+							INTL_ENV_DATA_STRUCT_H *p_intlenv_data_struct_h) {
+	
+	FILE *MsgOutFile=NULL;
+	char chr_l_file[FILERR_LENGTH]				= APL_NULL_STRING;
+	
+	
+	char chr_l_file_ext[FILERR_EXT_LENGTH]		= APL_NULL_STRING;
+	char chr_l_temp_file[2*PATH_LENGTH] 	= APL_NULL_STRING;
+	char chr_l_final_file[2*PATH_LENGTH] = APL_NULL_STRING;
+	char chr_l_file_ftp[2*PATH_LENGTH] = APL_NULL_STRING;
+	char chr_l_sysdatetime_A[APL_DATE_LEN] = APL_NULL_STRING;
+	char chr_l_sysdatetime1[APL_DATE_LEN] = APL_NULL_STRING;
+	char chr_chartemp[1000]					= APL_NULL_STRING;
+	char chr_h_rowid_a[APL_ROWID_LEN]		= APL_NULL_STRING;
+	char chr_inifile[PATH_LENGTH]			= APL_NULL_STRING;
+	char *chr_tempchar=NULL;
+	char chr_msgch;
+	char chr_l_msgoutfile[PATH_LENGTH]	= APL_NULL_STRING;
+	char chr_l_gcnfiletemp[PATH_LENGTH]	= APL_NULL_STRING;
+	char chr_test[4] 							= APL_NULL_STRING;
+	DIR *dp;
+	struct dirent *dir=NULL;
+
+	short i_sysdatetime = 0;
+
+	imsglog messageStruct;
+   l_ms_msglog_i_struct i_indicator_msg;
+
+   if(!chr_logfile)
+	{
+	  if(CO_Rtv_RptFileName("4Q",
+								APL_LOGFILE_DESC,
+								100,
+								argv[5],
+								argv,
+								&chr_logfile,
+								l_debug_info_ptr)==APL_FAILURE)
+		 {
+				 return(APL_FAILURE);
+		 }
+   }
+
+	EXEC SQL VAR messageStruct.client IS STRING;
+	EXEC SQL VAR chr_h_rowid_a IS STRING;
+	EXEC SQL VAR messageStruct.message_ind IS STRING;
+	EXEC SQL VAR messageStruct.swift_msg_no IS STRING;
+	EXEC SQL VAR messageStruct.maker IS STRING;
+	EXEC SQL VAR messageStruct.maker_dt IS STRING;
+	EXEC SQL VAR messageStruct.status_ind IS STRING;
+	EXEC SQL VAR messageStruct.msg_in_out_ind IS STRING;
+	EXEC SQL VAR messageStruct.msg IS STRING;
+	EXEC SQL VAR messageStruct.contact_details IS STRING;
+	EXEC SQL VAR messageStruct.contact_details1 IS STRING;
+	EXEC SQL VAR messageStruct.baseid IS STRING;
+	EXEC SQL VAR messageStruct.message_class IS STRING;
+
+	
+	
+
+	EXEC SQL DECLARE ftpmsgCursor_othr CURSOR FOR
+		SELECT MS_MSGLOG.*,ROWID
+			FROM MS_MSGLOG
+				WHERE STATUS='F' AND 
+				SWIFT_MSG_NO IN ('571', '572', '573', '550', '551', '552', '554', '555', '556', '560', '562', '563')
+		FOR UPDATE OF STATUS;
+	IS_ANY_ORA_ERROR
+
+	EXEC SQL OPEN ftpmsgCursor_othr;
+	IS_ANY_ORA_ERROR
+
+	while(1)
+		{
+			EXEC SQL FETCH ftpmsgCursor_othr INTO :messageStruct :i_indicator_msg,:chr_h_rowid_a;
+			IS_ANY_ORA_ERROR
+
+			if((APL_ZERO_RESULT_SET) && (*p_time_count != 13))
+			{
+				
+				if(*p_time_count == 0)
+				*p_time_count =  *p_time_count + 1;
+
+				fprintf(chr_logfile,"No more records in Imsglog for processing ...\n"); 
+				fprintf(chr_logfile,"Time Lapsed  :: %d      Rec. Processed  :: %d\n",((*p_time_count - 1 ) * 5),*p_rec_count); 
+				fprintf(chr_logfile,"Breaking....\n"); 
+
+			
+				break;
+			}		
+
+			if(*p_time_count == 13)
+			{
+				memset(chr_l_temp_file,APL_NULL_CHAR,2*PATH_LENGTH);
+				memset(chr_l_final_file,APL_NULL_CHAR,2*PATH_LENGTH);
+
+            
+            fflush(l_gcnftpfile);
+            fclose(l_gcnftpfile);
+            fclose(MsgOutFile);
+
+				
+				dp=opendir(p_gcnfiledir);
+
+				
+					strcpy(chr_l_temp_file,p_gcnfiledir);
+					strcat(chr_l_temp_file,l_file_temp);
+
+				
+					strcpy(chr_l_final_file,p_gcnfiledir);
+					strcat(chr_l_final_file,l_file_final);
+
+				
+					strcpy(chr_l_file_ftp,p_gcnftpdir);
+					strcat(chr_l_file_ftp,l_file_final);
+
+					if(*p_rec_count > 0 )
+					{
+						
+						link(chr_l_temp_file,chr_l_final_file);
+						unlink(chr_l_temp_file);
+
+						
+						link(chr_l_final_file,chr_l_file_ftp);
+                  
+                  unlink(chr_l_final_file);
+
+						fprintf(chr_logfile,"Final File Created after 1 hr  :: %s\n",chr_l_final_file);
+						printf("Final h_file created : %s \n",chr_l_final_file);
+					}
+					else
+						unlink(chr_l_temp_file);
+
+				closedir(dp);
+					
+				fprintf(chr_logfile,"Resetting Time & Records processed .... \n");
+
+				*p_time_count = 0;
+				*p_rec_count  = 0;
+
+
+
+				
+
+
+                 EXEC SQL UPDATE MS_MSGLOG
+                    SET STATUS='A'
+                    WHERE STATUS='O';
+                 IS_ANY_ORA_ERROR;
+
+				EXEC SQL COMMIT;
+ 				IS_ANY_ORA_ERROR
+				fprintf(chr_logfile, "Committing .... for Time : OTHR \n");
+
+				break;
+
+			}
+
+			
+
+		   if(p_msgoutdir[strlen(p_msgoutdir)-1] == '/')
+         	sprintf(chr_l_msgoutfile,"%s%s",p_msgoutdir,messageStruct.msg);
+      	else
+         	sprintf(chr_l_msgoutfile,"%s/%s",p_msgoutdir,messageStruct.msg);
+
+      	if(!(MsgOutFile=fopen(chr_l_msgoutfile,"r")))
+      	{
+         	fprintf(chr_logfile,"Could not find %s\n",chr_l_msgoutfile);
+         	fflush(chr_logfile);
+         	continue;
+      	}
+
+			if(Ftp_MsgHdr(l_gcnftpfile,messageStruct.swift_msg_no,l_debug_info_ptr) == APL_FAILURE)
+			{
+				fprintf(chr_logfile,"Failure During writting Ftp Message Header \n");
+				APL_GOBACK_FAIL
+			}
+
+			
+
+			
+
+			
+			
+			fprintf(chr_logfile,"Processed File ::  %s \n",messageStruct.msg);
+				
+			while(fgets(chr_chartemp,1000,MsgOutFile))
+         fprintf(l_gcnftpfile,"%s",chr_chartemp);
+
+			
+
+			fprintf(l_gcnftpfile,"-}\n");
+
+      
+         fclose(MsgOutFile);
+			
+			
+				 
+
+         EXEC SQL UPDATE MS_MSGLOG 
+						SET STATUS = 'O'
+						WHERE ROWID = :chr_h_rowid_a;
+         IS_ANY_ORA_ERROR;
+			
+			
+
+			*p_rec_count = *p_rec_count + 1;
+			fflush(l_gcnftpfile);
+
+
+         if (*p_rec_count == BIDS_OTHR_FILES_MAX )
+			{
+				fflush(l_gcnftpfile);
+				fclose(l_gcnftpfile);
+				fclose(MsgOutFile);	
+				*p_time_count = 0;
+				*p_rec_count = 0;
+
+				memset(chr_l_temp_file,APL_NULL_CHAR,2*PATH_LENGTH);
+				memset(chr_l_final_file,APL_NULL_CHAR,2*PATH_LENGTH);
+
+				
+				dp=opendir(p_gcnfiledir);
+
+				
+					strcpy(chr_l_temp_file,p_gcnfiledir);
+					strcat(chr_l_temp_file,l_file_temp);
+
+				
+					strcpy(chr_l_final_file,p_gcnfiledir);
+					strcat(chr_l_final_file,l_file_final);
+
+				
+					strcpy(chr_l_file_ftp,p_gcnftpdir);
+					strcat(chr_l_file_ftp,l_file_final);
+
+
+				
+					link(chr_l_temp_file,chr_l_final_file);
+					unlink(chr_l_temp_file);
+
+				
+					link(chr_l_final_file,chr_l_file_ftp);
+               
+               unlink(chr_l_final_file);
+
+
+               fprintf(chr_logfile,"Final File Created after %d Records  :: %s\n",BIDS_OTHR_FILES_MAX, chr_l_final_file);
+					printf("Final h_file created : %s \n",chr_l_final_file);
+				closedir(dp);
+
+				
+
+				
+
+
+                 EXEC SQL UPDATE MS_MSGLOG
+                    SET STATUS='A'
+                    WHERE STATUS='O';
+                 IS_ANY_ORA_ERROR;
+
+				EXEC SQL COMMIT;
+ 				IS_ANY_ORA_ERROR
+            fprintf(chr_logfile, "Committing .... for Max Records : OTHR \n");
+				break;
+			}	
+		}
+
+APL_GOBACK_SUCCESS // AIX - Warnings
+			
+RETURN_SUCCESS:
+{
+	EXEC SQL CLOSE ftpmsgCursor_othr;
+	IS_ANY_ORA_ERROR
+   
+   fflush(l_gcnftpfile);
+	fflush(chr_logfile);
+	return APL_SUCCESS;
+}
+RETURN_FAILURE:
+{
+	EXEC SQL CLOSE ftpmsgCursor_othr;
+	IS_ANY_ORA_ERROR
+   
+   fflush(l_gcnftpfile);
+	fflush(chr_logfile);
+	return APL_FAILURE;
+}
+}
+
+
+
+
+//main(int argc, char **argv) {
+int main(int argc,char **argv)//Changes done for AIX Migration
+ {
+DEBUG_INFO_STRUCT_H *l_debuglist;
+INTL_ENV_DATA_STRUCT_H l_intl_environ_data_h;
+int int_chpid;
+FILE *chr_finifile;
+static FILE *l_logfile = NULL;
+char chr_inifile[PATH_LENGTH],chr_l_uname[APL_USERID_LEN],chr_l_passwd[100],chr_buffer[KEY_LENGTH];
+char chr_custody_id_b[APL_USERID_LEN];
+DEBUG_INFO_STRUCT_H *l_debuginfo = NULL;
+DEBUG_INFO_STRUCT_H **l_debug_info_ptr;
+int int_p_funcreturnstate = 0;
+INTL_ENV_DATA_STRUCT_H p_intl_envdatastruct_h;
+char chr_date[APL_DATE_LEN]	=	APL_NULL_STRING;
+char chr_l_sys_date_time[APL_DATE_LEN]	=	APL_NULL_STRING;
+char chr_l_statinfo[61]	= APL_NULL_STRING;
+
+char chr_l_gcnmsgdir[PATH_LENGTH] = APL_NULL_STRING;
+char chr_l_msgoutdir[PATH_LENGTH] = APL_NULL_STRING;
+
+char chr_l_gcnconfmsgdir[PATH_LENGTH] = APL_NULL_STRING;
+char chr_l_gcnothrmsgdir[PATH_LENGTH] = APL_NULL_STRING;
+int  int_l_time_count_conf = 0;
+int  int_l_rec_count_conf  = 0;
+int  int_l_time_count_othr = 0;
+int  int_l_rec_count_othr  = 0;
+
+int  int_l_int_unproc_recs = 0;
+
+	FILE *l_GcnFtpFile_conf=NULL;
+	FILE *l_GcnFtpFile_othr=NULL;
+	char chr_l_file[FILERR_LENGTH]				= APL_NULL_STRING;
+
+	char chr_l_file_temp_conf[FILERR_LENGTH]		= APL_NULL_STRING;
+	char chr_l_file_final_conf[FILERR_LENGTH]		= APL_NULL_STRING;
+	char chr_l_file_temp_othr[FILERR_LENGTH]		= APL_NULL_STRING;
+	char chr_l_file_final_othr[FILERR_LENGTH]		= APL_NULL_STRING;
+
+	char chr_l_file_ext[FILERR_EXT_LENGTH]		= APL_NULL_STRING;
+	char chr_l_temp_file[2*PATH_LENGTH] 	= APL_NULL_STRING;
+	char chr_l_temp_file1[2*PATH_LENGTH] 	= APL_NULL_STRING;
+	char chr_l_sysdatetime_A[APL_DATE_LEN] = APL_NULL_STRING;
+	char chr_l_sysdatetime1[APL_DATE_LEN] = APL_NULL_STRING;
+	char chr_l_gcnfiletemp[PATH_LENGTH]	= APL_NULL_STRING;
+	DIR *dp;
+	char **temp;
+	struct dirent *dir=NULL;
+	int int_num = 0;
+
+	short i_sysdatetime = 0;
+
+l_debug_info_ptr=&l_debuginfo;
+
+strcpy(p_intl_envdatastruct_h.usr,"SYSTEM");
+strcpy(p_intl_envdatastruct_h.h_mode,APL_NULL_STRING);
+if(argc == 1)
+{
+	strcpy(p_intl_envdatastruct_h.processtion,"FTP Bid Transfer Daemon");
+}
+else
+{
+	strcpy(p_intl_envdatastruct_h.processtion, argv[5]);
+}
+strcpy(p_intl_envdatastruct_h.auth_req,APL_NULL_STRING);
+strcpy(p_intl_envdatastruct_h.subprocess,APL_NULL_STRING);
+strcpy(p_intl_envdatastruct_h.h_process,APL_NULL_STRING);
+
+memset(chr_inifile,APL_NULL_CHAR,PATH_LENGTH);
+memset(chr_buffer,APL_NULL_CHAR,KEY_LENGTH);
+memset(chr_l_uname,APL_NULL_CHAR,40);
+memset(chr_l_passwd,APL_NULL_CHAR,40);
+chr_finifile=NULL;
+EXEC SQL VAR chr_h_restart_data IS STRING;
+EXEC SQL VAR h_ora_rowid IS STRING;
+
+EXEC SQL VAR chr_l_uname IS STRING;
+EXEC SQL VAR chr_l_passwd IS STRING;
+EXEC SQL VAR chr_date IS STRING;
+
+strcpy(chr_inifile,getenv("INTL_ROOT_PATH"));
+strcat(chr_inifile,"/intl_sun.cfg");
+if ( (chr_finifile = fopen(chr_inifile,"r") ) == NULL)
+        APL_GOBACK_FAIL;
+
+APL_FETCH_DB_LOGIN_DETAILS(chr_finifile,chr_custody_id_b,chr_l_uname,chr_l_passwd,APL_OUT_FILE,l_debug_info_ptr);
+EXEC SQL CONNECT :chr_l_uname IDENTIFIED BY :chr_l_passwd;
+
+if(sqlca.sqlcode < 0)
+   {
+     ltoa_r(sqlca.sqlcode,chr_buffer,KEY_LENGTH-1);
+     CO_InsertErr(&l_debuginfo,
+         DB_ERR_NO,
+         chr_buffer,
+         APL_NULL_STRING,
+         APL_NULL_STRING,
+         __LINE__,
+         __FILE__);
+     APL_GOBACK_FAIL
+
+   }
+
+
+        if (APL_FAILURE == CO_Rtv_RptFileName("4Q", APL_LOGFILE_DESC, 100,
+                     "FTP Bid Transfer Daemon",NULL, &l_logfile, &l_debuginfo) )
+                {
+                        exit(-1);
+                }
+
+
+
+        EXEC SQL COMMIT WORK;
+if(sqlca.sqlcode < 0)
+   {
+     ltoa_r(sqlca.sqlcode,chr_buffer,KEY_LENGTH-1);
+     CO_InsertErr(&l_debuginfo,
+                     DB_ERR_NO,
+                     chr_buffer,
+                     APL_NULL_STRING,
+                     APL_NULL_STRING,
+                     __LINE__,
+                     __FILE__);
+     APL_GOBACK_FAIL
+	}
+
+
+	if(CO_RtvSysDt(chr_date,l_debug_info_ptr)==APL_FAILURE)
+	{
+		APL_GOBACK_FAIL
+	}
+	if ( CO_RtvSysParams(l_debug_info_ptr) == APL_FAILURE)
+		APL_GOBACK_FAIL
+
+   CO_ProcMonitor(APL_OUT_FILE,"Locking Batch in Proc table",NULL,NULL);
+
+               if(APL_SUCCESS ==  EI_Proc_BatchRestart(argv[0],
+                                                  argv[0],
+                                                  APL_NULL_STRING,
+                                                  &int_p_funcreturnstate,
+                                                  &l_debuginfo,
+                                                  p_intl_envdatastruct_h))
+                {
+                      if(int_p_funcreturnstate == 11 || int_p_funcreturnstate == 10)
+                      {
+                                EXEC SQL SELECT PROCESSING_STATUS , ROWID
+                                INTO :chr_h_restart_data:i_restart, :h_ora_rowid:i_ora_rowid
+
+                                FROM SYS_BATCHPROC
+                                WHERE ( PROCESS_NAME = :argv[0]
+                                AND STATUS = 'started' )
+                                FOR UPDATE OF PROCESSING_STATUS,STATUS,STAT_DET;
+
+
+                                if (sqlca.sqlcode <0)
+                                {
+                                    APL_GOBACK_FAIL
+                                 }
+                       }
+                       else
+                       {
+         						CO_ProcMonitor(l_logfile,
+                  				"Batch Table Cannot be Locked as Copy Of The Daemon Is Still Running",
+                 				 NULL, NULL);
+                             APL_GOBACK_FAIL
+                       }
+
+                }
+                else
+                {
+								CO_ProcMonitor(l_logfile,"Batch Table Cannot Be locked",NULL,NULL);
+                        APL_GOBACK_FAIL
+                }
+
+
+	
+
+   CO_ProcMonitor(APL_OUT_FILE,"Reading Token ",NULL,NULL);
+
+   if (CO_ReadToken( chr_finifile,
+                     "SESAM_GCN_MSG_FILE",
+                     chr_l_gcnmsgdir,
+                     l_debug_info_ptr)  == APL_FAILURE)
+	{
+		fprintf(l_logfile,"Failed to open GCN Message File dir\n");
+		APL_GOBACK_FAIL
+	}
+   if (CO_ReadToken( chr_finifile,
+                     "SMAC_GCN_CONF_PATH",
+                     chr_l_gcnconfmsgdir,
+                     l_debug_info_ptr)  == APL_FAILURE)
+	{
+		fprintf(l_logfile,"Failed to open GCN Conf Msg File dir :SMAC_GCN_CONF_PATH:\n");
+		APL_GOBACK_FAIL
+	}
+   if (CO_ReadToken( chr_finifile,
+                     "SMAC_GCN_OTHR_PATH",
+                     chr_l_gcnothrmsgdir,
+                     l_debug_info_ptr)  == APL_FAILURE)
+	{
+		fprintf(l_logfile,"Failed to open GCN Other Msg File dir :SMAC_GCN_OTHR_PATH:\n");
+		APL_GOBACK_FAIL
+	}
+
+   if (CO_ReadToken( chr_finifile,
+                     "INTL_MS_SND_PATH",
+                     chr_l_msgoutdir,
+                     l_debug_info_ptr)  == APL_FAILURE)
+	{
+		fprintf(l_logfile,"Failed to open GCN Message FTP dir\n");
+		APL_GOBACK_FAIL
+	}
+
+	
+	
+
+	EXEC SQL UPDATE MS_MSGLOG SET STATUS = 'F' WHERE STATUS IN ('C','O');
+
+	
+
+	
+
+
+while(1) {
+
+       EXEC SQL UPDATE SYS_BATCHPROC set STAT_DET = 'Preparing file' where
+		 rowid = :h_ora_rowid;
+               if (sqlca.sqlcode <0)
+               {
+                    APL_GOBACK_FAIL
+               }
+
+ 
+
+   if(int_l_time_count_conf == 0 && int_l_rec_count_conf == 0)
+	{
+
+		
+
+		dp=opendir(chr_l_gcnmsgdir);
+		
+		fprintf(l_logfile,"Deleting all Temp (Conf.) Files ......\n");
+		//while(dir=readdir(dp)) 
+		while((dir=readdir(dp))) // AIX - Warnings
+		{
+		
+			memset(chr_l_temp_file,APL_NULL_CHAR,2*PATH_LENGTH);
+			memset(chr_l_temp_file1,APL_NULL_CHAR,2*PATH_LENGTH); 
+
+			strcpy(chr_l_temp_file,chr_l_gcnmsgdir);
+
+
+			strcat(chr_l_temp_file,dir->d_name);
+
+			strcpy(chr_l_temp_file1,chr_l_temp_file);
+			strcat(chr_l_temp_file1,".");
+		        CO_SplitStr(chr_l_temp_file1,'.',&int_num,&temp);
+			if ( ( strcmp(temp[1],"TMP") == 0 ) && (strncmp(dir->d_name, BIDS_CONF_FILE_START, 4)==0) )
+			{
+				unlink(chr_l_temp_file);
+				fprintf(l_logfile,"Deleted Temp h_file (Conf.)    :: %s\n",dir->d_name);
+			}
+		}
+		closedir(dp);
+			
+      
+      sleep(MIN_SLEEP_TIME);
+
+		
+		EXEC SQL SELECT to_char(sysdate,'DDMMYYHHMISS')
+					INTO :chr_l_sysdatetime_A:i_sysdatetime FROM DUAL;
+		IS_ANY_ORA_ERROR
+
+		if( CO_Trim(chr_l_sysdatetime_A,' ','R',chr_l_sysdatetime1,l_debug_info_ptr) == APL_FAILURE)
+		{
+			APL_GOBACK_FAIL
+		}
+
+		memset(chr_l_file,APL_NULL_CHAR,FILERR_LENGTH);
+		sprintf(chr_l_file,"%s", BIDS_CONF_FILE_START);
+		strcat(chr_l_file,chr_l_sysdatetime1);
+
+		memset(chr_l_file_ext,APL_NULL_CHAR,FILERR_EXT_LENGTH);
+		strcpy(chr_l_file_ext,".TMP");
+
+		
+		memset(chr_l_file_temp_conf,APL_NULL_CHAR,FILERR_LENGTH);
+		strcpy(chr_l_file_temp_conf,chr_l_file);
+		strcat(chr_l_file_temp_conf,chr_l_file_ext);
+
+
+		memset(chr_l_file_ext,APL_NULL_CHAR,FILERR_EXT_LENGTH);
+		strcpy(chr_l_file_ext,".TXT");
+
+		
+		memset(chr_l_file_final_conf,APL_NULL_CHAR,FILERR_LENGTH);
+		strcpy(chr_l_file_final_conf,chr_l_file);
+		strcat(chr_l_file_final_conf,chr_l_file_ext);
+
+
+		if(chr_l_gcnmsgdir[strlen(chr_l_gcnmsgdir)-1] == '/')
+			sprintf(chr_l_gcnfiletemp,"%s%s",chr_l_gcnmsgdir,chr_l_file_temp_conf);
+		else
+			sprintf(chr_l_gcnfiletemp,"%s/%s",chr_l_gcnmsgdir,chr_l_file_temp_conf);
+	
+		
+
+		if(!(l_GcnFtpFile_conf = fopen(chr_l_gcnfiletemp,"w+")))
+		{
+			fprintf(l_logfile,"Could not Create %s \n",chr_l_gcnfiletemp);
+			fflush(l_logfile);
+			APL_GOBACK_FAIL	
+		}
+
+		fprintf(l_logfile,"New Temp File(Conf.)    :: %s\n",chr_l_file_temp_conf);
+			   	
+	}	
+		fprintf(l_logfile,"Calling Fn. (Conf.) Tmp File :%s:    \n",chr_l_file_temp_conf);
+ 
+		if(Ftp_message(&int_l_time_count_conf,
+							&int_l_rec_count_conf,
+							chr_l_gcnmsgdir,
+							chr_l_gcnconfmsgdir,
+							chr_l_msgoutdir,
+							l_GcnFtpFile_conf,
+							chr_l_file_temp_conf,
+							chr_l_file_final_conf,
+							l_logfile,
+							argv,
+							l_debug_info_ptr,
+							&l_intl_environ_data_h)==APL_FAILURE)
+			{
+		fprintf(l_logfile,"Finished Processing with FAILURE (Conf.)\n");
+			EXEC SQL ROLLBACK;
+			IS_ANY_ORA_ERROR
+			APL_GOBACK_FAIL
+			}
+		fprintf(l_logfile,"**************  Processed Fn. (Conf.) ****************\n\n");
+
+   if(int_l_time_count_othr == 0 && int_l_rec_count_othr == 0)
+	{
+
+		
+
+		dp=opendir(chr_l_gcnmsgdir);
+		
+		fprintf(l_logfile,"Deleting all Temp (Othr.) Files ......\n");
+		//while(dir=readdir(dp)) 
+		while((dir=readdir(dp))) // AIX - Warnings 
+		{
+			
+			memset(chr_l_temp_file,APL_NULL_CHAR,2*PATH_LENGTH);
+			memset(chr_l_temp_file1,APL_NULL_CHAR,2*PATH_LENGTH);
+
+			strcpy(chr_l_temp_file,chr_l_gcnmsgdir);
+
+
+			strcat(chr_l_temp_file,dir->d_name);
+
+			strcpy(chr_l_temp_file1,chr_l_temp_file);
+			strcat(chr_l_temp_file1,".");
+			CO_SplitStr(chr_l_temp_file1,'.',&int_num,&temp);
+			if ( ( strcmp(temp[1],"TMP") == 0 ) && (strncmp(dir->d_name, BIDS_OTHR_FILE_START, 4)==0) )
+			{
+				unlink(chr_l_temp_file);
+				fprintf(l_logfile,"Deleted Temp h_file (Othr.)    :: %s\n",dir->d_name);
+
+			}
+		}
+		closedir(dp);
+			
+      
+      sleep(MIN_SLEEP_TIME);
+
+		
+		EXEC SQL SELECT to_char(sysdate,'DDMMYYHHMISS')
+					INTO :chr_l_sysdatetime_A:i_sysdatetime FROM DUAL;
+		IS_ANY_ORA_ERROR
+
+		if( CO_Trim(chr_l_sysdatetime_A,' ','R',chr_l_sysdatetime1,l_debug_info_ptr) == APL_FAILURE)
+		{
+			APL_GOBACK_FAIL
+		}
+
+		memset(chr_l_file,APL_NULL_CHAR,FILERR_LENGTH);
+		sprintf(chr_l_file,"%s", BIDS_OTHR_FILE_START);
+		strcat(chr_l_file,chr_l_sysdatetime1);
+
+		memset(chr_l_file_ext,APL_NULL_CHAR,FILERR_EXT_LENGTH);
+		strcpy(chr_l_file_ext,".TMP");
+
+		
+		memset(chr_l_file_temp_othr,APL_NULL_CHAR,FILERR_LENGTH);
+		strcpy(chr_l_file_temp_othr,chr_l_file);
+		strcat(chr_l_file_temp_othr,chr_l_file_ext);
+
+
+		memset(chr_l_file_ext,APL_NULL_CHAR,FILERR_EXT_LENGTH);
+		strcpy(chr_l_file_ext,".TXT");
+
+		
+		memset(chr_l_file_final_othr,APL_NULL_CHAR,FILERR_LENGTH);
+		strcpy(chr_l_file_final_othr,chr_l_file);
+		strcat(chr_l_file_final_othr,chr_l_file_ext);
+
+
+		if(chr_l_gcnmsgdir[strlen(chr_l_gcnmsgdir)-1] == '/')
+			sprintf(chr_l_gcnfiletemp,"%s%s",chr_l_gcnmsgdir,chr_l_file_temp_othr);
+		else
+			sprintf(chr_l_gcnfiletemp,"%s/%s",chr_l_gcnmsgdir,chr_l_file_temp_othr);
+	
+		
+
+		if(!(l_GcnFtpFile_othr = fopen(chr_l_gcnfiletemp,"w+")))
+		{
+			fprintf(l_logfile,"Could not Create %s \n",chr_l_gcnfiletemp);
+			fflush(l_logfile);
+			APL_GOBACK_FAIL	
+		}
+
+		fprintf(l_logfile,"New Temp File(Othr.)    :: %s\n",chr_l_file_temp_othr);
+			   	
+	}	
+		
+		fprintf(l_logfile,"Calling Fn. (Othr.) Tmp File :%s: \n",chr_l_file_temp_othr);
+ 
+		if(Ftp_message_Oth(&int_l_time_count_othr,
+							&int_l_rec_count_othr,
+							chr_l_gcnmsgdir,
+							chr_l_gcnothrmsgdir,
+							chr_l_msgoutdir,
+							l_GcnFtpFile_othr,
+							chr_l_file_temp_othr,
+							chr_l_file_final_othr,
+							l_logfile,
+							argv,
+							l_debug_info_ptr,
+							&l_intl_environ_data_h)==APL_FAILURE)
+			{
+		fprintf(l_logfile,"Finished Processing with FAILURE (Othr.)\n");
+			EXEC SQL ROLLBACK;
+			IS_ANY_ORA_ERROR
+			APL_GOBACK_FAIL
+			}
+		fprintf(l_logfile,"**************  Processed Fn. (Othr.) ****************\n\n");
+
+
+	            
+
+				 if( APL_FAILURE == CO_RtvSysDtTime(chr_l_sys_date_time, l_debug_info_ptr))
+				 APL_GOBACK_FAIL;
+	   	    memset(chr_l_statinfo,APL_NULL_CHAR,61);
+				 strcpy(chr_l_statinfo, "sleeping : ");
+	   	    strcat(chr_l_statinfo, chr_l_sys_date_time);
+
+       		 EXEC SQL UPDATE SYS_BATCHPROC set STAT_DET = :chr_l_statinfo 
+             where rowid = :h_ora_rowid;
+               if (sqlca.sqlcode <0)
+               {
+                    APL_GOBACK_FAIL
+               }
+       
+				
+
+
+
+       		EXEC SQL SELECT PROCESSING_STATUS 
+                INTO :chr_h_restart_data:i_restart
+				FROM SYS_BATCHPROC where rowid = :h_ora_rowid
+				FOR UPDATE OF STAT_DET;
+               if (sqlca.sqlcode <0)
+               {
+                    APL_GOBACK_FAIL
+               }
+
+   int_l_int_unproc_recs = 0;
+   EXEC SQL SELECT NVL(COUNT(*),0) INTO :int_l_int_unproc_recs FROM MS_MSGLOG
+            WHERE STATUS = 'F'  AND
+            SWIFT_MSG_NO IN ('530', '531', '532', '533', '534', '596', '571', '572', '573', '550', '551', '552', '554', '555', '556', '560', '562', '563');
+   IS_ANY_ORA_ERROR
+
+   printf("\nThe number of unprocessed records : %d: \n", int_l_int_unproc_recs);
+	fprintf(l_logfile,"\n ::  Total Unprocessed Records = %d \n\n",int_l_int_unproc_recs);
+
+   if (int_l_int_unproc_recs == 0 )
+   {
+      printf("\n Number of unprocessed records : %d:   \n", int_l_int_unproc_recs);
+      CO_ProcMonitor(APL_OUT_FILE,"Sleeping ....... ",NULL,NULL);
+		CO_ProcMonitor(l_logfile,"Sleeping zzz.zz.z.z.z.z.z.......\n",NULL,NULL);
+		CO_ProcMonitor(l_logfile,"================================\n\n",NULL,NULL);
+
+      sleep(SLEEP_TIME);
+
+		
+		if (int_l_time_count_conf != 0)
+		int_l_time_count_conf = int_l_time_count_conf + 1;
+		if (int_l_time_count_othr != 0)
+		int_l_time_count_othr = int_l_time_count_othr + 1;
+		
+		
+   }
+
+} 
+   EXEC SQL UPDATE SYS_BATCHPROC
+                                SET STATUS              ='completed'
+                                WHERE   ROWID           = :h_ora_rowid;
+
+        IS_ANY_ORA_ERROR
+
+        if (sqlca.sqlcode == 1403)
+   {
+      APL_GOBACK_FAIL
+   }
+
+APL_GOBACK_SUCCESS // AIX - Warnings
+
+RETURN_SUCCESS:
+	EXEC SQL COMMIT;
+	fclose(chr_finifile);
+	exit(0);
+RETURN_FAILURE:
+	fclose(chr_finifile);
+	exit(-1);
+} 
+

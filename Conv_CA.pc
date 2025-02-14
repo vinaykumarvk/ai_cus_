@@ -1,0 +1,1666 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#include "CO_HostStructdef.h"
+#include "MT_Interface.h"
+#include "CA_InterFace.h"
+#include "Intellect_Common.h"
+#include "CA_Common.h"
+
+EXEC SQL INCLUDE SQLCA.H;
+
+#define	RTV_SYSTEM_DATA
+
+/* Added by kotubabu for Linux Migration -Start*/
+#ifdef OS_LINUX
+FILE*						g_inifile;
+FILE*						g_logfile;
+FILE*                l_pr_filept;
+FILE*                l_po_filept;
+#else
+FILE *g_inifile = APL_OUT_FILE;
+FILE *g_logfile = APL_OUT_FILE;
+FILE *l_pr_filept = APL_OUT_FILE;
+FILE *l_po_filept = APL_OUT_FILE;
+#endif
+/* Added by kotubabu  for Linux Migration -END*/
+char						chr_g_progname			[APL_BATCH_PROGNAME_LEN]= APL_NULL_STRING;
+char						chr_g_key					[APL_BATCH_KEY_LEN]= APL_NULL_STRING;
+char						chr_g_start_date		[APL_DATE_LEN]= APL_NULL_STRING;
+char						chr_g_funccode			[CA_FUNC_CD_LEN]= APL_NULL_STRING;
+char						chr_g_sys_date			[APL_DATE_LEN]= APL_NULL_STRING;
+char						chr_g_sys_date_time	[APL_DATE_LEN]= APL_NULL_STRING;
+char						chr_g_restart_data_h	[APL_RESTARTDATA_LENGTH]= APL_NULL_STRING;
+char						chr_g_client			[APL_CLIENT_LENGTH]= APL_NULL_STRING;
+char						chr_g_log_buff			[MSG_LENGTH]= APL_NULL_STRING;
+
+char 						chr_g_old_ccy		[4]			= APL_NULL_STRING;
+char 						chr_g_new_ccy		[4]			= APL_NULL_STRING;
+int						int_g_conv_onem							= CONV_AMT;
+int 						int_g_conv_onek							= CONV_QTY;		
+
+
+
+int    Conv_SetUp( INTL_ENV_DATA_STRUCT_H *p_intlenv_data_struct_h, DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+static int rep_file(char *p_preorpost, INTL_ENV_DATA_STRUCT_H *p_intlenv_data_struct_h, DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+
+
+
+main(int argc, char **argv)
+{
+	/* Added by kotubabu for Linux Migration -Start*/
+   #ifdef OS_LINUX
+   g_inifile = APL_OUT_FILE;
+   g_logfile = APL_OUT_FILE;
+   l_pr_filept = APL_OUT_FILE;
+   l_po_filept = APL_OUT_FILE;
+   #endif
+   /* Added by kotubabu for Linux Migration -END*/
+	struct sqlca sqlca;
+	DEBUG_INFO_STRUCT_H			**l_debug_info_ptr=NULL,
+								*l_debug_info_struct=NULL;
+	INTL_ENV_DATA_STRUCT_H	p_intlenv_data_struct_h;
+	char						chr_inifile[PATH_LENGTH]= APL_NULL_STRING;
+	char						chr_logfile[PATH_LENGTH]= APL_NULL_STRING;
+	char						chr_custody_id_b[APL_USERID_LEN];
+
+	EXEC SQL BEGIN DECLARE SECTION;
+		char chr_uname[APL_USERID_LEN];
+		char chr_passwd[APL_PASSWD_LEN];
+	EXEC SQL END DECLARE SECTION; 
+
+	EXEC SQL VAR chr_uname IS STRING;
+	EXEC SQL VAR chr_passwd IS STRING;
+	
+	l_debug_info_ptr = &l_debug_info_struct;
+	
+	
+	strcpy(chr_inifile,getenv("INTL_ROOT_PATH"));
+	strcat(chr_inifile,"/intl_sun.cfg");
+	
+	if ( ( g_inifile=fopen(chr_inifile,"r") ) == NULL)
+		exit(-1);	
+
+	
+
+	
+	APL_FETCH_DB_LOGIN_DETAILS(g_inifile,chr_custody_id_b,chr_uname,chr_passwd,APL_OUT_FILE,l_debug_info_ptr)
+	EXEC SQL CONNECT :chr_uname IDENTIFIED BY :chr_passwd;
+	IS_ANY_ORA_ERROR
+	
+
+	
+   if ( CO_Rtv_RptFileName("CA_CONV",
+								APL_LOGFILE_DESC,
+								100,
+								argv[5],
+								argv,
+								&g_logfile,
+								l_debug_info_ptr) ==APL_FAILURE) 
+	{
+		exit(-1);
+	}
+
+   if ( CO_Rtv_RptFileName("PrCA",
+                        "Pre-Conv CA Data",
+                        100,
+                        argv[5],
+                        argv,
+                        &l_pr_filept,
+                        l_debug_info_ptr) ==APL_FAILURE)
+   {
+      exit(-1);
+   }
+
+   if ( CO_Rtv_RptFileName("PoCA",
+                        "Post-Conv CA Data",
+                        100,
+                        argv[5],
+                        argv,
+                        &l_po_filept,
+                        l_debug_info_ptr) ==APL_FAILURE)
+   {
+      exit(-1);
+   }
+
+
+	EXEC SQL COMMIT;
+	IS_ANY_ORA_ERROR
+	
+	
+   if ( argc < 4 )
+   {
+      CO_ProcMonitor(g_logfile,"All Arguments expected by  program not passed \n", NULL, NULL);
+      APL_GOBACK_FAIL
+   }
+	strcpy(chr_g_progname,	argv[0]);
+	strcpy(chr_g_key,			argv[1]);
+	strcpy(chr_g_start_date,	argv[2]);
+	strcpy(chr_g_funccode,argv[5]);
+	
+	if (CO_RtvSysParams(l_debug_info_ptr) == APL_FAILURE)
+		APL_GOBACK_FAIL
+	if(CO_RtvSysDt(chr_g_sys_date,l_debug_info_ptr)==APL_FAILURE)
+		APL_GOBACK_FAIL
+
+	
+	if (CA_Conv(&p_intlenv_data_struct_h,l_debug_info_ptr) == APL_FAILURE)
+		APL_GOBACK_FAIL
+
+	
+	
+	APL_GOBACK_SUCCESS
+   RETURN_SUCCESS:
+   {
+		EXEC SQL UPDATE SYS_BATCHPROC
+		SET status 			= 'completed'
+		WHERE process_name		=	RTRIM(:argv[0])
+		AND	proc_init			=	RTRIM(:argv[1])
+		AND	STARTDATE	=	:argv[2]
+		AND	status		=	'started';
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"BATCH_IN_PROC",chr_g_progname,chr_g_key)
+		
+		EXEC SQL COMMIT;
+		IS_ANY_ORA_ERROR
+		
+		CO_ProcMonitor(g_logfile,"RECORD COMMITTED \n",NULL,NULL);
+		
+		CO_ProcMonitor(APL_OUT_FILE,
+            "Currency Conversion for CA exiting successfully",
+            NULL,
+            NULL);
+	
+		sprintf(chr_g_log_buff,"T: TRL-TRY Corporate Action Conversion exiting successfully\n");
+		CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+		fclose(g_logfile);
+		fclose(l_pr_filept);
+		fclose(l_po_filept);
+		exit(0);
+	}
+	RETURN_FAILURE:
+	{
+		EXEC SQL ROLLBACK;
+		IS_ANY_ORA_ERROR
+		CO_ProcMonitor(g_logfile,"ROLLING BACK \n",NULL,NULL);
+
+		sprintf(chr_g_log_buff,"T: TRL-TRY Corporate Action Conversion exiting with failure\n");
+		CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+		
+		CO_ProcMonitor(APL_OUT_FILE,
+            "Currency Conversion for CA exiting with errors",
+            NULL,
+            NULL);
+
+		fclose(g_logfile);
+		fclose(l_pr_filept);
+		fclose(l_po_filept);
+		exit(-1);
+	}
+}
+
+
+int   CA_Conv( INTL_ENV_DATA_STRUCT_H *p_intlenv_data_struct_h, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+   int int_l_amt_dec_len = 0;
+   int int_l_fmt_dec_len = 0;
+   int int_l_eqt_dec_len = 0;
+   int int_l_max_dec_len    = 0;
+
+   short i_amt_dec_len = 0;
+   short i_fmt_dec_len = 0;
+   short i_eqt_dec_len = 0;
+
+	struct sqlca sqlca;
+
+	#ifdef APL_THREADS
+   	APL_SET_CONTEXT
+   	EXEC SQL CONTEXT USE :my_ctx_local;
+   #endif
+
+
+	sqlca.sqlcode = 0;
+
+	EXEC SQL VAR chr_g_old_ccy IS STRING;
+	EXEC SQL VAR chr_g_new_ccy IS STRING;
+		
+
+	strcpy(chr_g_old_ccy, CONV_FROM_TRL);
+	strcpy(chr_g_new_ccy, CONV_TO_TRY);
+
+   APL_IF_DEBUG
+   {
+      CO_ProcMonitor(   APL_OUT_FILE,
+                  "Entered Function CA_Conv \n",
+                  NULL,
+                  NULL);
+   }
+
+
+   EXEC SQL SELECT AMOUNT_DECIMAL_LEN
+            INTO :int_l_amt_dec_len:i_amt_dec_len
+            FROM MT_CORE_SYS_PARAMS;
+
+   IS_ANY_ORA_ERROR;
+
+
+   EXEC SQL SELECT FIELD_VAL
+            INTO :int_l_fmt_dec_len:i_fmt_dec_len
+            FROM PRO_GSSPLVAL
+            WHERE MAIN_FUN = 'QUANTITY_DEC_LEN'
+            AND SUB_PROCESS = 'DEC_FOR_BONDS'
+            AND NATION = 'TR';
+
+   IS_ANY_ORA_ERROR;
+
+
+   EXEC SQL SELECT FIELD_VAL
+            INTO :int_l_eqt_dec_len:i_eqt_dec_len
+            FROM PRO_GSSPLVAL
+            WHERE MAIN_FUN = 'QUANTITY_DEC_LEN'
+            AND SUB_PROCESS = 'DEC_FOR_EQUITIES'
+            AND NATION = 'TR';
+
+   IS_ANY_ORA_ERROR;
+
+
+   if (int_l_eqt_dec_len > int_l_fmt_dec_len)
+      int_l_max_dec_len = int_l_eqt_dec_len;
+   else
+      int_l_max_dec_len = int_l_fmt_dec_len;
+
+
+	if (rep_file("Pr", 
+					  &p_intlenv_data_struct_h, 
+					  l_debug_info_ptr)
+					  == APL_FAILURE)
+	APL_GOBACK_FAIL;
+
+
+	memset(chr_g_sys_date_time, APL_NULL_STRING, sizeof(APL_DATE_LEN));
+	if (CO_RtvSysDtTime(chr_g_sys_date_time, l_debug_info_ptr) == APL_FAILURE)
+   	APL_GOBACK_FAIL
+
+
+
+	
+	
+	
+	
+	/*Smita - Chamged Col Name - HDFCCA_BaseVer*/
+	EXEC SQL UPDATE CAREPLY
+			SET INSTR_HOLD = ROUND(INST_HOLDG/:int_g_conv_onek, :int_l_max_dec_len)
+			WHERE CORP_ID IN (SELECT CORP_ID FROM  CAEVENT a 
+								 WHERE CA_CURRENCY = :chr_g_old_ccy
+								 AND (STATUS IN ('RP', 'PP')
+               			 		OR (CA_EVENT='RT'
+                  					 AND STATUS='CP'
+                  				  	 AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c
+                                  						   WHERE b.INSTR_CODE=c.INSTR_CODE
+                                     						AND c.INSTR_PARENT IS NOT NULL
+                                     						AND c.MOTHER_SEC_IND <> 'Y'
+                                     						AND b.SAFEKEEP_POS>0)
+                  					 AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d
+                                	 					WHERE d.CA_EVENT='RT'
+                                						AND d.STATUS='CP'
+                                						AND d.INSTR_CODE=a.INSTR_CODE)))
+								 AND INSTR_CODE IN 
+								 (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTRUMENT_TYPE NOT IN ('FMT','BON') AND CURRENCY_CD=:chr_g_new_ccy));
+
+	IS_ANY_ORA_ERROR
+
+	sprintf(chr_g_log_buff,"Updated |%d| row(s) in CAREPLY table for NON-FMT instrument\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+
+	/*Smita - Changed Col Name - HDFCCA_BaseVer*/	
+	EXEC SQL UPDATE CAREPLY
+         SET INSTR_HOLD = ROUND(INST_HOLDG/:int_g_conv_onem, :int_l_max_dec_len)
+         WHERE CORP_ID IN (SELECT CORP_ID FROM  CAEVENT a
+								 WHERE CA_CURRENCY = :chr_g_old_ccy
+								 AND (STATUS IN ('RP', 'PP')
+               			 		OR (CA_EVENT='RT'
+                  					 AND STATUS='CP'
+                  				  	 AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c
+                                  						   WHERE b.INSTR_CODE=c.INSTR_CODE
+                                     						AND c.INSTR_PARENT IS NOT NULL
+                                     						AND c.MOTHER_SEC_IND <> 'Y'
+                                     						AND b.SAFEKEEP_POS>0)
+                  					 AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d
+                                	 					WHERE d.CA_EVENT='RT'
+                                						AND d.STATUS='CP'
+                                						AND d.INSTR_CODE=a.INSTR_CODE)))
+                         AND INSTR_CODE IN
+                         (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTRUMENT_TYPE IN ('FMT', 'BON') AND CURRENCY_CD = :chr_g_new_ccy));
+	
+		IS_ANY_ORA_ERROR
+	
+	sprintf(chr_g_log_buff,"Updated |%d| row(s) in CAREPLY table for FMT instrument\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+	
+	
+
+	
+
+	EXEC SQL UPDATE CARTSPROC SET	
+				TOTAL_QUANTITY			= TRUNC(TOTAL_QTY/:int_g_conv_onek,:int_l_max_dec_len),
+				TAKEUP_QUANTITY			= TRUNC(TAKEUPQTY/:int_g_conv_onek,:int_l_max_dec_len),
+				LAPSE_QTY				= TRUNC(LAPSEQTY/:int_g_conv_onek,:int_l_max_dec_len),
+				SUB_CURRENCY				= :chr_g_new_ccy,
+				SUB_PR			= CEIL((SUB_PRICE/:int_g_conv_onek)*power(10,:int_l_amt_dec_len))/(power(10,:int_l_amt_dec_len))
+			WHERE SUB_CURRENCY = :chr_g_old_ccy
+         AND CORP_ID IN (SELECT CORP_ID FROM  CAEVENT a
+								 WHERE CA_CURRENCY = :chr_g_old_ccy
+								 AND (STATUS IN ('RP', 'PP')
+               			 		OR (CA_EVENT='RT'
+                  					 AND STATUS='CP'
+                  				  	 AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c
+                                  						   WHERE b.INSTR_CODE=c.INSTR_CODE
+                                     						AND c.INSTR_PARENT IS NOT NULL
+                                     						AND c.MOTHER_SEC_IND <> 'Y'
+                                     						AND b.SAFEKEEP_POS>0)
+                  					 AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d
+                                	 					WHERE d.CA_EVENT='RT'
+                                						AND d.STATUS='CP'
+                                						AND d.INSTR_CODE=a.INSTR_CODE)))
+         AND INSTR_CODE IN (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTRUMENT_TYPE NOT IN ('FMT', 'BON') AND CURRENCY_CD = :chr_g_new_ccy));
+	
+	IS_ANY_ORA_ERROR
+	
+	sprintf(chr_g_log_buff,"Updated |%d| row(s) in ARIGHTSPRO table for NON-FMT instrument\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+	
+
+	
+	EXEC SQL UPDATE CARTSPROC SET	
+				TOTAL_QUANTITY			= ROUND(TOTAL_QTY/:int_g_conv_onem,:int_l_max_dec_len),
+				TAKEUP_QUANTITY			= ROUND(TAKEUPQTY/:int_g_conv_onem,:int_l_max_dec_len),
+				LAPSE_QTY				= ROUND(LAPSEQTY/:int_g_conv_onem,:int_l_max_dec_len),
+				SUB_CURRENCY				= :chr_g_new_ccy
+			WHERE SUB_CURRENCY = :chr_g_old_ccy
+         AND CORP_ID IN (SELECT CORP_ID FROM  CAEVENT a
+								 WHERE CA_CURRENCY = :chr_g_old_ccy
+								 AND (STATUS IN ('RP', 'PP')
+               			 		OR (CA_EVENT='RT'
+                  					 AND STATUS='CP'
+                  				  	 AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c
+                                  						   WHERE b.INSTR_CODE=c.INSTR_CODE
+                                     						AND c.INSTR_PARENT IS NOT NULL
+                                     						AND c.MOTHER_SEC_IND <> 'Y'
+                                     						AND b.SAFEKEEP_POS>0)
+                  					 AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d
+                                	 					WHERE d.CA_EVENT='RT'
+                                						AND d.STATUS='CP'
+                                						AND d.INSTR_CODE=a.INSTR_CODE)))
+         AND INSTR_CODE IN (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTRUMENT_TYPE IN ('FMT','BON') AND CURRENCY_CD = :chr_g_new_ccy));
+	
+	IS_ANY_ORA_ERROR
+	
+	sprintf(chr_g_log_buff,"Updated |%d| row(s) in ARIGHTSPRO table for FMT instrument\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+	
+	
+
+	
+	
+	
+	
+
+	EXEC SQL UPDATE CAENTITLMENT_VER SET 
+					CCY_FOR_ENTITL = :chr_g_new_ccy,
+					EARNINGS  = TRUNC(INCOME/:int_g_conv_onek,5),
+					ELIG_ENTITL_POS = TRUNC(ENT_POS/:int_g_conv_onek, :int_l_max_dec_len),
+					INSTR_INC_BAL = TRUNC(INC_DUE/:int_g_conv_onem,  :int_l_amt_dec_len)		
+			WHERE CCY_FOR_ENTITL = :chr_g_old_ccy
+		   AND CORP_ID IN (SELECT CORP_ID FROM  CAEVENT a
+								WHERE CA_CURRENCY = :chr_g_old_ccy
+								AND (STATUS IN ('RP', 'PP')
+               					OR (CA_EVENT='RT'
+                  					 AND STATUS='CP'
+                  				  	 AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c
+                                  						   WHERE b.INSTR_CODE=c.INSTR_CODE
+                                     						AND c.INSTR_PARENT IS NOT NULL
+                                     						AND c.MOTHER_SEC_IND <> 'Y'
+                                     						AND b.SAFEKEEP_POS>0)
+                  					 AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d
+                                	 					WHERE d.CA_EVENT='RT'
+                                						AND d.STATUS='CP'
+                                						AND d.INSTR_CODE=a.INSTR_CODE)))
+							  AND INSTR_CODE IN
+                       (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTRUMENT_TYPE NOT IN ('FMT', 'BON') AND CURRENCY_CD = :chr_g_new_ccy));
+	IS_ANY_ORA_ERROR
+	
+	sprintf(chr_g_log_buff,"Updated |%d| row(s) in AENTITL_RECON table for NON-FMT instrument\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+	
+	   EXEC SQL UPDATE CAENTITLMENT_VER SET
+               CCY_FOR_ENTITL = :chr_g_new_ccy,
+               ELIG_ENTITL_POS = TRUNC(ENT_POS/:int_g_conv_onem, :int_l_max_dec_len),
+               INSTR_INC_BAL = TRUNC(INC_DUE/:int_g_conv_onem,  :int_l_amt_dec_len)
+         WHERE CCY_FOR_ENTITL = :chr_g_old_ccy
+         AND CORP_ID IN (SELECT CORP_ID FROM  CAEVENT a
+								WHERE CA_CURRENCY = :chr_g_old_ccy
+								AND (STATUS IN ('RP', 'PP')
+               					OR (CA_EVENT='RT'
+                  					 AND STATUS='CP'
+                  				  	 AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c
+                                  						   WHERE b.INSTR_CODE=c.INSTR_CODE
+                                     						AND c.INSTR_PARENT IS NOT NULL
+                                     						AND c.MOTHER_SEC_IND <> 'Y'
+                                     						AND b.SAFEKEEP_POS>0)
+                  					 AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d
+                                	 					WHERE d.CA_EVENT='RT'
+                                						AND d.STATUS='CP'
+                                						AND d.INSTR_CODE=a.INSTR_CODE)))
+                       AND INSTR_CODE IN
+                       (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTRUMENT_TYPE IN ('FMT','BON') AND CURRENCY_CD = :chr_g_new_ccy));
+ 
+ 		 IS_ANY_ORA_ERROR
+  
+EXEC SQL UPDATE CAENTITLMENT_VER 
+SET INSTR_INC_BAL = ELIG_ENTITL_POS 
+WHERE INSTR_INC_BAL > ELIG_ENTITL_POS 
+AND CORP_ID IN (SELECT CORP_ID FROM CAEVENT 
+       WHERE INSTR_CODE IN (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTRUMENT_TYPE  in ('FMT','BON')) 
+              AND CA_EVENT='RD' AND INSTR_INC_RATE = 100 AND CCY_FOR_ENTITL = :chr_g_new_ccy);
+	
+ 		 IS_ANY_ORA_ERROR
+
+EXEC SQL UPDATE CAENTITLMENT_VER
+SET STATUS = 'CP' /*Smita - Changed Col Name - HDFCCA Base Ver*/
+	WHERE ELIG_ENTITL_POS = 0  
+	AND CCY_FOR_ENTITL = :chr_g_new_ccy ; 
+
+ 		 IS_ANY_ORA_ERROR
+
+	sprintf(chr_g_log_buff,"Updated |%d| row(s) in AENTITL_RECON table for FMT instrument\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+
+	
+	
+	
+	
+	
+
+	EXEC SQL	UPDATE CAENTITLEMENT SET
+					ELIG_ENTITL_POS  = TRUNC(ENT_POS/:int_g_conv_onek, :int_l_max_dec_len),
+					CCY_FOR_ENTITL  = :chr_g_new_ccy,
+					INSTR_INC_BAL  = TRUNC(INC_DUE/:int_g_conv_onem,  :int_l_amt_dec_len),
+					RECEIVED_AMT	=	TRUNC(AMT_RECD/:int_g_conv_onem,  :int_l_amt_dec_len),
+					QUANTITY_BAL  = TRUNC(QTY_DUE/:int_g_conv_onek, :int_l_max_dec_len),
+				   QUANTITY_RECEIVED = TRUNC(QTY_RECD/:int_g_conv_onek, :int_l_max_dec_len)	
+       	WHERE CCY_FOR_ENTITL  = :chr_g_old_ccy
+			AND CORP_ID IN (SELECT CORP_ID FROM  CAEVENT a
+								WHERE CA_CURRENCY = :chr_g_old_ccy
+								AND (STATUS IN ('RP', 'PP')
+               					OR (CA_EVENT='RT'
+                  					 AND STATUS='CP'
+                  				  	 AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c
+                                  						   WHERE b.INSTR_CODE=c.INSTR_CODE
+                                     						AND c.INSTR_PARENT IS NOT NULL
+                                     						AND c.MOTHER_SEC_IND <> 'Y'
+                                     						AND b.SAFEKEEP_POS>0)
+                  					 AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d
+                                	 					WHERE d.CA_EVENT='RT'
+                                						AND d.STATUS='CP'
+                                						AND d.INSTR_CODE=a.INSTR_CODE)))
+                       AND INSTR_CODE IN
+                       (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTRUMENT_TYPE NOT IN ('FMT','BON') AND CURRENCY_CD = :chr_g_new_ccy));
+
+	IS_ANY_ORA_ERROR
+	
+	sprintf(chr_g_log_buff,"Updated |%d| row(s) in AENTITL table for NON-FMT instrument\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+	
+	
+	   EXEC SQL UPDATE CAENTITLEMENT SET
+               ELIG_ENTITL_POS  = TRUNC(ENT_POS/:int_g_conv_onem, :int_l_max_dec_len),
+               CCY_FOR_ENTITL  = :chr_g_new_ccy,
+               INSTR_INC_BAL  = TRUNC(INC_DUE/:int_g_conv_onem,  :int_l_amt_dec_len),
+               RECEIVED_AMT =  TRUNC(AMT_RECD/:int_g_conv_onem,  :int_l_amt_dec_len),
+               QUANTITY_BAL  = TRUNC(QTY_DUE/:int_g_conv_onem, :int_l_max_dec_len),
+               QUANTITY_RECEIVED = TRUNC(QTY_RECD/:int_g_conv_onem, :int_l_max_dec_len)
+         WHERE CCY_FOR_ENTITL  = :chr_g_old_ccy
+         AND CORP_ID IN (SELECT CORP_ID FROM  CAEVENT a
+								WHERE CA_CURRENCY = :chr_g_old_ccy
+								AND (STATUS IN ('RP', 'PP')
+               					OR (CA_EVENT='RT'
+                  					 AND STATUS='CP'
+                  				  	 AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c
+                                  						   WHERE b.INSTR_CODE=c.INSTR_CODE
+                                     						AND c.INSTR_PARENT IS NOT NULL
+                                     						AND c.MOTHER_SEC_IND <> 'Y'
+                                     						AND b.SAFEKEEP_POS>0)
+                  					 AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d
+                                	 					WHERE d.CA_EVENT='RT'
+                                						AND d.STATUS='CP'
+                                						AND d.INSTR_CODE=a.INSTR_CODE)))
+                       AND INSTR_CODE IN
+                       (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTRUMENT_TYPE IN ('FMT','BON') AND CURRENCY_CD = :chr_g_new_ccy));
+
+   	IS_ANY_ORA_ERROR
+
+  
+	
+EXEC SQL UPDATE CAENTITLEMENT
+SET INSTR_INC_BAL = ELIG_ENTITL_POS
+WHERE INSTR_INC_BAL > ELIG_ENTITL_POS
+AND CORP_ID IN (SELECT CORP_ID FROM CAEVENT
+       WHERE INSTR_CODE IN (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTRUMENT_TYPE  in ('FMT','BON'))
+              AND CA_EVENT='RD' AND INSTR_INC_RATE = 100 AND CCY_FOR_ENTITL = :chr_g_new_ccy);
+
+   	IS_ANY_ORA_ERROR
+
+EXEC SQL UPDATE CAENTITLEMENT
+SET STATUS = 'CP'
+	WHERE ELIG_ENTITL_POS = 0  
+	AND CCY_FOR_ENTITL = :chr_g_new_ccy ; 
+
+ 		 IS_ANY_ORA_ERROR
+
+
+	sprintf(chr_g_log_buff,"Updated |%d| row(s) in AENTITL table for FMT instrument\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+	
+	
+	
+	
+
+	EXEC SQL	UPDATE CAENTITLEMENTMG SET
+					ELIG_ENTITL_POS  = TRUNC(ENT_POS/:int_g_conv_onek, :int_l_max_dec_len),
+					CCY_FOR_ENTITL  = :chr_g_new_ccy,
+					INSTR_INC_BAL  = TRUNC(INC_DUE/:int_g_conv_onem,  :int_l_amt_dec_len),
+					RECEIVED_AMT	=	TRUNC(AMT_RECD/:int_g_conv_onem,  :int_l_amt_dec_len),
+					QUANTITY_BAL  = TRUNC(QTY_DUE/:int_g_conv_onek, :int_l_max_dec_len),
+				   QUANTITY_RECEIVED = TRUNC(QTY_RECD/:int_g_conv_onek, :int_l_max_dec_len)	
+       	WHERE CCY_FOR_ENTITL  = :chr_g_old_ccy
+         AND CORP_ID IN (SELECT CORP_ID FROM  CAEVENT a
+								WHERE CA_CURRENCY = :chr_g_old_ccy
+								AND (STATUS IN ('RP', 'PP')
+               					OR (CA_EVENT='RT'
+                  					 AND STATUS='CP'
+                  				  	 AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c
+                                  						   WHERE b.INSTR_CODE=c.INSTR_CODE
+                                     						AND c.INSTR_PARENT IS NOT NULL
+                                     						AND c.MOTHER_SEC_IND <> 'Y'
+                                     						AND b.SAFEKEEP_POS>0)
+                  					 AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d
+                                	 					WHERE d.CA_EVENT='RT'
+                                						AND d.STATUS='CP'
+                                						AND d.INSTR_CODE=a.INSTR_CODE)))
+                       AND INSTR_CODE IN
+                       (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTRUMENT_TYPE NOT IN ('FMT','BON') AND CURRENCY_CD = :chr_g_new_ccy));
+
+	IS_ANY_ORA_ERROR
+	
+	sprintf(chr_g_log_buff,"Updated |%d| row(s) in AENTITLIMG table for NON-FMT instrument\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+	
+	
+	
+	   EXEC SQL UPDATE CAENTITLEMENTMG SET
+               ELIG_ENTITL_POS  = TRUNC(ENT_POS/:int_g_conv_onem, :int_l_max_dec_len),
+               CCY_FOR_ENTITL  = :chr_g_new_ccy,
+               INSTR_INC_BAL  = TRUNC(INC_DUE/:int_g_conv_onem,  :int_l_amt_dec_len),
+               RECEIVED_AMT =  TRUNC(AMT_RECD/:int_g_conv_onem,  :int_l_amt_dec_len),
+               QUANTITY_BAL  = TRUNC(QTY_DUE/:int_g_conv_onem, :int_l_max_dec_len),
+               QUANTITY_RECEIVED = TRUNC(QTY_RECD/:int_g_conv_onem, :int_l_max_dec_len)
+         WHERE CCY_FOR_ENTITL  = :chr_g_old_ccy
+         AND CORP_ID IN (SELECT CORP_ID FROM  CAEVENT a
+								WHERE CA_CURRENCY = :chr_g_old_ccy
+								AND (STATUS IN ('RP', 'PP')
+               					OR (CA_EVENT='RT'
+                  					 AND STATUS='CP'
+                  				  	 AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c
+                                  						   WHERE b.INSTR_CODE=c.INSTR_CODE
+                                     						AND c.INSTR_PARENT IS NOT NULL
+                                     						AND c.MOTHER_SEC_IND <> 'Y'
+                                     						AND b.SAFEKEEP_POS>0)
+                  					 AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d
+                                	 					WHERE d.CA_EVENT='RT'
+                                						AND d.STATUS='CP'
+                                						AND d.INSTR_CODE=a.INSTR_CODE)))
+                       AND INSTR_CODE IN
+                       (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTRUMENT_TYPE IN ('FMT','BON') AND CURRENCY_CD = :chr_g_new_ccy));
+
+   	IS_ANY_ORA_ERROR
+
+  
+	
+EXEC SQL UPDATE CAENTITLEMENTMG
+SET INSTR_INC_BAL = ELIG_ENTITL_POS
+WHERE INSTR_INC_BAL > ELIG_ENTITL_POS
+AND CORP_ID IN (SELECT CORP_ID FROM CAEVENT
+       WHERE INSTR_CODE IN (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTRUMENT_TYPE  in ('FMT','BON'))
+              AND CA_EVENT='RD' AND INSTR_INC_RATE = 100 AND CCY_FOR_ENTITL = :chr_g_new_ccy);
+
+   	IS_ANY_ORA_ERROR
+
+
+EXEC SQL UPDATE CAENTITLEMENTMG
+SET STATUS = 'CP'
+	WHERE ELIG_ENTITL_POS = 0  
+	AND CCY_FOR_ENTITL = :chr_g_new_ccy ; 
+
+ 		 IS_ANY_ORA_ERROR
+
+	
+	sprintf(chr_g_log_buff,"Updated |%d| row(s) in AENTITLIMG table for FMT instrument\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+	
+	
+	
+	
+	
+	
+
+	EXEC SQL UPDATE CACHEQUE SET 
+					PAYMENT_CCY = :chr_g_new_ccy,
+					CURR_PYMT  = ROUND(CUR_PMT/:int_g_conv_onem,  :int_l_amt_dec_len),
+					QUANTITY_RECEIVED = ROUND(QTY_RECD/:int_g_conv_onek, :int_l_max_dec_len),
+					TAX_AMOUNT  =  ROUND(TAX_AMT/:int_g_conv_onem,  :int_l_amt_dec_len),
+					OTHER_CHRGS  = ROUND(OTH_CHR/:int_g_conv_onem,  :int_l_amt_dec_len),
+					QUANTITY_PAID = ROUND(QTY_PAID/:int_g_conv_onek, :int_l_max_dec_len)
+			WHERE PAYMENT_CCY = :chr_g_old_ccy
+         AND CORP_ID IN (SELECT CORP_ID FROM  CAEVENT a
+								WHERE CA_CURRENCY = :chr_g_old_ccy
+								AND (STATUS IN ('RP', 'PP')
+               					OR (CA_EVENT='RT'
+                  					 AND STATUS='CP'
+                  				  	 AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c
+                                  						   WHERE b.INSTR_CODE=c.INSTR_CODE
+                                     						AND c.INSTR_PARENT IS NOT NULL
+                                     						AND c.MOTHER_SEC_IND <> 'Y'
+                                     						AND b.SAFEKEEP_POS>0)
+                  					 AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d
+                                	 					WHERE d.CA_EVENT='RT'
+                                						AND d.STATUS='CP'
+                                						AND d.INSTR_CODE=a.INSTR_CODE)))
+                       AND INSTR_CODE IN
+                       (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTRUMENT_TYPE NOT IN ('FMT','BON') AND CURRENCY_CD = :chr_g_new_ccy));
+
+	IS_ANY_ORA_ERROR
+	
+	sprintf(chr_g_log_buff,"Updated |%d| row(s) in CACHEQUE table for NON-FMT instrument\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+	
+	   EXEC SQL UPDATE CACHEQUE SET
+               PAYMENT_CCY = :chr_g_new_ccy,
+               CURR_PYMT  = ROUND(CUR_PMT/:int_g_conv_onem,  :int_l_amt_dec_len),
+               QUANTITY_RECEIVED = ROUND(QTY_RECD/:int_g_conv_onem, :int_l_max_dec_len),
+               TAX_AMOUNT  =  ROUND(TAX_AMT/:int_g_conv_onem,  :int_l_amt_dec_len),
+               OTHER_CHRGS  = ROUND(OTH_CHR/:int_g_conv_onem,  :int_l_amt_dec_len),
+               QUANTITY_PAID = ROUND(QTY_PAID/:int_g_conv_onem, :int_l_max_dec_len)
+         WHERE PAYMENT_CCY = :chr_g_old_ccy
+         AND CORP_ID IN (SELECT CORP_ID FROM  CAEVENT a
+								WHERE CA_CURRENCY = :chr_g_old_ccy
+								AND (STATUS IN ('RP', 'PP')
+               					OR (CA_EVENT='RT'
+                  					 AND STATUS='CP'
+                  				  	 AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c
+                                  						   WHERE b.INSTR_CODE=c.INSTR_CODE
+                                     						AND c.INSTR_PARENT IS NOT NULL
+                                     						AND c.MOTHER_SEC_IND <> 'Y'
+                                     						AND b.SAFEKEEP_POS>0)
+                  					 AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d
+                                	 					WHERE d.CA_EVENT='RT'
+                                						AND d.STATUS='CP'
+                                						AND d.INSTR_CODE=a.INSTR_CODE)))
+                       	AND INSTR_CODE IN
+                       	(SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTRUMENT_TYPE IN ('FMT','BON') AND CURRENCY_CD = :chr_g_new_ccy));
+
+   	IS_ANY_ORA_ERROR	
+	
+	sprintf(chr_g_log_buff,"Updated |%d| row(s) in CACHEQUE table for FMT instrument\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+
+	
+	
+	
+	
+	
+
+	EXEC SQL UPDATE CACHEQUEMG SET 
+					PAYMENT_CCY = :chr_g_new_ccy,
+					CURR_PYMT  = ROUND(CUR_PMT/:int_g_conv_onem,  :int_l_amt_dec_len),
+					QUANTITY_RECEIVED = ROUND(QTY_RECD/:int_g_conv_onek, :int_l_max_dec_len),
+					TAX_AMOUNT  = ROUND(TAX_AMT/:int_g_conv_onem,  :int_l_amt_dec_len),
+					OTHER_CHRGS  = ROUND(OTH_CHR/:int_g_conv_onem,  :int_l_amt_dec_len),
+					QUANTITY_PAID = ROUND(QTY_PAID/:int_g_conv_onek, :int_l_max_dec_len)
+			WHERE PAYMENT_CCY = :chr_g_old_ccy
+         AND CORP_ID IN (SELECT CORP_ID FROM CAEVENT a
+								WHERE CA_CURRENCY = :chr_g_old_ccy
+								AND (STATUS IN ('RP', 'PP')
+               					OR (CA_EVENT='RT'
+                  					 AND STATUS='CP'
+                  				  	 AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c
+                                  						   WHERE b.INSTR_CODE=c.INSTR_CODE
+                                     						AND c.INSTR_PARENT IS NOT NULL
+                                     						AND c.MOTHER_SEC_IND <> 'Y'
+                                     						AND b.SAFEKEEP_POS>0)
+                  					 AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d
+                                	 					WHERE d.CA_EVENT='RT'
+                                						AND d.STATUS='CP'
+                                						AND d.INSTR_CODE=a.INSTR_CODE)))
+                       	AND INSTR_CODE IN
+                       	(SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTRUMENT_TYPE NOT IN ('FMT','BON') AND CURRENCY_CD = :chr_g_new_ccy));
+
+	IS_ANY_ORA_ERROR
+	
+	sprintf(chr_g_log_buff,"Updated |%d| row(s) in APAYMENTIMG table for NON-FMT instrument\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+	
+	
+	   EXEC SQL UPDATE CACHEQUEMG SET
+               PAYMENT_CCY = :chr_g_new_ccy,
+               CURR_PYMT  = ROUND(CUR_PMT/:int_g_conv_onem,  :int_l_amt_dec_len),
+               QUANTITY_RECEIVED = ROUND(QTY_RECD/:int_g_conv_onem, :int_l_max_dec_len),
+               TAX_AMOUNT  = ROUND(TAX_AMT/:int_g_conv_onem,  :int_l_amt_dec_len),
+               OTHER_CHRGS  = ROUND(OTH_CHR/:int_g_conv_onem,  :int_l_amt_dec_len),
+               QUANTITY_PAID = ROUND(QTY_PAID/:int_g_conv_onem, :int_l_max_dec_len)
+         WHERE PAYMENT_CCY = :chr_g_old_ccy
+         AND CORP_ID IN (SELECT CORP_ID FROM  CAEVENT a
+								WHERE CA_CURRENCY = :chr_g_old_ccy
+								AND (STATUS IN ('RP', 'PP')
+               					OR (CA_EVENT='RT'
+                  					 AND STATUS='CP'
+                  				  	 AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c
+                                  						   WHERE b.INSTR_CODE=c.INSTR_CODE
+                                     						AND c.INSTR_PARENT IS NOT NULL
+                                     						AND c.MOTHER_SEC_IND <> 'Y'
+                                     						AND b.SAFEKEEP_POS>0)
+                  					 AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d
+                                	 					WHERE d.CA_EVENT='RT'
+                                						AND d.STATUS='CP'
+                                						AND d.INSTR_CODE=a.INSTR_CODE)))
+                       AND INSTR_CODE IN
+                       (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTRUMENT_TYPE IN ('FMT','BON') AND CURRENCY_CD = :chr_g_new_ccy));
+
+   	IS_ANY_ORA_ERROR
+	
+	sprintf(chr_g_log_buff,"Updated |%d| row(s) in APAYMENTIMG table for FMT instrument\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+
+
+	
+	
+	
+	
+
+	EXEC SQL UPDATE CAGLPYMT SET
+					ELIG_ENTITL_POS = ROUND(ENT_POS/:int_g_conv_onek, :int_l_max_dec_len),
+					QUANTITY_BAL = ROUND(QTY_DUE/:int_g_conv_onek, :int_l_max_dec_len),
+					AMOUNT_BAL = ROUND(AMT_DUE/:int_g_conv_onem,  :int_l_amt_dec_len),
+					CURR_QTY_BAL = ROUND(CUR_QTY_DUE/:int_g_conv_onek, :int_l_max_dec_len),
+					CUR_AMT_BAL = ROUND(CUR_AMT_DUE/:int_g_conv_onem,  :int_l_amt_dec_len),
+					QUANTITY_PAID = ROUND(QTY_PAID/:int_g_conv_onek, :int_l_max_dec_len)
+         WHERE CORP_ID IN (SELECT CORP_ID FROM CAEVENT a
+								 WHERE CA_CURRENCY = :chr_g_old_ccy
+								 AND (STATUS IN ('RP', 'PP')
+               					OR (CA_EVENT='RT'
+                  					 AND STATUS='CP'
+                  				  	 AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c
+                                  						   WHERE b.INSTR_CODE=c.INSTR_CODE
+                                     						AND c.INSTR_PARENT IS NOT NULL
+                                     						AND c.MOTHER_SEC_IND <> 'Y'
+                                     						AND b.SAFEKEEP_POS>0)
+                  					 AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d
+                                	 					WHERE d.CA_EVENT='RT'
+                                						AND d.STATUS='CP'
+                                						AND d.INSTR_CODE=a.INSTR_CODE)))
+                       AND INSTR_CODE IN
+                       (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTRUMENT_TYPE NOT IN ('FMT','BON') AND CURRENCY_CD = :chr_g_new_ccy));
+								
+	IS_ANY_ORA_ERROR				
+	
+	sprintf(chr_g_log_buff,"Updated |%d| row(s) in AGLPAYMENT table for NON-FMT instrument\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+	
+	   EXEC SQL UPDATE CAGLPYMT SET
+               ELIG_ENTITL_POS = ROUND(ENT_POS/:int_g_conv_onem, :int_l_max_dec_len),
+               QUANTITY_BAL = ROUND(QTY_DUE/:int_g_conv_onem, :int_l_max_dec_len),
+               AMOUNT_BAL = ROUND(AMT_DUE/:int_g_conv_onem,  :int_l_amt_dec_len),
+               CURR_QTY_BAL = ROUND(CUR_QTY_DUE/:int_g_conv_onem, :int_l_max_dec_len),
+               CUR_AMT_BAL = ROUND(CUR_AMT_DUE/:int_g_conv_onem,  :int_l_amt_dec_len),
+               QUANTITY_PAID = ROUND(QTY_PAID/:int_g_conv_onem, :int_l_max_dec_len)
+         WHERE CORP_ID IN (SELECT CORP_ID FROM  CAEVENT a
+								 WHERE CA_CURRENCY = :chr_g_old_ccy
+								 AND (STATUS IN ('RP', 'PP')
+               					OR (CA_EVENT='RT'
+                  					 AND STATUS='CP'
+                  				  	 AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c
+                                  						   WHERE b.INSTR_CODE=c.INSTR_CODE
+                                     						AND c.INSTR_PARENT IS NOT NULL
+                                     						AND c.MOTHER_SEC_IND <> 'Y'
+                                     						AND b.SAFEKEEP_POS>0)
+                  					 AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d
+                                	 					WHERE d.CA_EVENT='RT'
+                                						AND d.STATUS='CP'
+                                						AND d.INSTR_CODE=a.INSTR_CODE)))
+                       	AND INSTR_CODE IN
+                       	(SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTRUMENT_TYPE IN ('FMT','BON') AND CURRENCY_CD = :chr_g_new_ccy));
+
+   	IS_ANY_ORA_ERROR
+	
+	sprintf(chr_g_log_buff,"Updated |%d| row(s) in AGLPAYMENT table for FMT instrument\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+
+	
+	
+	
+	
+
+	EXEC SQL UPDATE CAEVENT a SET	
+		     		CA_CURRENCY = :chr_g_new_ccy,
+					EARNINGS			 		= TRUNC(INCOME/:int_g_conv_onek,5),
+					FRACT_PR 					= ROUND(F_PRICE/:int_g_conv_onek,  :int_l_amt_dec_len),
+					SUB_PR         	= CEIL((SUB_PRICE/:int_g_conv_onek)*power(10,:int_l_amt_dec_len))/(power(10,:int_l_amt_dec_len)),
+					AMOUNT_BAL  				= ROUND(AMT_DUE/:int_g_conv_onem,  :int_l_amt_dec_len),
+					RECEIVED_AMT 				= ROUND(AMT_RECD/:int_g_conv_onem,  :int_l_amt_dec_len),
+					QUANTITY_BAL 					= ROUND(QTY_DUE/:int_g_conv_onek, :int_l_max_dec_len),
+					QUANTITY_RECEIVED 				= ROUND(QTY_RECD/:int_g_conv_onek, :int_l_max_dec_len)
+			WHERE CA_CURRENCY = :chr_g_old_ccy
+			AND (STATUS IN ('RP', 'PP')
+         		OR (CA_EVENT='RT'
+				 		AND STATUS='CP'
+				 		AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c 
+              								 WHERE b.INSTR_CODE=c.INSTR_CODE
+												 AND c.INSTR_PARENT IS NOT NULL
+												 AND c.MOTHER_SEC_IND <> 'Y'
+												 AND b.SAFEKEEP_POS>0)
+				 		AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d 
+               		        	  WHERE d.CA_EVENT='RT' 
+										  AND d.STATUS='CP'
+										  AND	d.INSTR_CODE=a.INSTR_CODE)))
+         AND INSTR_CODE IN
+         (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTRUMENT_TYPE NOT IN  ('FMT','BON') AND CURRENCY_CD = :chr_g_new_ccy);
+
+	IS_ANY_ORA_ERROR
+	
+	sprintf(chr_g_log_buff,"Updated |%d| row(s) in CAEVENT table for NON-FMT instrument\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+	
+	
+	
+	   EXEC SQL UPDATE CAEVENT a SET
+               CA_CURRENCY 					= :chr_g_new_ccy,
+               AMOUNT_BAL              = ROUND(AMT_DUE/:int_g_conv_onem,  :int_l_amt_dec_len),
+               RECEIVED_AMT             = ROUND(AMT_RECD/:int_g_conv_onem,  :int_l_amt_dec_len),
+               QUANTITY_BAL              = ROUND(QTY_DUE/:int_g_conv_onem, :int_l_max_dec_len),
+               QUANTITY_RECEIVED             = ROUND(QTY_RECD/:int_g_conv_onem, :int_l_max_dec_len)
+         WHERE CA_CURRENCY = :chr_g_old_ccy
+			AND (STATUS IN ('RP', 'PP')
+         		OR (CA_EVENT='RT'
+				 		AND STATUS='CP'
+				 		AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c 
+              								 WHERE b.INSTR_CODE=c.INSTR_CODE
+												 AND c.INSTR_PARENT IS NOT NULL
+												 AND c.MOTHER_SEC_IND <> 'Y'
+												 AND b.SAFEKEEP_POS>0)
+				 		AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d 
+               		        	  WHERE d.CA_EVENT='RT' 
+										  AND d.STATUS='CP'
+										  AND	d.INSTR_CODE=a.INSTR_CODE)))
+         AND INSTR_CODE IN
+         (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTRUMENT_TYPE IN ('FMT','BON') AND CURRENCY_CD = :chr_g_new_ccy);
+
+   	IS_ANY_ORA_ERROR
+	
+	sprintf(chr_g_log_buff,"Updated |%d| row(s) in CAEVENT table for FMT instrument\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+	
+
+
+	
+	
+	
+	
+				
+	EXEC SQL UPDATE CAEVENTMG a SET	
+		     		CA_CURRENCY = :chr_g_new_ccy,
+					EARNINGS			 		= ROUND(INCOME/:int_g_conv_onek,  :int_l_amt_dec_len),
+					FRACT_PR 					= ROUND(F_PRICE/:int_g_conv_onek,  :int_l_amt_dec_len),
+					SUB_PR         	= CEIL((SUB_PRICE/:int_g_conv_onek)*power(10,:int_l_amt_dec_len))/(power(10,:int_l_amt_dec_len)),
+					AMOUNT_BAL  				= ROUND(AMT_DUE/:int_g_conv_onem,  :int_l_amt_dec_len),
+					RECEIVED_AMT 				= ROUND(AMT_RECD/:int_g_conv_onem,  :int_l_amt_dec_len),
+					QUANTITY_BAL 					= ROUND(QTY_DUE/:int_g_conv_onek, :int_l_max_dec_len),
+					QUANTITY_RECEIVED 				= ROUND(QTY_RECD/:int_g_conv_onek, :int_l_max_dec_len)
+			WHERE CA_CURRENCY = :chr_g_old_ccy
+			AND (STATUS IN ('RP', 'PP')
+         		OR (CA_EVENT='RT'
+				 		AND STATUS='CP'
+				 		AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c 
+              								 WHERE b.INSTR_CODE=c.INSTR_CODE
+												 AND c.INSTR_PARENT IS NOT NULL
+												 AND c.MOTHER_SEC_IND <> 'Y'
+												 AND b.SAFEKEEP_POS>0)
+				 		AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d 
+               		        	  WHERE d.CA_EVENT='RT' 
+										  AND d.STATUS='CP'
+										  AND	d.INSTR_CODE=a.INSTR_CODE)))
+			AND INSTR_CODE IN
+			(SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTRUMENT_TYPE NOT IN ('FMT','BON') AND CURRENCY_CD = :chr_g_new_ccy);
+	
+	IS_ANY_ORA_ERROR
+	
+	sprintf(chr_g_log_buff,"Updated |%d| row(s) in AEVENTIMG table for NON-FMT instrument\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+	
+
+	
+ 	  EXEC SQL UPDATE CAEVENTMG a SET
+               CA_CURRENCY = :chr_g_new_ccy,
+               AMOUNT_BAL              = ROUND(AMT_DUE/:int_g_conv_onem,  :int_l_amt_dec_len),
+               RECEIVED_AMT             = ROUND(AMT_RECD/:int_g_conv_onem,  :int_l_amt_dec_len),
+               QUANTITY_BAL              = ROUND(QTY_DUE/:int_g_conv_onem, :int_l_max_dec_len),
+               QUANTITY_RECEIVED             = ROUND(QTY_RECD/:int_g_conv_onem, :int_l_max_dec_len)
+         WHERE CA_CURRENCY = :chr_g_old_ccy
+			AND (STATUS IN ('RP', 'PP')
+         		OR (CA_EVENT='RT'
+				 		AND STATUS='CP'
+				 		AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c 
+              								 WHERE b.INSTR_CODE=c.INSTR_CODE
+												 AND c.INSTR_PARENT IS NOT NULL
+												 AND c.MOTHER_SEC_IND <> 'Y'
+												 AND b.SAFEKEEP_POS>0)
+				 		AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d 
+               		        	  WHERE d.CA_EVENT='RT' 
+										  AND d.STATUS='CP'
+										  AND	d.INSTR_CODE=a.INSTR_CODE)))
+         AND INSTR_CODE IN
+         (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTRUMENT_TYPE IN ('FMT','BON') AND CURRENCY_CD = :chr_g_new_ccy);
+
+   	IS_ANY_ORA_ERROR
+	
+	sprintf(chr_g_log_buff,"Updated |%d| row(s) in AEVENTIMG table for FMT instrument\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+	
+	if (rep_file("Po",
+                 &p_intlenv_data_struct_h,
+                 l_debug_info_ptr)
+                 == APL_FAILURE
+      )
+   APL_GOBACK_FAIL
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+	{
+		return (APL_SUCCESS);
+	}
+	RETURN_FAILURE:
+	{
+		return (APL_FAILURE);
+	}
+
+}
+
+
+static int rep_file(char *p_preorpost, INTL_ENV_DATA_STRUCT_H *p_intlenv_data_struct_h, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	struct sqlca sqlca;
+	
+	char chr_l_filename_c[31];
+	
+	char chr_l_client_a[APL_CLIENT_LENGTH]   = APL_NULL_STRING;	
+	char chr_l_ccycode[APL_CCYCODE_LEN]   = APL_NULL_STRING;
+	char chr_l_caid[CORP_ID_LEN] 			 = APL_NULL_STRING;
+	char chr_l_instrcode_a[APL_INSTRUMENTCODE_LEN]		 = APL_NULL_STRING;
+	char chr_l_subccy[APL_CCYCODE_LEN]    = APL_NULL_STRING;
+	char chr_l_respdt[APL_DATE_LEN]		 = APL_NULL_STRING;					
+	char chr_l_instseme[APL_TXNREFNO_LEN] = APL_NULL_STRING;
+
+	double l_instholdg			       = 0.0;	
+	double l_totquantity 						 = 0.0;
+	double l_takeupquantity					 = 0.0;
+	double l_lapsequantity 					 = 0.0;
+	double l_subbasequantity 					 = 0.0;
+	double l_earnings						 = 0.0;
+	double l_entpos						 = 0.0;
+	double l_incdue						 = 0.0;			
+	double l_amountdue						= 0.0;
+	double l_amountrecd 						= 0.0;
+	double l_quantitydue						= 0.0;
+	double l_quantityrecd						= 0.0;
+	double l_subnewquantity	=	 0.0;
+	double l_newstockqtyae_rate = 0.0;
+	double l_subcost	= 0.0;
+	double l_oldstockquantity = 0.0;
+	double l_fcost = 0.0;
+	double l_newstockquantity	=0.0;
+	double l_curquantitydue = 0.0;
+	double l_curamountdue = 0.0;
+	double l_quantitypaid = 0.0;
+	double l_taxamount = 0.0;
+	double l_curpmt = 0.0;
+	double l_othchr = 0.0;
+		
+	short i_dl_client 		 = 0;
+	short i_currencycode		 = 0;	
+	short i_caid          = 0;
+	short i_instr_code        = 0;
+	short i_subccy        = 0;
+	short i_totqty        = 0;
+	short i_takeupquantity     = 0;
+	short i_lapsequenceuantity      = 0;
+	short i_subbaseqty    = 0;
+	short i_earnings        = 0;
+	short i_entpos        = 0;
+	short i_incdue        = 0;
+	short i_respdt			 = 0;
+	short i_instseme		 = 0;
+	short i_instholdg		 = 0;		
+	short i_amtdue			= 0;
+	short i_amtrecd		= 0;
+	short i_qtydue			= 0;
+	short i_qtyrecd		= 0;
+	short i_subnewqty = 0;
+	short i_newstockqtyrate=0;
+	short i_subprice = 0;
+	short i_oldstockqty = 0;
+	short i_fprice = 0;
+	short i_newstockqty = 0;
+	short i_curqtydue =0;
+	short i_curamtdue =0;
+	short i_qtypaid = 0;
+	short i_taxamt = 0;
+	short i_othchr = 0;
+	short i_curpmt = 0;
+
+
+	EXEC SQL VAR chr_l_client_a          IS STRING;
+	EXEC SQL VAR chr_l_ccycode          IS STRING;
+	EXEC SQL VAR chr_l_caid   	        IS STRING;
+	EXEC SQL VAR chr_l_instrcode_a           IS STRING;
+	EXEC SQL VAR chr_l_subccy           IS STRING;
+	EXEC SQL VAR chr_l_respdt           IS STRING;
+	EXEC SQL VAR chr_l_instseme         IS STRING;
+	
+	
+	FILE *l_filept = NULL;
+
+	APL_IF_DEBUG
+	{
+   	CO_ProcMonitor( APL_OUT_FILE,
+     		"Entered Function rep_file\n",
+      	NULL,
+      	NULL);
+   }
+
+   if (strcmp(p_preorpost,"Pr")==0)
+      l_filept = l_pr_filept;
+   else
+      l_filept = l_po_filept;
+
+	
+   
+
+   sqlca.sqlcode = 0;
+
+   EXEC SQL DECLARE response CURSOR FOR
+		SELECT CORP_ID, CLIENT, RESPONSE_DT, INSTR_MSGREFNO, nvl(INSTR_HOLD,0) FROM CAREPLY
+      WHERE CORP_ID IN (SELECT CORP_ID FROM  CAEVENT a
+							 WHERE CA_CURRENCY IN (:chr_g_old_ccy,:chr_g_new_ccy)
+							 AND (STATUS IN ('RP', 'PP')
+         			    		OR (CA_EVENT='RT'
+				 			 		AND STATUS='CP'
+				 			 		AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c 
+              									 		WHERE b.INSTR_CODE=c.INSTR_CODE
+													 		AND c.INSTR_PARENT IS NOT NULL
+													 		AND c.MOTHER_SEC_IND <> 'Y'
+													 		AND b.SAFEKEEP_POS>0)
+				 			 		AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d 
+               		 	       	  		WHERE d.CA_EVENT='RT' 
+											  		AND d.STATUS='CP'
+											  		AND	d.INSTR_CODE=a.INSTR_CODE)))
+							 AND INSTR_CODE IN (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE CURRENCY_CD = :chr_g_new_ccy));
+	
+	IS_ANY_ORA_ERROR
+
+   EXEC SQL OPEN response;
+
+   IS_ANY_ORA_ERROR
+
+	fprintf(l_filept,"CA Reminder/Response Details-------------------------------------------------------------------------------------------------\n");
+
+   fprintf(l_filept,"%-20s\t%-10s\t%-16s\t%-16s\t%-25s\n",
+			  "CORP_ID", "CLIENT", "RESPONSE_DT", "INSTR_MSGREFNO", "INSTR_HOLD");
+	fprintf(l_filept,"-----------------------------------------------------------------------------------------------------------------------------\n");
+
+   for(;;)
+   {
+      EXEC SQL FETCH response
+         INTO chr_l_caid:i_caid, chr_l_client_a:i_dl_client, chr_l_respdt:i_respdt, chr_l_instseme:i_instseme, l_instholdg:i_instholdg;
+
+      IS_ANY_ORA_ERROR
+      if (APL_ZERO_RESULT_SET)
+         break;
+
+      fprintf(l_filept, "%-20s\t%-10s\t%-16s\t%-16s\t%-25f\n", chr_l_caid, chr_l_client_a, chr_l_respdt, chr_l_instseme, l_instholdg);
+   }
+	fprintf(l_filept,"=============================================================================================================================\n\n");
+
+   EXEC SQL CLOSE response;
+
+
+
+
+	
+
+   sqlca.sqlcode = 0;
+
+   EXEC SQL DECLARE rightspro CURSOR FOR
+      SELECT CORP_ID, CLIENT, INSTR_CODE, nvl(TOTAL_QUANTITY,0), nvl(TAKEUP_QUANTITY,0), 
+		nvl(LAPSE_QTY,0), SUB_CURRENCY, nvl(SUB_PR,0)
+		FROM CARTSPROC 
+		WHERE SUB_CURRENCY = :chr_g_old_ccy
+      AND CORP_ID IN (SELECT CORP_ID FROM  CAEVENT a
+						 WHERE CA_CURRENCY = :chr_g_old_ccy
+						 AND (STATUS IN ('RP', 'PP')
+           			 		OR (CA_EVENT='RT'
+        						 AND STATUS='CP'
+           				  	 AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c
+                          						   WHERE b.INSTR_CODE=c.INSTR_CODE
+                             						AND c.INSTR_PARENT IS NOT NULL
+                             						AND c.MOTHER_SEC_IND <> 'Y'
+                             						AND b.SAFEKEEP_POS>0)
+           					 AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d
+                             	 					WHERE d.CA_EVENT='RT'
+                             						AND d.STATUS='CP'
+                             						AND d.INSTR_CODE=a.INSTR_CODE)))
+     AND INSTR_CODE IN (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE CURRENCY_CD = :chr_g_new_ccy));
+	
+   IS_ANY_ORA_ERROR
+
+   EXEC SQL OPEN rightspro;
+   IS_ANY_ORA_ERROR
+
+	fprintf(l_filept,"CA Rights Processing Details-------------------------------------------------------------------------------------------------\n");
+   fprintf(l_filept,"%-20s\t%-10s\t%-10s\t%-25s\t%-25s\t%-25s\t%-10s\t%-25s\n",
+			  "CORP_ID", "CLIENT", "INSTR_CODE", "TOTAL_QUANTITY", "TAKEUP_QUANTITY", 
+			  "LAPSE_QTY", "SUB_CURRENCY", "SUB_PR");
+	fprintf(l_filept,"-----------------------------------------------------------------------------------------------------------------------------\n");
+
+   for(;;)
+   {
+      EXEC SQL FETCH rightspro
+         INTO chr_l_caid:i_caid, chr_l_client_a:i_dl_client, chr_l_instrcode_a:i_instr_code, l_totquantity:i_totqty, 
+				  l_takeupquantity:i_takeupquantity, l_lapsequantity:i_lapsequenceuantity,  
+				  chr_l_subccy:i_subccy, l_subcost:i_subprice;
+
+      IS_ANY_ORA_ERROR
+      if (APL_ZERO_RESULT_SET)
+         break;
+
+      fprintf(l_filept, "%-20s\t%-10s\t%-10s\t%-25f\t%-25f\t%-25f\t%-10d\t%-25f\n", 
+				  chr_l_caid, chr_l_client_a, chr_l_instrcode_a, l_totquantity, l_takeupquantity, l_lapsequantity, 
+				  chr_l_subccy, l_subcost);
+   }
+
+	fprintf(l_filept,"=============================================================================================================================\n\n");
+   EXEC SQL CLOSE rightspro;
+
+
+
+
+
+	
+
+   sqlca.sqlcode = 0;
+
+   EXEC SQL DECLARE entitl_recon CURSOR FOR
+      SELECT CORP_ID, CLIENT, CCY_FOR_ENTITL, nvl(EARNINGS,0), nvl(ELIG_ENTITL_POS,0), nvl(INSTR_INC_BAL,0)  
+      FROM CAENTITLMENT_VER
+	WHERE CORP_ID IN (SELECT CORP_ID FROM CAEVENT a 
+							 WHERE CA_CURRENCY IN (:chr_g_old_ccy,:chr_g_new_ccy)
+							 AND (STATUS IN ('RP', 'PP')
+         			    		OR (CA_EVENT='RT'
+				 			 		AND STATUS='CP'
+				 			 		AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c 
+              											 WHERE b.INSTR_CODE=c.INSTR_CODE
+															 AND c.INSTR_PARENT IS NOT NULL
+														 	 AND c.MOTHER_SEC_IND <> 'Y'
+														 	 AND b.SAFEKEEP_POS>0)
+				 			 		AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d 
+               		 	       	  			WHERE d.CA_EVENT='RT' 
+											  			AND d.STATUS='CP'
+											  			AND	d.INSTR_CODE=a.INSTR_CODE)))
+							 AND INSTR_CODE IN (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE CURRENCY_CD = :chr_g_new_ccy)); 
+
+   IS_ANY_ORA_ERROR
+
+   EXEC SQL OPEN entitl_recon;
+
+   IS_ANY_ORA_ERROR
+
+	fprintf(l_filept,"CA Entitlement Recon Details-------------------------------------------------------------------------------------------------\n");
+   fprintf(l_filept,"%-20s\t%-10s%-10s\t%-25s\t%-25s\t%-25s\t\n", 
+			  "CORP_ID", "CLIENT", "CCY_FOR_ENTITL", "EARNINGS", "ELIG_ENTITL_POS", "INSTR_INC_BAL");
+	fprintf(l_filept,"-----------------------------------------------------------------------------------------------------------------------------\n");
+
+   for(;;)
+   {
+      EXEC SQL FETCH entitl_recon
+         INTO chr_l_caid:i_caid, chr_l_client_a:i_dl_client, chr_l_ccycode:i_currencycode, 
+				  l_earnings:i_earnings, l_entpos:i_entpos, l_incdue:i_incdue;
+
+      IS_ANY_ORA_ERROR
+      if (APL_ZERO_RESULT_SET)
+         break;
+
+      fprintf(l_filept, "%-20s\t%-10s%-10s\t%-25f\t%-25f\t%-25f\t\n", 
+				  chr_l_caid, chr_l_client_a, chr_l_ccycode, l_earnings, l_entpos, l_incdue);
+   }
+	fprintf(l_filept,"=============================================================================================================================\n\n");
+
+	EXEC SQL CLOSE entitl_recon;
+
+
+	
+
+   sqlca.sqlcode = 0;
+
+   EXEC SQL DECLARE entitl CURSOR FOR
+      SELECT CORP_ID, CLIENT, nvl(ELIG_ENTITL_POS,0), CCY_FOR_ENTITL, nvl(INSTR_INC_BAL,0), nvl(RECEIVED_AMT,0), nvl(QUANTITY_BAL,0), nvl(QUANTITY_RECEIVED,0)  
+      FROM CAENTITLEMENT
+		WHERE CORP_ID IN (SELECT CORP_ID FROM  CAEVENT a
+							 WHERE CA_CURRENCY IN (:chr_g_old_ccy,:chr_g_new_ccy)
+							 AND (STATUS IN ('RP', 'PP')
+         			    		OR (CA_EVENT='RT'
+				 			 		AND STATUS='CP'
+				 			 		AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c 
+              											 WHERE b.INSTR_CODE=c.INSTR_CODE
+															 AND c.INSTR_PARENT IS NOT NULL
+															 AND c.MOTHER_SEC_IND <> 'Y'
+													 		 AND b.SAFEKEEP_POS>0)
+				 			 		AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d 
+               		 	   		    	  WHERE d.CA_EVENT='RT' 
+													  AND d.STATUS='CP'
+											  		  AND	d.INSTR_CODE=a.INSTR_CODE)))
+							AND INSTR_CODE IN (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE CURRENCY_CD = :chr_g_new_ccy));
+
+   IS_ANY_ORA_ERROR
+
+   EXEC SQL OPEN entitl;
+   IS_ANY_ORA_ERROR
+
+	fprintf(l_filept,"CA Entitlement Details-------------------------------------------------------------------------------------------------------\n");
+   fprintf(l_filept,"%-20s\t%-10s\t%-25s\t%-10s\t%-25s\t%-25s\t%-25s\t%-25s\n",
+			  "CORP_ID", "CLIENT", "ELIG_ENTITL_POS", "CCY_FOR_ENTITL", "INSTR_INC_BAL", "RECEIVED_AMT", "QUANTITY_BAL", "QUANTITY_RECEIVED"); 
+	fprintf(l_filept,"-----------------------------------------------------------------------------------------------------------------------------\n");
+
+   for(;;)
+   {
+      EXEC SQL FETCH entitl
+			INTO chr_l_caid:i_caid, chr_l_client_a:i_dl_client, l_entpos:i_entpos, 
+			     chr_l_ccycode:i_currencycode, l_incdue:i_incdue, l_amountrecd:i_amtrecd, 
+				  l_quantitydue:i_qtydue, l_quantityrecd:i_qtyrecd;
+      
+		IS_ANY_ORA_ERROR
+     	if (APL_ZERO_RESULT_SET)
+        	break;
+
+      fprintf(l_filept, "%-20s\t%-10s\t%-25f\t%-10s\t%-25f\t%-25f\t%-25f\t%-25f\n", 
+				  chr_l_caid, chr_l_client_a, l_entpos, chr_l_ccycode, l_incdue, l_amountrecd, l_quantitydue, l_quantityrecd);
+   }
+	fprintf(l_filept,"=============================================================================================================================\n\n");
+
+   EXEC SQL CLOSE entitl;
+
+
+	
+
+   sqlca.sqlcode = 0;
+
+   EXEC SQL DECLARE entitlimg CURSOR FOR
+      SELECT CORP_ID, CLIENT, nvl(ELIG_ENTITL_POS,0), CCY_FOR_ENTITL, nvl(INSTR_INC_BAL,0), nvl(RECEIVED_AMT,0), nvl(QUANTITY_BAL,0), nvl(QUANTITY_RECEIVED,0)  
+      FROM CAENTITLEMENTMG
+		WHERE CORP_ID IN (SELECT CORP_ID FROM  CAEVENT a 
+							 WHERE CA_CURRENCY IN (:chr_g_old_ccy,:chr_g_new_ccy)
+							 AND (STATUS IN ('RP', 'PP')
+         			    		OR (CA_EVENT='RT'
+				 			 		AND STATUS='CP'
+				 			 		AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c 
+              									 		WHERE b.INSTR_CODE=c.INSTR_CODE
+													 		AND c.INSTR_PARENT IS NOT NULL
+													 		AND c.MOTHER_SEC_IND <> 'Y'
+													 		AND b.SAFEKEEP_POS>0)
+				 			 		AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d 
+               		 	       	  		WHERE d.CA_EVENT='RT' 
+											  		AND d.STATUS='CP'
+											 	 	AND	d.INSTR_CODE=a.INSTR_CODE)))
+									AND INSTR_CODE IN (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE CURRENCY_CD = :chr_g_new_ccy));
+
+   IS_ANY_ORA_ERROR
+
+   EXEC SQL OPEN entitlimg;
+
+   IS_ANY_ORA_ERROR
+
+	fprintf(l_filept,"CA Entitlement Image Details-------------------------------------------------------------------------------------------------\n");
+   fprintf(l_filept,"%-20s\t%-10s\t%-25s\t%-10s\t%-25s\t%-25s\t%-25s\t%-25s\n",
+			  "CORP_ID", "CLIENT", "ELIG_ENTITL_POS", "CCY_FOR_ENTITL", "INSTR_INC_BAL", "RECEIVED_AMT", "QUANTITY_BAL", "QUANTITY_RECEIVED");
+	fprintf(l_filept,"-----------------------------------------------------------------------------------------------------------------------------\n");
+
+   for(;;)
+   {
+      EXEC SQL FETCH entitlimg
+			INTO chr_l_caid:i_caid, chr_l_client_a:i_dl_client, l_entpos:i_entpos, 
+			     chr_l_ccycode:i_currencycode, l_incdue:i_incdue, l_amountrecd:i_amtrecd, 
+				  l_quantitydue:i_qtydue, l_quantityrecd:i_qtyrecd;
+      
+		IS_ANY_ORA_ERROR
+     	if (APL_ZERO_RESULT_SET)
+        	break;
+
+      fprintf(l_filept, "%-20s\t%-10s\t%-25f\t%-10s\t%-25f\t%-25f\t%-25f\t%-25f\n", 
+				  chr_l_caid, chr_l_client_a, l_entpos, chr_l_ccycode, l_incdue, l_amountrecd, l_quantitydue, l_quantityrecd);
+   }
+	fprintf(l_filept,"=============================================================================================================================\n\n");
+
+   EXEC SQL CLOSE entitlimg;
+	
+
+	
+
+   sqlca.sqlcode = 0;
+
+   EXEC SQL DECLARE payment CURSOR FOR
+      SELECT CORP_ID, CLIENT, PAYMENT_CCY, nvl(CURR_PYMT,0), nvl(QUANTITY_RECEIVED,0), nvl(TAX_AMOUNT,0), nvl(OTHER_CHRGS,0), nvl(QUANTITY_PAID,0)
+      FROM CACHEQUE
+		WHERE CORP_ID IN (SELECT CORP_ID FROM  CAEVENT a 
+							 WHERE CA_CURRENCY IN (:chr_g_old_ccy,:chr_g_new_ccy)
+							 AND (STATUS IN ('RP', 'PP')
+         			    		OR (CA_EVENT='RT'
+				 			 		AND STATUS='CP'
+				 			 		AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c 
+              									 		WHERE b.INSTR_CODE=c.INSTR_CODE
+													 		AND c.INSTR_PARENT IS NOT NULL
+													 		AND c.MOTHER_SEC_IND <> 'Y'
+													 		AND b.SAFEKEEP_POS>0)
+				 			 		AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d 
+               		 	       	  		WHERE d.CA_EVENT='RT' 
+											  		AND d.STATUS='CP'
+											  		AND	d.INSTR_CODE=a.INSTR_CODE)))
+									AND INSTR_CODE IN (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE CURRENCY_CD = :chr_g_new_ccy));
+
+   IS_ANY_ORA_ERROR
+
+   EXEC SQL OPEN payment;
+   IS_ANY_ORA_ERROR
+
+	fprintf(l_filept,"CA Payment Details-----------------------------------------------------------------------------------------------------------\n");
+   fprintf(l_filept, "%-20s\t%-10s\t%-10s\t%-25s\t%-25s\t%-25s\t%-25s\t%-25s\n",
+           "CORP_ID", "CLIENT", "PAYMENT_CCY", "CURR_PYMT", "QUANTITY_RECEIVED", "TAX_AMOUNT", "OTHER_CHRGS", "QUANTITY_PAID");
+	fprintf(l_filept,"-----------------------------------------------------------------------------------------------------------------------------\n");
+
+   for(;;)
+   {
+      EXEC SQL FETCH payment
+         INTO chr_l_caid:i_caid, chr_l_client_a:i_dl_client, chr_l_ccycode:i_currencycode, l_curpmt:i_curpmt, 
+			  	  l_quantityrecd:i_qtyrecd, l_taxamount:i_taxamt, l_othchr:i_othchr, l_quantitypaid:i_qtypaid;
+
+      IS_ANY_ORA_ERROR
+      if (APL_ZERO_RESULT_SET)
+         break;
+
+      fprintf(l_filept, "%-20s\t%-10s\t%-10s\t%-25f\t%-25f\t%-25f\t%-25f\t%-25f\n", 
+				  chr_l_caid, chr_l_client_a, chr_l_ccycode, l_curpmt, l_quantityrecd, l_taxamount, l_othchr, l_quantitypaid);
+   }
+	fprintf(l_filept,"=============================================================================================================================\n\n");
+
+   EXEC SQL CLOSE payment;
+
+
+	
+
+   sqlca.sqlcode = 0;
+
+   EXEC SQL DECLARE paymentimg CURSOR FOR
+      SELECT CORP_ID, CLIENT, PAYMENT_CCY, nvl(CURR_PYMT,0), nvl(QUANTITY_RECEIVED,0), nvl(TAX_AMOUNT,0), nvl(OTHER_CHRGS,0), nvl(QUANTITY_PAID,0)
+      FROM CACHEQUEMG
+		WHERE CORP_ID IN (SELECT CORP_ID FROM  CAEVENT a 
+							 WHERE CA_CURRENCY IN (:chr_g_old_ccy,:chr_g_new_ccy)
+							 AND (STATUS IN ('RP', 'PP')
+         			    		OR (CA_EVENT='RT'
+				 			 		AND STATUS='CP'
+				 			 		AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c 
+              									 		WHERE b.INSTR_CODE=c.INSTR_CODE
+													 		AND c.INSTR_PARENT IS NOT NULL
+													 		AND c.MOTHER_SEC_IND <> 'Y'
+													 		AND b.SAFEKEEP_POS>0)
+				 			 		AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d 
+               		 	       	  		WHERE d.CA_EVENT='RT' 
+											  		AND d.STATUS='CP'
+											  		AND	d.INSTR_CODE=a.INSTR_CODE)))
+							AND INSTR_CODE IN (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE CURRENCY_CD = :chr_g_new_ccy));
+	
+   IS_ANY_ORA_ERROR
+
+   EXEC SQL OPEN paymentimg;
+   IS_ANY_ORA_ERROR
+
+	fprintf(l_filept,"CA Payment Image Details-----------------------------------------------------------------------------------------------------\n");
+   fprintf(l_filept,"%-20s\t%-10s\t%-10s\t%-25s\t%-25s\t%-25s\t%-25s\t%-25s\n",
+           "CORP_ID", "CLIENT", "PAYMENT_CCY", "CURR_PYMT", "QUANTITY_RECEIVED", "TAX_AMOUNT", "OTHER_CHRGS", "QUANTITY_PAID");
+	fprintf(l_filept,"-----------------------------------------------------------------------------------------------------------------------------\n");
+
+   for(;;)
+   {
+      EXEC SQL FETCH paymentimg
+         INTO chr_l_caid:i_caid, chr_l_client_a:i_dl_client, chr_l_ccycode:i_currencycode, l_curpmt:i_curpmt, 
+			  	  l_quantityrecd:i_qtyrecd, l_taxamount:i_taxamt, l_othchr:i_othchr, l_quantitypaid:i_qtypaid;
+
+      IS_ANY_ORA_ERROR
+      if (APL_ZERO_RESULT_SET)
+         break;
+
+      fprintf(l_filept, "%-20s\t%-10s\t%-10s\t%-25f\t%-25f\t%-25f\t%-25f\t%-25f\n",
+				  chr_l_caid, chr_l_client_a, chr_l_ccycode, l_curpmt, l_quantityrecd, l_taxamount, l_othchr, l_quantitypaid);
+   }
+	fprintf(l_filept,"=============================================================================================================================\n\n");
+
+   EXEC SQL CLOSE paymentimg;
+
+
+	
+
+   sqlca.sqlcode = 0;
+
+   EXEC SQL DECLARE glpayment CURSOR FOR
+      SELECT CORP_ID, nvl(ELIG_ENTITL_POS,0), nvl(QUANTITY_BAL,0), nvl(AMOUNT_BAL,0), nvl(CURR_QTY_BAL,0), nvl(CUR_AMT_BAL,0), nvl(QUANTITY_PAID,0)
+      FROM CAGLPYMT
+		WHERE CORP_ID IN (SELECT CORP_ID FROM  CAEVENT a 
+							 WHERE CA_CURRENCY IN (:chr_g_old_ccy,:chr_g_new_ccy)
+							 AND (STATUS IN ('RP', 'PP')
+         			    		OR (CA_EVENT='RT'
+				 			 		AND STATUS='CP'
+				 			 		AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c 
+              									 		WHERE b.INSTR_CODE=c.INSTR_CODE
+													 		AND c.INSTR_PARENT IS NOT NULL
+													 		AND c.MOTHER_SEC_IND <> 'Y'
+													 		AND b.SAFEKEEP_POS>0)
+				 			 		AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d 
+               		 	       	  		WHERE d.CA_EVENT='RT' 
+											  		AND d.STATUS='CP'
+											  		AND	d.INSTR_CODE=a.INSTR_CODE)))
+									AND INSTR_CODE IN (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE CURRENCY_CD = :chr_g_new_ccy));
+	
+   IS_ANY_ORA_ERROR
+
+   EXEC SQL OPEN glpayment;
+   IS_ANY_ORA_ERROR
+
+	fprintf(l_filept,"CA Global Payment Details----------------------------------------------------------------------------------------------------\n");
+   fprintf(l_filept,"%-20s\t%-25s\t%-25s\t%-25s\t%-25s\t%-25s\t%-25s\n",
+           "CORP_ID", "ELIG_ENTITL_POS", "QUANTITY_BAL", "AMOUNT_BAL", "CURR_QTY_BAL", "CUR_AMT_BAL", "QUANTITY_PAID");
+	fprintf(l_filept,"-----------------------------------------------------------------------------------------------------------------------------\n");
+
+   for(;;)
+   {
+      EXEC SQL FETCH glpayment
+         INTO chr_l_caid:i_caid, l_entpos:i_entpos, l_quantitydue:i_qtydue, 
+			  	  l_amountdue:i_amtdue, l_curquantitydue:i_curqtydue, l_curamountdue:i_curamtdue, l_quantitypaid:i_qtypaid;
+
+      IS_ANY_ORA_ERROR
+      if (APL_ZERO_RESULT_SET)
+         break;
+
+      fprintf(l_filept, "%-20s\t%-25f\t%-25f\t%-25f\t%-25f\t%-25f\t%-25f\n",
+				  chr_l_caid, l_entpos, l_quantitydue, l_amountdue, l_curquantitydue, l_curamountdue, l_quantitypaid);
+   }
+	fprintf(l_filept,"=============================================================================================================================\n\n");
+
+   EXEC SQL CLOSE glpayment;
+
+
+
+	
+
+	sqlca.sqlcode = 0;
+	
+	EXEC SQL DECLARE event CURSOR FOR
+   	SELECT CORP_ID, CA_CURRENCY, nvl(EARNINGS,0), nvl(FRACT_PR,0), nvl(SUB_PR,0), 
+				 nvl(AMOUNT_BAL,0), nvl(RECEIVED_AMT,0), nvl(QUANTITY_BAL,0), nvl(QUANTITY_RECEIVED,0) 	
+   	FROM CAEVENT a
+		WHERE CA_CURRENCY IN (:chr_g_old_ccy,:chr_g_new_ccy)
+		AND ((STATUS IN ('RP', 'PP')
+     		    	OR (CA_EVENT='RT'
+	 		 	  	AND STATUS='CP'
+		 		  	AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c 
+              									 WHERE b.INSTR_CODE=c.INSTR_CODE
+													 AND c.INSTR_PARENT IS NOT NULL
+													 AND c.MOTHER_SEC_IND <> 'Y'
+													 AND b.SAFEKEEP_POS>0)
+				 	AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d 
+               		 	       	  WHERE d.CA_EVENT='RT' 
+											  AND d.STATUS='CP'
+											  AND	d.INSTR_CODE=a.INSTR_CODE)))
+		AND INSTR_CODE IN (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE CURRENCY_CD = :chr_g_new_ccy));
+
+   IS_ANY_ORA_ERROR;
+
+   EXEC SQL OPEN event;
+
+   IS_ANY_ORA_ERROR;
+
+	fprintf(l_filept,"CA Event Details-------------------------------------------------------------------------------------------------------------\n");
+   fprintf(l_filept, "%-20s\t%-10s\t%-25s\t%-20s\t%-20s\t%-25s\t%-25s\t%-25s\t%-25s\n",
+			  "CORP_ID", "CA_CURRENCY", "EARNINGS","FRACT_PR", "SUB_PR",
+		     "AMOUNT_BAL", "RECEIVED_AMT", "QUANTITY_BAL", "QUANTITY_RECEIVED");
+	fprintf(l_filept,"-----------------------------------------------------------------------------------------------------------------------------\n");
+
+	for(;;)
+   {
+   	EXEC SQL FETCH event
+      	INTO chr_l_caid:i_caid, chr_l_ccycode:i_currencycode, l_earnings:i_earnings,  
+				  l_fcost:i_fprice, l_subcost:i_subprice, 
+				  l_amountdue:i_amtdue, l_amountrecd:i_amtrecd, l_quantitydue:i_qtydue, l_quantityrecd:i_qtyrecd; 
+
+      IS_ANY_ORA_ERROR
+      if (APL_ZERO_RESULT_SET)
+         break;
+		
+      fprintf(l_filept, "%-20s\t%-10s\t%-25f\t%-20f\t%-25f\t%-25f\t%-25f\t%-25f\t%-25f\n", chr_l_caid, chr_l_ccycode, l_earnings,  l_fcost, l_subcost, l_amountdue, l_amountrecd, l_quantitydue, l_quantityrecd);
+   }
+	fprintf(l_filept,"=============================================================================================================================\n\n");
+  
+	EXEC SQL CLOSE event;
+ 
+
+	sqlca.sqlcode = 0;
+	
+	EXEC SQL DECLARE eventimg CURSOR FOR
+   	SELECT CORP_ID, CA_CURRENCY, nvl(EARNINGS,0), nvl(FRACT_PR,0), nvl(SUB_PR,0), 
+				 nvl(AMOUNT_BAL,0), nvl(RECEIVED_AMT,0), nvl(QUANTITY_BAL,0), nvl(QUANTITY_RECEIVED,0) 	
+   	FROM CAEVENTMG a
+		WHERE CA_CURRENCY IN (:chr_g_old_ccy,:chr_g_new_ccy)
+		AND ((STATUS IN ('RP', 'PP')
+     		    OR (CA_EVENT='RT'
+	 		   	  AND STATUS='CP'
+		 			  AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c 
+              									 WHERE b.INSTR_CODE=c.INSTR_CODE
+													 AND c.INSTR_PARENT IS NOT NULL
+													 AND c.MOTHER_SEC_IND <> 'Y'
+													 AND b.SAFEKEEP_POS>0)
+				 	  AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d 
+               		 	       	  WHERE d.CA_EVENT='RT' 
+											  AND d.STATUS='CP'
+											  AND	d.INSTR_CODE=a.INSTR_CODE)))
+		AND INSTR_CODE IN (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE CURRENCY_CD = :chr_g_new_ccy));
+
+   IS_ANY_ORA_ERROR
+
+   EXEC SQL OPEN eventimg;
+
+   IS_ANY_ORA_ERROR
+   
+	fprintf(l_filept,"CA Event Image Details-------------------------------------------------------------------------------------------------------\n");
+	fprintf(l_filept,"%-20s\t%-10s\t%-25s\t%-20s\t%-20s\t%-25s\t%-25s\t%-25s\t%-25s\n",
+			  "CORP_ID", "CA_CURRENCY", "EARNINGS", "FRACT_PR", "SUB_PR",
+		     "AMOUNT_BAL", "RECEIVED_AMT", "QUANTITY_BAL", "QUANTITY_RECEIVED");
+	fprintf(l_filept,"-----------------------------------------------------------------------------------------------------------------------------\n");
+
+	for(;;)
+   {
+   	EXEC SQL FETCH eventimg
+      	INTO chr_l_caid:i_caid, chr_l_ccycode:i_currencycode, l_earnings:i_earnings,  
+				  l_fcost:i_fprice, l_subcost:i_subprice, 
+				  l_amountdue:i_amtdue, l_amountrecd:i_amtrecd, l_quantitydue:i_qtydue, l_quantityrecd:i_qtyrecd; 
+
+      IS_ANY_ORA_ERROR
+      if (APL_ZERO_RESULT_SET)
+         break;
+		
+      fprintf(l_filept, "%-20s\t%-10s\t%-25f\t%-20f\t%-25f\t%-25f\t%-25f\t%-25f\t%-25f\n", 
+				  chr_l_caid, chr_l_ccycode, l_earnings,  
+				  l_fcost, 
+				  l_subcost, l_amountdue, l_amountrecd, l_quantitydue, l_quantityrecd);
+   }
+	fprintf(l_filept,"=============================================================================================================================\n\n");
+  
+	EXEC SQL CLOSE eventimg;
+
+	APL_IF_DEBUG
+	{
+   	CO_ProcMonitor( APL_OUT_FILE,
+     		"Leaving Function rep_file\n",
+      	NULL,
+      	NULL);
+   }
+
+	RETURN_SUCCESS:
+	{
+		fflush(l_filept);
+		return (APL_SUCCESS);
+	}
+	RETURN_FAILURE:
+	{
+		fflush(l_filept);
+	 	return (APL_FAILURE);
+	}
+}

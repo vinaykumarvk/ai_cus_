@@ -1,0 +1,1659 @@
+
+
+
+
+
+
+
+
+#include "CO_HostStructdef.h"
+#include "DL_Interface.h" 
+#include "MS_Swift.h"
+#include <stdlib.h>
+#include "DL_Csd.h"
+
+EXEC SQL INCLUDE SQLCA.H;
+EXEC SQL INCLUDE SQLDA.H;
+
+ /* Bageshri -- 10GM */
+#define CSD_COMMITSIZE			25
+#define CSD_RPT_HEADERSIZE		25
+
+main(int argc,char **argv)
+{
+	
+	DEBUG_INFO_STRUCT_H **l_debug_info_ptr ;
+	INTL_ENV_DATA_STRUCT_H p_intlenv_data_struct_h;
+	
+	FILE *l_logfile=NULL, *l_finifile=NULL;
+	FILE *l_csd_cre_rept_file = NULL;
+	FILE *l_ptr_handoff_file = NULL;
+   INTL_REPT_STRUCT_H                           *l_intl_rept_struct_ha   =NULL;	
+  
+	char **temp=(char**)NULL;
+   char	**chr_l_param = (char **)NULL;
+ 	
+	char chr_l_instrcode_a[INSTR_CD_LEN_C]=APL_NULL_STRING;
+	char chr_l_inifile[PATH_LENGTH] = APL_NULL_STRING;
+	char chr_l_handoff_dir[FILEPATH_LEN] = APL_NULL_STRING;
+	char chr_l_handoff_file_name[FILENAME_LEN_A] = APL_NULL_STRING;
+	char chr_l_sys_date[APL_DATE_LEN] = APL_NULL_STRING;
+   char chr_l_now[APL_DATE_LEN]=APL_NULL_STRING;
+   char chr_l_seq_number[SEQ_LEN]=APL_NULL_STRING;	
+	
+	char chr_uname[APL_USERID_LEN] = APL_NULL_STRING;
+	char chr_custody_id_b[APL_USERID_LEN] = APL_NULL_STRING;
+	char chr_passwd[APL_USERID_LEN] = APL_NULL_STRING;
+	
+	int int_retval=0;
+	int int_num=0;   
+	int int_l_count =0;
+   int int_noelem =0;
+   int int_l_condexists_A=0;
+   char                  chr_g_restart_data[APL_RESTARTDATA_LENGTH];
+    short                 g_restart_data_i;
+	
+	struct sqlca sqlca;
+	
+	EXEC SQL BEGIN DECLARE SECTION;
+	EXEC SQL VAR chr_l_sys_date         IS STRING;
+   EXEC SQL VAR chr_l_seq_number       IS STRING;
+   EXEC SQL VAR chr_l_sys_date IS STRING;
+   EXEC SQL VAR chr_l_now IS STRING;
+	EXEC SQL VAR chr_uname IS STRING;
+	EXEC SQL VAR chr_passwd IS STRING;
+EXEC SQL VAR chr_g_restart_data is string;
+	EXEC SQL END DECLARE SECTION;
+	
+   
+	
+	
+	
+   
+	if(APL_FAILURE == CO_SplitStr(argv[9],';',&int_noelem,&chr_l_param))
+   {
+   	   CO_ProcMonitor(l_logfile,"Failed in CO_SplitStr\n",NULL,NULL);
+      	APL_GOBACK_FAIL
+   }
+   
+	
+	if(int_noelem < 2)
+   {
+   	   CO_ProcMonitor(l_logfile,"Parameter string not proper\n",NULL,NULL);
+   }
+ 	
+ 
+	 
+	
+	memset(&p_intlenv_data_struct_h, NULL, sizeof(INTL_ENV_DATA_STRUCT_H));
+
+	if ( ( (l_debug_info_ptr) = (DEBUG_INFO_STRUCT_H **)calloc(1,sizeof(DEBUG_INFO_STRUCT_H *)) ) == NULL )
+		APL_GOBACK_FAIL;
+
+	strcpy(p_intlenv_data_struct_h.usr, argv[3]);
+	strcpy(p_intlenv_data_struct_h.h_mode, argv[4]);
+	strcpy(p_intlenv_data_struct_h.processtion, argv[5]);
+	strcpy(p_intlenv_data_struct_h.auth_req, argv[6]);
+	strcpy(p_intlenv_data_struct_h.subprocess, argv[7]);
+	strcpy(p_intlenv_data_struct_h.h_process, argv[8]);
+	
+	strcpy(chr_l_inifile,getenv("INTL_ROOT_PATH"));
+	strcat(chr_l_inifile,"intl_sun.cfg");
+	strcat(chr_l_inifile,"\0");
+   
+	if ( ( l_finifile=fopen(chr_l_inifile,"r") ) == NULL)
+	{
+		APL_GOBACK_FAIL
+	}
+  
+	sqlca.sqlcode =0; 
+   
+	APL_FETCH_DB_LOGIN_DETAILS(l_finifile, chr_custody_id_b, chr_uname, chr_passwd, APL_OUT_FILE, l_debug_info_ptr)
+		IS_ANY_ORA_ERROR
+	
+	EXEC SQL CONNECT :chr_uname IDENTIFIED BY :chr_passwd;
+  	   IS_ANY_ORA_ERROR
+ 
+ 
+ 	if (APL_FAILURE == CO_RtvSysParams(l_debug_info_ptr))
+   {
+         CO_ProcMonitor(l_logfile, "Error In Getting System Parameters", l_debug_info_ptr,&p_intlenv_data_struct_h);
+         CO_Proc_RptClose(l_logfile, l_debug_info_ptr);
+         APL_GOBACK_FAIL
+   }
+
+  	
+	if ( APL_FAILURE == CO_Chk_CntryEnabled( "IPO_PROC",
+                                           "IPO_MENU_AVAILABLE",
+                                             &int_l_condexists_A,
+                                             l_debug_info_ptr ) )
+   {
+      	CO_ProcMonitor(l_logfile,"Failed in CO_Chk_CntryEnabled \n",NULL,NULL);
+      	APL_GOBACK_FAIL
+   }
+  
+	
+
+	if(int_l_condexists_A == 0)
+   {
+   	   CO_ProcMonitor(l_logfile,"CSD Flat File Processing Not Allowed\n",NULL,NULL);
+     	   APL_GOBACK_FAIL
+   }
+
+	
+	
+ 
+	
+
+	if (APL_FAILURE == CO_Rtv_RptFileName( "CS",
+					  APL_LOGFILE_DESC,
+			        100,
+			        argv[5],
+			        argv,
+			        &l_logfile,
+			        l_debug_info_ptr ))	
+	{
+			APL_GOBACK_FAIL
+	}
+
+	if (APL_FAILURE == CO_Rtv_RptFileName( "FC",
+					  "CSD Trades Report",
+			        100,
+					  argv[5],
+			        argv,
+			        &l_csd_cre_rept_file,
+			        l_debug_info_ptr ))	
+	{
+			APL_GOBACK_FAIL
+	}
+
+
+    CO_ProcMonitor(l_logfile, "Before Placing Header in Report \n",NULL,NULL);
+
+	if(APL_FAILURE == CR_Prnt_CSDRptHdr(l_csd_cre_rept_file,l_logfile))
+	{   
+			 CO_ProcMonitor(l_logfile,"Unable to Place Header in Report \n",NULL,NULL);	
+			 APL_GOBACK_FAIL
+	}
+    CO_ProcMonitor(l_logfile,"After Placing Header in Report \n",NULL,NULL);
+	
+
+
+	
+	
+	memset(chr_l_handoff_dir,NULL,sizeof(chr_l_handoff_dir));
+	memset(chr_l_handoff_file_name,NULL,sizeof(chr_l_handoff_file_name));
+
+	if ( APL_FAILURE == CO_ReadToken(l_finifile,
+				   							 "INTL_HF_PATH",
+				    							  chr_l_handoff_dir,
+				    							  l_debug_info_ptr ))
+	{
+			fprintf(l_logfile,"\nReturning unsuccessfully from CO_ReadToken\n");
+			APL_GOBACK_FAIL
+	}
+
+   
+	if (APL_FAILURE == CO_RtvSysDt(chr_l_sys_date,l_debug_info_ptr))
+	{
+			fprintf(l_logfile,"Failed in getting SystemDate\n");
+			APL_GOBACK_FAIL
+	}
+	memset(chr_l_now,APL_NULL_CHAR,APL_DATE_LEN);
+   EXEC SQL SELECT SEQ_CSDFLATFILE.NEXTVAL INTO
+		      :chr_l_seq_number FROM DUAL;
+    
+   EXEC SQL SELECT TO_CHAR(to_date(substr(:chr_l_sys_date,1,10),'dd/chr_mm/yyyy'),'DDMMYYYY')
+			    INTO :chr_l_now FROM DUAL;
+
+	strcpy(chr_l_handoff_file_name, chr_l_handoff_dir);
+	strcat(chr_l_handoff_file_name, "SAT");
+   strcat(chr_l_handoff_file_name,chr_l_now);
+   strcat(chr_l_handoff_file_name,chr_l_seq_number);
+   strcat(chr_l_handoff_file_name,".txt");
+	strcat(chr_l_handoff_file_name,"\0");
+   
+	if ((l_ptr_handoff_file = fopen(chr_l_handoff_file_name,"w")) == NULL)
+   {
+   	   CO_ProcMonitor(l_logfile,"Unable to create CSD flat h_file \n",l_debug_info_ptr,&p_intlenv_data_struct_h);
+      	APL_GOBACK_FAIL
+   }
+	
+	fclose(l_ptr_handoff_file);
+ 
+   
+
+
+   l_intl_rept_struct_ha    =(INTL_REPT_STRUCT_H *)calloc(1, sizeof(INTL_REPT_STRUCT_H));
+			      APL_MALLOC_FAIL(l_intl_rept_struct_ha);
+
+	strcpy(l_intl_rept_struct_ha->report_name, chr_l_handoff_file_name+strlen(chr_l_handoff_dir));
+  	strcpy(l_intl_rept_struct_ha->report_desc, APL_HOFF_FILE_DESC);
+   strcpy(l_intl_rept_struct_ha->report_date,argv[2]);
+   l_intl_rept_struct_ha->report_width = 100;
+   strcpy(l_intl_rept_struct_ha->task_desc, p_intlenv_data_struct_h.processtion);
+   strcpy(l_intl_rept_struct_ha->fe_be_ind, APL_BE_IND);
+   strcpy(l_intl_rept_struct_ha->usr, p_intlenv_data_struct_h.usr);
+
+    
+   
+	DEBUG_INFO
+	{  
+			printf("Before inserting into Common_report\n");
+   }
+	
+   if (APL_FAILURE == CO_Proc_DBRptIns(l_intl_rept_struct_ha, l_debug_info_ptr))
+   {
+		     printf("Failed in insertion into common_report\n");
+           APL_GOBACK_FAIL
+	}
+
+	strcpy(chr_l_handoff_file_name, chr_l_handoff_dir);
+	strcat(chr_l_handoff_file_name,"CSDFILE.TXT"); 
+	strcat(chr_l_handoff_file_name,"\0");
+	
+	CO_ProcMonitor(l_logfile,"Trying to create csd flat h_file... will update if successful \n",l_debug_info_ptr,&p_intlenv_data_struct_h);
+
+	if ((l_ptr_handoff_file = fopen(chr_l_handoff_file_name,"w")) == NULL)
+	{
+			CO_ProcMonitor(l_logfile,"Unable to create CSD flat h_file \n",l_debug_info_ptr,&p_intlenv_data_struct_h);
+			APL_GOBACK_FAIL
+	}
+
+   memset(chr_l_sys_date,APL_NULL_CHAR,APL_DATE_LEN);
+	
+	EXEC SQL SELECT TO_CHAR(SYS_DATE,'YYYYMMDD')
+  			INTO :chr_l_sys_date
+     		FROM PRO_SYS_DATE;
+
+
+	EXEC SQL SELECT PROCESSING_STATUS INTO :chr_g_restart_data:g_restart_data_i
+		FROM SYS_BATCHPROC
+		WHERE PROCESS_NAME=:argv[0]
+		AND   PROC_INIT=:argv[1]
+		AND   STARTDATE=:argv[2]
+		AND   STATUS='started'
+		FOR UPDATE OF PROCESSING_STATUS,STATUS; 
+
+	if(APL_ZERO_RESULT_SET)
+	{
+			CO_ProcMonitor(l_logfile,"E:No entry in batch_in_proc\n",l_debug_info_ptr,&p_intlenv_data_struct_h);
+			APL_GOBACK_FAIL
+	} 
+
+	 
+	
+	memset(chr_l_sys_date,APL_NULL_CHAR,APL_DATE_LEN);
+	EXEC SQL SELECT TO_CHAR(SYS_DATE,'DD/MM/YYYY') 
+			INTO :chr_l_sys_date 
+			FROM PRO_SYS_DATE;
+	
+	strcpy(chr_l_instrcode_a,argv[9]);
+	
+	fprintf(l_logfile,"Parameters received from FE...%s\n",chr_l_instrcode_a);
+	fprintf(l_logfile,"System Date is ....: %s\n",chr_l_sys_date);
+
+	CO_ProcMonitor(l_logfile,"Start Processing....\n",l_debug_info_ptr,&p_intlenv_data_struct_h);
+			
+	if(APL_FAILURE ==CR_Proc_CSDFile(argv,
+											l_csd_cre_rept_file,
+											l_ptr_handoff_file,
+											chr_l_sys_date,
+											l_logfile,
+											&p_intlenv_data_struct_h,
+										  	l_debug_info_ptr))
+	{
+			CO_ProcMonitor(l_logfile,"Failed in CR_Proc_CSDFile Function\n",l_debug_info_ptr,&p_intlenv_data_struct_h);
+			APL_GOBACK_FAIL
+	}
+
+	
+	APL_GOBACK_SUCCESS
+
+
+RETURN_SUCCESS : 
+
+	EXEC SQL UPDATE SYS_BATCHPROC
+		SET  status = 'completed'
+		WHERE PROCESS_NAME=:argv[0]
+		AND   PROC_INIT=:argv[1]
+		AND   STARTDATE=:argv[2]
+		AND   STATUS='started';
+
+	EXEC SQL COMMIT WORK RELEASE;			   
+	
+	fprintf(l_logfile,"Successfully Exiting the program CSD h_file Generation\n"); 
+	
+	CO_Proc_RptClose(l_logfile, l_debug_info_ptr);
+	CO_Proc_RptClose(l_csd_cre_rept_file, l_debug_info_ptr);
+   
+	free(l_intl_rept_struct_ha);	
+	fclose(l_ptr_handoff_file);
+	fclose(l_finifile);
+	exit(APL_SUCCESS);
+
+RETURN_FAILURE :
+
+	EXEC SQL COMMIT WORK RELEASE;			   
+	
+	fprintf(l_logfile,"Unsuccessfully Exiting the program CSD h_file Generation\n"); 
+	  
+	CO_Proc_RptClose(l_logfile, l_debug_info_ptr);
+	CO_Proc_RptClose(l_csd_cre_rept_file, l_debug_info_ptr);
+   free(l_intl_rept_struct_ha);
+	fclose(l_ptr_handoff_file);
+	fclose(l_finifile);
+	exit(APL_FAILURE);
+}	
+
+
+									
+
+
+int CR_Proc_CSDFile(char **argv ,
+			FILE *p_csd_cre_rept_file,
+			FILE *p_ptr_handoff_file,
+			char *chr_p_sys_date,
+			FILE *p_logfile,
+			INTL_ENV_DATA_STRUCT_H *p_intlenv_data_struct_h,
+			DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	FILE *l_logfile=NULL;
+	FILE *l_ptr_handoff_file=NULL;
+	
+	char chr_l_sys_date[APL_DATE_LEN]=APL_NULL_STRING;
+	char chr_l_client_a[APL_CLIENT_LENGTH]=APL_NULL_STRING;
+        short i_dl_client = 0;
+	char h_dl_client[APL_CLIENT_LENGTH]=APL_NULL_STRING;
+	char chr_l_refno_a[17]=APL_NULL_STRING;
+        short i_indentity_no = 0;
+	char chr_l_sel_msg_stmt[CSD_STR_LEN]=APL_NULL_STRING;
+	char chr_l_noofshs[NO_OF_SHS_LEN]=APL_NULL_STRING;
+   char chr_l_noofcas[NO_OF_CASE_LEN]=APL_NULL_STRING;
+	char chr_l_sysdatetime_A[APL_DATE_LEN]=APL_NULL_STRING;
+	char chr_l_sysdate_b[APL_DATE_LEN]=APL_NULL_STRING;
+	char chr_l_tempdate [APL_DATE_LEN]= APL_NULL_STRING;
+	char chr_l_isin[INSTR_ISIN_LEN_F]=APL_NULL_STRING;
+	char chr_l_isin_part[INSTR_ISIN_LEN_F]=APL_NULL_STRING;
+	char chr_l_notes[INFO_FIELD_LEN]=APL_NULL_STRING;
+        short i_infos = 0;
+	char chr_l_satclient[SATCLIENT_LEN]=APL_NULL_STRING;
+	char chr_l_satcode[SAT_CD_LEN]=APL_NULL_STRING;
+	char chr_l_opcode[OP_CD_LEN]=APL_NULL_STRING;
+	int  int_l_run_count =0;
+	char chr_l_run_count_temp[5] = APL_NULL_STRING;
+	int  int_l_tot_count =0;
+	char chr_l_tot_count_temp[9] = APL_NULL_STRING;
+	double l_totnoofshs=0.0;
+	double l_tempshs=0.0;
+        short i_tempshs = 0;
+	
+	char **chr_l_param=NULL;
+	char **chr_l_notefields=NULL;
+	char *chr_l_process_line=NULL;
+	char *chr_tempbuff=APL_NULL_STRING;
+	
+  	char p_instr_code[INSTR_CD_LEN_C] = APL_NULL_STRING;
+	char *chr_l_accstr = APL_NULL_STRING;
+	char *chr_l_tempstr =APL_NULL_STRING;
+
+	char details[INFO_FIELD_LEN]=APL_NULL_STRING;
+	char chr_l_remstring[TEMP_STR_LEN]=APL_NULL_STRING;
+	char chr_l_rec_temp[TEMP_STR_LEN]=APL_NULL_STRING;
+  	char chr_l_buf[BUFFER_SIZE];	
+
+	int int_l_seq_no=0;
+	int int_l_rec = 1;
+	int int_retstat=0;
+  	int int_noelem=0;
+	int int_l_count=0;
+	int int_l_loopcount=0;
+	int int_l_numeric_value=0;
+	int i=0;
+	int int_l_recexists=0;
+
+   char                  chr_g_restart_data[APL_RESTARTDATA_LENGTH];
+    short                 g_restart_data_i;
+	
+	MS_STATIC_VAL *l_ms_static_val= NULL, *l_ms_dynamic_val=NULL;
+	struct sqlca sqlca;
+	
+	EXEC SQL BEGIN DECLARE SECTION;	
+	EXEC SQL VAR chr_l_client_a IS STRING;
+	EXEC SQL VAR h_dl_client IS STRING;
+	EXEC SQL VAR chr_l_refno_a IS STRING;
+	EXEC SQL VAR chr_l_notes IS STRING;
+	EXEC SQL VAR chr_l_isin IS STRING;
+	EXEC SQL VAR chr_l_isin_part IS STRING;
+	EXEC SQL VAR chr_l_sysdate_b IS STRING;
+	EXEC SQL VAR chr_l_sysdatetime_A IS STRING;
+	EXEC SQL VAR chr_l_tempdate IS STRING;
+   EXEC SQL VAR chr_l_buf IS STRING;
+	EXEC SQL VAR chr_l_run_count_temp IS STRING;
+	EXEC SQL VAR chr_l_tot_count_temp IS STRING;
+EXEC SQL VAR chr_g_restart_data is string;
+	EXEC SQL END DECLARE SECTION;
+   
+	l_logfile=p_logfile;
+
+	CO_ProcMonitor(l_logfile,"Entered into CR_Proc_CSDFile Function\n",l_debug_info_ptr,p_intlenv_data_struct_h);
+	
+	l_ptr_handoff_file=p_ptr_handoff_file;
+	
+	strcpy(chr_l_sys_date,chr_p_sys_date);
+	
+	l_ms_static_val = (MS_STATIC_VAL *)calloc(1,sizeof(MS_STATIC_VAL));
+		APL_MALLOC_FAIL(l_ms_static_val);
+	
+	l_ms_dynamic_val = (MS_STATIC_VAL *)calloc(1,sizeof(MS_STATIC_VAL));
+	APL_MALLOC_FAIL(l_ms_dynamic_val);
+
+	chr_l_process_line = (char *)calloc(CSD_STR_LEN,sizeof(char));
+	
+	chr_tempbuff=(char *) calloc(CSD_STR_LEN,sizeof(char));
+
+	memset(chr_l_sel_msg_stmt,APL_NULL_CHAR,CSD_STR_LEN);
+	memset(chr_l_process_line,APL_NULL_CHAR,CSD_STR_LEN);
+	memset(chr_l_tempdate,APL_NULL_CHAR,APL_DATE_LEN);
+   memset(chr_l_noofcas,APL_NULL_CHAR,NO_OF_CASE_LEN);	
+	memset(chr_l_noofshs,APL_NULL_CHAR,NO_OF_SHS_LEN);
+	memset(chr_l_notes,APL_NULL_CHAR,INFO_FIELD_LEN);
+	memset(details,APL_NULL_CHAR,INFO_FIELD_LEN);
+	memset(chr_l_satclient,APL_NULL_CHAR,SATCLIENT_LEN);
+	memset(chr_l_satcode,APL_NULL_CHAR,SAT_CD_LEN);
+	memset(chr_l_opcode,APL_NULL_CHAR,OP_CD_LEN);
+	memset(chr_l_remstring,APL_NULL_CHAR,TEMP_STR_LEN);
+	memset(p_instr_code,APL_NULL_CHAR,INSTR_CD_LEN_C);
+	
+	l_ms_static_val = realloc(l_ms_static_val,sizeof(MS_STATIC_VAL)*10);
+		APL_MALLOC_FAIL(l_ms_static_val)
+	
+	if(APL_FAILURE == CO_SplitStr(argv[9],';',&int_noelem,&chr_l_param))
+   {
+   	   CO_ProcMonitor(l_logfile,"Failed in CO_SplitStr\n",NULL,NULL);
+      	APL_GOBACK_FAIL
+   }  
+     
+	strcpy(p_instr_code,chr_l_param[0]);
+   strcpy(chr_l_noofcas,chr_l_param[1]);
+   
+	strcpy(chr_l_tempstr,chr_l_param[2]);
+
+	if (strlen(chr_l_tempstr) < 1)
+		{
+			fprintf(l_logfile,"Passed Account Str is Blank\n");
+			APL_GOBACK_FAIL
+		}
+
+	CO_ProcMonitor(l_logfile,"Calling ValidatingISIN Function \n",l_debug_info_ptr,p_intlenv_data_struct_h);
+ 
+  		
+
+	if(APL_FAILURE ==CR_Chk_CSD_ISIN(p_instr_code,
+										p_logfile,
+										l_debug_info_ptr))
+	{
+			fprintf(l_logfile,"Failed in Validating ISIN processtion\n");
+			APL_GOBACK_FAIL
+	}
+   
+
+	if(APL_FAILURE==CO_RtvSysDt(chr_l_tempdate,l_debug_info_ptr))
+	{
+			fprintf(l_logfile,"Failed in getting SystemDate \n");
+			APL_GOBACK_FAIL	
+	}
+
+	
+   DEBUG_INFO
+   {
+		printf("Date get from CO_RtvSysDt is %s\n",chr_l_tempdate);
+	}	
+
+   memset(chr_l_sysdate_b,APL_NULL_CHAR,APL_DATE_LEN);
+
+	EXEC SQL SELECT TO_CHAR(to_date(substr(:chr_l_tempdate,1,10),'dd/chr_mm/yyyy'),'DDMMYYYY')
+			INTO :chr_l_sysdate_b	
+			FROM DUAL;   
+	
+	memset(chr_l_sysdatetime_A,APL_NULL_CHAR,20);
+
+   DEBUG_INFO
+   { 
+		printf("DATE is .........:::\n %s",chr_l_sysdate_b);
+   }
+
+	if(APL_FAILURE==CO_RtvSysDtTime(chr_l_tempdate,l_debug_info_ptr))
+	{
+			 fprintf(l_logfile,"Failed in getting SystemDateTime \n"); 
+			 APL_GOBACK_FAIL
+	}
+
+	EXEC SQL SELECT to_char(to_date(substr(:chr_l_tempdate,1,20),'dd/chr_mm/chr_yyyy hh24:mi:ss'),'DDMMYYYYhh24mi')
+			INTO :chr_l_sysdatetime_A
+			FROM DUAL; 
+
+
+   DEBUG_INFO
+	{
+		printf("DATE and Time is .......:::\n %s",chr_l_sysdatetime_A);
+	}
+
+	memset(chr_l_isin,APL_NULL_CHAR,INSTR_ISIN_LEN_F);
+
+      EXEC SQL SELECT INSTR_ISIN
+			INTO    :chr_l_isin
+			FROM    MT_INSTRUMENT
+			WHERE   instr_code= :p_instr_code;
+
+	IS_ANY_ORA_ERROR
+ 
+	if(APL_ZERO_RESULT_SET)
+	{
+		CO_ProcMonitor(p_logfile,"Failed in getting ISIN  \n",l_debug_info_ptr,p_intlenv_data_struct_h);
+		APL_GOBACK_FAIL
+	}
+
+
+   DEBUG_INFO
+	{ 
+	      printf("ISIN =%s \n",chr_l_isin);	
+   }
+
+	
+
+	for ( int_l_loopcount=0,int_l_numeric_value=0;int_l_loopcount<strlen(chr_l_isin) && int_l_numeric_value < 3;int_l_loopcount++)
+	{
+		if((chr_l_isin[int_l_loopcount] == '0') || (chr_l_isin[int_l_loopcount] == '1') ||
+			(chr_l_isin[int_l_loopcount] == '2') || (chr_l_isin[int_l_loopcount] == '3') ||
+			(chr_l_isin[int_l_loopcount] == '4') || (chr_l_isin[int_l_loopcount] == '5') ||
+			(chr_l_isin[int_l_loopcount] == '6') || (chr_l_isin[int_l_loopcount] == '7') ||
+			(chr_l_isin[int_l_loopcount] == '8') || (chr_l_isin[int_l_loopcount] == '9'))
+      		{     
+			chr_l_isin_part[int_l_numeric_value]=chr_l_isin[int_l_loopcount];
+			int_l_numeric_value ++;
+		}
+	}
+   
+	chr_l_isin_part[int_l_numeric_value]='\0';
+
+	DEBUG_INFO
+	{
+			printf("ISIN_PART is .......%s\n",chr_l_isin_part);
+   }	
+
+	
+
+	strcpy((l_ms_static_val)[0].link_val,"DUMMY");
+	strcpy((l_ms_static_val)[0].link_tag,"DUMMY");
+	strcpy((l_ms_static_val)[1].link_val,"INSTR_ISIN");
+	strcpy((l_ms_static_val)[1].link_tag,chr_l_isin);
+	strcpy((l_ms_static_val)[2].link_val,"GENDATETIME");
+	strcpy((l_ms_static_val[2]).link_tag,chr_l_sysdatetime_A);
+	strcpy((l_ms_static_val[3]).link_val,"GENDATE");
+	strcpy((l_ms_static_val[3]).link_tag,chr_l_sysdate_b);
+	strcpy((l_ms_static_val)[4].link_val,"TOTENTRIES");
+	strcpy((l_ms_static_val)[5].link_val,"TOTENTRIES_PL_H");
+	strcpy((l_ms_static_val)[6].link_val,"TOTSHSH");
+	
+	strcpy((l_ms_static_val)[7].link_val,"NOOFCAS");
+   strcpy((l_ms_static_val)[7].link_tag,chr_l_noofcas);
+	strcpy((l_ms_static_val)[8].link_val,"ISIN_PART");
+	strcpy((l_ms_static_val)[8].link_tag,chr_l_isin_part);
+	strcpy((l_ms_static_val)[9].link_val,"");
+	strcpy((l_ms_static_val)[9].link_tag,"");
+
+	
+	
+	int_l_run_count=0;
+	int_l_tot_count=0;
+	l_totnoofshs=0.0;
+
+	
+	while ((chr_l_accstr = strtok_r(NULL,",",&chr_l_tempstr)) !=NULL)
+	{
+	
+     memset(h_dl_client,APL_NULL_CHAR,APL_CLIENT_LENGTH);
+	  strcpy(h_dl_client,chr_l_accstr);
+
+	EXEC SQL DECLARE csd_records CURSOR FOR
+		
+		SELECT 	CLIENT,IDENTIY_NO,NVL(INFO1,''),NVL(QTY,0)
+		FROM    DL_DEAL
+		WHERE CLIENT = :h_dl_client
+		AND DL_CLASS IN ('28','29') 
+		AND DEAL_CD='3' 
+		AND FAILREASON_CD='90' 
+      AND DEAL_STAT ='AA'
+		AND INSTR_CODE=:p_instr_code; 
+	IS_ANY_ORA_ERROR
+
+	EXEC SQL OPEN csd_records;
+
+	IS_ANY_ORA_ERROR
+	
+	for(;;)
+	{
+	
+		l_ms_dynamic_val =  realloc(l_ms_dynamic_val,sizeof(MS_STATIC_VAL)*10);
+		APL_MALLOC_FAIL(l_ms_dynamic_val)
+
+
+      memset(chr_l_client_a,APL_NULL_CHAR,APL_CLIENT_LENGTH);
+      memset(chr_l_refno_a,APL_NULL_CHAR,17);
+		memset(chr_l_notes,APL_NULL_CHAR,INFO_FIELD_LEN);
+	   memset(chr_tempbuff,APL_NULL_CHAR,INFO_FIELD_LEN);	
+	   memset(details,APL_NULL_CHAR,INFO_FIELD_LEN);	
+		memset(chr_l_satclient,APL_NULL_CHAR,SATCLIENT_LEN);
+   	memset(chr_l_satcode,APL_NULL_CHAR,SAT_CD_LEN);
+  	 	memset(chr_l_opcode,APL_NULL_CHAR,OP_CD_LEN);
+   	memset(chr_l_remstring,APL_NULL_CHAR,TEMP_STR_LEN);
+		
+		l_tempshs=0.0;
+		fprintf(l_logfile,"------------------------------------------------------------\n");
+ 		fprintf(l_logfile,"Record No : %d\n",int_l_rec);
+	
+		l_debug_info_ptr=(DEBUG_INFO_STRUCT_H **)NULL;
+
+		if ( ( (l_debug_info_ptr) = (DEBUG_INFO_STRUCT_H **)calloc(1,sizeof(DEBUG_INFO_STRUCT_H *)) ) == NULL )
+			APL_GOBACK_FAIL ;
+		sqlca.sqlcode=0;
+		
+		EXEC SQL FETCH csd_records 
+			INTO :chr_l_client_a:i_dl_client,:chr_l_refno_a:i_indentity_no,:chr_l_notes:i_infos,:l_tempshs:i_tempshs;
+		if(sqlca.sqlcode == 1403) 
+		{
+			CO_ProcMonitor(p_logfile,"No Data Found for Account and identity number\n",l_debug_info_ptr,p_intlenv_data_struct_h);
+			break;
+		}		
+		int_l_run_count=int_l_run_count+1;
+		int_l_tot_count=int_l_tot_count+1;
+		l_totnoofshs=l_totnoofshs+l_tempshs;
+		int_l_recexists=1;
+
+
+		if(int_l_run_count==100)
+			int_l_run_count=1;
+
+		    
+		strcpy(chr_tempbuff,chr_l_notes);
+		strcat(chr_tempbuff,"\n");
+		strcat(chr_tempbuff,"\0");
+
+		
+		CO_SplitStr(chr_tempbuff,'\n', &int_noelem, &chr_l_param);	
+		
+                if (int_noelem >= 4)
+                {
+		strcpy(details,chr_l_param[3]);
+		strcat(details,"_");
+		strcat(details,"\0");
+         	}	
+		int_noelem=0; 
+		printf("notes is %s\n",details);
+                fflush(stdout);
+		CO_SplitStr(details,'_', &int_noelem, &chr_l_notefields);
+                if (int_noelem >= 2)
+                {
+		strcpy(chr_l_satclient,chr_l_notefields[0]);
+		strcpy(chr_l_remstring,chr_l_notefields[1]);   
+		strcat(chr_l_remstring,"+");
+		strcat(chr_l_remstring,"\0");
+		}
+		chr_l_notefields=(char **)NULL;
+
+		CO_SplitStr(chr_l_remstring,'+', &int_noelem, &chr_l_notefields);
+		  
+                if (int_noelem > 0)
+                {
+		strcpy(chr_l_satcode,chr_l_notefields[0]);
+		strcpy(chr_l_opcode,chr_l_notefields[1]);  	
+                }
+
+			
+
+		strcpy((l_ms_dynamic_val)[0].link_val,"DUMMY");
+		strcpy((l_ms_dynamic_val)[0].link_tag,"DUMMY");
+		strcpy((l_ms_dynamic_val)[1].link_val,"ISIN_PART");
+		strcpy((l_ms_dynamic_val)[2].link_val,"SATCODE");
+		strcpy((l_ms_dynamic_val)[3].link_val,"SHRTNAME");
+		strcpy((l_ms_dynamic_val)[4].link_val,"SATACCOUNT");
+		strcpy((l_ms_dynamic_val)[5].link_val,"OPCODE");
+		strcpy((l_ms_dynamic_val)[6].link_val,"QTY");
+		strcpy((l_ms_dynamic_val)[7].link_val,"RUN_COUNT");
+		strcpy((l_ms_dynamic_val)[8].link_val,"TOTAL_COUNT");
+  		strcpy((l_ms_dynamic_val)[9].link_val,"");
+
+		
+		memset(chr_l_run_count_temp,APL_NULL_CHAR,5);
+		sprintf(chr_l_run_count_temp,"%d",int_l_run_count);
+		memset(chr_l_tot_count_temp,APL_NULL_CHAR,9);
+		sprintf(chr_l_tot_count_temp,"%d",int_l_tot_count);
+        
+ 	         		
+		
+		strcpy(chr_l_sel_msg_stmt,"SELECT substr(NVL(b.countaccnm,'XXXXXXXXXXXXXXX'),1,15) ");
+		strcat(chr_l_sel_msg_stmt," as SHORTNAME, ");	
+		strcat(chr_l_sel_msg_stmt,"c.isin as ISIN_PART ,");
+		strcat(chr_l_sel_msg_stmt,"to_char(b.quantity) as QUANTITY");
+		if (strlen(chr_l_satclient) == 0)
+		{
+			strcat(chr_l_sel_msg_stmt,",'00000000000'");
+			strcat(chr_l_sel_msg_stmt," as SATACCOUNT ");
+		}
+		else
+		{
+			strcat(chr_l_sel_msg_stmt,",'");
+			strcat(chr_l_sel_msg_stmt,chr_l_satclient);
+			strcat(chr_l_sel_msg_stmt,"' as SATACCOUNT ");
+		}
+		if (strlen(chr_l_satcode) == 0)
+		{
+			strcat(chr_l_sel_msg_stmt,",'00000000000'");
+			strcat(chr_l_sel_msg_stmt," as SATCODE ");
+		}
+		else
+		{
+			strcat(chr_l_sel_msg_stmt,",'");
+			strcat(chr_l_sel_msg_stmt,chr_l_satcode);
+			strcat(chr_l_sel_msg_stmt,"' as SATCODE ");	
+		}
+      if (strlen(chr_l_opcode) == 0)
+      {
+         strcat(chr_l_sel_msg_stmt,",'0000000000'");
+         strcat(chr_l_sel_msg_stmt," as OPCODE ");
+      }
+      else
+      {
+         strcat(chr_l_sel_msg_stmt,",'");
+         strcat(chr_l_sel_msg_stmt,chr_l_opcode);
+         strcat(chr_l_sel_msg_stmt,"' as OPCODE ");
+      } 
+		if(int_l_run_count<10)
+			strcat(chr_l_sel_msg_stmt,",'0'||");
+		else
+			strcat(chr_l_sel_msg_stmt,",");
+		strcat(chr_l_sel_msg_stmt," to_char('");
+		strcat(chr_l_sel_msg_stmt,chr_l_run_count_temp);
+		strcat(chr_l_sel_msg_stmt,"') as RUN_COUNT, ");
+		strcat(chr_l_sel_msg_stmt," to_char('");
+		strcat(chr_l_sel_msg_stmt,chr_l_tot_count_temp);
+		strcat(chr_l_sel_msg_stmt,"') as TOTAL_COUNT ");
+
+		strcat(chr_l_sel_msg_stmt," FROM MT_CLIENT a,DL_DEAL b,MT_INSTRUMENT c ");
+		strcat(chr_l_sel_msg_stmt," WHERE ");
+		strcat(chr_l_sel_msg_stmt,"a.client = b.client AND ");
+		strcat(chr_l_sel_msg_stmt,"b.instr_code = c.instr_code AND ");
+		strcat(chr_l_sel_msg_stmt,"b.client='");
+		strcat(chr_l_sel_msg_stmt,chr_l_client_a);
+		strcat(chr_l_sel_msg_stmt,"'");
+		strcat(chr_l_sel_msg_stmt," AND ");
+		strcat(chr_l_sel_msg_stmt,"b.refno='");
+		strcat(chr_l_sel_msg_stmt,chr_l_refno_a);
+		strcat(chr_l_sel_msg_stmt,"'");
+		strcat(chr_l_sel_msg_stmt," AND ");
+		strcat(chr_l_sel_msg_stmt,"b.instr_code='");
+		strcat(chr_l_sel_msg_stmt,p_instr_code);
+		strcat(chr_l_sel_msg_stmt,"'");
+		strcat(chr_l_sel_msg_stmt,"\0");
+		  	
+		 
+		CO_ProcMonitor(p_logfile,"Calling MS_Proc_SelExec Function \n",l_debug_info_ptr,p_intlenv_data_struct_h); 
+
+		if(APL_FAILURE==MS_Proc_SelExec(NULL,
+										    "IPO_CSD",
+												NULL,
+												chr_l_sel_msg_stmt,
+												l_ms_static_val,
+												&l_ms_dynamic_val, 
+												NULL,
+												&int_l_seq_no,
+												NULL,
+												&int_retstat,
+												l_debug_info_ptr))
+                {
+								CO_ProcMonitor(p_logfile,"Failed in MS_Proc_SelExec \n",l_debug_info_ptr,p_intlenv_data_struct_h);
+								APL_GOBACK_FAIL
+                }
+
+ 		CO_ProcMonitor(p_logfile,"Returned Successfully from MS_Proc_SelExec Function \n",l_debug_info_ptr,p_intlenv_data_struct_h);
+
+		if(APL_FAILURE == CR_Proc_CSDLineFmt(l_ms_dynamic_val,
+														l_logfile,
+														chr_l_process_line,
+														l_debug_info_ptr))
+		{
+				CO_ProcMonitor(p_logfile,"Failed in CR_Proc_CSDLineFmt \n",l_debug_info_ptr,p_intlenv_data_struct_h);
+				APL_GOBACK_FAIL
+		}
+		
+		DEBUG_INFO
+		{
+				printf(" FormatString  After FormatCSDFileline Call is %s\n",chr_l_process_line);
+		}
+
+		if(APL_FAILURE == CR_Prnt_CSDLine(l_ptr_handoff_file,
+														l_logfile,
+														chr_l_process_line,
+														p_intlenv_data_struct_h,
+														l_debug_info_ptr))
+		{
+				CO_ProcMonitor(p_logfile,"Failed in CR_Prnt_CSDLine\n",l_debug_info_ptr,p_intlenv_data_struct_h);
+				APL_GOBACK_FAIL
+		}
+       
+		fprintf(p_csd_cre_rept_file,"%-12s\t%-17s\t\n",chr_l_client_a,chr_l_refno_a);
+	
+	memset(chr_l_process_line,APL_NULL_CHAR,CSD_STR_LEN);
+		int_l_seq_no = int_l_seq_no + 1;
+
+		if(!(int_l_rec%CSD_COMMITSIZE)) 
+      {
+   	      memset(chr_l_buf, NULL, BUFFER_SIZE);
+      	   sprintf(chr_l_buf, "Processed %d Records", int_l_rec);
+         	EXEC SQL UPDATE SYS_BATCHPROC
+                  SET STAT_DET = :chr_l_buf
+                  WHERE PROCESS_NAME=:argv[0]
+                  AND   PROC_INIT=:argv[1]
+                  AND   STARTDATE=:argv[2]
+                  AND   STATUS='started';
+         	EXEC SQL COMMIT WORK;
+         	IS_ANY_ORA_ERROR
+
+         	CO_ProcMonitor(l_logfile, "Record Committed", NULL, NULL);
+        		EXEC SQL  SELECT PROCESSING_STATUS INTO :chr_g_restart_data:g_restart_data_i
+                  FROM SYS_BATCHPROC
+                  WHERE PROCESS_NAME=:argv[0]
+                  AND   PROC_INIT=:argv[1]
+                  AND   STARTDATE=:argv[2]
+                  AND   STATUS='started'
+                  FOR UPDATE OF PROCESSING_STATUS,STATUS;
+         	IS_ANY_ORA_ERROR  
+         	if(APL_ZERO_RESULT_SET)
+         	{
+            		CO_ProcMonitor(l_logfile,"E:No entry in batch_in_proc",NULL,NULL);
+            		APL_GOBACK_FAIL
+         	}
+      } 
+		
+		int_l_rec++;
+	   if (!(int_l_rec%CSD_RPT_HEADERSIZE))
+      {
+      
+           if(APL_FAILURE == CR_Prnt_CSDRptHdr(p_csd_cre_rept_file,l_logfile))
+          {
+                CO_ProcMonitor(l_logfile,"Unable to Place Header in Report \n",NULL,NULL);
+          }
+      }			
+	}
+
+	EXEC SQL CLOSE csd_records;
+
+	}  
+
+
+	if (int_l_recexists==0)
+	{
+			CO_ProcMonitor(l_logfile,"Records not int_found for the instr_code...\n",l_debug_info_ptr,p_intlenv_data_struct_h);
+			int_l_rec = 0;
+			APL_GOBACK_SUCCESS
+	}
+
+	if( int_l_rec >= 1)
+        int_l_rec--;
+    
+	memset(chr_l_rec_temp,APL_NULL_CHAR, RECORD_TEMP_LEN);
+	
+	fclose(l_ptr_handoff_file);
+
+	DEBUG_INFO
+	{
+	     printf("Calling Header Function \n ");
+	}
+
+	strcpy(chr_l_rec_temp,ltoa(int_l_rec));
+
+	if(APL_FAILURE== CO_PadString(chr_l_rec_temp,'L',10,"0",l_debug_info_ptr))
+	{
+     		CO_ProcMonitor(p_logfile,"Failure in the Function  CO_PadString\n",l_debug_info_ptr,p_intlenv_data_struct_h);
+			APL_GOBACK_FAIL
+	}
+  
+	DEBUG_INFO
+	{ 
+		printf("The returned Padded string is %s\n", chr_l_rec_temp); 
+	}
+
+	strcpy((l_ms_static_val)[4].link_tag,chr_l_rec_temp);
+
+	memset(chr_l_rec_temp,APL_NULL_CHAR,RECORD_TEMP_LEN); 
+
+	int_l_rec++;
+
+	strcpy(chr_l_rec_temp,ltoa(int_l_rec));
+
+	if(APL_FAILURE==CO_PadString( chr_l_rec_temp,'L',10,"0",l_debug_info_ptr))
+	{
+			CO_ProcMonitor(p_logfile,"Failure in the Function  CBPad_Str Function\n",l_debug_info_ptr,p_intlenv_data_struct_h);
+			APL_GOBACK_FAIL
+	}
+
+	strcpy((l_ms_static_val)[5].link_tag,chr_l_rec_temp);
+	
+	memset(chr_l_rec_temp,APL_NULL_CHAR,RECORD_TEMP_LEN); 
+	strcpy(chr_l_rec_temp,ltoa(l_totnoofshs));
+
+	if(APL_FAILURE==CO_PadString( chr_l_rec_temp,'L',15,"0",l_debug_info_ptr))
+	{
+			CO_ProcMonitor(p_logfile,"Failure in the Function  CBPad_Str Function\n",l_debug_info_ptr,p_intlenv_data_struct_h);
+			APL_GOBACK_FAIL
+	}
+   strcpy((l_ms_static_val)[6].link_tag,chr_l_rec_temp);
+
+	CO_FreeErrLst(l_debug_info_ptr);
+
+	if(APL_FAILURE == CR_Proc_CSDHdrFmt(l_ms_static_val,
+														l_logfile,
+														chr_l_process_line,
+														l_debug_info_ptr))
+  {
+			CO_ProcMonitor(p_logfile,"Failed in CR_Proc_CSDHdrFmt\n",l_debug_info_ptr,p_intlenv_data_struct_h);
+			APL_GOBACK_FAIL
+  }
+
+  DEBUG_INFO
+  {	
+			printf("Header is %s\n",chr_l_process_line);	
+  }
+
+  if(APL_FAILURE == CR_Prnt_CSDHdr(l_logfile,
+														chr_l_process_line,
+														p_intlenv_data_struct_h,
+														l_debug_info_ptr))
+	{
+			CO_ProcMonitor(p_logfile,"Failed in CR_Prnt_CSDHdr\n",l_debug_info_ptr,p_intlenv_data_struct_h);
+			APL_GOBACK_FAIL
+	} 
+
+	fprintf(l_logfile,"Successfully Exiting the program CR_Proc_CSDFile processtion\n"); 
+   
+	memset(chr_l_buf, NULL, BUFFER_SIZE);
+   
+	int_l_rec--;
+   
+	
+RETURN_SUCCESS :
+	sprintf(chr_l_buf, "Processed %d Records", int_l_rec);
+         
+			EXEC SQL UPDATE SYS_BATCHPROC
+                  SET STAT_DET = :chr_l_buf
+                  WHERE PROCESS_NAME=:argv[0]
+                  AND   PROC_INIT=:argv[1]
+                  AND   STARTDATE=:argv[2]
+                  AND   STATUS='started';
+   
+	      EXEC SQL COMMIT WORK;
+   
+	      IS_ANY_ORA_ERROR	
+		APL_FREE(chr_l_process_line);	
+	return(APL_SUCCESS);
+
+RETURN_FAILURE :
+
+	 EXEC SQL UPDATE SYS_BATCHPROC
+                  SET STAT_DET = 'Records Not found',STATUS='completed'
+                  WHERE PROCESS_NAME=:argv[0]
+                  AND   PROC_INIT=:argv[1]
+                  AND   STARTDATE=:argv[2]
+                  AND   STATUS='started';
+
+		APL_FREE(chr_l_process_line);	
+         EXEC SQL COMMIT WORK;
+
+         IS_ANY_ORA_ERROR
+	
+	fprintf(l_logfile,"UnSuccessfully Exiting the program CR_Proc_CSDFile processtion\n"); 
+	return(APL_FAILURE);
+}	
+
+
+
+						
+
+
+int CR_Chk_CSD_ISIN(char *p_instr_code,
+					FILE *p_logfile,
+					DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	char chr_l_isin[INSTR_ISIN_LEN_F]=APL_NULL_STRING;
+	
+	memset(chr_l_isin,APL_NULL_CHAR,INSTR_ISIN_LEN_F);
+		 
+	EXEC SQL BEGIN DECLARE SECTION; 
+   EXEC SQL VAR chr_l_isin IS STRING; 
+   EXEC SQL END DECLARE SECTION; 
+
+   EXEC SQL SELECT instr_isin
+		INTO    :chr_l_isin
+      FROM    MT_INSTRUMENT
+      WHERE   instr_code= :p_instr_code;
+
+   	IS_ANY_ORA_ERROR        
+
+
+   if(sqlca.sqlcode==1403)
+   {
+			fprintf(p_logfile,"No Records int_found for INSTR_CODE in MT_INSTRUMENT\n");
+			APL_GOBACK_FAIL
+   }	
+	
+	fprintf(p_logfile,"Instrurity Code:::: = %s\n",p_instr_code);		
+	fprintf(p_logfile,"ISIN         :::: = %s\n",chr_l_isin);
+ 
+	APL_GOBACK_SUCCESS
+        
+RETURN_SUCCESS:
+
+	fprintf(p_logfile,"Successfully returned from Validating ISIN processtion  \n");
+   return(APL_SUCCESS);
+
+
+RETURN_FAILURE:
+
+	fprintf(p_logfile,"UnSuccefully exited Validating ISIN processtion \n");
+   return(APL_FAILURE);
+
+
+}
+
+
+
+int CR_Proc_CSDLineFmt(MS_STATIC_VAL *p_ms_static_val_b,
+								FILE *p_logfile,
+								char *p_process_line,
+								DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+   
+	struct sqlca sqlca;
+ 
+	int int_l_count=0;	
+	int int_l_loopcount=0;
+	int int_l_selval_size=0;
+
+	char chr_l_format[CSD_STR_LEN]=APL_NULL_STRING;
+	
+	DL_CSDMAP_STRUCT_H *l_dl_csdmap_struct_h = NULL;
+	DL_CSDMAP_STRUCT_I *l_dl_csdmap_struct_i = NULL;
+	
+	CO_ProcMonitor(p_logfile,"Enter the Function FormatCSDFileline\n",NULL,NULL);
+	
+	l_dl_csdmap_struct_h = (DL_CSDMAP_STRUCT_H *)calloc(1,sizeof(DL_CSDMAP_STRUCT_H ));
+	l_dl_csdmap_struct_i = (DL_CSDMAP_STRUCT_I *)calloc(1,sizeof(DL_CSDMAP_STRUCT_I ));
+
+	EXEC SQL BEGIN DECLARE SECTION;
+	EXEC SQL VAR l_dl_csdmap_struct_h->h_msg_ident_no IS STRING;
+	EXEC SQL VAR l_dl_csdmap_struct_h->c_recordateype IS STRING;
+	EXEC SQL VAR l_dl_csdmap_struct_h->h_infosrc IS STRING;
+	EXEC SQL VAR l_dl_csdmap_struct_h->h_src IS STRING;
+	EXEC SQL VAR l_dl_csdmap_struct_h->h_typeof_link IS STRING;
+   EXEC SQL VAR l_dl_csdmap_struct_h->c_padateype IS STRING;
+   EXEC SQL VAR l_dl_csdmap_struct_h->h_csd_padstr IS STRING;
+	EXEC SQL END DECLARE SECTION;
+	
+	EXEC SQL DECLARE csdmap CURSOR FOR
+		SELECT * FROM DL_CSDMAP WHERE
+		RECCLASS='RECORD' ORDER BY SRL_NUMBER;
+
+	IS_ANY_ORA_ERROR
+
+	EXEC SQL OPEN csdmap;
+	
+	IS_ANY_ORA_ERROR
+	
+	int_l_count=0; 
+
+	memset(l_dl_csdmap_struct_h,NULL,sizeof(DL_CSDMAP_STRUCT_H));
+	memset(l_dl_csdmap_struct_i,NULL,sizeof(DL_CSDMAP_STRUCT_I));
+	
+	strcpy(p_process_line,APL_NULL_STRING);
+
+	for(int_l_loopcount=0;;int_l_loopcount++)
+	{
+		if( strcmp((p_ms_static_val_b)[int_l_loopcount].link_val,"") == 0)
+		{
+			break;
+		}
+		int_l_selval_size= int_l_selval_size + 1;
+	}
+	
+	for(;;)
+	{
+		int_l_count=int_l_count + 1;	
+		
+		CO_FreeErrLst(l_debug_info_ptr);
+		
+		memset(l_dl_csdmap_struct_h,NULL,sizeof(DL_CSDMAP_STRUCT_H));
+		memset(l_dl_csdmap_struct_i,NULL,sizeof(DL_CSDMAP_STRUCT_I));
+
+		sqlca.sqlcode =0;
+		
+		EXEC SQL FETCH csdmap
+				INTO :l_dl_csdmap_struct_h:l_dl_csdmap_struct_i;
+		IS_ANY_ORA_ERROR	
+		
+		if(sqlca.sqlcode == 1403)break;
+	
+		if (strcmp(l_dl_csdmap_struct_h->h_infosrc,"STATIC")==0) 
+ 		{
+			if (APL_FAILURE==CR_Proc_CSDStatData(l_dl_csdmap_struct_h,p_ms_static_val_b,p_logfile,chr_l_format,l_debug_info_ptr))
+			{
+					CO_ProcMonitor(p_logfile,"Failed in CR_Proc_CSDStatData\n",NULL,NULL);
+					APL_GOBACK_FAIL
+			}
+			strcat(p_process_line,chr_l_format);	
+		}
+		
+		else if (strcmp(l_dl_csdmap_struct_h->h_infosrc,"DYNAMIC")==0)
+		{ 
+			if(APL_FAILURE==CR_Proc_CSDDynaData(l_dl_csdmap_struct_h,p_ms_static_val_b,int_l_selval_size,p_logfile,chr_l_format,l_debug_info_ptr))
+			{
+				CO_ProcMonitor(p_logfile,"Failed in CR_Proc_CSDDynaData\n",NULL,NULL);
+				APL_GOBACK_FAIL
+			}	
+			strcat(p_process_line,chr_l_format);
+		 }
+			
+	}
+
+	strcat(p_process_line,"\0");
+	EXEC SQL CLOSE csdmap;
+
+	APL_GOBACK_SUCCESS
+
+RETURN_SUCCESS : 
+
+	fprintf(p_logfile,"Successfully Exiting the processtion CR_Proc_CSDLineFmt\n"); 
+	return(APL_SUCCESS);		
+
+RETURN_FAILURE : 
+	
+	fprintf(p_logfile,"UnSuccessfully Exiting the processtion CR_Proc_CSDLineFmt\n"); 
+	return(APL_FAILURE);
+}			
+
+
+	
+
+int CR_Proc_CSDStatData(DL_CSDMAP_STRUCT_H *p_dl_csdmap_struct_h,
+						MS_STATIC_VAL *p_ms_static_val_b, 
+						FILE *p_logfile,
+						char *p_process_line,
+						DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	
+	char chr_l_format_string[FORMAT_STR_LEN]=APL_NULL_STRING;
+	char int_l_temp[CSD_STR_LEN]=APL_NULL_STRING;
+   char chr_l_temp_padded[CSD_STR_LEN]=APL_NULL_STRING;
+	
+	CO_ProcMonitor(p_logfile,"Enter the Function  CR_Proc_CSDStatData \n",NULL,NULL);
+
+	memset(int_l_temp,APL_NULL_CHAR,CSD_STR_LEN);
+	memset(chr_l_format_string,APL_NULL_CHAR,FORMAT_STR_LEN);
+	memset(chr_l_temp_padded,APL_NULL_CHAR,CSD_STR_LEN);
+	chr_l_format_string[0]='%';
+	chr_l_format_string[1]=APL_NULL_CHAR;
+   strcat(chr_l_format_string,".");	
+	sprintf(int_l_temp,"%s",ltoa(p_dl_csdmap_struct_h->h_max_len));
+   strcat(chr_l_format_string,int_l_temp);
+	
+	chr_l_format_string[strlen(int_l_temp)+2]='s';
+	chr_l_format_string[strlen(int_l_temp)+3]='\0';
+   strcpy(chr_l_temp_padded,p_dl_csdmap_struct_h->h_src);	
+  
+	CO_FreeErrLst(l_debug_info_ptr);
+ 
+   fprintf(p_logfile,"String.....|%s|\n",chr_l_temp_padded);
+  
+	
+            if (strlen(chr_l_temp_padded) == 0)
+            {
+               strcpy(chr_l_temp_padded,APL_NULL_STRING);
+               sprintf(chr_l_temp_padded,chr_l_format_string," ");
+               strcat(chr_l_temp_padded,APL_NULL_STRING);
+            }
+				else
+				{
+    				if(APL_FAILURE== CO_PadString(chr_l_temp_padded,p_dl_csdmap_struct_h->c_padateype[0],p_dl_csdmap_struct_h->h_max_len,p_dl_csdmap_struct_h->h_csd_padstr,l_debug_info_ptr))
+            	{
+              	      fprintf(p_logfile,"Failure in the Function  CO_PadString\n");
+                     APL_GOBACK_FAIL
+            	}
+				}
+   fprintf(p_logfile,"Format String.....|%s|\n",chr_l_format_string);
+   fprintf(p_logfile,"Padding type.....|%s|\n",p_dl_csdmap_struct_h->c_padateype);
+   fprintf(p_logfile,"Padding String.....|%s|\n",p_dl_csdmap_struct_h->h_csd_padstr);
+   fprintf(p_logfile,"Padding String.....|%s|\n",chr_l_temp_padded);
+	sprintf(int_l_temp,chr_l_format_string,chr_l_temp_padded);
+	strcpy(p_process_line,int_l_temp);
+
+	APL_GOBACK_SUCCESS
+
+RETURN_SUCCESS : 
+
+	fprintf(p_logfile,"Successfully Exiting the processtion CR_Proc_CSDStatData\n"); 
+	return(APL_SUCCESS);
+
+RETURN_FAILURE : 
+	fprintf(p_logfile,"UnSuccessfully Exiting the processtion CR_Proc_CSDStatData\n"); 
+	return(APL_FAILURE);
+}
+
+
+
+int CR_Proc_CSDDynaData(DL_CSDMAP_STRUCT_H *p_dl_csdmap_struct_h,
+						MS_STATIC_VAL *p_ms_static_val_b,
+						int p_selval_size, 
+						FILE *p_logfile,
+						char *p_process_line,
+						DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	int int_l_selval_size = 0;
+	int int_l_loopcount=0;
+	int int_l_numeric_value=0;
+	int i=0;
+
+	char chr_l_format_string[FORMAT_STR_LEN]=APL_NULL_STRING;
+	char int_l_temp[CSD_STR_LEN]=APL_NULL_STRING;
+	char chr_l_temp_data[CSD_STR_LEN]=APL_NULL_STRING;
+	char chr_l_shortname[FORMAT_STR_LEN]=APL_NULL_STRING;
+	char chr_l_isin_part[INSTR_ISIN_LEN_F]=APL_NULL_STRING;
+   char chr_l_temp_padded[CSD_STR_LEN]=APL_NULL_STRING; 
+	CO_ProcMonitor(p_logfile,"Enter the Function  catDataDynamic \n",NULL,NULL);
+	
+	memset(int_l_temp,APL_NULL_CHAR,CSD_STR_LEN);
+	memset(chr_l_format_string,APL_NULL_CHAR,FORMAT_STR_LEN);
+	memset(chr_l_temp_data,APL_NULL_CHAR,CSD_STR_LEN);
+	memset(chr_l_isin_part,APL_NULL_CHAR,INSTR_ISIN_LEN_F);
+	memset(chr_l_temp_padded,APL_NULL_CHAR,CSD_STR_LEN);
+	
+	int_l_selval_size=p_selval_size;
+	chr_l_format_string[0]='%';
+   chr_l_format_string[1]=APL_NULL_CHAR;
+   
+	strcat(chr_l_format_string,".");	
+	
+	sprintf(int_l_temp,"%s",ltoa(p_dl_csdmap_struct_h->h_max_len));
+	
+	strcat(chr_l_format_string,int_l_temp);
+	
+	chr_l_format_string[strlen(int_l_temp)+2]='s';
+	chr_l_format_string[strlen(int_l_temp)+3]='\0';
+
+	for(i=0;i<int_l_selval_size; ++i)
+	{
+ 		if(strcmp(p_dl_csdmap_struct_h->h_src,(p_ms_static_val_b)[i].link_val)==0)
+		{
+			strcpy(chr_l_temp_data,(p_ms_static_val_b)[i].link_tag); 
+         strcpy(chr_l_temp_padded,(p_ms_static_val_b)[i].link_tag);
+			if(strcmp((p_ms_static_val_b)[i].link_val,"ISIN_PART")==0)  
+			{
+				for ( int_l_loopcount=0,int_l_numeric_value=0;int_l_loopcount<strlen(chr_l_temp_data ) && int_l_numeric_value < 3;int_l_loopcount++)
+   				{
+       					if((chr_l_temp_data[int_l_loopcount] == '0') || (chr_l_temp_data[int_l_loopcount] == '1') ||
+               				(chr_l_temp_data[int_l_loopcount] == '2') || (chr_l_temp_data[int_l_loopcount] == '3') ||
+               				(chr_l_temp_data[int_l_loopcount] == '4') || (chr_l_temp_data[int_l_loopcount] == '5') ||
+              					(chr_l_temp_data[int_l_loopcount] == '6') || (chr_l_temp_data[int_l_loopcount] == '7') ||
+               				(chr_l_temp_data[int_l_loopcount] == '8') || (chr_l_temp_data[int_l_loopcount] == '9'))
+         				{
+               				chr_l_isin_part[int_l_numeric_value]=chr_l_temp_data[int_l_loopcount];
+              					int_l_numeric_value ++;
+         				}
+    				}
+		
+  				chr_l_isin_part[int_l_numeric_value]='\0';	
+				strcpy(chr_l_temp_data,chr_l_isin_part);
+			}
+
+		        
+      else
+	   {    	
+      		fprintf(p_logfile,"string ---- |%s|\n",chr_l_temp_padded);
+				
+            if (strlen(chr_l_temp_padded) == 0)
+            {
+               strcpy(chr_l_temp_padded,APL_NULL_STRING);
+               sprintf(chr_l_temp_padded,chr_l_format_string," ");
+               strcat(chr_l_temp_padded,APL_NULL_STRING);
+            }
+				else
+				{
+					if(APL_FAILURE== CO_PadString(chr_l_temp_padded,p_dl_csdmap_struct_h->c_padateype[0],p_dl_csdmap_struct_h->h_max_len,p_dl_csdmap_struct_h->h_csd_padstr,l_debug_info_ptr))
+						{
+								 fprintf(p_logfile,"Failure in the Function  CO_PadString\n");
+								 APL_GOBACK_FAIL		
+						
+						}
+               	strcpy(chr_l_temp_data,chr_l_temp_padded);
+				}
+		} 
+		
+		sprintf(int_l_temp,chr_l_format_string,chr_l_temp_data);
+      fprintf(p_logfile,"Format string ---- |%s|\n",chr_l_format_string);
+      fprintf(p_logfile,"Padtype ....|%s|\n",p_dl_csdmap_struct_h->c_padateype);
+      fprintf(p_logfile,"Padstring....|%s|\n",p_dl_csdmap_struct_h->h_csd_padstr);
+		fprintf(p_logfile,"Dynamic portion of data is |%s|\n",int_l_temp); 
+		break;
+		} 
+	}		
+      
+	strcpy(p_process_line,int_l_temp);
+	
+	APL_GOBACK_SUCCESS
+
+RETURN_SUCCESS : 
+
+	fprintf(p_logfile,"Successfully Exiting the processtion CR_Proc_CSDDynaData\n"); 
+	return(APL_SUCCESS);		
+
+RETURN_FAILURE : 
+	
+	fprintf(p_logfile,"UnSuccessfully Exiting the processtion CR_Proc_CSDDynaData\n"); 
+	return(APL_FAILURE);
+}
+
+
+
+int CR_Prnt_CSDLine(FILE *p_ptr_handoff_file,
+							FILE *p_logfile,
+							char *p_processline)
+{
+	
+	fprintf(p_logfile,"Entered into CR_Prnt_CSDLine Function...\n");
+	fprintf(p_ptr_handoff_file,"%s\n",p_processline);
+	APL_GOBACK_SUCCESS
+
+RETURN_SUCCESS : 
+	
+	fprintf(p_logfile,"Successfully Exiting the processtion CR_Prnt_CSDLine\n"); 
+	return(APL_SUCCESS);		
+
+RETURN_FAILURE : 
+	
+	fprintf(p_logfile,"UnSuccessfully Exiting the processtion CR_Prnt_CSDLine\n"); 
+	return(APL_FAILURE);
+
+}
+
+
+
+
+int CR_Proc_CSDHdrFmt(MS_STATIC_VAL *p_ms_static_val_a,
+								FILE *p_logfile,
+								char *p_process_line,
+								DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	struct sqlca sqlca;
+   
+	int int_l_count=0;	
+	int int_l_loopcount=0;
+	int int_l_statval_size=0;
+	char chr_l_format[CSD_STR_LEN]=APL_NULL_STRING;   
+	
+	DL_CSDMAP_STRUCT_H *l_dl_csdmap_struct_h = NULL;
+	DL_CSDMAP_STRUCT_I *l_dl_csdmap_struct_i = NULL;
+	
+	CO_ProcMonitor(p_logfile,"Enter the Function CR_Proc_CSDHdrFmt Function\n",NULL,NULL);
+	
+	l_dl_csdmap_struct_h = (DL_CSDMAP_STRUCT_H *)calloc(1,sizeof(DL_CSDMAP_STRUCT_H ));
+	l_dl_csdmap_struct_i = (DL_CSDMAP_STRUCT_I *)calloc(1,sizeof(DL_CSDMAP_STRUCT_I ));
+	
+	EXEC SQL BEGIN DECLARE SECTION;
+	EXEC SQL VAR l_dl_csdmap_struct_h->h_msg_ident_no IS STRING;
+	EXEC SQL VAR l_dl_csdmap_struct_h->c_recordateype IS STRING;
+	EXEC SQL VAR l_dl_csdmap_struct_h->h_infosrc IS STRING;
+	EXEC SQL VAR l_dl_csdmap_struct_h->h_src IS STRING;
+	EXEC SQL VAR l_dl_csdmap_struct_h->h_typeof_link IS STRING;
+   EXEC SQL VAR l_dl_csdmap_struct_h->c_padateype  IS STRING;
+   EXEC SQL VAR l_dl_csdmap_struct_h->h_csd_padstr IS STRING;
+	EXEC SQL END DECLARE SECTION;
+	
+	EXEC SQL DECLARE csdheader CURSOR FOR
+		SELECT * FROM DL_CSDMAP WHERE
+			    RECCLASS='HEADER' ORDER BY SRL_NUMBER;
+
+		IS_ANY_ORA_ERROR
+	
+	EXEC SQL OPEN csdheader;
+	
+	IS_ANY_ORA_ERROR
+	
+	int_l_count=0; 
+	
+	memset(l_dl_csdmap_struct_h,NULL,sizeof(DL_CSDMAP_STRUCT_H));
+	memset(l_dl_csdmap_struct_i,NULL,sizeof(DL_CSDMAP_STRUCT_I));
+	
+	
+	memset(p_process_line,NULL,sizeof(CSD_STR_LEN));	
+	for(int_l_loopcount=0;;int_l_loopcount++)
+	{
+		if( strcmp((p_ms_static_val_a)[int_l_loopcount].link_val,"") == 0)
+		{
+			break;
+		}
+		int_l_statval_size= int_l_statval_size + 1;
+	 }
+	
+	for(;;)
+	{
+		int_l_count=int_l_count + 1;	
+		
+		CO_FreeErrLst(l_debug_info_ptr);
+		
+		memset(l_dl_csdmap_struct_h,NULL,sizeof(DL_CSDMAP_STRUCT_H));
+		memset(l_dl_csdmap_struct_i,NULL,sizeof(DL_CSDMAP_STRUCT_I));
+
+		sqlca.sqlcode =0;
+		EXEC SQL FETCH csdheader
+			 INTO :l_dl_csdmap_struct_h:l_dl_csdmap_struct_i;
+		
+		IS_ANY_ORA_ERROR	
+		
+		if(sqlca.sqlcode == 1403)break;
+
+		if (strcmp(l_dl_csdmap_struct_h->h_infosrc,"STATIC")==0) 
+ 		{
+			if (APL_FAILURE==CR_Proc_CSDStatData(l_dl_csdmap_struct_h,p_ms_static_val_a,p_logfile,chr_l_format,l_debug_info_ptr))
+			{
+				CO_ProcMonitor(p_logfile,"Failed in CR_Proc_CSDStatData\n",NULL,NULL);
+				APL_GOBACK_FAIL
+			}
+			strcat(p_process_line,chr_l_format);	
+         fprintf(p_logfile,"l_formar :[%s]\n",chr_l_format);
+		}
+		
+		else if (strcmp(l_dl_csdmap_struct_h->h_infosrc,"DYNAMIC")==0)
+		{ 
+			if(APL_FAILURE==CR_Proc_CSDDynaData(l_dl_csdmap_struct_h,p_ms_static_val_a,int_l_statval_size,p_logfile,chr_l_format,l_debug_info_ptr))
+			{
+				CO_ProcMonitor(p_logfile,"Failed in CR_Proc_CSDDynaData\n",NULL,NULL);
+				APL_GOBACK_FAIL
+			}	
+			strcat(p_process_line,chr_l_format);
+         fprintf(p_logfile,"l_formar :[%s]\n",chr_l_format);
+		}
+			
+	}
+   strcat(p_process_line,"\0");  
+   fprintf(p_logfile,"p_process_lin :[%s]\n",p_process_line);
+
+	EXEC SQL CLOSE csdheader;
+	
+	APL_GOBACK_SUCCESS
+
+RETURN_SUCCESS : 
+
+	fprintf(p_logfile,"Successfully Exiting the program CR_Proc_CSDHdrFmt\n"); 
+	return(APL_SUCCESS);		
+
+RETURN_FAILURE : 
+	
+	fprintf(p_logfile,"UnSuccessfully Exiting the program CR_Proc_CSDHdrFmt\n"); 
+	return(APL_FAILURE);
+}
+
+ 
+
+
+int CR_Prnt_CSDHdr(FILE *p_logfile,
+								char *chr_l_process_line,
+         					INTL_ENV_DATA_STRUCT_H *p_intlenv_data_struct_h,
+								DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{ 
+	 
+	char chr_l_handoff_dir[FILEPATH_LEN] = APL_NULL_STRING;
+	char chr_l_handoff_file_name[FILEPATH_LEN]=APL_NULL_STRING; 
+	char chr_l_filepath[FILEPATH_LEN]=APL_NULL_STRING;
+	char chr_l_inifile[PATH_LENGTH] = APL_NULL_STRING;
+	char chr_l_sysdate_b[APL_DATE_LEN]=APL_NULL_STRING;
+	char chr_l_seq_number[SEQ_LEN]=APL_NULL_STRING;
+   char chr_l_tempdate[APL_DATE_LEN]=APL_NULL_STRING;
+   char chr_l_line[500]=APL_NULL_STRING;
+   char chr_l_handoff_source_file[FILEPATH_LEN]=APL_NULL_STRING; 
+	
+	FILE *l_ptr_handoff_file = NULL;
+	FILE *l_finifile;
+   FILE *l_ptr_source_file= NULL;
+
+	memset(chr_l_tempdate,APL_NULL_CHAR,APL_DATE_LEN);
+   memset(chr_l_sysdate_b,APL_NULL_CHAR,APL_DATE_LEN);
+   memset(chr_l_seq_number,APL_NULL_CHAR,SEQ_LEN);
+   memset(chr_l_line,APL_NULL_CHAR,500);
+	
+	EXEC SQL VAR chr_l_seq_number IS STRING;
+   EXEC SQL VAR chr_l_sysdate_b IS STRING;
+   EXEC SQL VAR chr_l_tempdate IS STRING;
+	
+	strcpy(chr_l_inifile,getenv("INTL_ROOT_PATH"));
+	strcat(chr_l_inifile,"intl_sun.cfg");
+
+	if ( ( l_finifile=fopen(chr_l_inifile,"r") ) == NULL)
+	{
+   		APL_GOBACK_FAIL
+	}	
+	
+	memset(chr_l_handoff_dir,NULL,sizeof(chr_l_handoff_dir));
+	memset(chr_l_handoff_file_name,NULL,sizeof(chr_l_handoff_file_name));
+	
+	if ( APL_FAILURE == CO_ReadToken(l_finifile, "INTL_HF_PATH", chr_l_handoff_dir, l_debug_info_ptr ))
+	{
+			fprintf(p_logfile,"\nReturning unsuccessfully from CO_ReadToken\n");
+			APL_GOBACK_FAIL
+	}
+   
+	if (APL_FAILURE == CO_RtvSysDt(chr_l_tempdate,l_debug_info_ptr))
+   {
+   	   fprintf(p_logfile,"Failed in getting SystemDateTime \n");
+			APL_GOBACK_FAIL
+   }
+		
+   EXEC SQL SELECT TO_CHAR(to_date(substr(:chr_l_tempdate,1,10),'dd/chr_mm/yyyy'),'DDMMYYYY')
+					into :chr_l_sysdate_b FROM DUAL;
+	
+	IS_ANY_ORA_ERROR	
+	
+	EXEC SQL SELECT SEQ_CSDFLATFILE.CURRVAL INTO
+			:chr_l_seq_number FROM DUAL;
+	
+	IS_ANY_ORA_ERROR
+
+   strcpy(chr_l_handoff_file_name, chr_l_handoff_dir);
+	strcat(chr_l_handoff_file_name, "SAT");             
+   strcat(chr_l_handoff_file_name,chr_l_sysdate_b);
+   strcat(chr_l_handoff_file_name,chr_l_seq_number);
+   strcat(chr_l_handoff_file_name,".txt");
+	strcat(chr_l_handoff_file_name,"\0");
+
+	CO_ProcMonitor(p_logfile,"Puting Header in the h_file .........\n",NULL,NULL);
+
+	if ((l_ptr_handoff_file = fopen(chr_l_handoff_file_name,"w")) == NULL)
+	{
+			CO_ProcMonitor(p_logfile,"Unable to create CSD flat h_file with Header \n",NULL,NULL);
+			APL_GOBACK_FAIL
+	}
+
+	fprintf(l_ptr_handoff_file,"%s\n",chr_l_process_line);
+   
+	fprintf(p_logfile,"Header in the h_file:::|%s|\n",chr_l_process_line);
+
+	strcpy(chr_l_handoff_source_file,chr_l_handoff_dir);
+   strcat(chr_l_handoff_source_file,"CSDFILE.TXT");	
+   strcat(chr_l_handoff_source_file,"\0");
+
+	if((l_ptr_source_file=fopen(chr_l_handoff_source_file,"r"))== NULL)
+	{
+			CO_ProcMonitor(p_logfile,"Unable to open the h_file  .....\n",NULL,NULL);
+			APL_GOBACK_FAIL
+	}
+  	
+	while (!feof(l_ptr_source_file))
+
+	{
+			memset(chr_l_line,APL_NULL_CHAR,500);
+			fgets(chr_l_line,500,l_ptr_source_file);
+
+			if(strlen(chr_l_line)==0)
+			{
+				break;
+			}
+				
+			fputs(chr_l_line,l_ptr_handoff_file);
+         DEBUG_INFO
+			{
+           printf("The h_line in h_file is ...%s",chr_l_line);	
+			}
+	} 	
+	
+	fclose(l_ptr_source_file);	
+	fclose(l_ptr_handoff_file);
+	
+	memset(chr_l_filepath,APL_NULL_CHAR,FILEPATH_LEN);
+	
+
+   
+	 sprintf(chr_l_filepath,"rm -f %s%s",chr_l_handoff_dir,"CSDFILE.TXT"); 
+  	 system(chr_l_filepath); 
+   
+	DEBUG_INFO
+	{ 
+			printf("Removing File chr_path is %s\n",chr_l_filepath); 
+	}
+
+	APL_GOBACK_SUCCESS
+
+RETURN_SUCCESS :
+   
+	fprintf(p_logfile,"Successfully Exiting the program CR_Prnt_CSDHdr\n");
+   return(APL_SUCCESS);
+
+RETURN_FAILURE :
+        
+	fprintf(p_logfile,"UnSuccessfully Exiting the program CR_Prnt_CSDHdr\n");
+        return(APL_FAILURE);
+}
+
+
+int CR_Prnt_CSDRptHdr(FILE *p_csd_cre_rept_file,
+					       FILE *p_logfile)
+{
+   fprintf(p_csd_cre_rept_file,"\n");
+   fprintf(p_csd_cre_rept_file,"\t\t\t  Details of Trades selected for CSD File Creation     \n");
+   fprintf(p_csd_cre_rept_file,"\n");
+   fprintf(p_csd_cre_rept_file,"\n");
+   fprintf(p_csd_cre_rept_file,"Account           Reference  \n");
+   fprintf(p_csd_cre_rept_file,"--------------------------------------\n");
+
+   return(APL_SUCCESS);
+	
+}
+

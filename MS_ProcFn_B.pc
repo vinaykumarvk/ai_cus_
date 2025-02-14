@@ -1,0 +1,2311 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ 
+#include "stdio_64.h"
+#include <math.h>
+#include "MS_Swift.h"
+#include "CR_Common.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+
+
+
+
+#define	APL_MALLOC_FAIL_LOC(pointer)\
+			if (pointer == NULL)\
+			{\
+				return APL_FAILURE;\
+			}
+
+
+// AIX - Warnings
+int MS_Chk_CondPrevMsg(int,char *,FILE *,MS_STATIC_VAL *,int);
+int MS_Rtv_TabVal(int ,char *,FILE *,char *,MS_STATIC_VAL *,int );
+
+int MS_Proc_Msg(char *chr_p_msgno_a,MS_TAG_ELM_STRUCT_H **p_ms_tag_elm_struct_h,int p_tot_tag,
+                  MS_SEQ_ELM_STRUCT_H **p_ms_seq_elm_struct_h,
+                  int p_tot_seq,MS_VAL_ELM_STRUCT_H **p_ms_val_elm_struct_h,int *p_tot_val,
+                  FILE *l_data_values,int *p_val_rec,char *p_msg_file,
+                  char p_swftlx,MS_CALC_ELM_STRUCT_H **p_ms_calc_elm_struct_h,int p_calc_ctr,
+                  MS_STATIC_VAL *p_ms_static_val_d,FILE *p_errfile,char *p_txn_msg,
+                  int *int_p_retstat,DEBUG_INFO_STRUCT_H **l_debug_info_ptr) 
+{
+
+
+
+extern int MS_Rtv_SeqRep(int ,int ,MS_SEQ_ELM_STRUCT_H *,int *);
+extern int MS_Rtv_ParSeqRep(int ,int ,MS_SEQ_ELM_STRUCT_H *,int *);
+extern int MS_Chk_TagCond(char *p_cond,int  p_val_rec,FILE *p_data_values,MS_STATIC_VAL *);
+/*void MS_Proc_Round(char *,double ,char *,char ,char *,char,FILE *);*/
+void MS_Proc_Round(char *chr_p_msgno_a,double chr_p_val,char *f_val,char p_print_code,char *p_currencycode,char p_swftlx,FILE *p_errfile);
+int MS_Rtv_ComputedVal(char *,MS_CALC_ELM_STRUCT_H **,double *, int );
+int MS_Proc_TailUpd(char *,MS_VAL_ELM_STRUCT_H **,int ,MS_CALC_ELM_STRUCT_H **,int ,char,char,int ,MS_STATIC_VAL *,FILE *,FILE *);
+int MS_Proc_ComputedVal(char *,MS_CALC_ELM_STRUCT_H **,int ,int ,FILE *,MS_STATIC_VAL *,FILE *,int );
+int MS_Proc_MsgEnd(MS_TAG_ELM_STRUCT_H **,int ,int ,MS_VAL_ELM_STRUCT_H **,
+               MS_STATIC_VAL *,MS_CALC_ELM_STRUCT_H **,int ,FILE *,
+               int,char * ,char *,FILE *, DEBUG_INFO_STRUCT_H **);
+
+
+EXEC SQL BEGIN DECLARE SECTION;
+char chr_h_form_val[201];
+exec sql var chr_h_form_val is string;
+EXEC SQL END DECLARE SECTION;
+
+struct sqlca sqlca;
+
+int int_tag_ctr=0,int_val_ctr=0,int_seq_ctr=0,int_prv_seqno=0,int_calc_ctr=0,int_prev_val_rec=0;
+int int_mprocessed=0,int_l_seq_rep_no=0,int_tot_tag=0,int_tot_seq=0,int_returnval=0,int_multi_skip=0;
+int int_msglen=0,int_newmsgflg=0,int_prev_val_ctr=0,int_maxmsglen,int_newmsg=1,int_l_new_rec=0;
+int int_replen=0,int_prv_replen = 0,int_l_len_data_val=0,int_rec_processed = 0;
+int int_tag_skip=0,int_first_skip=0,int_line_ctr=0,int_last_proc=0,int_l_length_add = 0,int_retstat=0;
+double dbl_l_calc_val= 0;
+char chr_l_form_val[201],chr_l_ccycode[APL_CCYCODE_LEN],chr_l_ccy_format[100];
+char chr_format_code[10],chr_l_format_str[201];
+char chr_l_fld_value[201],chr_l_date_time[APL_DATE_LEN],chr_l_seq_flag[2];
+MS_MSGSTAT_STRUCT l_ms_msgstat_structa;
+
+int	int_l_new_prv_rep_len_ind=0;
+int	int_new_nreplen=0;
+char  chr_l_temp_val[201] = APL_NULL_STRING;
+char chr_l_unique_ref_num[APL_UNIQUE_REF_NUM_LEN]=APL_NULL_STRING;    
+
+
+int int_tp = 0;
+
+
+memset(chr_l_fld_value,APL_NULL_CHAR,201);
+memset(chr_l_form_val,APL_NULL_CHAR,201);
+memset(chr_h_form_val,APL_NULL_CHAR,201);
+memset(chr_l_ccycode,APL_NULL_CHAR,APL_CCYCODE_LEN);
+memset(chr_l_ccy_format,APL_NULL_CHAR,100);
+memset(l_ms_msgstat_structa.swift_msg_rep,APL_NULL_CHAR,7);
+memset(l_ms_msgstat_structa.proc_init,APL_NULL_CHAR,61);
+memset(l_ms_msgstat_structa.generate_dt,APL_NULL_CHAR,APL_DATE_LEN);
+memset(chr_l_date_time,APL_NULL_CHAR,APL_DATE_LEN);
+memset(chr_l_format_str,APL_NULL_CHAR,201);
+memset(chr_format_code,APL_NULL_CHAR,10);
+
+
+int_tot_tag = p_tot_tag;
+int_tot_seq = p_tot_seq;
+
+
+
+
+
+
+int_prv_seqno = (*p_ms_tag_elm_struct_h)[int_tag_ctr].identity_no;
+int_mprocessed = 0;
+strcpy(chr_l_seq_flag,(*p_ms_seq_elm_struct_h)[0].ind);
+if (p_swftlx == 'S')
+     int_maxmsglen = MAXSWIFTLEN;
+else
+     int_maxmsglen = l_mt_message_sys_params_struct_h.allowed_tlx_len;
+
+memset((*p_ms_val_elm_struct_h)[int_val_ctr].h_data_val,201,APL_NULL_CHAR);
+
+while (int_mprocessed != 1)
+{
+   int_tag_skip = 0; 
+   if((int_msglen-int_prv_replen+int_replen) > int_maxmsglen)
+   {
+      if(int_rec_processed == 1)
+                MS_Proc_TailUpd(chr_p_msgno_a,p_ms_val_elm_struct_h,int_val_ctr,p_ms_calc_elm_struct_h,p_calc_ctr,int_newmsg,'S',*p_val_rec,p_ms_static_val_d,l_data_values,p_errfile);
+      else
+                MS_Proc_TailUpd(chr_p_msgno_a,p_ms_val_elm_struct_h,int_val_ctr,p_ms_calc_elm_struct_h,p_calc_ctr,int_newmsg,'R',*p_val_rec,p_ms_static_val_d,l_data_values,p_errfile);
+      MS_Proc_MsgEnd(p_ms_tag_elm_struct_h,int_tot_tag,*p_val_rec,p_ms_val_elm_struct_h,
+               p_ms_static_val_d,p_ms_calc_elm_struct_h,int_newmsg,l_data_values, int_prev_val_ctr,chr_p_msgno_a,p_txn_msg,p_errfile,l_debug_info_ptr);
+      int_returnval = MS_Proc_MsgFormat(*p_ms_seq_elm_struct_h,int_tot_seq,*p_ms_val_elm_struct_h,
+                               int_prev_val_ctr,p_msg_file,p_swftlx);
+      APL_GOBACK_SUCCESS;
+   }
+   if ((*p_ms_tag_elm_struct_h)[int_tag_ctr].identity_no !=  int_prv_seqno) 
+   { 
+      if( strlen((*p_ms_seq_elm_struct_h)[((*p_ms_tag_elm_struct_h)[int_tag_ctr].identity_no)-1].seq_condition) != 0) 
+      {
+         if( APL_SUCCESS == MS_Chk_CondPrevMsg(*p_val_rec,(*p_ms_seq_elm_struct_h)[((*p_ms_tag_elm_struct_h)[int_tag_ctr].identity_no)-1].seq_condition,l_data_values,p_ms_static_val_d,int_newmsg))
+         { 
+            if((*p_ms_tag_elm_struct_h)[int_tag_ctr].head_cont_newline == 'T')
+            {
+                MS_Proc_TailUpd(chr_p_msgno_a,p_ms_val_elm_struct_h,int_val_ctr,p_ms_calc_elm_struct_h,p_calc_ctr,int_newmsg,'N',*p_val_rec,p_ms_static_val_d,l_data_values,p_errfile);
+            }
+            int_tag_ctr++;
+            continue;
+         }
+         else
+         {
+         if((*p_ms_tag_elm_struct_h)[int_tag_ctr].head_cont_newline == 'T')
+         {
+                MS_Proc_TailUpd(chr_p_msgno_a,p_ms_val_elm_struct_h,int_val_ctr,p_ms_calc_elm_struct_h,p_calc_ctr,int_newmsg,'S',*p_val_rec,p_ms_static_val_d,l_data_values,p_errfile);
+         }
+         if( (*p_ms_tag_elm_struct_h)[int_tag_ctr].identity_no == 1)
+         {
+              if(int_rec_processed == 1)
+                MS_Proc_TailUpd(chr_p_msgno_a,p_ms_val_elm_struct_h,int_val_ctr,p_ms_calc_elm_struct_h,p_calc_ctr,int_newmsg,'S',*p_val_rec,p_ms_static_val_d,l_data_values,p_errfile);
+              else
+                MS_Proc_TailUpd(chr_p_msgno_a,p_ms_val_elm_struct_h,int_val_ctr,p_ms_calc_elm_struct_h,p_calc_ctr,int_newmsg,'R',*p_val_rec,p_ms_static_val_d,l_data_values,p_errfile);
+              MS_Proc_MsgEnd(p_ms_tag_elm_struct_h,int_tot_tag,*p_val_rec,p_ms_val_elm_struct_h,
+               		 p_ms_static_val_d,p_ms_calc_elm_struct_h,int_newmsg,l_data_values, int_prev_val_ctr,chr_p_msgno_a,p_txn_msg,p_errfile,l_debug_info_ptr);
+	      if(int_last_proc == 0)
+	      {
+			
+             
+						 int_returnval = MS_Proc_MsgFormat(*p_ms_seq_elm_struct_h,int_tot_seq,*p_ms_val_elm_struct_h,
+													 (int_val_ctr+1),p_msg_file,p_swftlx);
+			
+
+	      }
+	      else
+	      {
+              int_returnval = MS_Proc_MsgFormat(*p_ms_seq_elm_struct_h,int_tot_seq,*p_ms_val_elm_struct_h,
+                                       int_val_ctr,p_msg_file,p_swftlx);
+	      }
+               APL_GOBACK_SUCCESS;
+         }
+         }
+ 
+      }
+      else
+      {
+      if( (*p_ms_tag_elm_struct_h)[int_tag_ctr].identity_no == 1)
+      {
+              if(int_rec_processed == 1)
+                MS_Proc_TailUpd(chr_p_msgno_a,p_ms_val_elm_struct_h,int_val_ctr,p_ms_calc_elm_struct_h,p_calc_ctr,int_newmsg,'S',*p_val_rec,p_ms_static_val_d,l_data_values,p_errfile);
+              else
+                MS_Proc_TailUpd(chr_p_msgno_a,p_ms_val_elm_struct_h,int_val_ctr,p_ms_calc_elm_struct_h,p_calc_ctr,int_newmsg,'R',*p_val_rec,p_ms_static_val_d,l_data_values,p_errfile);
+              MS_Proc_MsgEnd(p_ms_tag_elm_struct_h,int_tot_tag,*p_val_rec,p_ms_val_elm_struct_h,
+               		 p_ms_static_val_d,p_ms_calc_elm_struct_h,int_newmsg,l_data_values, int_prev_val_ctr,chr_p_msgno_a,p_txn_msg,p_errfile,l_debug_info_ptr);
+              int_returnval = MS_Proc_MsgFormat(*p_ms_seq_elm_struct_h,int_tot_seq,*p_ms_val_elm_struct_h,
+                                       int_val_ctr+1,p_msg_file,p_swftlx);
+               APL_GOBACK_SUCCESS;
+      }
+      }
+
+      int_seq_ctr = 0;
+      while( int_seq_ctr <= int_tot_seq)
+      {
+         if( (*p_ms_seq_elm_struct_h)[int_seq_ctr].identity_no == int_prv_seqno)
+         { 
+            (*p_ms_seq_elm_struct_h)[int_seq_ctr].sequence_rep_no = (*p_ms_seq_elm_struct_h)[int_seq_ctr].sequence_rep_no  + 1;
+            break;
+         }
+         int_seq_ctr++;
+      }
+      int_prv_seqno = (*p_ms_tag_elm_struct_h)[int_tag_ctr].identity_no;
+      int_seq_ctr = 0;
+      while( int_seq_ctr <= int_tot_seq)
+      {
+         if( (*p_ms_seq_elm_struct_h)[int_seq_ctr].identity_no == (*p_ms_tag_elm_struct_h)[int_tag_ctr].identity_no)
+         { 
+            strcpy(chr_l_seq_flag,(*p_ms_seq_elm_struct_h)[int_seq_ctr].ind);
+            break;
+         }
+         int_seq_ctr++;
+      }
+   }
+
+   if( strlen((*p_ms_tag_elm_struct_h)[int_tag_ctr].msg_tag_cond) != 0)
+   {
+       if(APL_FAILURE == MS_Chk_TagCond((*p_ms_tag_elm_struct_h)[int_tag_ctr].msg_tag_cond,*p_val_rec, l_data_values,p_ms_static_val_d))
+            {
+                int_tag_skip = 1; 
+
+		strcpy(chr_format_code,APL_NULL_STRING);
+                
+                
+                if(int_last_proc == 0)
+			int_multi_skip = 1;
+                else
+			int_multi_skip = 0;
+                int_last_proc = 0;
+             }
+             else
+             {
+               int_last_proc = 1; 
+             }
+   }
+	else
+	{
+		
+		int_last_proc = 1;
+	}
+
+   if((*p_ms_tag_elm_struct_h)[int_tag_ctr].info_type == 'F')
+   {
+       strcpy(chr_format_code,(*p_ms_tag_elm_struct_h)[int_tag_ctr].info_elem);
+       int_tag_skip = 1;
+   }
+
+
+   
+   
+   if((*p_ms_tag_elm_struct_h)[int_tag_ctr].head_cont_newline == 'F' )
+   {
+       if(int_tag_skip == 1)
+       	int_first_skip = 1;
+       else
+        int_first_skip = 0;
+   }
+
+   if(int_l_new_rec == 0)
+   {
+      int_rec_processed = 0;
+      int_returnval = MS_Proc_ComputedVal(chr_p_msgno_a,p_ms_calc_elm_struct_h,*p_val_rec,int_newmsg,l_data_values,p_ms_static_val_d,p_errfile,p_calc_ctr);
+      if(int_returnval == APL_FAILURE)
+      {
+         APL_GOBACK_FAIL;
+      }
+      int_l_new_rec = 1;
+   }
+   
+   int_l_length_add = 0;
+
+   if(int_tag_skip != 1)
+   { 
+
+   	strcpy((*p_ms_val_elm_struct_h)[int_val_ctr].msg_tag, (*p_ms_tag_elm_struct_h)[int_tag_ctr].msg_tag);
+
+
+      (*p_ms_val_elm_struct_h)[int_val_ctr].identity_no  = (*p_ms_tag_elm_struct_h)[int_tag_ctr].identity_no;
+      if(int_first_skip == 1 && ((*p_ms_tag_elm_struct_h)[int_tag_ctr].head_cont_newline == 'N'))
+      	(*p_ms_val_elm_struct_h)[int_val_ctr].head_cont_newline  = 'H';
+      else
+      	(*p_ms_val_elm_struct_h)[int_val_ctr].head_cont_newline  = (*p_ms_tag_elm_struct_h)[int_tag_ctr].head_cont_newline;
+      (*p_ms_val_elm_struct_h)[int_val_ctr].print_cd  = (*p_ms_tag_elm_struct_h)[int_tag_ctr].print_cd;
+
+
+
+   
+      MS_Rtv_SeqRep((*p_ms_tag_elm_struct_h)[int_tag_ctr].identity_no,int_tot_seq,*p_ms_seq_elm_struct_h,&int_l_seq_rep_no);
+      (*p_ms_val_elm_struct_h)[int_val_ctr].REP_NO  = int_l_seq_rep_no;
+  
+    
+      MS_Rtv_ParSeqRep((*p_ms_tag_elm_struct_h)[int_tag_ctr].identity_no,int_tot_seq,*p_ms_seq_elm_struct_h,&int_tp);
+      (*p_ms_val_elm_struct_h)[int_val_ctr].PAR_REP_NO  = int_tp;
+
+    
+      if((*p_ms_tag_elm_struct_h)[int_tag_ctr].head_cont_newline == 'N')
+      {
+        if(int_first_skip != 1)
+        {
+         int_line_ctr++;
+         strcpy((*p_ms_val_elm_struct_h)[int_val_ctr].msg_tag,(*p_ms_tag_elm_struct_h)[int_tag_ctr].msg_tag);
+         strcat((*p_ms_val_elm_struct_h)[int_val_ctr].msg_tag,ltoa(int_line_ctr));
+        }
+        else
+        {
+         strcpy((*p_ms_val_elm_struct_h)[int_val_ctr].msg_tag,(*p_ms_tag_elm_struct_h)[int_tag_ctr].msg_tag);
+         int_first_skip = 0;
+        }
+      }
+      else
+      if((*p_ms_tag_elm_struct_h)[int_tag_ctr].head_cont_newline != 'C')
+	 int_line_ctr = 0;
+
+    
+
+   
+      if((*p_ms_tag_elm_struct_h)[int_tag_ctr].info_type == 'T')
+      {
+         memset(chr_l_fld_value,'\0',201);
+         int_returnval = MS_Rtv_TabVal(*p_val_rec,(*p_ms_tag_elm_struct_h)[int_tag_ctr].info_elem,l_data_values,chr_l_fld_value,p_ms_static_val_d,0);
+
+         if(int_returnval == APL_FAILURE)
+         {
+	     fprintf(p_errfile,"Failure in reading datafile for %s\n",(*p_ms_tag_elm_struct_h)[int_tag_ctr].info_elem);
+             APL_GOBACK_FAIL
+         }
+       
+ 
+         if ((*p_ms_tag_elm_struct_h)[int_tag_ctr].print_cd != ' ')
+         { 
+            if ((*p_ms_tag_elm_struct_h)[int_tag_ctr].print_cd == 'A')
+            {
+                memset(chr_l_ccy_format,APL_NULL_CHAR,100);
+                strcpy(chr_l_ccy_format,"CURRENCY");
+                strcat(chr_l_ccy_format,(*p_ms_tag_elm_struct_h)[int_tag_ctr].info_elem);
+                int_returnval = MS_Rtv_TabVal(*p_val_rec,chr_l_ccy_format,l_data_values,chr_l_ccycode,p_ms_static_val_d,0);
+            }
+            if ((*p_ms_tag_elm_struct_h)[int_tag_ctr].print_cd == 'R')
+            {
+                memset(chr_l_ccy_format,APL_NULL_CHAR,100);
+                strcpy(chr_l_ccy_format,"DEC");
+                strcat(chr_l_ccy_format,(*p_ms_tag_elm_struct_h)[int_tag_ctr].info_elem);
+                int_returnval = MS_Rtv_TabVal(*p_val_rec,chr_l_ccy_format,l_data_values,chr_l_ccycode,p_ms_static_val_d,0);
+            }
+	    if(strcmp(chr_p_msgno_a,"599CPJ") == 0 ||
+               strcmp(chr_p_msgno_a,"599PFR") == 0)
+	    {
+		 memset(chr_l_form_val,APL_NULL_CHAR,201);
+	    MS_Proc_Round(chr_p_msgno_a,atof(chr_l_fld_value),chr_l_form_val,(*p_ms_tag_elm_struct_h)[int_tag_ctr].print_cd,chr_l_ccycode,'T',p_errfile);
+	    }
+	    else
+	    {
+		 memset(chr_l_form_val,APL_NULL_CHAR,201);
+	    MS_Proc_Round(chr_p_msgno_a,atof(chr_l_fld_value),chr_l_form_val,(*p_ms_tag_elm_struct_h)[int_tag_ctr].print_cd,chr_l_ccycode,p_swftlx,p_errfile);
+	    }
+				memset(chr_l_fld_value,APL_NULL_CHAR,201);
+            strcpy(chr_l_fld_value,chr_l_form_val);
+         }
+
+	 if(strlen(chr_format_code) != 0)
+	 {
+	 memset(chr_l_format_str,APL_NULL_CHAR,201); 
+	    sprintf(chr_l_format_str,chr_format_code,chr_l_fld_value);
+		 memset(chr_l_fld_value,APL_NULL_CHAR,201); 
+	    strcpy(chr_l_fld_value,chr_l_format_str);
+	    strcpy(chr_format_code,APL_NULL_STRING);
+	 }
+   
+         if((*p_ms_tag_elm_struct_h)[int_tag_ctr].head_cont_newline == 'C')
+         {
+             strcat((*p_ms_val_elm_struct_h)[int_val_ctr-1].h_data_val,chr_l_fld_value);  
+				 
+				 (*p_ms_val_elm_struct_h)[int_val_ctr].identity_no = 0;
+				 
+             int_val_ctr--;
+             if(strcmp((*p_ms_tag_elm_struct_h)[int_tag_ctr].msg_tag,"PG") == 0 ||
+                strcmp((*p_ms_tag_elm_struct_h)[int_tag_ctr].msg_tag,"PGC") == 0 )
+                 int_l_length_add = 26 - strlen((*p_ms_val_elm_struct_h)[int_val_ctr].msg_tag)-4;
+             else
+                 int_l_length_add = strlen(chr_l_fld_value)- strlen((*p_ms_val_elm_struct_h)[int_val_ctr].msg_tag)-4;
+         }
+         else 
+         {
+      	    strcpy((*p_ms_val_elm_struct_h)[int_val_ctr].h_data_val,chr_l_fld_value);  
+            if((*p_ms_tag_elm_struct_h)[int_tag_ctr].head_cont_newline == 'N')
+            {
+             if(strcmp((*p_ms_tag_elm_struct_h)[int_tag_ctr].msg_tag,"PG") == 0 ||
+                strcmp((*p_ms_tag_elm_struct_h)[int_tag_ctr].msg_tag,"PGC") == 0 )
+                 int_l_length_add = 26 - strlen((*p_ms_val_elm_struct_h)[int_val_ctr].msg_tag)-4;
+             else
+                 int_l_length_add = strlen(chr_l_fld_value)-strlen((*p_ms_val_elm_struct_h)[int_val_ctr].msg_tag);
+            }
+            else
+            {
+              if(strcmp((*p_ms_tag_elm_struct_h)[int_tag_ctr].msg_tag,"PG") == 0 ||
+                strcmp((*p_ms_tag_elm_struct_h)[int_tag_ctr].msg_tag,"PGC") == 0 )
+                int_l_length_add = 26;
+              else
+                int_l_length_add = strlen(chr_l_fld_value);
+            }
+         }
+		
+			if ((!(strcmp((*p_ms_tag_elm_struct_h)[int_tag_ctr].info_elem,"UNIQ_IDENT_NO"))||
+				!(strcmp((*p_ms_tag_elm_struct_h)[int_tag_ctr].info_elem,"UNIQREFNO"))) &&
+				(strcmp((*p_ms_tag_elm_struct_h)[int_tag_ctr].msg_tag,"21")!=0) &&
+				(strlen((*p_ms_val_elm_struct_h)[int_val_ctr].h_data_val)>0) &&
+				(strcmp(chr_p_msgno_a,"572")!=0) && (strncmp((*p_ms_val_elm_struct_h)[int_val_ctr].h_data_val, "SE",2) != 0) ) 
+				{
+				printf("<******> Now calling the change \n");	
+				printf("<<***1 ***>> The chr_value of : (p_ms_val_elm_struct_h)[int_val_ctr].h_data_val : *%s*\n\n",(*p_ms_val_elm_struct_h)[int_tag_ctr].h_data_val);
+				printf("<<***1 ***>> The chr_value of : (p_ms_tag_elm_struct_h)[int_tag_ctr].info_elem : *%s*\n\n",(*p_ms_tag_elm_struct_h)[int_tag_ctr].info_elem);
+				memset(chr_l_unique_ref_num,APL_NULL_CHAR,APL_UNIQUE_REF_NUM_LEN);
+				strcpy(chr_l_unique_ref_num,"SE");
+				strncat(chr_l_unique_ref_num,(*p_ms_val_elm_struct_h)[int_val_ctr].h_data_val,14);
+				chr_l_unique_ref_num[16]=APL_NULL_CHAR;
+				memset((*p_ms_val_elm_struct_h)[int_val_ctr].h_data_val,201,APL_NULL_CHAR);
+				strcpy((*p_ms_val_elm_struct_h)[int_val_ctr].h_data_val,chr_l_unique_ref_num);
+				printf("<<***2 2 ***>> The chr_value of : (p_ms_val_elm_struct_h)[int_val_ctr].h_data_val : *%s*\n\n",(*p_ms_val_elm_struct_h)[int_tag_ctr].h_data_val);
+				printf("<<***2 2 ***>> The chr_value of : (p_ms_tag_elm_struct_h)[int_tag_ctr].info_elem : *%s*\n\n",(*p_ms_tag_elm_struct_h)[int_tag_ctr].info_elem);
+
+				} 
+      } 
+
+ 
+   
+      if((*p_ms_tag_elm_struct_h)[int_tag_ctr].info_type == 'C')
+      {
+         MS_Rtv_ComputedVal((*p_ms_tag_elm_struct_h)[int_tag_ctr].info_elem,p_ms_calc_elm_struct_h,
+                         &dbl_l_calc_val,p_calc_ctr);
+
+         if((*p_ms_tag_elm_struct_h)[int_tag_ctr].print_cd ==  'A')
+         {
+            memset(chr_l_ccy_format,APL_NULL_CHAR,100);
+            strcpy(chr_l_ccy_format,"CURRENCY");
+            strcat(chr_l_ccy_format,(*p_ms_tag_elm_struct_h)[int_tag_ctr].info_elem);
+            int_returnval = MS_Rtv_TabVal(*p_val_rec,chr_l_ccy_format,l_data_values,chr_l_ccycode,p_ms_static_val_d,0);
+         }
+         if((*p_ms_tag_elm_struct_h)[int_tag_ctr].print_cd ==  'R')
+         {
+            memset(chr_l_ccy_format,APL_NULL_CHAR,100);
+            strcpy(chr_l_ccy_format,"DEC");
+            strcat(chr_l_ccy_format,(*p_ms_tag_elm_struct_h)[int_tag_ctr].info_elem);
+            int_returnval = MS_Rtv_TabVal(*p_val_rec,chr_l_ccy_format,l_data_values,chr_l_ccycode,p_ms_static_val_d,0);
+         }
+	 if(strcmp(chr_p_msgno_a,"599CPJ") == 0 ||
+            strcmp(chr_p_msgno_a,"599PFR") == 0)
+         {
+	 MS_Proc_Round(chr_p_msgno_a,dbl_l_calc_val,chr_l_form_val,(*p_ms_tag_elm_struct_h)[int_tag_ctr].print_cd,chr_l_ccycode,'T',p_errfile);
+         }
+	 else
+         {
+	 MS_Proc_Round(chr_p_msgno_a,dbl_l_calc_val,chr_l_form_val,(*p_ms_tag_elm_struct_h)[int_tag_ctr].print_cd,chr_l_ccycode,p_swftlx,p_errfile);
+         }
+
+	 if(strcmp((*p_ms_tag_elm_struct_h)[int_tag_ctr].info_elem,"PAGENO") == 0 ||
+	    strcmp((*p_ms_tag_elm_struct_h)[int_tag_ctr].info_elem,"PARTNO") == 0 )
+	
+	 {
+	    EXEC SQL SELECT substr(lpad(:chr_l_form_val,5,'0'),1,5) into :chr_h_form_val
+		     FROM DUAL;
+
+	    IS_ANY_ORA_ERROR
+	    memset(chr_l_form_val,APL_NULL_CHAR,201);
+	    strcpy(chr_l_form_val,chr_h_form_val);
+	 }
+        
+	 if(strlen(chr_format_code) != 0)
+	 {
+		memset(chr_l_format_str,APL_NULL_CHAR,201);
+	    sprintf(chr_l_format_str,chr_format_code,chr_l_form_val);
+		 memset(chr_l_form_val,APL_NULL_CHAR,201); 
+	    strcpy(chr_l_form_val,chr_l_format_str);
+	    strcpy(chr_format_code,APL_NULL_STRING);
+	 }
+         if((*p_ms_tag_elm_struct_h)[int_tag_ctr].head_cont_newline == 'C')
+         {
+             
+				
+				if(dbl_l_calc_val < 0)
+               {
+                  memset(chr_l_temp_val,APL_NULL_CHAR,30);
+                  strcpy(chr_l_temp_val,chr_l_form_val);
+                  if (atol(chr_l_temp_val)!=0)
+                      {
+				   	     strcat((*p_ms_val_elm_struct_h)[int_val_ctr-1].h_data_val,"N");
+                      }
+               }
+             strcat((*p_ms_val_elm_struct_h)[int_val_ctr-1].h_data_val,chr_l_form_val);  
+				 
+				 (*p_ms_val_elm_struct_h)[int_val_ctr].identity_no = 0;
+				 
+             int_val_ctr--;
+             if(strcmp((*p_ms_tag_elm_struct_h)[int_tag_ctr].msg_tag,"PG") == 0 ||
+                strcmp((*p_ms_tag_elm_struct_h)[int_tag_ctr].msg_tag,"PGC") == 0 )
+                int_l_length_add = 26-strlen((*p_ms_val_elm_struct_h)[int_val_ctr].msg_tag)-4;
+             else
+                int_l_length_add = strlen(chr_l_form_val)-strlen((*p_ms_val_elm_struct_h)[int_val_ctr].msg_tag)-4;
+         }
+         else
+         { 
+				
+				if(dbl_l_calc_val < 0)
+				{
+               memset(chr_l_temp_val,APL_NULL_CHAR,30);
+               strcpy(chr_l_temp_val,chr_l_form_val);
+               if (atol(chr_l_temp_val)!=0)
+                  {
+				     	 strcpy((*p_ms_val_elm_struct_h)[int_val_ctr].h_data_val,"N");
+					    strcat((*p_ms_val_elm_struct_h)[int_val_ctr].h_data_val,chr_l_form_val);
+                  }
+               else
+                   strcpy((*p_ms_val_elm_struct_h)[int_val_ctr].h_data_val,chr_l_form_val);
+				}
+				else
+            	strcpy((*p_ms_val_elm_struct_h)[int_val_ctr].h_data_val,chr_l_form_val); 
+
+             if((*p_ms_tag_elm_struct_h)[int_tag_ctr].head_cont_newline == 'N')
+             {
+             if(strcmp((*p_ms_tag_elm_struct_h)[int_tag_ctr].msg_tag,"PG") == 0 ||
+                strcmp((*p_ms_tag_elm_struct_h)[int_tag_ctr].msg_tag,"PGC") == 0 )
+                 int_l_length_add = 26-strlen((*p_ms_val_elm_struct_h)[int_val_ctr].msg_tag);
+             else
+                 int_l_length_add = strlen(chr_l_form_val)-strlen((*p_ms_val_elm_struct_h)[int_val_ctr].msg_tag);
+             }
+             else
+             {
+             if(strcmp((*p_ms_tag_elm_struct_h)[int_tag_ctr].msg_tag,"PG") == 0 ||
+                strcmp((*p_ms_tag_elm_struct_h)[int_tag_ctr].msg_tag,"PGC") == 0 )
+                 int_l_length_add = 26;
+             else
+                 int_l_length_add = strlen(chr_l_form_val);
+             }
+          }
+      }
+
+    
+      if((*p_ms_tag_elm_struct_h)[int_tag_ctr].info_type == 'S')
+      {
+    
+         if((*p_ms_tag_elm_struct_h)[int_tag_ctr].head_cont_newline == 'C')
+         {
+            
+            strcat((*p_ms_val_elm_struct_h)[int_val_ctr-1].h_data_val,(*p_ms_tag_elm_struct_h)[int_tag_ctr].info_elem); 
+				
+				(*p_ms_val_elm_struct_h)[int_val_ctr].identity_no = 0;
+				
+            int_val_ctr--;
+            if(strcmp((*p_ms_tag_elm_struct_h)[int_tag_ctr].msg_tag,"PG") == 0 ||
+                strcmp((*p_ms_tag_elm_struct_h)[int_tag_ctr].msg_tag,"PGC") == 0 )
+                int_l_length_add = 26-strlen((*p_ms_val_elm_struct_h)[int_val_ctr].msg_tag)-4;  
+            else
+                int_l_length_add = strlen((*p_ms_tag_elm_struct_h)[int_tag_ctr].info_elem)-strlen((*p_ms_val_elm_struct_h)[int_val_ctr].msg_tag)-4;  
+         }
+         else
+         { 
+             strcpy((*p_ms_val_elm_struct_h)[int_val_ctr].h_data_val,(*p_ms_tag_elm_struct_h)[int_tag_ctr].info_elem);  
+          
+             if((*p_ms_tag_elm_struct_h)[int_tag_ctr].head_cont_newline == 'N')
+             {
+              if(strcmp((*p_ms_tag_elm_struct_h)[int_tag_ctr].msg_tag,"PG") == 0 ||
+                strcmp((*p_ms_tag_elm_struct_h)[int_tag_ctr].msg_tag,"PGC") == 0 )
+                  int_l_length_add = 26-strlen((*p_ms_val_elm_struct_h)[int_val_ctr].msg_tag);
+              else
+                  int_l_length_add = strlen((*p_ms_tag_elm_struct_h)[int_tag_ctr].info_elem)-strlen((*p_ms_val_elm_struct_h)[int_val_ctr].msg_tag);
+             }
+             else
+             {
+              if(strcmp((*p_ms_tag_elm_struct_h)[int_tag_ctr].msg_tag,"PG") == 0 ||
+                strcmp((*p_ms_tag_elm_struct_h)[int_tag_ctr].msg_tag,"PGC") == 0 )
+                  int_l_length_add = 26;
+              else
+                  int_l_length_add = strlen((*p_ms_tag_elm_struct_h)[int_tag_ctr].info_elem);  
+             }
+         }
+       }
+
+   }
+   int_tag_ctr++;
+   if(int_tag_skip != 1)
+   {
+      if(p_swftlx == 'S' )
+      {
+        if(strcmp(chr_l_seq_flag,"NR") == 0)
+        {
+   	    int_replen = int_replen + strlen((*p_ms_val_elm_struct_h)[int_val_ctr].msg_tag) + int_l_length_add + 4;
+     	
+			 if(int_l_new_prv_rep_len_ind == 0)
+   	    	int_new_nreplen =  int_replen;
+     	
+        }
+        else
+        {
+   	   int_msglen = int_msglen + strlen((*p_ms_val_elm_struct_h)[int_val_ctr].msg_tag) + int_l_length_add + 4;
+        }
+      }
+      else
+      {
+        if(strcmp(chr_l_seq_flag,"NR") == 0)
+        {
+   	   int_replen = int_replen + strlen((*p_ms_val_elm_struct_h)[int_val_ctr].msg_tag) + int_l_length_add + 2;
+        }
+        else
+        {
+   	   int_msglen = int_msglen + strlen((*p_ms_val_elm_struct_h)[int_val_ctr].msg_tag) + int_l_length_add + 2;
+        }
+      }
+   }
+
+   if( int_tag_ctr >= int_tot_tag)
+   {
+     int_rec_processed = 1;
+     int_prev_val_rec = *p_val_rec;
+	  
+    
+	  if((int_last_proc == 0) && (int_tag_skip != 1) )	
+     {
+       int_val_ctr--;
+     }
+	 
+		if(int_tag_skip !=1)
+		    int_prev_val_ctr = int_val_ctr+1;
+		else
+		    int_prev_val_ctr = int_val_ctr;
+	
+   
+		
+     	
+		int_prv_replen = int_replen - int_new_nreplen;
+	
+	  if (int_l_new_prv_rep_len_ind == 0)
+		int_l_new_prv_rep_len_ind = 1;
+     	
+		
+     int_l_new_rec = 0;
+     memset(chr_l_fld_value,'\0',201);
+     int_returnval = MS_Rtv_TabVal(*p_val_rec,"PROC_INIT",l_data_values,chr_l_fld_value,p_ms_static_val_d,0);
+     if(int_returnval == APL_FAILURE)
+     {
+	     fprintf(p_errfile,"Failure in reading datafile for %s for record %d\n","PROC_INIT",*p_val_rec);
+             APL_GOBACK_FAIL
+     }
+     strcpy(l_ms_msgstat_structa.proc_init,chr_l_fld_value);
+     strcpy(l_ms_msgstat_structa.swift_msg_rep,chr_p_msgno_a);
+     
+	  l_ms_msgstat_structa.swift_msg_rep[strlen(l_ms_msgstat_structa.swift_msg_rep)] = APL_NULL_CHAR;
+     memset(chr_l_fld_value,'\0',201);
+     int_returnval = MS_Rtv_TabVal(*p_val_rec,"CLIENT",l_data_values,chr_l_fld_value,p_ms_static_val_d,0);
+     if(int_returnval == APL_FAILURE)
+     {
+	     fprintf(p_errfile,"Failure in reading datafile for %s for record %d\n","CLIENT",*p_val_rec);
+             APL_GOBACK_FAIL
+     }
+     strcpy(l_ms_msgstat_structa.client,chr_l_fld_value);
+     int_returnval = CO_RtvSysDt(chr_l_date_time,l_debug_info_ptr);
+     if(int_returnval == APL_FAILURE)
+     {
+          APL_GOBACK_FAIL
+     }
+     strcpy(l_ms_msgstat_structa.generate_dt,chr_l_date_time);
+     int_returnval = MS_Mod_MsgStat(l_ms_msgstat_structa,&int_retstat,l_debug_info_ptr);
+
+     if(int_returnval == APL_FAILURE)
+     {
+          APL_GOBACK_FAIL
+     }
+     
+     (*p_val_rec)++;  
+     int_newmsg = 0;
+     
+     memset(chr_l_fld_value,'\0',201);
+     int_returnval = MS_Rtv_TabVal(*p_val_rec,"EOF",l_data_values,chr_l_fld_value,p_ms_static_val_d,0);
+     if(feof(l_data_values) == 0)
+     {
+     g_prev_pos = g_cur_pos;
+     fgetpos(l_data_values,&g_cur_pos);
+     }
+
+     if(int_returnval == APL_FAILURE)
+     {
+	     fprintf(p_errfile,"Failure in reading datafile for %s\n",(*p_ms_tag_elm_struct_h)[int_tag_ctr].info_elem);
+             APL_GOBACK_FAIL
+     }
+     int_tag_ctr = 0;
+     if((strcmp(chr_l_fld_value,"T" )== 0) || (int_tot_seq == 1))
+     {
+	
+	   if((int_last_proc == 0) && (int_tag_skip == 1))
+      {
+         int_val_ctr--;
+      }
+		
+            if(int_rec_processed == 1)
+                MS_Proc_TailUpd(chr_p_msgno_a,p_ms_val_elm_struct_h,int_val_ctr,p_ms_calc_elm_struct_h,p_calc_ctr,int_newmsg,'S',*p_val_rec,p_ms_static_val_d,l_data_values,p_errfile);
+            else
+                MS_Proc_TailUpd(chr_p_msgno_a,p_ms_val_elm_struct_h,int_val_ctr,p_ms_calc_elm_struct_h,p_calc_ctr,int_newmsg,'R',*p_val_rec,p_ms_static_val_d,l_data_values,p_errfile);
+            MS_Proc_MsgEnd(p_ms_tag_elm_struct_h,int_tot_tag,*p_val_rec,p_ms_val_elm_struct_h,
+                   p_ms_static_val_d,p_ms_calc_elm_struct_h,int_newmsg,l_data_values, int_prev_val_ctr,chr_p_msgno_a,p_txn_msg,p_errfile,l_debug_info_ptr);
+        int_returnval = MS_Proc_MsgFormat(*p_ms_seq_elm_struct_h,int_tot_seq,*p_ms_val_elm_struct_h,
+                                 (int_val_ctr+1),p_msg_file,p_swftlx);
+        if(int_returnval == APL_FAILURE)
+		APL_GOBACK_FAIL
+        int_mprocessed = 1;
+        break;
+     }
+     
+   }
+   if(int_tag_skip != 1)
+   {
+      int_val_ctr++;  
+      int_last_proc = 1;
+      if(int_val_ctr == 1)
+         *p_ms_val_elm_struct_h = (MS_VAL_ELM_STRUCT_H *)realloc(*p_ms_val_elm_struct_h,sizeof(MS_VAL_ELM_STRUCT_H)*(int_val_ctr+2));
+      else
+         *p_ms_val_elm_struct_h = (MS_VAL_ELM_STRUCT_H *)realloc(*p_ms_val_elm_struct_h,sizeof(MS_VAL_ELM_STRUCT_H)*(int_val_ctr+1));
+ 
+   
+
+	  memset((*p_ms_val_elm_struct_h)[int_val_ctr].msg_tag,APL_NULL_CHAR,6);
+     memset((*p_ms_val_elm_struct_h)[int_val_ctr].h_data_val,APL_NULL_CHAR,201);
+
+   }
+}  
+
+*p_tot_val = int_val_ctr;
+
+APL_GOBACK_SUCCESS;
+
+RETURN_SUCCESS:
+
+        CO_ProcMonitor(APL_OUT_FILE,"Exiting successfully  out of Message Processing\n",NULL,NULL);
+       
+
+        return APL_SUCCESS;
+
+RETURN_FAILURE:
+        CO_ProcMonitor(APL_OUT_FILE,"Exiting unsuccesfully out of Message Processing\n",NULL,NULL);
+       
+        return APL_FAILURE;
+
+}
+
+
+int MS_Proc_TailUpd(char *chr_p_msgno_a,MS_VAL_ELM_STRUCT_H **p_ms_val_elm_struct_h,int p_val_ctr,MS_CALC_ELM_STRUCT_H **p_ms_calc_elm_struct_h,int p_calc_ctr,char p_newmsg,char p_revflg,int p_rownum,MS_STATIC_VAL *p_ms_static_val_d,FILE *p_data_values,FILE *p_errfile)
+{
+
+void MS_Proc_Round(char *chr_p_msgno_a,double chr_p_val,char *f_val,char p_print_code,char *p_currencycode,char p_swftlx,FILE *p_errfile);
+int int_ctr=0,int_returnval=0;
+double dbl_l_calc_val=0;
+char chr_l_form_val[30] = APL_NULL_STRING;
+char chr_l_fld_value[201] = APL_NULL_STRING;
+char chr_l_temp_val[30] = APL_NULL_STRING;
+
+memset(chr_l_fld_value,APL_NULL_CHAR,201);
+
+    if(strcmp(chr_p_msgno_a,"572") == 0)
+    {
+       if (APL_SUCCESS == MS_Chk_CondPrevMsg(p_rownum,"CLIENT",p_data_values,p_ms_static_val_d,0))
+       {
+          if(p_revflg == 'N')
+             (*p_ms_calc_elm_struct_h)[11].link_tag = (*p_ms_calc_elm_struct_h)[11].PREV_VAL;
+       }
+       else if(p_revflg == 'N')
+          p_revflg = 'S';
+
+      if(p_revflg == 'S')
+      {
+      int_returnval = MS_Rtv_TabVal(p_rownum,"EOF",p_data_values,chr_l_fld_value,p_ms_static_val_d,0);
+
+       if(int_returnval == APL_FAILURE)
+       {
+             fprintf(p_errfile,"Failure in reading datafile for EOF\n");
+             APL_GOBACK_FAIL
+       }
+
+       if(strcmp(chr_l_fld_value,"T") == 0)
+       {
+           (*p_ms_calc_elm_struct_h)[11].link_tag = (*p_ms_calc_elm_struct_h)[11].PREV_VAL;
+       } 
+
+       }
+       int_ctr = p_val_ctr;
+       while(int_ctr > 0)
+       {
+        if(strcmp((*p_ms_val_elm_struct_h)[int_ctr].msg_tag,"62A") == 0)
+        {
+         if(p_revflg == 'R')
+         {
+         (*p_ms_calc_elm_struct_h)[11].link_tag = (*p_ms_calc_elm_struct_h)[12].link_tag;
+         (*p_ms_calc_elm_struct_h)[11].PREV_VAL = (*p_ms_calc_elm_struct_h)[12].PREV_VAL;
+         }
+         if(p_revflg != 'N')
+         {
+         dbl_l_calc_val = (*p_ms_calc_elm_struct_h)[11].link_tag;
+         
+	 MS_Proc_Round(chr_p_msgno_a,dbl_l_calc_val,chr_l_form_val,'Q',APL_NULL_STRING,'S',p_errfile);
+			
+			if( dbl_l_calc_val < 0)
+			{
+           memset(chr_l_temp_val,APL_NULL_CHAR,30);
+           strcpy(chr_l_temp_val,chr_l_form_val);
+           if (atol(chr_l_temp_val)!=0)
+              {
+         	   strcpy((*p_ms_val_elm_struct_h)[int_ctr].h_data_val,"N");
+				   strcat((*p_ms_val_elm_struct_h)[int_ctr].h_data_val,chr_l_form_val);
+              }
+           else
+              strcpy((*p_ms_val_elm_struct_h)[int_ctr].h_data_val,chr_l_form_val);
+         }
+			else
+				strcpy((*p_ms_val_elm_struct_h)[int_ctr].h_data_val,chr_l_form_val); 
+         }
+         break;
+        }
+        int_ctr--;
+	  
+       }
+       if(p_revflg == 'S')
+          (*p_ms_calc_elm_struct_h)[11].link_tag = (*p_ms_calc_elm_struct_h)[11].PREV_VAL;
+
+    }
+
+APL_GOBACK_SUCCESS // AIX - Warning
+
+RETURN_SUCCESS:
+
+        CO_ProcMonitor(APL_OUT_FILE,"Exiting successfully  out of Update Tail\n",NULL,NULL);
+        return APL_SUCCESS;
+
+RETURN_FAILURE:
+        CO_ProcMonitor(APL_OUT_FILE,"Exiting unsuccesfully out of Update Tail\n",NULL,NULL);
+        return APL_FAILURE;
+
+}
+
+
+
+
+
+
+
+int MS_Rtv_SeqRep(int p_seq_no,int p_no_of_seq,MS_SEQ_ELM_STRUCT_H *p_ms_seq_elm_struct_h,int *p_seq_rep_no)
+{
+int int_seq_ctr=0;
+   for(int_seq_ctr=0;int_seq_ctr<p_no_of_seq;int_seq_ctr++)
+   {
+
+      if(p_ms_seq_elm_struct_h[int_seq_ctr].identity_no == p_seq_no)
+	break;
+
+   }
+   *p_seq_rep_no = p_ms_seq_elm_struct_h[int_seq_ctr].sequence_rep_no+1;
+
+APL_GOBACK_SUCCESS;
+
+RETURN_SUCCESS:
+
+        CO_ProcMonitor(APL_OUT_FILE,"Exiting successfully  out of MS_Rtv_SeqRep\n",NULL,NULL);
+
+        return APL_SUCCESS;
+/* AIX - Warning
+RETURN_FAILURE:
+        CO_ProcMonitor(APL_OUT_FILE,"Exiting unsuccesfully out of MS_Rtv_SeqRep\n",NULL,NULL);
+        return APL_FAILURE;
+*/
+}
+
+int MS_Rtv_ParSeqRep(int p_seq_no,int p_no_of_seq,MS_SEQ_ELM_STRUCT_H *p_ms_seq_elm_struct_h,int *p_par_seq_rep_no)
+{
+
+int int_seq_ctr = 0,int_l_par_seq_no=0;
+
+    for(int_seq_ctr=0;int_seq_ctr<=p_no_of_seq;int_seq_ctr++)
+    {
+
+      if(p_ms_seq_elm_struct_h[int_seq_ctr].identity_no == p_seq_no)
+      {
+        int_l_par_seq_no = p_ms_seq_elm_struct_h[int_seq_ctr].par_seqno;
+	break;
+      }
+       
+    }
+    for(int_seq_ctr=0;int_seq_ctr<=p_no_of_seq;int_seq_ctr++)
+    {
+      if(p_ms_seq_elm_struct_h[int_seq_ctr].identity_no == int_l_par_seq_no)
+      {
+        *p_par_seq_rep_no = p_ms_seq_elm_struct_h[int_seq_ctr].sequence_rep_no;
+	break;
+      }
+       
+    }
+APL_GOBACK_SUCCESS;
+
+RETURN_SUCCESS:
+
+        CO_ProcMonitor(APL_OUT_FILE,"Exiting successfully  out of MS_Rtv_ParSeqRep\n",NULL,NULL);
+
+        return APL_SUCCESS;
+/* AIX - Warning
+RETURN_FAILURE:
+        CO_ProcMonitor(APL_OUT_FILE,"Exiting unsuccesfully out of MS_Rtv_ParSeqRep\n",NULL,NULL);
+        return APL_FAILURE;
+*/
+}
+
+int MS_Rtv_TabVal(int p_val_rec_seq_no,char *p_fld_name,FILE *p_data_values,char *p_fld_value,MS_STATIC_VAL *p_ms_static_val_d,int p_pos)
+{
+
+int int_returnval=0,int_stat_ctr=0;
+char chr_l_fld_name[205];
+
+
+      while(p_ms_static_val_d[int_stat_ctr].link_val != NULL && strlen(p_ms_static_val_d[int_stat_ctr].link_val) != 0)
+      {
+           if(strcmp(p_ms_static_val_d[int_stat_ctr].link_val,p_fld_name) == 0)	
+           {
+          	strcpy(p_fld_value,p_ms_static_val_d[int_stat_ctr].link_tag);
+                APL_GOBACK_SUCCESS 
+           }
+           int_stat_ctr++;
+      }
+
+		
+     	 
+		memset(chr_l_fld_name,APL_NULL_CHAR,205); 
+      strcpy(chr_l_fld_name,ltoa(p_val_rec_seq_no));
+      strcat(chr_l_fld_name,p_fld_name);
+
+
+      int g_curr_rec_start = 0 ; /*added for Linux Mig*/
+      int g_prev_rec_start = 0;   /*added for Linux Mig*/
+		if (int_g_curr_rec_no == 0)			
+		{
+			int_g_curr_rec_no = p_val_rec_seq_no;
+			memset(chr_l_fld_name,APL_NULL_CHAR,205); 
+			strcpy(chr_l_fld_name,"1EOF");
+			int_returnval = CO_Rtv_Token(p_val_rec_seq_no,p_data_values,chr_l_fld_name,p_fld_value,NULL);
+			fgetpos(p_data_values,&g_curr_rec_start);
+			g_curr_rec_start = g_curr_rec_start - (strlen(ltoa(p_val_rec_seq_no)) + 6);
+			g_prev_rec_start = g_curr_rec_start;
+		}
+		
+		
+		if (p_val_rec_seq_no < int_g_curr_rec_no)
+		{
+			fsetpos(p_data_values,&g_prev_rec_start);
+		}
+
+		if (p_val_rec_seq_no == int_g_curr_rec_no)
+		{
+			 fsetpos(p_data_values,&g_curr_rec_start); 
+		}
+
+		if (p_val_rec_seq_no > int_g_curr_rec_no)
+		{
+			fsetpos(p_data_values,&g_curr_rec_start); 
+		}
+		memset(chr_l_fld_name,APL_NULL_CHAR,205); 
+		strcpy(chr_l_fld_name,ltoa(p_val_rec_seq_no));
+		strcat(chr_l_fld_name,p_fld_name);
+		int_returnval = CO_Rtv_Token(p_val_rec_seq_no,p_data_values,chr_l_fld_name,p_fld_value,NULL);
+		if(int_returnval == APL_SUCCESS)
+		{
+			
+			if (p_val_rec_seq_no > int_g_curr_rec_no)
+			{
+				int_g_curr_rec_no = p_val_rec_seq_no;
+				g_prev_rec_start = g_curr_rec_start;
+				fgetpos(p_data_values,&g_curr_rec_start);
+				g_curr_rec_start = g_curr_rec_start - (strlen(ltoa(p_val_rec_seq_no)) + 6);
+			}
+			
+	 		 APL_GOBACK_SUCCESS;
+      }
+      else
+      {
+          APL_GOBACK_FAIL;
+      }
+
+
+RETURN_SUCCESS:
+
+        CO_ProcMonitor(APL_OUT_FILE,"Exiting successfully  out of MS_Rtv_TabVal\n",NULL,NULL);
+
+        return APL_SUCCESS;
+
+RETURN_FAILURE:
+        CO_ProcMonitor(APL_OUT_FILE,"Exiting unsuccesfully out of GetTableBalues\n",NULL,NULL);
+        return APL_FAILURE;
+
+}
+
+int MS_Chk_CondPrevMsg(int p_val_rec,char *p_fld_name,FILE *p_data_values,MS_STATIC_VAL *p_ms_static_val_d,int p_newmsg)
+{
+
+char chr_curr_fld_val[201];
+char chr_prev_fld_val[201];
+char chr_l_fld_value[201];
+
+memset(chr_curr_fld_val,APL_NULL_CHAR,201);
+memset(chr_prev_fld_val,APL_NULL_CHAR,201);
+memset(chr_l_fld_value,APL_NULL_CHAR,201);
+
+		
+      MS_Rtv_TabVal(p_val_rec,p_fld_name,p_data_values,
+                     chr_l_fld_value,p_ms_static_val_d,0);
+      strcpy(chr_curr_fld_val,chr_l_fld_value);
+
+      
+      
+      if(p_val_rec == 1  || p_newmsg == 1)
+            APL_GOBACK_FAIL
+
+      memset(chr_l_fld_value,APL_NULL_CHAR,201);
+       
+		
+      MS_Rtv_TabVal((p_val_rec-1),p_fld_name,p_data_values,
+                     chr_l_fld_value,p_ms_static_val_d,1);
+      strcpy(chr_prev_fld_val,chr_l_fld_value);
+      if(strcmp(chr_curr_fld_val,chr_prev_fld_val) == 0)
+		APL_GOBACK_SUCCESS
+      else
+		APL_GOBACK_FAIL
+
+RETURN_SUCCESS:
+
+        CO_ProcMonitor(APL_OUT_FILE,"Exiting successfully  out of MS_Chk_CondPrevMsg\n",NULL,NULL);
+
+        return APL_SUCCESS;
+
+RETURN_FAILURE:
+        CO_ProcMonitor(APL_OUT_FILE,"Exiting unsuccesfully out of MS_Chk_CondPrevMsg\n",NULL,NULL);
+        return APL_FAILURE;
+    
+}
+
+int MS_Rtv_ComputedVal(char *p_fld_name,MS_CALC_ELM_STRUCT_H **p_ms_calc_elm_struct_h,double *p_calc_val,
+                      int p_calc_ctr)
+{
+int int_calc_ctr=0;
+int int_found_flg = 0,int_first_flg = 0;
+
+  for(int_calc_ctr=0;int_calc_ctr<p_calc_ctr;++int_calc_ctr)
+  {
+
+      if(strcmp((*p_ms_calc_elm_struct_h)[int_calc_ctr].link_val,p_fld_name) == 0)
+      {
+            *p_calc_val = (*p_ms_calc_elm_struct_h)[int_calc_ctr].link_tag;
+            break;
+             
+      }
+
+  }
+
+APL_GOBACK_SUCCESS
+
+RETURN_SUCCESS:
+
+        CO_ProcMonitor(APL_OUT_FILE,"Exiting successfully  out of MS_Rtv_ComputedVal\n",NULL,NULL);
+
+        return APL_SUCCESS;
+/* AIX - Warning
+RETURN_FAILURE:
+        CO_ProcMonitor(APL_OUT_FILE,"Exiting unsuccesfully out of MS_Rtv_ComputedVal \n",NULL,NULL);
+        return APL_FAILURE;
+*/
+}
+
+int MS_Proc_ComputedVal(char *chr_p_msgno_a,MS_CALC_ELM_STRUCT_H **p_ms_calc_elm_struct_h,int p_rownum,int p_newmsg,FILE *p_data_values,MS_STATIC_VAL *p_ms_static_val_d,FILE *p_errfile,int p_calc_ctr)
+{
+char chr_l_fld_value[201],chr_l_pvalue[201],chr_l_trcode_a[2],l_quantity[100];
+char chr_l_reverse[2]; 
+char *chr_l_ccy_end = NULL;
+char *chr_l_ccy_end_t = NULL;
+int int_returnval=0;
+double dbl_l_calc_val=0;
+
+
+char chr_l_form_val[201];
+char chr_l_ccycode[APL_CCYCODE_LEN];
+char chr_l_ccyformat[100];
+int int_l_tmpdeclen =0;
+char chr_lchar[5]=APL_NULL_STRING;
+
+
+chr_l_ccy_end_t = chr_l_ccy_end = (char *)calloc(4,sizeof(char));
+APL_MALLOC_FAIL_LOC(chr_l_ccy_end);
+
+memset(chr_l_fld_value,APL_NULL_CHAR,201);
+memset(chr_l_pvalue,APL_NULL_CHAR,201);
+memset(chr_l_trcode_a,APL_NULL_CHAR,2);
+memset(chr_l_reverse,APL_NULL_CHAR,2);
+memset(l_quantity,APL_NULL_CHAR,100);
+  if(p_newmsg == 1)
+  {
+         (*p_ms_calc_elm_struct_h)[1].link_tag = 0;
+         (*p_ms_calc_elm_struct_h)[3].link_tag = 0;
+         (*p_ms_calc_elm_struct_h)[4].link_tag = 0;
+         (*p_ms_calc_elm_struct_h)[5].link_tag = 0;
+  }
+
+   if(strncmp(chr_p_msgno_a,"571",3) == 0)
+   {
+
+      int_returnval = MS_Rtv_TabVal(p_rownum,"COMB_MSG",p_data_values,
+                     chr_l_fld_value,p_ms_static_val_d,0);
+      if(int_returnval == APL_FAILURE)
+      {
+         fprintf(p_errfile,"Failure in reading data h_file for consmsg indicator\n");
+         APL_GOBACK_FAIL
+      }
+      if(strcmp(chr_l_fld_value,"Y") == 0)
+      {
+         
+         if (APL_SUCCESS == MS_Chk_CondPrevMsg(p_rownum,"CLIENT",p_data_values,p_ms_static_val_d,0))
+         {
+                if( p_newmsg == 1)
+		  (*p_ms_calc_elm_struct_h)[0].link_tag++;
+         }
+         else
+         {
+	        (*p_ms_calc_elm_struct_h)[0].link_tag = 1;
+                (*p_ms_calc_elm_struct_h)[1].link_tag = 0;
+         }
+      }
+      else
+      {
+         if (APL_SUCCESS == MS_Chk_CondPrevMsg(p_rownum,"SUBACCOUNT",p_data_values,p_ms_static_val_d,0))
+         {
+                if ( p_newmsg == 1)
+		  (*p_ms_calc_elm_struct_h)[0].link_tag++;
+         }
+         else
+         {
+		(*p_ms_calc_elm_struct_h)[0].link_tag = 1;
+                (*p_ms_calc_elm_struct_h)[1].link_tag = 0;
+         }
+
+      }
+
+      if(p_newmsg == 1)
+         (*p_ms_calc_elm_struct_h)[2].link_tag = 0;
+      if (APL_FAILURE == MS_Chk_CondPrevMsg(p_rownum,"INSTR_CODE",p_data_values,p_ms_static_val_d,p_newmsg))
+      {
+			
+         memset(chr_l_ccyformat, APL_NULL_CHAR,100);
+         strcpy(chr_l_ccyformat, "CCYTOTPORTFOLIO");
+         memset(chr_l_ccycode,APL_NULL_CHAR,APL_CCYCODE_LEN);
+         int_returnval = MS_Rtv_TabVal(p_rownum, chr_l_ccyformat, p_data_values,
+                                              chr_l_ccycode,p_ms_static_val_d,0);
+         
+
+      	if(int_returnval == APL_SUCCESS)
+      	{
+      		memset(chr_l_fld_value,APL_NULL_CHAR,201);
+      		int_returnval = MS_Rtv_TabVal(p_rownum,"TOTAL_PORTFOLIO",p_data_values,
+         		            chr_l_fld_value,p_ms_static_val_d,0);
+				if(int_returnval == APL_SUCCESS)
+				{
+					
+                EXEC SQL SELECT DEC_LEN INTO :int_l_tmpdeclen
+                         FROM DL_CURRENCY
+                         WHERE currency_cd = :chr_l_ccycode;
+                if(sqlca.sqlcode < 0 || sqlca.sqlcode == 1403)
+                        {
+                           fprintf(p_errfile,"Error in accessing currency table for %s\n",chr_l_ccycode);
+                        }
+                sprintf(chr_lchar,"%s%d%s","%.",int_l_tmpdeclen,"lf");
+                sprintf(chr_l_form_val,chr_lchar,atof(chr_l_fld_value));	
+
+           		
+					(*p_ms_calc_elm_struct_h)[2].link_tag = (*p_ms_calc_elm_struct_h)[2].link_tag+atof(chr_l_form_val);
+				}
+      	}
+			(*p_ms_calc_elm_struct_h)[1].link_tag++;
+			(*p_ms_calc_elm_struct_h)[6].link_tag = 0;
+      }
+      memset(chr_l_fld_value,APL_NULL_CHAR,201);
+      int_returnval = MS_Rtv_TabVal(p_rownum,"SAFEKEEP_POS",p_data_values,
+                     chr_l_fld_value,p_ms_static_val_d,0);
+      if(int_returnval == APL_SUCCESS)
+      {
+                   (*p_ms_calc_elm_struct_h)[6].link_tag = (*p_ms_calc_elm_struct_h)[6].link_tag+atof(chr_l_fld_value);
+      }
+   
+
+  }
+  if(strcmp(chr_p_msgno_a,"572") == 0)
+  {
+
+       if (APL_SUCCESS == MS_Chk_CondPrevMsg(p_rownum,"CLIENT",p_data_values,p_ms_static_val_d,0))
+       {
+             if( p_newmsg == 1)
+             {
+		(*p_ms_calc_elm_struct_h)[0].link_tag++;
+             }
+       }
+       else
+       {
+		(*p_ms_calc_elm_struct_h)[0].link_tag = 1;
+                (*p_ms_calc_elm_struct_h)[1].link_tag = 0;
+       }
+
+      
+
+       memset(chr_l_fld_value,APL_NULL_CHAR,201);
+       int_returnval = MS_Rtv_TabVal(p_rownum,"DEAL_CD",p_data_values,
+                     chr_l_fld_value,p_ms_static_val_d,0);
+
+       strcpy(chr_l_trcode_a,chr_l_fld_value);
+       memset(chr_l_fld_value,APL_NULL_CHAR,201);
+		 
+       int_returnval = MS_Rtv_TabVal(p_rownum,"FENT_POS",p_data_values,
+                     chr_l_fld_value,p_ms_static_val_d,0);
+       strcpy(l_quantity,chr_l_fld_value);
+       
+       
+
+       memset(chr_l_fld_value,APL_NULL_CHAR,201);
+       int_returnval = MS_Rtv_TabVal(p_rownum,"REVERSE",p_data_values,
+                     chr_l_fld_value,p_ms_static_val_d,0);
+       strcpy(chr_l_reverse,chr_l_fld_value);
+ 
+      
+
+ 
+       if (APL_SUCCESS == MS_Chk_CondPrevMsg(p_rownum,"ACC_INSTR_CODE",p_data_values,p_ms_static_val_d,0))
+       {
+             if( p_newmsg == 1)
+	     {
+                (*p_ms_calc_elm_struct_h)[1].link_tag++;
+      		memset(chr_l_fld_value,APL_NULL_CHAR,201);
+      		int_returnval = MS_Rtv_TabVal(p_rownum,"OPNBAL",p_data_values,
+                     chr_l_fld_value,p_ms_static_val_d,0);
+      		if(int_returnval == APL_SUCCESS)
+      		{
+                   (*p_ms_calc_elm_struct_h)[10].link_tag = atof(chr_l_fld_value);
+      		}
+
+		if((*p_ms_calc_elm_struct_h)[0].link_tag > 1)
+                {
+		
+                MS_Rtv_ComputedVal("CLOSING_BAL",p_ms_calc_elm_struct_h,&dbl_l_calc_val,p_calc_ctr);
+                (*p_ms_calc_elm_struct_h)[10].link_tag = dbl_l_calc_val; 
+      		} 
+	     }
+       }
+       else
+       {
+                (*p_ms_calc_elm_struct_h)[1].link_tag++;
+      		memset(chr_l_fld_value,APL_NULL_CHAR,201);
+      		int_returnval = MS_Rtv_TabVal(p_rownum,"OPNBAL",p_data_values,
+                     chr_l_fld_value,p_ms_static_val_d,0);
+      		if(int_returnval == APL_SUCCESS)
+      		{
+                   (*p_ms_calc_elm_struct_h)[10].link_tag = atof(chr_l_fld_value);
+      		}
+	      
+       }
+
+      
+
+ 
+       if (APL_SUCCESS == MS_Chk_CondPrevMsg(p_rownum,"ACC_INSTR_CODE",p_data_values,p_ms_static_val_d,0))
+       {
+         (*p_ms_calc_elm_struct_h)[12].link_tag = (*p_ms_calc_elm_struct_h)[11].link_tag;
+         (*p_ms_calc_elm_struct_h)[12].PREV_VAL = (*p_ms_calc_elm_struct_h)[11].PREV_VAL;
+           if((*p_ms_calc_elm_struct_h)[0].link_tag > 1 && p_newmsg == 1)
+           {
+	         (*p_ms_calc_elm_struct_h)[11].PREV_VAL = (*p_ms_calc_elm_struct_h)[10].link_tag  ;
+           }
+	   
+	   
+      if((strcmp(chr_l_trcode_a,"1") == 0 ||strcmp(chr_l_trcode_a,"3") == 0 ||strcmp(chr_l_trcode_a,"7") == 0) && (strcmp(chr_l_reverse,"N") == 0))
+        	(*p_ms_calc_elm_struct_h)[11].PREV_VAL = (*p_ms_calc_elm_struct_h)[11].PREV_VAL - atof(l_quantity);
+	   else
+         if((strcmp(chr_l_trcode_a,"2") == 0 ||strcmp(chr_l_trcode_a,"4") == 0 || strcmp(chr_l_trcode_a,"8") == 0) && (strcmp(chr_l_reverse,"N") == 0))
+        	(*p_ms_calc_elm_struct_h)[11].PREV_VAL = (*p_ms_calc_elm_struct_h)[11].PREV_VAL + atof(l_quantity);
+        
+              
+      if((strcmp(chr_l_trcode_a,"1") == 0 ||strcmp(chr_l_trcode_a,"3") == 0 ||strcmp(chr_l_trcode_a,"7") == 0) && (strcmp(chr_l_reverse,"Y") == 0))  
+         (*p_ms_calc_elm_struct_h)[11].PREV_VAL = (*p_ms_calc_elm_struct_h)[11].PREV_VAL + atof(l_quantity);
+      else
+         if((strcmp(chr_l_trcode_a,"2") == 0 ||strcmp(chr_l_trcode_a,"4") == 0 ||strcmp(chr_l_trcode_a,"8") == 0) && (strcmp(chr_l_reverse,"Y") == 0))     
+                (*p_ms_calc_elm_struct_h)[11].PREV_VAL = (*p_ms_calc_elm_struct_h)[11].PREV_VAL - atof(l_quantity);
+            
+       }
+       else
+       {
+         (*p_ms_calc_elm_struct_h)[12].link_tag = (*p_ms_calc_elm_struct_h)[11].link_tag;
+         (*p_ms_calc_elm_struct_h)[12].PREV_VAL = (*p_ms_calc_elm_struct_h)[11].PREV_VAL;
+	   
+
+	   if((strcmp(chr_l_trcode_a,"1") == 0 ||strcmp(chr_l_trcode_a,"3") == 0 ||strcmp(chr_l_trcode_a,"7") == 0) && (strcmp(chr_l_reverse,"N") == 0))
+	     (*p_ms_calc_elm_struct_h)[11].PREV_VAL = (*p_ms_calc_elm_struct_h)[10].link_tag  - atof(l_quantity);
+      else
+        if((strcmp(chr_l_trcode_a,"2") == 0 ||strcmp(chr_l_trcode_a,"4") == 0 ||strcmp(chr_l_trcode_a,"8") == 0) && (strcmp(chr_l_reverse,"N") == 0))
+	     (*p_ms_calc_elm_struct_h)[11].PREV_VAL = (*p_ms_calc_elm_struct_h)[10].link_tag + atof(l_quantity);
+	   
+      	
+      
+      if((strcmp(chr_l_trcode_a,"1") == 0 ||strcmp(chr_l_trcode_a,"3") == 0 ||strcmp(chr_l_trcode_a,"7") == 0) && (strcmp(chr_l_reverse,"Y") == 0))
+            (*p_ms_calc_elm_struct_h)[11].PREV_VAL = (*p_ms_calc_elm_struct_h)[10].link_tag  +  atof(l_quantity);
+      else
+      if((strcmp(chr_l_trcode_a,"2") == 0 ||strcmp(chr_l_trcode_a,"4") == 0 ||strcmp(chr_l_trcode_a,"8") == 0) && (strcmp(chr_l_reverse,"Y") == 0))
+            (*p_ms_calc_elm_struct_h)[11].PREV_VAL = (*p_ms_calc_elm_struct_h)[10].link_tag  - atof(l_quantity);
+      
+      
+       }
+      
+       
+	
+      
+  }
+  if(strcmp(chr_p_msgno_a,"573") == 0)
+  {
+
+       if (APL_SUCCESS == MS_Chk_CondPrevMsg(p_rownum,"CLIENT",p_data_values,p_ms_static_val_d,0))
+       {
+             if( p_newmsg == 1)
+		(*p_ms_calc_elm_struct_h)[0].link_tag++;
+       }
+       else
+       {
+		(*p_ms_calc_elm_struct_h)[0].link_tag = 1;
+		(*p_ms_calc_elm_struct_h)[1].link_tag = 0;
+       }
+
+       if (APL_FAILURE  == MS_Chk_CondPrevMsg(p_rownum,"INSTR_CODE",p_data_values,p_ms_static_val_d,0))
+		(*p_ms_calc_elm_struct_h)[1].link_tag++;
+       else
+       {
+            if(p_newmsg == 1)
+		(*p_ms_calc_elm_struct_h)[1].link_tag++;
+       }
+
+      memset(chr_l_fld_value,APL_NULL_CHAR,201);
+      int_returnval = MS_Rtv_TabVal(p_rownum,"TR3TOT",p_data_values,
+                     chr_l_fld_value,p_ms_static_val_d,0);
+      if(int_returnval == APL_FAILURE)
+      {
+         fprintf(p_errfile,"Failure in reading data h_file for total deliver amount\n");
+         APL_GOBACK_FAIL
+      }
+
+      (*p_ms_calc_elm_struct_h)[3].link_tag = (*p_ms_calc_elm_struct_h)[3].link_tag + atof(chr_l_fld_value);
+      memset(chr_l_fld_value,APL_NULL_CHAR,201);
+      int_returnval = MS_Rtv_TabVal(p_rownum,"TR4TOT",p_data_values,
+                     chr_l_fld_value,p_ms_static_val_d,0);
+      if(int_returnval == APL_FAILURE)
+      {
+         fprintf(p_errfile,"Failure in reading data h_file for total receive amount\n");
+         APL_GOBACK_FAIL
+      }
+      (*p_ms_calc_elm_struct_h)[4].link_tag = (*p_ms_calc_elm_struct_h)[4].link_tag + atof(chr_l_fld_value);
+      (*p_ms_calc_elm_struct_h)[5].link_tag = (*p_ms_calc_elm_struct_h)[3].link_tag - (*p_ms_calc_elm_struct_h)[4].link_tag;
+        
+  }
+  if(strcmp(chr_p_msgno_a,"DRT") ==0)
+  {
+    
+      if (APL_SUCCESS == MS_Chk_CondPrevMsg(p_rownum,"CLIENT",p_data_values,p_ms_static_val_d,0))
+      {
+             if( p_newmsg == 1)
+		(*p_ms_calc_elm_struct_h)[0].link_tag++;
+      }
+      else
+		(*p_ms_calc_elm_struct_h)[0].link_tag = 1;
+     if(p_newmsg == 1)
+     {
+      memset(chr_l_fld_value,APL_NULL_CHAR,201);
+      int_returnval = MS_Rtv_TabVal(p_rownum,"OPNBAL",p_data_values,
+                     chr_l_fld_value,p_ms_static_val_d,0);
+      if(int_returnval == APL_FAILURE)
+      {
+         fprintf(p_errfile,"Failure in reading data h_file for opening balance\n");
+         APL_GOBACK_FAIL
+      }
+      (*p_ms_calc_elm_struct_h)[6].link_tag = atof(chr_l_fld_value);
+        
+     }
+      if (APL_FAILURE== MS_Chk_CondPrevMsg(p_rownum,"INSTR_CODE",p_data_values,p_ms_static_val_d,0))
+      {
+      memset(chr_l_fld_value,APL_NULL_CHAR,201);
+      int_returnval = MS_Rtv_TabVal(p_rownum,"OPNBAL",p_data_values,
+                     chr_l_fld_value,p_ms_static_val_d,0);
+      if(int_returnval == APL_FAILURE)
+      {
+         fprintf(p_errfile,"Failure in reading data h_file for opening balance\n");
+         APL_GOBACK_FAIL
+      }
+      (*p_ms_calc_elm_struct_h)[6].link_tag = atof(chr_l_fld_value);
+      }
+     memset(chr_l_fld_value,APL_NULL_CHAR,201);
+     int_returnval = MS_Rtv_TabVal(p_rownum,"DEAL_CD",p_data_values,
+                     chr_l_fld_value,p_ms_static_val_d,0);
+     if(int_returnval == APL_FAILURE)
+     {
+         fprintf(p_errfile,"Failure in reading data h_file for trade h_code\n");
+         APL_GOBACK_FAIL
+     }
+     strcpy(chr_l_trcode_a,chr_l_fld_value);
+     memset(chr_l_fld_value,APL_NULL_CHAR,201);
+     int_returnval = MS_Rtv_TabVal(p_rownum,"QTY",p_data_values,
+                     chr_l_fld_value,p_ms_static_val_d,0);
+     if(int_returnval == APL_FAILURE)
+     {
+         fprintf(p_errfile,"Failure in reading data h_file for quantity\n");
+         APL_GOBACK_FAIL
+     }
+     strcpy(l_quantity,chr_l_fld_value);
+     if(strcmp(chr_l_trcode_a,"1")== 0 ||
+        strcmp(chr_l_trcode_a,"3")==0 ||
+			strcmp(chr_l_trcode_a,"7")==0)
+     {
+         (*p_ms_calc_elm_struct_h)[6].link_tag = (*p_ms_calc_elm_struct_h)[6].link_tag - atof(l_quantity);
+     }
+     else
+         (*p_ms_calc_elm_struct_h)[6].link_tag = (*p_ms_calc_elm_struct_h)[6].link_tag + atof(l_quantity);
+
+  }
+  if(strncmp(chr_p_msgno_a,"53x",3) == 0 )
+  {
+       if (APL_SUCCESS == MS_Chk_CondPrevMsg(p_rownum,"CLIENT",p_data_values,p_ms_static_val_d,0))
+       {
+                if ( p_newmsg == 1)
+		(*p_ms_calc_elm_struct_h)[0].link_tag++;
+       }
+       else
+		(*p_ms_calc_elm_struct_h)[0].link_tag = 1;
+  }
+  if(strcmp(chr_p_msgno_a,"599FX") == 0 ||
+     strcmp(chr_p_msgno_a,"599PFR") == 0)
+  {
+       if (APL_SUCCESS == MS_Chk_CondPrevMsg(p_rownum,"CLIENT",p_data_values,p_ms_static_val_d,0))
+       {
+                if ( p_newmsg == 1)
+		(*p_ms_calc_elm_struct_h)[0].link_tag++;
+       }
+       else
+		(*p_ms_calc_elm_struct_h)[0].link_tag = 1;
+  }
+  
+  if(strcmp(chr_p_msgno_a,"512_E") == 0 ||
+     strcmp(chr_p_msgno_a,"512_C") == 0 ||
+	  strcmp(chr_p_msgno_a,"599EXP") == 0)
+  {
+       if (APL_SUCCESS == MS_Chk_CondPrevMsg(p_rownum,"CLIENT",p_data_values,p_ms_static_val_d,0))
+       {
+                if ( p_newmsg == 1)
+		(*p_ms_calc_elm_struct_h)[0].link_tag++;
+       }
+       else
+		(*p_ms_calc_elm_struct_h)[0].link_tag = 1;
+  }
+APL_GOBACK_SUCCESS
+RETURN_SUCCESS:
+        free(chr_l_ccy_end_t);
+        CO_ProcMonitor(APL_OUT_FILE,"Exiting successfully  out of MS_Proc_ComputedVal\n",NULL,NULL);
+
+        return APL_SUCCESS;
+
+RETURN_FAILURE:
+        free(chr_l_ccy_end_t);
+        CO_ProcMonitor(APL_OUT_FILE,"Exiting unsuccesfully out of MS_Proc_ComputedVal\n",NULL,NULL);
+        return APL_FAILURE;
+
+}
+
+int MS_Chk_TagCond(char *p_cond,int  p_val_rec,FILE *p_data_values,MS_STATIC_VAL *p_ms_static_val_d)
+{
+
+typedef struct{
+     char chr_varval[201];
+     char iv_cond[3];
+     char chr_testval[201];
+     char h_op_val[4];
+} condstruct;
+
+typedef struct{
+     int h_res;
+     char h_op_val[4];
+     char h_brac[2];
+}resstruct;
+
+  char *chr_l_varst = NULL;
+  char *chr_l_varst_t = NULL;
+  char *chr_l_vared = NULL;
+  char *chr_l_vared_t = NULL;
+  char *chr_l_valst = NULL;
+  char *chr_l_valst_t = NULL;
+  char *chr_l_valed = NULL;
+  char *chr_l_valed_t = NULL;
+  char *chr_l_bracst = NULL;
+  char *chr_l_bracst_t = NULL;
+  char *chr_l_braced = NULL;
+  char *chr_l_braced_t = NULL;
+  char *int_l_cond = NULL;
+  char chr_myvalue[201];
+  char *chr_varname = NULL;
+  char *chr_varname_t = NULL;
+  int int_varpos=0,int_valpos=0,int_condpos=0,int_oppos=0,int_l_ctr=0,int_l_bracflg=0,int_p_noelem=0;
+  int i=0,int_preres=1,int_curres=1,int_l_rescnt=0,j=0,int_returnval=0;
+  resstruct evalres[50];
+  condstruct l_condstr[50];
+  
+
+  int_l_cond = (char *) calloc(201,sizeof(char));
+  APL_MALLOC_FAIL_LOC(int_l_cond);
+
+
+
+  memset(chr_myvalue,APL_NULL_CHAR,201);
+  chr_varname_t = chr_varname = (char *) calloc(100,sizeof(char));
+  APL_MALLOC_FAIL_LOC(chr_varname);
+
+  chr_l_varst_t = chr_l_varst = (char *) calloc(100,sizeof(char));
+  APL_MALLOC_FAIL_LOC(chr_l_varst);
+
+  chr_l_vared_t = chr_l_vared = (char *) calloc(100,sizeof(char));
+  APL_MALLOC_FAIL_LOC(chr_l_vared);
+
+  chr_l_valst_t = chr_l_valst = (char *) calloc(100,sizeof(char));
+  APL_MALLOC_FAIL_LOC(chr_l_valst);
+
+  chr_l_valed_t = chr_l_valed = (char *) calloc(100,sizeof(char));
+  APL_MALLOC_FAIL_LOC(chr_l_valed);
+
+  chr_l_bracst_t = chr_l_bracst = (char *) calloc(100,sizeof(char));
+  APL_MALLOC_FAIL_LOC(chr_l_bracst);
+
+  chr_l_braced_t = chr_l_braced = (char *) calloc(100,sizeof(char));
+  APL_MALLOC_FAIL_LOC(chr_l_braced);
+
+  memset(chr_varname,'\0',100 * sizeof(char));
+  memset(chr_l_varst,'\0',100 * sizeof(char));
+  memset(chr_l_vared,'\0',100 * sizeof(char));
+  memset(chr_l_valst,'\0',100 * sizeof(char));
+  memset(chr_l_valed,'\0',100 * sizeof(char));
+  memset(chr_l_bracst,'\0',100 * sizeof(char));
+  memset(chr_l_braced,'\0',100 * sizeof(char));
+  strcpy(int_l_cond,p_cond);
+  while (strlen(int_l_cond) > 0)
+  {
+     memset(l_condstr[int_l_ctr].chr_varval,APL_NULL_CHAR,201); /* Veda --10GM */
+     memset(l_condstr[int_l_ctr].iv_cond,APL_NULL_CHAR,3);
+     memset(l_condstr[int_l_ctr].h_op_val,APL_NULL_CHAR,4);
+     memset(l_condstr[int_l_ctr].chr_testval,APL_NULL_CHAR,201);/* Veda --10GM */
+     
+     int_l_bracflg = 0;
+     chr_l_bracst = strchr(int_l_cond,'(');
+     chr_l_braced = strchr(int_l_cond,')');
+     chr_l_varst = strchr(int_l_cond,'{');
+     chr_l_vared = strchr(int_l_cond,'}');
+     chr_l_valst = strchr(int_l_cond,'[');
+    chr_l_valed = strchr(int_l_cond,']');
+
+     if (chr_l_varst == NULL)
+     {
+        if (chr_l_braced != NULL)
+        {
+           strcpy((l_condstr)[int_l_ctr].chr_varval,")");/* Veda --10GM */
+			  			
+           strcpy(int_l_cond,chr_l_braced+1);
+
+				int_l_cond[200]='\0';	
+           int_l_ctr++;
+           continue;
+        }
+        break;
+     }
+     if (chr_l_bracst != NULL)
+     {
+        if(( chr_l_bracst- chr_l_varst) < 0)
+        {
+           int_oppos  = chr_l_bracst - int_l_cond ;
+           if (int_oppos > 0)
+           {
+              strncpy((l_condstr)[int_l_ctr-1].h_op_val,int_l_cond,int_oppos);
+              
+				  l_condstr[int_l_ctr-1].h_op_val[strlen(l_condstr[int_l_ctr-1].h_op_val)] = APL_NULL_CHAR;
+           }
+           int_l_bracflg = 1;
+
+          strcpy((l_condstr)[int_l_ctr].chr_varval,"(");/* Veda --10GM */
+           int_l_ctr++;
+           memset(l_condstr[int_l_ctr].chr_varval,APL_NULL_CHAR,201);/* Veda --10GM */
+           memset(l_condstr[int_l_ctr].iv_cond,APL_NULL_CHAR,3);
+           memset(l_condstr[int_l_ctr].h_op_val,APL_NULL_CHAR,4);
+           memset(l_condstr[int_l_ctr].chr_testval,APL_NULL_CHAR,201);/* Veda --10GM */
+        }
+       else
+       {
+          int_oppos  = chr_l_varst - int_l_cond ;
+          if (int_oppos > 0)
+          {
+           strncpy((l_condstr)[int_l_ctr-1].h_op_val,int_l_cond,int_oppos);
+          
+			  l_condstr[int_l_ctr-1].h_op_val[strlen(l_condstr[int_l_ctr-1].h_op_val)] = APL_NULL_CHAR;
+          }
+       }
+
+     }
+     else
+     {
+       if (chr_l_braced != NULL)
+       {
+        if((chr_l_braced - chr_l_varst) < 0)
+        {
+           int_oppos  = chr_l_varst - chr_l_braced-1;
+           if (int_oppos > 0)
+           {
+             strncpy((l_condstr)[int_l_ctr-1].h_op_val,chr_l_braced+1,int_oppos);
+           
+			  l_condstr[int_l_ctr-1].h_op_val[strlen(l_condstr[int_l_ctr-1].h_op_val)] = APL_NULL_CHAR;
+           }
+           int_l_bracflg = 1;
+           strcpy((l_condstr)[int_l_ctr].chr_varval,")");/* Veda --10GM */
+           int_l_ctr++;
+           memset(l_condstr[int_l_ctr].chr_varval,APL_NULL_CHAR,201);/* Veda --10GM */
+           memset(l_condstr[int_l_ctr].iv_cond,APL_NULL_CHAR,3);
+           memset(l_condstr[int_l_ctr].h_op_val,APL_NULL_CHAR,4);
+           memset(l_condstr[int_l_ctr].chr_testval,APL_NULL_CHAR,201);/* Veda --10GM */
+        }
+        else
+        {
+          int_oppos  = chr_l_varst - int_l_cond ;
+          if (int_oppos > 0)
+          {
+           strncpy((l_condstr)[int_l_ctr-1].h_op_val,int_l_cond,int_oppos);
+           
+			  l_condstr[int_l_ctr-1].h_op_val[strlen(l_condstr[int_l_ctr-1].h_op_val)] = APL_NULL_CHAR;
+          }
+        }
+
+       }
+       else
+       {
+          int_oppos  = chr_l_varst - int_l_cond ;
+          if (int_oppos > 0)
+          {
+
+          strncpy((l_condstr)[int_l_ctr-1].h_op_val,int_l_cond,int_oppos);
+           
+			  l_condstr[int_l_ctr-1].h_op_val[strlen(l_condstr[int_l_ctr-1].h_op_val)] = APL_NULL_CHAR;
+          }
+       }
+     }
+     int_varpos = chr_l_vared - chr_l_varst -1;
+     int_valpos = chr_l_valed - chr_l_valst -1;
+     int_condpos = chr_l_valst - chr_l_vared -1 ;
+     memset(chr_varname,APL_NULL_CHAR,31);
+	  if (chr_l_varst != NULL)
+	     strncpy(chr_varname,chr_l_varst+1,int_varpos);
+     else 
+	     strcpy(chr_varname,APL_NULL_STRING);
+	  memset(chr_myvalue,APL_NULL_CHAR,201);
+		
+     int_returnval = MS_Rtv_TabVal(p_val_rec,chr_varname,p_data_values,chr_myvalue,p_ms_static_val_d,0);
+
+
+     strcpy((l_condstr)[int_l_ctr].chr_varval,chr_myvalue);/* Veda --10GM */
+	  if (chr_l_vared != NULL)
+     		strncpy((l_condstr)[int_l_ctr].iv_cond ,chr_l_vared+1,int_condpos);
+     else
+			strcpy((l_condstr)[int_l_ctr].iv_cond,APL_NULL_STRING);
+	  if (chr_l_valst != NULL)
+	  		strncpy((l_condstr)[int_l_ctr].chr_testval,chr_l_valst+1,int_valpos);/* Veda --10GM */
+	  else 
+			strcpy((l_condstr)[int_l_ctr].chr_testval,APL_NULL_STRING);/* Veda --10GM */
+     
+	  l_condstr[int_l_ctr].chr_varval[strlen(l_condstr[int_l_ctr].chr_varval)] = APL_NULL_CHAR;/* Veda --10GM */
+	  l_condstr[int_l_ctr].iv_cond[strlen(l_condstr[int_l_ctr].iv_cond)] = APL_NULL_CHAR;
+	  l_condstr[int_l_ctr].chr_testval[strlen(l_condstr[int_l_ctr].chr_testval)] = APL_NULL_CHAR;/* Veda --10GM */
+     if(chr_l_valed != NULL) 
+			strcpy(int_l_cond,chr_l_valed+1);
+	  else
+			strcpy(int_l_cond,APL_NULL_STRING);
+		int_l_cond[200]='\0';
+     int_l_ctr++;
+   }
+int_p_noelem = int_l_ctr ;
+
+  while(i < int_p_noelem)
+  {
+     evalres[i].h_res = 0;
+     memset(evalres[i].h_op_val,APL_NULL_CHAR,4);
+     memset(evalres[i].h_brac,APL_NULL_CHAR,2);
+
+    if ((strcmp(l_condstr[i].chr_varval,"(") == 0) || (strcmp(l_condstr[i].chr_varval,")") == 0)/* Veda --10GM */
+)
+    {
+      strcpy(evalres[i].h_brac,l_condstr[i].chr_varval);/* Veda --10GM */
+      if( i > 0)
+      {
+         strcpy(evalres[i-1].h_op_val,l_condstr[i-1].h_op_val);
+      }
+      i++;
+      continue;
+    }
+    if(strcmp(l_condstr[i].iv_cond,"=")==0)
+    {
+       if(strcmp(l_condstr[i].chr_varval,l_condstr[i].chr_testval)== 0)/* Veda --10GM */
+       {
+            int_curres= 1;
+            evalres[i].h_res = 1;
+       }
+       else
+
+       {
+           int_curres= 0;
+           evalres[i].h_res = 0;
+       }
+    }
+
+    if(strcmp(l_condstr[i].iv_cond,"!=")==0)
+    {
+       if(strcmp(l_condstr[i].chr_varval,l_condstr[i].chr_testval)!= 0)/* Veda --10GM */
+       {
+            int_curres= 1;
+            evalres[i].h_res = 1;
+       }
+       else
+       {
+           int_curres= 0;
+           evalres[i].h_res = 0;
+       }
+    }
+   if(i > 0)
+   {
+
+
+
+     strcpy(evalres[i-1].h_op_val,l_condstr[i-1].h_op_val);
+   }
+
+
+
+   int_preres = int_curres;
+   ++i;
+  }
+  i = int_p_noelem-1;
+  int_l_rescnt = int_p_noelem-1;
+  while(int_l_rescnt > 0)
+  {
+     if (i == 0)
+     {
+       i = int_l_rescnt;
+     }
+     if((strcmp(evalres[i].h_brac,")") == 0) || (strcmp(evalres[i].h_brac,"(")) == 0
+)
+     {
+        if((strcmp(evalres[i].h_brac,")") == 0) && (strcmp(evalres[i-2].h_brac,"("))
+ == 0)
+        {
+
+           j = i;
+           while(j < int_l_rescnt)
+           {
+              evalres[j].h_res = evalres[j+1].h_res;
+              strcpy(evalres[j].h_op_val,evalres[j+1].h_op_val);
+              strcpy(evalres[j].h_brac,evalres[j+1].h_brac);
+              j++;
+           }
+           int_l_rescnt--;
+           j = i-2;
+           while(j < int_l_rescnt)
+           {
+              evalres[j].h_res = evalres[j+1].h_res;
+              strcpy(evalres[j].h_op_val,evalres[j+1].h_op_val);
+              strcpy(evalres[j].h_brac,evalres[j+1].h_brac);
+              j++;
+           }
+           int_l_rescnt--;
+           i--;
+        }
+        i--;
+        continue;
+     }
+     if((strcmp(evalres[i-1].h_brac,")") == 0) || (strcmp(evalres[i-1].h_brac,"("))
+== 0)
+     {
+        i--;
+        continue;
+     }
+     if( strcmp(evalres[i-1].h_op_val,"AND") == 0)
+     {
+       if ((evalres[i].h_res && evalres[i-1].h_res))
+       {
+         evalres[i-1].h_res = 1;
+       }
+       else
+       {
+         evalres[i-1].h_res = 0;
+       }
+     }
+     if( strcmp(l_condstr[i-1].h_op_val,"OR") == 0)
+     {
+       if ((evalres[i].h_res || evalres[i-1].h_res))
+       {
+         evalres[i-1].h_res = 1;
+       }
+
+       else
+       {
+         evalres[i-1].h_res = 0;
+       }
+
+     }
+     strcpy(evalres[i-1].h_op_val,evalres[i].h_op_val);
+     j = i;
+     while(j < int_l_rescnt)
+     {
+      evalres[j].h_res = evalres[j+1].h_res;
+      strcpy(evalres[j].h_op_val,evalres[j+1].h_op_val);
+      strcpy(evalres[j].h_brac,evalres[j+1].h_brac);
+      j++;
+     }
+     int_l_rescnt--;
+     i--;
+
+  }
+
+  if( evalres[0].h_res == 1)
+       APL_GOBACK_SUCCESS
+  else
+       APL_GOBACK_FAIL
+
+RETURN_SUCCESS:
+
+        CO_ProcMonitor(APL_OUT_FILE,"Exiting successfully  out of MS_Chk_TagCond\n",NULL,NULL);
+   free(int_l_cond);
+   free(chr_varname_t);
+   free(chr_l_varst_t);
+  	free(chr_l_vared_t);
+  	free(chr_l_valst_t);
+  	free(chr_l_valed_t);
+  	free(chr_l_bracst_t);
+  	free(chr_l_braced_t);
+        return APL_SUCCESS;
+
+RETURN_FAILURE:
+        CO_ProcMonitor(APL_OUT_FILE,"Exiting unsuccesfully out of MS_Chk_TagCond\n",NULL,NULL);
+   free(int_l_cond);
+   free(chr_varname_t);
+   free(chr_l_varst_t);
+  	free(chr_l_vared_t);
+  	free(chr_l_valst_t);
+  	free(chr_l_valed_t);
+  	free(chr_l_bracst_t);
+  	free(chr_l_braced_t);
+        return APL_FAILURE;
+
+}
+
+void MS_Proc_Round(char *chr_p_msgno_a,double chr_p_val,char *f_val,char p_print_code,char *p_currencycode,char p_swftlx,FILE *p_errfile)
+{
+
+int h_dec_len = 0;
+char chr_fchar[5]; 
+char chr_l_val[15]; 
+
+
+
+char chr_h_main_func_area[21], chr_h_sub_func[21], chr_h_field_val[21];
+int int_h_exists = 0;
+DEBUG_INFO_STRUCT_H *l_debuginfo = NULL;
+
+memset(chr_h_main_func_area,APL_NULL_CHAR,21);
+memset(chr_h_sub_func,APL_NULL_CHAR,21);
+memset(chr_h_field_val,APL_NULL_CHAR,21);
+
+strcpy(chr_h_main_func_area, "MSG_FORMATTER");
+strcpy(chr_h_sub_func, "QTY_LENGTH");
+strcpy(chr_h_field_val, "6");
+
+
+            if(p_print_code  == 'A')
+            {
+               EXEC SQL SELECT DEC_LEN INTO :h_dec_len
+                        FROM  DL_CURRENCY
+                        WHERE currency_cd = :p_currencycode;
+
+               if(sqlca.sqlcode < 0 || sqlca.sqlcode == 1403)
+               {
+                   fprintf(p_errfile,"Error in accessing currency table for %s\n",p_currencycode); 
+               }
+
+            }
+            else if(p_print_code  == 'Q')
+				{
+               if(APL_FAILURE==CO_Chk_SplVal(chr_h_main_func_area,chr_h_sub_func,chr_h_field_val,&int_h_exists,&l_debuginfo))
+               {
+                  CO_ProcMonitor(p_errfile,"Error in MS_Proc_Round Calling CO_Chk_SplVal\n",NULL,NULL);
+                  int_h_exists=0;
+               }
+               if(int_h_exists)
+               {
+                  h_dec_len=6;
+               }
+					// Chirag add for ISKB 644 Stmt Of Holding & Stmt Of Transaction shld display qty in decimal
+					else if((strncmp(chr_p_msgno_a,"535",3) == 0 || strncmp(chr_p_msgno_a,"536",3) == 0) ) 
+					{
+						Alert("In MSG 535 & 536 block....Chirag \n");
+						EXEC SQL SELECT FIELD_VAL INTO :h_dec_len
+									FROM PRO_GSSPLVAL
+									WHERE MAIN_FUN = 'QTY_LEN_SWFT'
+									AND SUB_PROCESS = 'MSG_535_536'
+									AND NATION = 'IN';
+
+						if (sqlca.sqlcode < 0 || sqlca.sqlcode == 1403)
+						{
+							Alert("Error occured in setup for quantity decimal length\n");
+							fprintf(p_errfile,"Error in accessing setup for quantity decimal length\n");
+						}
+						
+					}
+					// Chirag add for ISKB 644 Stmt Of Holding & Stmt Of Transaction shld display qty in decimal
+               else
+               {
+						EXEC SQL SELECT QTY_DEC_LEN INTO :h_dec_len
+						FROM  MT_CORE_SYS_PARAMS;
+
+						if (sqlca.sqlcode < 0 || sqlca.sqlcode == 1403)
+						{
+							fprintf(p_errfile,"Error in accessing setup for quantity decimal length\n");
+						}
+					}
+            }
+            else if(p_print_code  == 'R')
+	    {
+		h_dec_len = atoi(p_currencycode);
+	    }
+            if(p_print_code == 'N')
+		strcpy(chr_fchar,"%lf");
+	    		else
+            	sprintf(chr_fchar,"%s%d%s","%.",h_dec_len,"lf");
+	    if(strcmp(chr_p_msgno_a,"DRT") == 0)
+            	sprintf(chr_l_val,chr_fchar,chr_p_val);
+	    else
+            	sprintf(chr_l_val,chr_fchar,fabs(chr_p_val));
+	
+	    if(p_print_code != ' ' && p_swftlx == 'T')
+		strcpy(f_val,chr_l_val);
+            else if(p_print_code != ' ')
+            	MS_Proc_SWFTForm(chr_l_val,f_val);
+            else
+		strcpy(f_val,chr_l_val);
+
+return;
+}
+
+int MS_Proc_MsgEnd(MS_TAG_ELM_STRUCT_H **p_ms_tag_elm_struct_h,int int_tag_ctr,int p_rownum,MS_VAL_ELM_STRUCT_H **p_ms_val_elm_struct_h,
+               MS_STATIC_VAL *p_ms_static_val_d,MS_CALC_ELM_STRUCT_H **p_ms_calc_elm_struct_h,int p_newmsg,FILE *l_data_values,
+               int p_val_ctr,char *p_msg_no,char *p_txn_msg,FILE *p_errfile, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+int i=0,j=p_val_ctr,k=0;
+double dbl_l_calc_val = 0;
+char *int_l_temp=NULL,chr_l_page[6];
+char chr_l_client_a[APL_CLIENT_LENGTH],chr_l_fld_value[201],dbl_l_amount_a[201],chr_l_dbind[30];
+char chr_l_domciti_flg[201] = APL_NULL_STRING;
+short int_l_cond=0;
+int int_returnval=0;
+
+memset(chr_l_page,APL_NULL_CHAR,6);
+memset(chr_l_client_a,APL_NULL_CHAR,APL_CLIENT_LENGTH);
+memset(chr_l_fld_value,APL_NULL_CHAR,201);
+memset(dbl_l_amount_a,APL_NULL_CHAR,201);
+memset(chr_l_dbind,APL_NULL_CHAR,30);
+
+
+    for(i=0;i<int_tag_ctr;i++)
+    {
+	if((strcmp((*p_ms_tag_elm_struct_h)[i].msg_tag,"28") == 0) && (strcmp((*p_ms_tag_elm_struct_h)[i].info_elem,"PAGENO") == 0))
+        {
+           if(strcmp(p_msg_no,"571") == 0)
+              strcpy(chr_l_client_a,"SUBACCOUNT");
+           else
+              strcpy(chr_l_client_a,"CLIENT");   
+           if( APL_FAILURE == MS_Chk_CondPrevMsg(p_rownum,chr_l_client_a,l_data_values,p_ms_static_val_d,p_newmsg))
+           {
+               j=p_val_ctr;
+               while(j>=0)
+               {
+		  if((strcmp((*p_ms_val_elm_struct_h)[j].msg_tag,"28") == 0) && ((*p_ms_tag_elm_struct_h)[i].identity_no == (*p_ms_val_elm_struct_h)[j].identity_no))
+		  {
+                      int_l_temp = strchr((*p_ms_val_elm_struct_h)[j].h_data_val,'/');
+                      memset(chr_l_page,APL_NULL_CHAR,6);
+							 if (int_l_temp != NULL)
+                      		strncpy(chr_l_page,(*p_ms_val_elm_struct_h)[j].h_data_val,strlen((*p_ms_val_elm_struct_h)[j].h_data_val) - strlen(int_l_temp));
+                      else
+                      		strncpy(chr_l_page,(*p_ms_val_elm_struct_h)[j].h_data_val,strlen((*p_ms_val_elm_struct_h)[j].h_data_val));
+							 strcat(chr_l_page,"/99");
+                      strcpy((*p_ms_val_elm_struct_h)[j].h_data_val,chr_l_page);
+                      break;	
+		  }
+		  j--;
+               }
+           }
+	   
+        }
+	if((strcmp((*p_ms_tag_elm_struct_h)[i].msg_tag,"72") == 0) && (strcmp((*p_ms_tag_elm_struct_h)[i].info_elem,"PAGENO") == 0))
+        {
+           if(strcmp(p_msg_no,"571") == 0)
+              strcpy(chr_l_client_a,"SUBACCOUNT");
+           else
+              strcpy(chr_l_client_a,"CLIENT");   
+           if( APL_FAILURE == MS_Chk_CondPrevMsg(p_rownum,chr_l_client_a,l_data_values,p_ms_static_val_d,p_newmsg))
+           {
+               j=p_val_ctr;
+               while(j>=0)
+               {
+		  if((strcmp((*p_ms_val_elm_struct_h)[j].msg_tag,"72") == 0) && ((*p_ms_tag_elm_struct_h)[i].identity_no == (*p_ms_val_elm_struct_h)[j].identity_no))
+		  {
+                      if( strstr( (*p_ms_val_elm_struct_h)[j].h_data_val,"/PG/") != NULL)
+                      {
+                          strcat((*p_ms_val_elm_struct_h)[j].h_data_val,"L");
+                          break;	
+                      }
+		  }
+		  j--;
+               }
+           }
+	   
+        }
+	if(strcmp((*p_ms_tag_elm_struct_h)[i].msg_tag,"PGC") == 0)
+        {
+               j=p_val_ctr;
+               while(j>=0)
+               {
+		  if((strcmp((*p_ms_val_elm_struct_h)[j].msg_tag,"PGC") == 0) && ((*p_ms_tag_elm_struct_h)[i].identity_no == (*p_ms_val_elm_struct_h)[j].identity_no))
+		  {
+		
+                   strcpy((*p_ms_val_elm_struct_h)[j].msg_tag,"");
+                   (*p_ms_val_elm_struct_h)[j].head_cont_newline = 'N';
+		   if((*p_ms_calc_elm_struct_h)[0].link_tag == 1)
+                     strcpy((*p_ms_val_elm_struct_h)[j].h_data_val,"");
+                   else if((*p_ms_calc_elm_struct_h)[0].link_tag > 1)
+                   {
+                     strcpy((*p_ms_val_elm_struct_h)[j].h_data_val,"FOLLOWING FROM PAGE ");
+                     strcat((*p_ms_val_elm_struct_h)[j].h_data_val,ltoa((*p_ms_calc_elm_struct_h)[0].link_tag-1));
+                     strcat((*p_ms_val_elm_struct_h)[j].h_data_val,APL_NULL_STRING);
+                   }
+                     break;	
+		  }
+		  j--;
+               }
+        }
+        if(strcmp((*p_ms_tag_elm_struct_h)[i].msg_tag,"PG") == 0)
+        {
+           strcpy(chr_l_client_a,"CLIENT");
+               j=p_val_ctr;
+               while(j>=0)
+               {
+                  if((strcmp((*p_ms_val_elm_struct_h)[j].msg_tag,"PG") == 0) && ((*p_ms_tag_elm_struct_h)[i].identity_no == (*p_ms_val_elm_struct_h)[j].identity_no))
+                  {
+                   (*p_ms_val_elm_struct_h)[j].head_cont_newline = 'N';
+                   strcpy((*p_ms_val_elm_struct_h)[j].msg_tag,"");
+                   if( APL_SUCCESS == MS_Chk_CondPrevMsg(p_rownum,chr_l_client_a,l_data_values,p_ms_static_val_d,p_newmsg))
+                   {
+                     strcpy((*p_ms_val_elm_struct_h)[j].h_data_val,"END OF PAGE ");
+                     strcat((*p_ms_val_elm_struct_h)[j].h_data_val,ltoa((*p_ms_calc_elm_struct_h)[0].link_tag));
+                     strcat((*p_ms_val_elm_struct_h)[j].h_data_val," (CONTINUE)");
+                     strcat((*p_ms_val_elm_struct_h)[j].h_data_val,APL_NULL_STRING);
+                     break;
+                  }
+                  else
+                  {
+                    strcpy((*p_ms_val_elm_struct_h)[j].h_data_val,"");
+                    break;	
+
+                  }
+                }
+                  j--;
+           }
+         }
+        if(strcmp((*p_ms_tag_elm_struct_h)[i].msg_tag,"TR3") == 0) 
+    	{
+               memset(chr_l_fld_value,'\0',201);
+               int_returnval = MS_Rtv_TabVal(p_rownum,"REF_CCY",l_data_values,chr_l_fld_value,p_ms_static_val_d,0);
+
+               if(int_returnval == APL_FAILURE)
+               {
+	  		fprintf(p_errfile,"Failure in reading datafile for %s\n","REF_CCY");
+             		APL_GOBACK_FAIL
+              }
+               j=p_val_ctr;
+               while(j>=0)
+               {
+		     if((strcmp((*p_ms_val_elm_struct_h)[j].msg_tag,"TR3") == 0) && ((*p_ms_tag_elm_struct_h)[i].identity_no == (*p_ms_val_elm_struct_h)[j].identity_no))
+        	    {
+                       strcpy(dbl_l_amount_a,(*p_ms_val_elm_struct_h)[j].h_data_val);
+                       if((*p_ms_calc_elm_struct_h)[3].link_tag > 0)
+                       {
+                       strcpy((*p_ms_val_elm_struct_h)[j].h_data_val,"TOTAL AMOUNT TO BE CREDITED ");
+                       for(k=0;k<=13;k++)
+                       	 strcat((*p_ms_val_elm_struct_h)[j].h_data_val," ");
+                       strcat((*p_ms_val_elm_struct_h)[j].h_data_val,chr_l_fld_value);
+                       strcat((*p_ms_val_elm_struct_h)[j].h_data_val,dbl_l_amount_a);
+                       strcat((*p_ms_val_elm_struct_h)[j].h_data_val,APL_NULL_STRING);
+                       }
+                       else
+                       {
+                         strcpy((*p_ms_val_elm_struct_h)[j].h_data_val,"");
+                       }
+                       break;
+                   }
+                  j--;
+              }
+        }
+        if(strcmp((*p_ms_tag_elm_struct_h)[i].msg_tag,"TR4") == 0) 
+    	{
+               memset(chr_l_fld_value,'\0',201);
+               int_returnval = MS_Rtv_TabVal(p_rownum-1,"REF_CCY",l_data_values,chr_l_fld_value,p_ms_static_val_d,1);
+
+               if(int_returnval == APL_FAILURE)
+               {
+	  		fprintf(p_errfile,"Failure in reading datafile for %s\n","REF_CCY");
+             		APL_GOBACK_FAIL
+              }
+               j=p_val_ctr;
+               while(j>=0)
+               {
+		  if((strcmp((*p_ms_val_elm_struct_h)[j].msg_tag,"TR4") == 0) && ((*p_ms_tag_elm_struct_h)[i].identity_no == (*p_ms_val_elm_struct_h)[j].identity_no))
+		  {
+                       strcpy(dbl_l_amount_a,(*p_ms_val_elm_struct_h)[j].h_data_val);
+                       if((*p_ms_calc_elm_struct_h)[4].link_tag > 0)
+                       {
+                       strcpy((*p_ms_val_elm_struct_h)[j].h_data_val,"TOTAL AMOUNT TO BE DEBITED ");
+                       for(k=0;k<=14;k++)
+                       	 strcat((*p_ms_val_elm_struct_h)[j].h_data_val," ");
+                       strcat((*p_ms_val_elm_struct_h)[j].h_data_val,chr_l_fld_value);
+                       strcat((*p_ms_val_elm_struct_h)[j].h_data_val,dbl_l_amount_a);
+                       strcat((*p_ms_val_elm_struct_h)[j].h_data_val,APL_NULL_STRING);
+                       }
+                       else
+                       {
+                         strcpy((*p_ms_val_elm_struct_h)[j].h_data_val,"");
+                       }
+                       break;
+                  }
+                  j--;
+              }
+         }
+        if(strcmp((*p_ms_tag_elm_struct_h)[i].msg_tag,"NET") == 0) 
+    	{
+               memset(chr_l_fld_value,'\0',201);
+               int_returnval = MS_Rtv_TabVal(p_rownum-1,"REF_CCY",l_data_values,chr_l_fld_value,p_ms_static_val_d,1);
+
+               if(int_returnval == APL_FAILURE)
+               {
+	  		fprintf(p_errfile,"Failure in reading datafile for %s\n","REF_CCY");
+             		APL_GOBACK_FAIL
+              }
+               memset(chr_l_dbind,'\0',30);
+               j=p_val_ctr;
+               while(j>=0)
+               {
+		  if((strcmp((*p_ms_val_elm_struct_h)[j].msg_tag,"NET") == 0) && ((*p_ms_tag_elm_struct_h)[i].identity_no == (*p_ms_val_elm_struct_h)[j].identity_no))
+		  {
+                       strcpy(dbl_l_amount_a,(*p_ms_val_elm_struct_h)[j].h_data_val);
+                       if((*p_ms_calc_elm_struct_h)[5].link_tag != 0)
+                       {
+		       if((*p_ms_calc_elm_struct_h)[5].link_tag > 0)
+                          strcpy(chr_l_dbind,"CREDITED");
+                       else
+                          strcpy(chr_l_dbind,"DEBITED ");
+                       strcpy((*p_ms_val_elm_struct_h)[j].h_data_val,"NET AMOUNT TO BE ");
+                       strcat((*p_ms_val_elm_struct_h)[j].h_data_val,chr_l_dbind);
+                       for(k=0;k<=15;k++)
+                       	 strcat((*p_ms_val_elm_struct_h)[j].h_data_val," ");
+                       strcat((*p_ms_val_elm_struct_h)[j].h_data_val,chr_l_fld_value);
+                       strcat((*p_ms_val_elm_struct_h)[j].h_data_val,dbl_l_amount_a);
+                       strcat((*p_ms_val_elm_struct_h)[j].h_data_val,APL_NULL_STRING);
+                       }
+                       else
+                       {
+                         strcpy((*p_ms_val_elm_struct_h)[j].h_data_val,"");
+                       }
+                       break;
+                  }
+                  j--;
+
+             }
+
+         } 
+         if(strcmp(p_msg_no,"599PFR") == 0)
+         {
+               j=p_val_ctr;
+               while(j>=0)
+               {
+           	if(strcmp((*p_ms_val_elm_struct_h)[j].msg_tag,"REG") == 0)
+            	{
+                   (*p_ms_val_elm_struct_h)[j].head_cont_newline = 'N';
+           	   strcpy((*p_ms_val_elm_struct_h)[j].msg_tag,"");
+           	   break;
+                }
+                j--;
+               }
+         }
+    }
+
+    if(strncmp(p_msg_no,"53x",3)==0) 
+    {
+         memset(chr_l_fld_value,'\0',201);
+         int_returnval = MS_Rtv_TabVal(p_rownum-1,"DEAL_CD",l_data_values,chr_l_fld_value,p_ms_static_val_d,1);
+
+         if(int_returnval == APL_FAILURE)
+         {
+	     fprintf(p_errfile,"Failure in reading datafile for %s\n","DEAL_CD");
+             APL_GOBACK_FAIL
+         }
+
+         if(strcmp(chr_l_fld_value,"1")==0)
+            strcpy(p_txn_msg,"532");
+         else if(strcmp(chr_l_fld_value,"2")==0)
+            strcpy(p_txn_msg,"530");
+         else if(strcmp(chr_l_fld_value,"3")==0)
+            strcpy(p_txn_msg,"533");
+         else if(strcmp(chr_l_fld_value,"4")==0)
+            strcpy(p_txn_msg,"531");
+       
+    } 
+    else if(strcmp(p_msg_no,"52x")==0) 
+    {
+         memset(chr_l_fld_value,'\0',201);
+         int_returnval = MS_Rtv_TabVal(p_rownum-1,"DEAL_CD",l_data_values,chr_l_fld_value,p_ms_static_val_d,1);
+
+         if(int_returnval == APL_FAILURE)
+         {
+	     fprintf(p_errfile,"Failure in reading datafile for %s\n","DEAL_CD");
+             APL_GOBACK_FAIL
+         }
+
+			
+
+			if (APL_FAILURE == CO_Chk_CntryEnabled(	"MSG_52X",
+																"GEN_52X_FOR_BOG",
+																&int_l_cond,
+																l_debug_info_ptr ))
+			{
+				APL_GOBACK_FAIL
+			}
+
+			if (int_l_cond) 
+			{
+				
+
+				memset(chr_l_domciti_flg, NULL, 201);
+				if (APL_FAILURE == MS_Rtv_TabVal(	p_rownum-1,
+																"ISDOMCITI",
+																l_data_values,
+																chr_l_domciti_flg,
+																p_ms_static_val_d,
+																1 ))
+				{
+	     			fprintf(p_errfile,"Failure in reading datafile for %s\n","ISDOMCITI");
+             	APL_GOBACK_FAIL
+				}
+
+				if (((!strcmp(chr_l_fld_value,"1")) || (!strcmp(chr_l_fld_value, "3"))) &&
+					 (!strcmp(chr_l_domciti_flg, "Y")))
+				{
+					strcpy(p_txn_msg, "522");
+				}
+				else if (!strcmp(chr_l_fld_value, "1"))
+				{
+					strcpy(p_txn_msg, "522");
+				}
+				else if (!strcmp(chr_l_fld_value, "2"))
+				{
+					strcpy(p_txn_msg, "520");
+				}
+				else if (!strcmp(chr_l_fld_value, "3"))
+				{
+					strcpy(p_txn_msg, "523");
+				}
+				else if (!strcmp(chr_l_fld_value, "4"))
+				{
+					strcpy(p_txn_msg, "521");
+				}
+			}
+			else
+			{
+				if(strcmp(chr_l_fld_value,"1")==0)
+					strcpy(p_txn_msg,"522");
+				else if(strcmp(chr_l_fld_value,"2")==0)
+					strcpy(p_txn_msg,"520");
+			}
+    } 
+    else
+    {
+	memset(p_txn_msg,APL_NULL_CHAR,7);
+    }
+
+APL_GOBACK_SUCCESS;
+
+RETURN_SUCCESS:
+
+        CO_ProcMonitor(APL_OUT_FILE,"Exiting successfully  out of end of Message Processing \n",NULL,NULL);
+
+        return APL_SUCCESS;
+
+RETURN_FAILURE:
+        CO_ProcMonitor(APL_OUT_FILE,"Exiting unsuccesfully out of end of Message Processing\n",NULL,NULL);
+        return APL_FAILURE;
+
+}

@@ -1,0 +1,661 @@
+
+
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+
+
+
+#include "Intellect_Common.h"
+#include "CO_HostStructdef.h"
+#include "DL_Interface.h" 
+#include <stdlib.h>
+#include "DL_Ipo.h"
+#include "DL_Csd.h"
+
+
+EXEC SQL INCLUDE SQLCA.H;
+
+int int_g_match_rept_line = 0, int_g_unmatch_rept_line = 0;
+
+main(int argc,char **argv)
+{
+   DEBUG_INFO_STRUCT_H **l_debug_info_ptr = (DEBUG_INFO_STRUCT_H **)NULL ;
+  	INTL_ENV_DATA_STRUCT_H p_intlenv_data_struct_h;
+
+   FILE *l_logfile =(FILE *)NULL, *l_finifile= (FILE *)NULL;
+   FILE *l_match_rept_file = (FILE *)NULL,*l_unmatch_rept_file = (FILE *)NULL;	 
+   char chr_l_hoff_file[PATH_LENGTH]=APL_NULL_STRING;
+   char chr_l_inifile[PATH_LENGTH] = APL_NULL_STRING;
+   struct sqlca sqlca;
+   char chr_l_sys_date[APL_DATE_LEN] = APL_NULL_STRING;
+   short int_l_condexists_A = 0;
+	char chr_uname[APL_USERID_LEN] = APL_NULL_STRING;
+   char chr_custody_id_b[APL_USERID_LEN] = APL_NULL_STRING;
+   char chr_passwd[APL_USERID_LEN] = APL_NULL_STRING;
+   char                  chr_g_restart_data[APL_RESTARTDATA_LENGTH];
+    short                 g_restart_data_i;
+
+   EXEC SQL BEGIN DECLARE SECTION;
+   	EXEC SQL VAR chr_uname		IS STRING;
+   	EXEC SQL VAR chr_passwd		IS STRING;
+  	EXEC SQL END DECLARE SECTION;
+EXEC SQL VAR chr_g_restart_data is string;
+	
+   memset(&p_intlenv_data_struct_h, NULL, sizeof(INTL_ENV_DATA_STRUCT_H));
+
+	if ( ( (l_debug_info_ptr) = (DEBUG_INFO_STRUCT_H **)calloc(1,sizeof(DEBUG_INFO_STRUCT_H *)) ) == NULL )
+		APL_GOBACK_FAIL;
+
+   strcpy(p_intlenv_data_struct_h.usr, argv[3]);
+   strcpy(p_intlenv_data_struct_h.h_mode, argv[4]);
+   strcpy(p_intlenv_data_struct_h.processtion, argv[5]);
+   strcpy(p_intlenv_data_struct_h.auth_req, argv[6]);
+   strcpy(p_intlenv_data_struct_h.subprocess, argv[7]);
+   strcpy(p_intlenv_data_struct_h.h_process, argv[8]);
+   
+   strcpy(chr_l_inifile,getenv("INTL_ROOT_PATH"));
+   strcat(chr_l_inifile,"intl_sun.cfg");
+   if ( ( l_finifile=fopen(chr_l_inifile,"r") ) == NULL)
+   {
+		APL_GOBACK_FAIL
+   }
+   sqlca.sqlcode =0; 
+   APL_FETCH_DB_LOGIN_DETAILS(l_finifile, chr_custody_id_b, chr_uname, chr_passwd, APL_OUT_FILE, l_debug_info_ptr)
+   IS_ANY_ORA_ERROR
+   EXEC SQL CONNECT :chr_uname IDENTIFIED BY :chr_passwd;
+  
+   IS_ANY_ORA_ERROR
+   if (APL_FAILURE == CO_RtvSysParams(l_debug_info_ptr))
+   {
+      CO_ProcMonitor(APL_OUT_FILE, "Error In Getting System Parameters", NULL, NULL);
+      APL_GOBACK_FAIL
+   }
+
+   if ( APL_FAILURE == CO_Chk_CntryEnabled( "IPO_PROC",
+                                          "IPO_MENU_AVAILABLE",
+                                          &int_l_condexists_A,
+                                          l_debug_info_ptr ) )
+   {
+      CO_ProcMonitor(APL_OUT_FILE,"Failed in CO_Chk_CntryEnabled \n",NULL,NULL);
+      APL_GOBACK_FAIL
+   }
+   if(int_l_condexists_A == 0)
+   {
+      CO_ProcMonitor(APL_OUT_FILE,"SAT Processing Not Allowed\n",NULL,NULL);
+      APL_GOBACK_FAIL
+   }	
+
+
+
+
+
+   
+ 
+
+	if (APL_FAILURE == CO_Rtv_RptFileName( "PR",
+													APL_LOGFILE_DESC,
+			        								100,
+					  								argv[5],
+			        								argv,
+			        								&l_logfile,
+			        								l_debug_info_ptr ))	
+   {
+		
+		APL_GOBACK_FAIL
+   }
+
+	if (APL_FAILURE == CO_Rtv_RptFileName( "RM",
+													"SAT Reconciliation  Match Report",
+			        								100,
+					  								argv[5],
+			        								argv,
+			        								&l_match_rept_file,
+			        								l_debug_info_ptr ))	
+   {
+		APL_GOBACK_FAIL
+   }
+	DL_Prnt_IPOHdr(l_match_rept_file,"match");
+
+
+	if (APL_FAILURE == CO_Rtv_RptFileName( "RU",
+													"SAT Reconciliation Unmatch Report",
+			        								100,
+					  								argv[5],
+			        								argv,
+			        								&l_unmatch_rept_file,
+			        								l_debug_info_ptr ))	
+   {
+		APL_GOBACK_FAIL
+   }
+
+	DL_Prnt_IPOHdr(l_unmatch_rept_file,"unmatch");
+
+   if ( APL_FAILURE == CO_ReadToken(	l_finifile,
+				    								"INTL_UPL_PATH",
+				   							 	chr_l_hoff_file,
+				    								l_debug_info_ptr ))
+   {
+		fprintf(l_logfile,"\nReturning unsuccessfully from CO_ReadToken\n");
+		APL_GOBACK_FAIL
+   }
+	strcat(chr_l_hoff_file,argv[9]+1);
+	
+	IPO_IF_DEBUG
+			printf("\n|%s|\n",chr_l_hoff_file);
+	
+    EXEC SQL SELECT PROCESSING_STATUS INTO :chr_g_restart_data:g_restart_data_i
+    FROM SYS_BATCHPROC
+    WHERE PROCESS_NAME=:argv[0]
+    AND   PROC_INIT=:argv[1]
+    AND   STARTDATE=:argv[2]
+    AND   STATUS='started'
+    FOR UPDATE OF PROCESSING_STATUS,STATUS; 
+	if(APL_ZERO_RESULT_SET)
+	{
+      CO_ProcMonitor(l_logfile,"E:No entry in batch_in_proc\n",NULL,NULL);
+      APL_GOBACK_FAIL
+	}
+
+	if(APL_FAILURE == CO_RtvSysDtTime(chr_l_sys_date,l_debug_info_ptr))
+	{
+		CO_ProcMonitor(l_logfile,"Failed to get time and chr_date\n",NULL,NULL);
+		APL_GOBACK_FAIL
+	}	
+   CO_ProcMonitor(l_logfile,"Start Processing\n",l_debug_info_ptr,&p_intlenv_data_struct_h);
+	
+	CO_FreeErrLst(l_debug_info_ptr);
+	if(APL_FAILURE == DL_Proc_ReconFile( argv,
+													l_match_rept_file,
+													l_unmatch_rept_file,
+													chr_l_hoff_file,
+													chr_l_sys_date,
+													l_logfile,
+													&p_intlenv_data_struct_h,
+													l_debug_info_ptr))
+	{
+		CO_ProcMonitor(l_logfile,"Finished Processing\n",l_debug_info_ptr,&p_intlenv_data_struct_h);
+		APL_GOBACK_FAIL
+	}
+	
+	APL_GOBACK_SUCCESS
+
+
+  RETURN_SUCCESS :
+  
+  	EXEC SQL UPDATE SYS_BATCHPROC
+	  SET  status = 'completed'
+	  WHERE PROCESS_NAME=:argv[0]
+	  AND   PROC_INIT=:argv[1]
+	  AND   STARTDATE=:argv[2]
+	  AND   STATUS='started';
+
+  	  EXEC SQL COMMIT WORK RELEASE;			   
+	  if(l_logfile != (FILE *)NULL)fprintf(l_logfile,"Successfully Exiting the program IPO_Recon\n"); 
+	  CO_Proc_RptClose(l_logfile, l_debug_info_ptr);
+	  CO_Proc_RptClose(l_match_rept_file, l_debug_info_ptr);
+	  CO_Proc_RptClose(l_unmatch_rept_file, l_debug_info_ptr);
+	  if(l_finifile != (FILE *)NULL)fclose(l_finifile);
+	  CO_FreeErrLst(l_debug_info_ptr);
+	  APL_FREE(l_debug_info_ptr);
+	  exit(APL_SUCCESS);
+
+  RETURN_FAILURE :
+  	  EXEC SQL COMMIT WORK RELEASE;			   
+	  if(l_logfile != (FILE *)NULL)fprintf(l_logfile,"Unsuccessfully Exiting the program IPO_Recon\n"); 
+	  CO_Proc_RptClose(l_logfile, l_debug_info_ptr);
+	  CO_Proc_RptClose(l_match_rept_file, l_debug_info_ptr);
+	  CO_Proc_RptClose(l_unmatch_rept_file, l_debug_info_ptr);
+	  if(l_finifile != (FILE *)NULL)fclose(l_finifile);
+	  CO_FreeErrLst(l_debug_info_ptr);
+     APL_FREE(l_debug_info_ptr);
+  	  exit(APL_FAILURE);
+}	
+
+
+
+
+							
+
+
+
+
+int DL_Proc_ReconFile(char **argv,
+							FILE *p_match_rept_file,
+                     FILE *p_unmatch_rept_file,
+                     char *p_file_name,
+                     char *chr_p_sys_date,
+                     FILE *p_logfile,
+                     INTL_ENV_DATA_STRUCT_H *p_intlenv_data_struct_h,
+                     DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	FILE *l_fhoff_file = (FILE *)NULL;
+
+	DL_SAT_RECON_STRUCT_H **l_dl_sat_recon_struct_h; 
+	DL_SAT_RECON_STRUCT_I *i_db_recon = (DL_SAT_RECON_STRUCT_I *)NULL;
+	DL_SAT_RECON_STRUCT_H *l_dl_sat_recon_struct_h_tmp;
+	char *chr_l_hoff_file = (char *)NULL;
+	char chr_tempbuff_a[IPO_LINERR_LENGTH] = APL_NULL_STRING,chr_l_sat_line[IPO_LINERR_LENGTH]= APL_NULL_STRING;
+	char chr_l_ipo_line[500] = APL_NULL_STRING,chr_l_buf[IPO_BUFSIZE]=APL_NULL_STRING; 
+	int int_l_rec = 1,int_l_count,int_l_tot_size=0,int_l_line_size =0;
+   struct sqlca sqlca;
+   char                  chr_g_restart_data[APL_RESTARTDATA_LENGTH];
+    short                 g_restart_data_i;
+
+EXEC SQL VAR chr_g_restart_data is string;
+
+	
+	CO_ProcMonitor(p_logfile,"Inside DL_Proc_IPOFile Function\n",NULL,p_intlenv_data_struct_h);
+
+	(l_dl_sat_recon_struct_h)= (DL_SAT_RECON_STRUCT_H **)calloc(1,sizeof(DL_SAT_RECON_STRUCT_H *));
+	i_db_recon = (DL_SAT_RECON_STRUCT_I *)calloc(1,sizeof(DL_SAT_RECON_STRUCT_I));	
+
+	EXEC SQL DECLARE ipo_recon_cur CURSOR FOR
+		SELECT * 
+		FROM 		DL_CSDMAP
+		WHERE 	MSG_IDENT_NO = 'REC'
+		ORDER BY SRL_NUMBER; 
+
+	IS_ANY_ORA_ERROR			 	
+	EXEC SQL OPEN ipo_recon_cur;
+	IS_ANY_ORA_ERROR	
+
+
+
+	for(int_l_count=0;;int_l_count++)
+	{
+		*l_dl_sat_recon_struct_h = (DL_SAT_RECON_STRUCT_H *)realloc((*l_dl_sat_recon_struct_h),sizeof(DL_SAT_RECON_STRUCT_H)*(int_l_count+1));
+		memset((*l_dl_sat_recon_struct_h + int_l_count)->h_infosrc ,APL_NULL_CHAR ,17);
+		memset(i_db_recon,NULL,sizeof(DL_SAT_RECON_STRUCT_I));
+		sqlca.sqlcode =0;		
+		l_dl_sat_recon_struct_h_tmp = (*l_dl_sat_recon_struct_h + int_l_count);
+		EXEC SQL FETCH ipo_recon_cur
+					INTO	:l_dl_sat_recon_struct_h_tmp:i_db_recon;
+			
+		IS_ANY_ORA_ERROR
+		if(sqlca.sqlcode == 1403)break;
+		fprintf(p_logfile,"|%d|\tData source name |%s|\t|%d|\t|%d|\n",int_l_count,(*l_dl_sat_recon_struct_h + int_l_count) ->h_infosrc,(*l_dl_sat_recon_struct_h + int_l_count) ->h_src,(*l_dl_sat_recon_struct_h + int_l_count) ->h_max_len);	
+
+		int_l_tot_size = int_l_tot_size + (*l_dl_sat_recon_struct_h + int_l_count) ->h_max_len;
+	}
+	
+	
+	if ( ( l_fhoff_file=fopen(p_file_name,"r") ) == NULL)
+	{ 
+		 CO_ProcMonitor(p_logfile,"Could not open the handoff h_file \n",NULL,p_intlenv_data_struct_h);
+		 APL_GOBACK_FAIL
+   }
+   else 
+	{ 
+		CO_ProcMonitor(p_logfile,"Opened the handoff h_file \n",NULL,p_intlenv_data_struct_h);
+	}
+
+	for ( ; ; )
+	{
+		if (feof(l_fhoff_file))
+		{
+	   	 break;
+		}
+		memset(chr_l_sat_line,APL_NULL_CHAR,IPO_LINERR_LENGTH);
+		memset(chr_tempbuff_a,APL_NULL_CHAR,IPO_LINERR_LENGTH);
+		fgets(chr_tempbuff_a,IPO_LINERR_LENGTH,l_fhoff_file);
+		int_l_line_size = 0;
+		int_l_line_size = strlen(chr_tempbuff_a);
+		if(int_l_line_size == 0)break;
+		if(chr_tempbuff_a[int_l_line_size - 1] == '\n')int_l_line_size = int_l_line_size - 1;
+		if(int_l_line_size == int_l_tot_size)
+		{
+			strcpy(chr_l_sat_line,chr_tempbuff_a);	
+		
+			fprintf(p_logfile,"------------------------------------------------------------\n");
+ 	   	fprintf(p_logfile,"Record No : %d\n",int_l_rec);
+	   
+ 
+			CO_FreeErrLst(l_debug_info_ptr);
+	   	if(APL_FAILURE == DL_Proc_SATRec(	int_l_count,
+															p_file_name,
+															l_dl_sat_recon_struct_h,
+															chr_l_sat_line,
+															p_match_rept_file,
+															p_unmatch_rept_file,
+															p_logfile,
+															chr_p_sys_date,
+															l_debug_info_ptr,
+															p_intlenv_data_struct_h))
+			{
+				fprintf(p_logfile,"Error in Processing Record No : %d",int_l_rec);
+			}
+			memset(chr_l_sat_line,APL_NULL_CHAR,IPO_LINERR_LENGTH);
+			memset(chr_tempbuff_a,APL_NULL_CHAR,IPO_LINERR_LENGTH);
+		}
+		else
+		{
+			fprintf(p_logfile,"total size from DB :|%d|\ntotal size of h_line :|%d|\nRecord:|%d|\tNot Contain Full Length\n",int_l_tot_size,int_l_line_size,int_l_rec);	
+		}
+     
+		if(!(int_l_rec%SAT_COMMITSIZE))
+      {
+         memset(chr_l_buf, NULL, IPO_BUFSIZE);
+         sprintf(chr_l_buf, "Processed %d Records", int_l_rec);
+         EXEC SQL UPDATE SYS_BATCHPROC
+                  SET STAT_DET = :chr_l_buf
+                  WHERE PROCESS_NAME=:argv[0]
+                  AND   PROC_INIT=:argv[1]
+                  AND   STARTDATE=:argv[2]
+                  AND   STATUS='started';
+         EXEC SQL COMMIT WORK;
+         IS_ANY_ORA_ERROR
+
+         CO_ProcMonitor(p_logfile, "Record Committed", NULL, NULL);
+        EXEC SQL  SELECT PROCESSING_STATUS INTO :chr_g_restart_data:g_restart_data_i
+                  FROM SYS_BATCHPROC
+                  WHERE PROCESS_NAME=:argv[0]
+                  AND   PROC_INIT=:argv[1]
+                  AND   STARTDATE=:argv[2]
+                  AND   STATUS='started'
+                  FOR UPDATE OF PROCESSING_STATUS,STATUS;
+         IS_ANY_ORA_ERROR
+         if(APL_ZERO_RESULT_SET)
+         {
+            CO_ProcMonitor(p_logfile,"E:No entry in batch_in_proc",NULL,NULL);
+            APL_GOBACK_FAIL
+         }
+      }
+
+		int_l_rec++;
+	}
+	
+	
+	memset(chr_l_buf, NULL, IPO_BUFSIZE);
+	sprintf(chr_l_buf, "Processed %d Records", --int_l_rec);
+	EXEC SQL UPDATE SYS_BATCHPROC
+				SET STAT_DET = :chr_l_buf
+				WHERE PROCESS_NAME=:argv[0]
+				AND   PROC_INIT=:argv[1]
+				AND   STARTDATE=:argv[2]
+				AND   STATUS='started';
+	IS_ANY_ORA_ERROR
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+		fprintf(p_logfile,"Successfully Exiting the program DL_Proc_IPOFile processtion\n"); 
+		fclose(l_fhoff_file);
+		return(APL_SUCCESS);
+
+	RETURN_FAILURE :
+ 		fprintf(p_logfile,"Unsuccessfully Exiting the program DL_Proc_IPOFile processtion\n"); 
+		fclose(l_fhoff_file);
+		return(APL_FAILURE);
+}
+
+
+
+
+
+
+
+
+
+
+int DL_Proc_SATRec( 	int int_p_count,
+								char *p_file_name,
+								DL_SAT_RECON_STRUCT_H **p_dl_sat_recon_struct_h,
+								char *p_sat_line,
+								FILE *p_match_rept_file,
+								FILE *p_unmatch_rept_file,
+								FILE *p_logfile,
+								char *chr_p_sys_date,
+								DEBUG_INFO_STRUCT_H **l_debug_info_ptr,
+								INTL_ENV_DATA_STRUCT_H *p_intlenv_data_struct_h)
+{
+
+	DL_SAT_REC_STRUCT_H *l_sat_recon_struct = (DL_SAT_REC_STRUCT_H *)NULL;
+
+
+	l_sat_recon_struct = (DL_SAT_REC_STRUCT_H *)calloc(1,sizeof(DL_SAT_REC_STRUCT_H));
+	memset(l_sat_recon_struct,NULL,sizeof(DL_SAT_REC_STRUCT_H));
+	CO_ProcMonitor(p_logfile,"Inside DL_Proc_SATRec\n",NULL,NULL);
+	
+	if(APL_FAILURE == DL_Proc_DLSATPopulate(int_p_count,p_sat_line,p_dl_sat_recon_struct_h,l_sat_recon_struct,p_logfile))
+	{
+		CO_ProcMonitor(p_logfile,"Failed in DL_Proc_DLSATPopulate\n",NULL,NULL);
+	
+		APL_GOBACK_FAIL
+	}
+	
+	if(APL_FAILURE == DL_Proc_SATReconcile(l_sat_recon_struct,p_logfile,p_match_rept_file,p_unmatch_rept_file,l_debug_info_ptr))
+	{
+		CO_ProcMonitor(p_logfile,"Failed in DL_Proc_ReconFile\n",NULL,NULL);
+		APL_GOBACK_FAIL
+	}
+
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS  :
+		fprintf(p_logfile,"Success from DL_Proc_SATRec \n");
+		fflush(p_logfile);
+	   APL_FREE(l_sat_recon_struct);
+		return(APL_SUCCESS);
+
+   RETURN_FAILURE  :
+		memset(l_sat_recon_struct,NULL,sizeof(DL_SAT_REC_STRUCT_H));
+		fprintf(p_logfile,"Failure from DL_Proc_SATRec \n");
+	   APL_FREE(l_sat_recon_struct);
+		fflush(p_logfile);
+		return(APL_FAILURE);
+}
+
+void DL_Rtv_SATData(char *p_source,int p_start,int p_size,char *p_dest)
+{
+        char int_l_temp[10] = APL_NULL_STRING;
+        char chr_l_format[20] = APL_NULL_STRING;
+        chr_l_format[0]='%';
+        chr_l_format[1]='\0';
+        sprintf(int_l_temp,"%s",ltoa(p_size));
+        strcat(chr_l_format,int_l_temp);
+        strcat(chr_l_format,"s");
+        sscanf(p_source+p_start-1,chr_l_format,p_dest);
+
+}
+
+
+
+
+
+
+
+
+int DL_Proc_DLSATPopulate(	int int_p_count, char *p_sat_line, DL_SAT_RECON_STRUCT_H **p_dl_sat_recon_struct_h, DL_SAT_REC_STRUCT_H *p_dl_sat_rec_struct_h, FILE *p_logfile)
+{
+	char l_quantity[16] = APL_NULL_STRING;
+	int int_l_temp_count,int_l_start_pos;
+	CO_ProcMonitor(p_logfile,"Inside PopulateStruct_SAT",NULL,NULL);	
+	fprintf(p_logfile,"Count = |%d|\n",int_p_count);	
+	fprintf(p_logfile,"line |%s|\n",p_sat_line);
+	for(int_l_temp_count = 0;int_l_temp_count < int_p_count;int_l_temp_count++)
+	{
+		int_l_start_pos = 0;
+		int_l_start_pos = atoi((const char *)(*p_dl_sat_recon_struct_h + int_l_temp_count) -> h_src);
+		
+
+		if(!strncmp((*p_dl_sat_recon_struct_h + int_l_temp_count)->h_infosrc,OPERATOR_CODE,strlen(OPERATOR_CODE)))
+			DL_Rtv_SATData(	p_sat_line,int_l_start_pos,(*p_dl_sat_recon_struct_h + int_l_temp_count)->h_max_len,p_dl_sat_rec_struct_h -> h_oper_cd);
+
+		if(!strncmp((*p_dl_sat_recon_struct_h + int_l_temp_count)->h_infosrc,SERIAL_NUMBER,strlen(SERIAL_NUMBER)))
+			DL_Rtv_SATData( p_sat_line,int_l_start_pos,(*p_dl_sat_recon_struct_h + int_l_temp_count)->h_max_len,p_dl_sat_rec_struct_h -> h_srl_no);
+
+		if(!strncmp((*p_dl_sat_recon_struct_h + int_l_temp_count)->h_infosrc,SAT_CODE,strlen(SAT_CODE)))
+			DL_Rtv_SATData( p_sat_line,int_l_start_pos,(*p_dl_sat_recon_struct_h + int_l_temp_count)->h_max_len,p_dl_sat_rec_struct_h -> h_sat_cd);
+	
+		if(!strncmp((*p_dl_sat_recon_struct_h + int_l_temp_count)->h_infosrc,SAT_ACCOUNT,strlen(SAT_ACCOUNT)))
+	 		DL_Rtv_SATData( p_sat_line,int_l_start_pos,(*p_dl_sat_recon_struct_h + int_l_temp_count)->h_max_len,p_dl_sat_rec_struct_h -> h_sat_clt);
+	
+		if(!strncmp((*p_dl_sat_recon_struct_h + int_l_temp_count)->h_infosrc,SHORT_NAME,strlen(SHORT_NAME)))
+			DL_Rtv_SATData( p_sat_line,int_l_start_pos,(*p_dl_sat_recon_struct_h + int_l_temp_count)->h_max_len,p_dl_sat_rec_struct_h -> h_instr_shortnm);
+		
+		if(!strncmp((*p_dl_sat_recon_struct_h + int_l_temp_count)->h_infosrc,ISIN,strlen(ISIN)))
+			DL_Rtv_SATData( p_sat_line,int_l_start_pos,(*p_dl_sat_recon_struct_h + int_l_temp_count)->h_max_len,p_dl_sat_rec_struct_h -> h_instr_isin);
+		
+		if(!strncmp((*p_dl_sat_recon_struct_h + int_l_temp_count)->h_infosrc,BAL_CD_INDENT,strlen(BAL_CD_INDENT)))
+			DL_Rtv_SATData( p_sat_line,int_l_start_pos,(*p_dl_sat_recon_struct_h + int_l_temp_count)->h_max_len,p_dl_sat_rec_struct_h -> h_bal_cd);
+	
+		if(!strncmp((*p_dl_sat_recon_struct_h + int_l_temp_count)->h_infosrc,SETTLEMENT_DATE,strlen(SETTLEMENT_DATE)))
+			DL_Rtv_SATData( p_sat_line,int_l_start_pos,(*p_dl_sat_recon_struct_h + int_l_temp_count)->h_max_len,p_dl_sat_rec_struct_h -> h_setldt);
+
+		if(!strncmp((*p_dl_sat_recon_struct_h + int_l_temp_count)->h_infosrc,QUANTITY,strlen(QUANTITY)))
+	 	{
+			DL_Rtv_SATData( p_sat_line,int_l_start_pos,(*p_dl_sat_recon_struct_h + int_l_temp_count)->h_max_len,l_quantity);
+			p_dl_sat_rec_struct_h -> h_qty = atof((const char *)l_quantity);
+		}
+
+
+	}
+	fprintf(p_logfile,"oprator h_code         |%s|\n",p_dl_sat_rec_struct_h -> h_oper_cd);
+	fprintf(p_logfile,"serial number        |%s|\n",p_dl_sat_rec_struct_h -> h_srl_no);
+	fprintf(p_logfile,"sat h_code             |%s|\n",p_dl_sat_rec_struct_h -> h_sat_cd);
+	fprintf(p_logfile,"sat client          |%s|\n",p_dl_sat_rec_struct_h -> h_sat_clt);
+	fprintf(p_logfile,"ISIN                 |%s|\n",p_dl_sat_rec_struct_h -> h_instr_isin);
+	fprintf(p_logfile,"sat client          |%s|\n",p_dl_sat_rec_struct_h -> h_sat_clt);
+	fprintf(p_logfile,"balance h_code         |%s|\n",p_dl_sat_rec_struct_h -> h_bal_cd);
+	fprintf(p_logfile,"settlement chr_date      |%s|\n",p_dl_sat_rec_struct_h -> h_setldt);
+	fprintf(p_logfile,"quantity             |%lf|\n",p_dl_sat_rec_struct_h -> h_qty);
+
+	APL_GOBACK_SUCCESS
+   RETURN_SUCCESS:
+      fprintf(p_logfile,"Successfully Exiting the program  DL_Proc_DLSATPopulate processtion\n");
+      return(APL_SUCCESS);
+
+   RETURN_FAILURE :
+      fprintf(p_logfile,"Unsuccessfully Exiting the program DL_Proc_DLSATPopulate processtion\n");
+      return(APL_FAILURE);	
+
+
+}
+
+
+
+
+
+
+
+
+
+int DL_Proc_SATReconcile(DL_SAT_REC_STRUCT_H *p_dl_sat_rec_struct_h,
+							FILE *p_logfile,
+							FILE *p_match_rept_file,
+							FILE *p_unmatch_rept_file,
+							DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+
+{
+	double l_quantity = 0,flt_l_sum = 0,int_l_diff = 0;
+	short i_qty = 0,i_info = 0,i_dl_client =0,l_sat_present;
+	char **chr_l_param = (char **)NULL;
+	int int_no_elements = 0;
+	char chr_l_note[261] = APL_NULL_STRING,chr_l_client_a[APL_CLIENT_LENGTH]=APL_NULL_STRING;
+   struct sqlca sqlca;
+	
+	memset(chr_l_client_a,APL_NULL_CHAR,APL_CLIENT_LENGTH);
+	CO_ProcMonitor(p_logfile,"Inside DL_Proc_SATReconcile\n",NULL,NULL);
+	EXEC SQL BEGIN DECLARE SECTION;
+		EXEC SQL VAR chr_l_note IS STRING;
+		EXEC SQL VAR chr_l_client_a IS STRING;
+		EXEC SQL VAR p_dl_sat_rec_struct_h -> h_instr_isin IS STRING;
+	EXEC SQL END DECLARE SECTION;	
+	
+	sqlca.sqlcode = 0;
+   EXEC SQL SELECT CLN_CODE
+         INTO :chr_l_client_a:i_dl_client
+         FROM MT_CLIENT
+         WHERE substr(CLN_CLH,1,10)  = :p_dl_sat_rec_struct_h -> h_sat_clt;
+
+   IS_ANY_ORA_ERROR
+
+	fprintf(p_logfile,"SAT ACCOUNT |%s|\n",p_dl_sat_rec_struct_h -> h_sat_clt);
+   if(sqlca.sqlcode == 1403)
+   {
+       CO_ProcMonitor(p_logfile,"SAT Account Not int_found\n",NULL,NULL);
+       APL_GOBACK_FAIL
+   }
+
+
+	EXEC SQL SELECT NVL(SUM(QTY),0) 
+	into :flt_l_sum
+	FROM DL_DEAL
+   WHERE   CLIENT =:chr_l_client_a
+	AND   INSTR_CODE = (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTR_ISIN =:p_dl_sat_rec_struct_h -> h_instr_isin)
+	AND	DEAL_CD IN ('2','4')
+   AND   DL_CLASS = '26'
+   AND   DEAL_STAT = 'CC'
+	AND   NVL(instr(INFO1,'A/A',1),0)=0; 
+	
+	IS_ANY_ORA_ERROR
+
+
+	int_l_diff = p_dl_sat_rec_struct_h -> h_qty - flt_l_sum;
+	
+	if(int_l_diff != 0)
+	{
+		DL_Prnt_IPOHdr(p_unmatch_rept_file,"unmatch");	
+		fprintf(p_unmatch_rept_file,"%-15s\t%-15s\t%20.3lf\t%20.3lf\t%20.3lf\n",chr_l_client_a,p_dl_sat_rec_struct_h -> h_sat_clt,p_dl_sat_rec_struct_h -> h_qty,flt_l_sum,int_l_diff);	
+	}
+	else
+	{
+		DL_Prnt_IPOHdr(p_match_rept_file,"match");
+		fprintf(p_match_rept_file,"%-15s\t%-15s\t%20.3lf\t%20.3lf\t%20.3lf\n",chr_l_client_a,p_dl_sat_rec_struct_h -> h_sat_clt,p_dl_sat_rec_struct_h -> h_qty,flt_l_sum,int_l_diff);	
+	}
+		
+	APL_GOBACK_SUCCESS
+
+   RETURN_SUCCESS:
+      fprintf(p_logfile,"Successfully Exiting the program DL_Proc_SATReconcile processtion\n");
+      return(APL_SUCCESS);
+
+   RETURN_FAILURE :
+      CO_ProcMonitor(p_logfile,"Unsuccessfully Exiting the program DL_Proc_SATReconcile processtion\n",l_debug_info_ptr,NULL);
+      return(APL_FAILURE);
+}
+
+
+
+
+int DL_Prnt_IPOHdr(	FILE *p_file,
+						char *rept_name)
+
+{	
+	char chr_l_rept_header[500] = APL_NULL_STRING,chr_l_temp_rept_str[500] = APL_NULL_STRING;
+	int int_l_line_count = 0;
+	
+	memset(chr_l_rept_header,APL_NULL_CHAR,500);
+	if(!strcmp(rept_name,"match"))
+	{
+		sprintf(chr_l_rept_header,"\n\t\t\t\t\t%s\n\t\t\t\t\t%s\n\n\n","SAT Matched Report","==================");
+		sprintf(chr_l_temp_rept_str,"%-15s\t%-15s\t%20s\t%20s\t%20s\n------------------------------------------------------------------------------------------------------------------------------\n","SMAC Account","SAT Account","SAT QTY","SMAC QTY","DIFFERENCE");
+		strcat(chr_l_rept_header,chr_l_temp_rept_str);
+		int_l_line_count = int_g_match_rept_line++;
+	}	
+	else if(!strcmp(rept_name,"unmatch"))
+	{
+		strcpy(chr_l_rept_header,"\n\t\t\t\t\tSAT Unmatched Report\n\t\t\t\t\t====================\n\n\n");
+		sprintf(chr_l_temp_rept_str,"%-15s\t%-15s\t%20s\t%20s\t%20s\n-----------------------------------------------------------------------------------------------------------------------------\n","SMAC Account","SAT Account","SAT QTY","SMAC QTY","DIFFERENCE");
+		strcat(chr_l_rept_header,chr_l_temp_rept_str);
+		int_l_line_count = int_g_unmatch_rept_line++;
+	}
+	
+	if(!(int_l_line_count%IPO_REPT_PAGERR_SIZE))fprintf(p_file,chr_l_rept_header); /* Veda */
+		
+}	
+	
+		
+

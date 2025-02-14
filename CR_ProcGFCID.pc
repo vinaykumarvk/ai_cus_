@@ -1,0 +1,948 @@
+
+
+
+
+
+
+
+#include "CO_HostStructdef.h" 
+#include "CA_Common.h"
+
+#define	RTV_SYSTEM_DATA
+#define  PAGELENGTH 55
+#define  APL_FILENAME_LENGTH 50 
+#define  APL_MAXLINE_SIZE 451 
+#define	GF_CLI_NOT_FOUND "01"
+#define	GF_CLI_STATUS_INVALID "02"
+#define	GF_MSTCLI_NOT_FOUND "03"
+#define	GF_MSTCLI_STATUS_INVALID "04"
+#define	GF_MSTCLI_NOMTCH "05"
+#define	GF_IGNORERR_CNTRY "06"
+#define	GF_IGNORERR_DATE "07"
+#define	GF_FATAL_ERROR "99"
+#define  P_STATIC_CODE ".FLAT.GFCID"
+#define  BUFFER_LEN_A 130
+EXEC SQL INCLUDE SQLCA.H;
+
+
+int CR_Proc_GFCIDUpd(	FILE *p_fp_inifile,
+						FILE *p_fp_logfile,
+						char **argv,
+						DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+int CR_Proc_GFCIDFile(  char  *p_feed_filename,
+							char	*p_out_filename,
+                     FILE  *p_fp_logfile,
+                     char  **argv,
+                     int   *int_p_no_gfcid,
+                     DEBUG_INFO_STRUCT_H **l_debug_info_ptr );
+
+int   CR_Chk_GFCIDAcc(  char  *chr_p_client,
+                        char  *chr_p_basenumber,
+                        char  *chr_p_status_code,
+                        DEBUG_INFO_STRUCT_H  **l_debug_info_ptr);
+
+int   CR_Mod_GFCIDAcc( char  *chr_p_client,
+							char  *chr_p_basenumber,
+							char *chr_p_gfcid,
+							char  *chr_p_status_code,
+							char *chr_p_before,
+							char *chr_p_after,
+							DEBUG_INFO_STRUCT_H  **l_debug_info_ptr);
+
+int main(int argc,char **argv)// Changes odne for AIX Migration
+{
+	struct sqlca sqlca;
+   DEBUG_INFO_STRUCT_H *l_debug_info_ptr = (DEBUG_INFO_STRUCT_H *) NULL;
+	FILE *p_fp_logfile;
+	FILE *p_fp_inifile;
+	
+	
+	char	chr_p_progname[APL_BATCH_PROGNAME_LEN]= APL_NULL_STRING;
+	char	chr_p_key_a[APL_BATCH_KEY_LEN]= APL_NULL_STRING;
+	char	chr_p_start_date[APL_DATE_LEN]= APL_NULL_STRING;
+	char  chr_p_funccode[CA_FUNC_CD_LEN]= APL_NULL_STRING;
+	
+	
+	
+	char  chr_p_log_buff[MSG_LENGTH]= APL_NULL_STRING; 
+	char 	p_dt[APL_DATE_LEN]=APL_NULL_STRING;
+	char 	chr_uname[APL_USERID_LEN] = APL_NULL_STRING;
+   char 	chr_custody_id_b[APL_USERID_LEN] = APL_NULL_STRING;
+   char 	chr_passwd[APL_USERID_LEN] = APL_NULL_STRING;
+	char 	chr_p_logdir[PATH_LENGTH] = APL_NULL_STRING;
+	char 	chr_p_inifile[PATH_LENGTH] = APL_NULL_STRING;
+	int 	int_h_prog_status=0;
+	int 	int_p_retval=0;
+   EXEC SQL VAR chr_uname IS STRING;
+   EXEC SQL VAR chr_passwd IS STRING;
+
+	
+	strcpy(chr_p_inifile,getenv("INTL_ROOT_PATH"));
+	strcat(chr_p_inifile,"intl_sun.cfg");
+	
+	if ( ( p_fp_inifile=fopen(chr_p_inifile,"r") ) == NULL)
+	exit(-1);
+  
+  
+   APL_FETCH_DB_LOGIN_DETAILS(p_fp_inifile, chr_custody_id_b, chr_uname, chr_passwd, APL_OUT_FILE, &l_debug_info_ptr)
+
+   EXEC SQL CONNECT :chr_uname IDENTIFIED BY :chr_passwd;
+
+   if (sqlca.sqlcode)
+   {
+   	APL_GOBACK_FAIL
+   }
+   else
+   {
+
+		 strcpy(chr_p_progname,argv[0]);
+		 strcpy(chr_p_key_a,argv[1]);
+		 strcpy(chr_p_start_date,argv[2]);
+		 strcpy(chr_p_funccode,argv[5]);
+
+   	if (APL_FAILURE == CO_Rtv_RptFileName(	"5G", 
+				APL_LOGFILE_DESC,
+				100,
+				argv[5],
+				argv,
+				&p_fp_logfile,
+				&l_debug_info_ptr ))
+      {
+         	APL_GOBACK_FAIL
+      }
+      
+		printf(":Just after gdbgenrep\n");	
+      EXEC SQL COMMIT WORK;
+
+      if (sqlca.sqlcode)
+      {
+         CO_ProcMonitor(p_fp_logfile, "Could not commit after opening chr_log file", NULL, NULL);
+         	APL_GOBACK_FAIL
+      }
+	
+		
+
+		if (APL_FAILURE == CO_RtvSysParams(&l_debug_info_ptr))
+		{
+				fprintf(p_fp_logfile, "\nFailed in Get System Params\n");
+         	APL_GOBACK_FAIL
+		}
+		printf(":Just after get system params\n");	
+		EXEC SQL select count(*)
+   	INTO  :int_h_prog_status
+   	FROM  SYS_BATCHPROC
+   	WHERE PROCESS_NAME=:argv[0]
+   	AND   PROC_INIT=:argv[1]
+   	AND   TO_CHAR(TO_DATE(STARTDATE),'ddmmyy')=TO_CHAR(TO_DATE(:argv[2]),'ddmmyy')
+   	AND   STATUS='completed';
+
+   	IS_ANY_ORA_ERROR
+
+  	 	if (int_h_prog_status != 0)
+   	{
+      	CO_ProcMonitor(p_fp_logfile, "Program Already Completed for Today", NULL, NULL);
+      	APL_GOBACK_SUCCESS
+   	}
+		printf(":Just before calling wrapper processtion\n");	
+
+
+     	int_p_retval = CR_Proc_GFCIDUpd( p_fp_inifile,
+										p_fp_logfile, 
+										argv,										
+										&l_debug_info_ptr);
+
+     	if ( int_p_retval == APL_FAILURE )
+     	{
+			fprintf(p_fp_logfile, "Unsuccessful in CR_Proc_GFCIDUpd Exiting from main\n");
+			APL_GOBACK_FAIL
+     	}
+     	else
+     	{
+
+     	 	EXEC SQL UPDATE SYS_BATCHPROC
+     		SET  status = 'completed'
+  			WHERE PROCESS_NAME=:argv[0]
+  			AND   PROC_INIT=:argv[1]
+  			AND   STARTDATE=:argv[2]
+  			AND   STATUS='started';
+
+        	EXEC SQL COMMIT WORK RELEASE;
+			fprintf(p_fp_logfile, "Record Committed. \n CR_Proc_GFCIDUpd Successful , Exiting from main\n");
+        	APL_GOBACK_SUCCESS
+     	}
+	}
+
+  RETURN_SUCCESS:
+  {
+   	CO_Proc_RptClose(p_fp_logfile, &l_debug_info_ptr); 
+		exit(0);
+  }
+  RETURN_FAILURE:
+  {	
+   	CO_Proc_RptClose(p_fp_logfile, &l_debug_info_ptr); 
+  		exit(-1);
+  }
+}
+int CR_Proc_GFCIDUpd(	FILE *p_fp_inifile,
+						FILE *p_fp_logfile,
+						char **argv,
+						DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	struct sqlca sqlca;
+	
+	
+	FILE 	*p_fp_feedfile   = NULL;
+	char	chr_p_inifile[PATH_LENGTH];
+	char 	chr_p_feedfile_name[PATH_LENGTH] = APL_NULL_STRING;
+	char 	chr_p_hofffile_name[PATH_LENGTH] = APL_NULL_STRING;
+	char 	chr_p_hofffinal_name[PATH_LENGTH] = APL_NULL_STRING;
+	char 	chr_p_gfupload[PATH_LENGTH] = APL_NULL_STRING;
+	char 	chr_p_gfhoff[PATH_LENGTH] = APL_NULL_STRING;
+	char 	chr_p_filename_a[APL_FILENAME_LENGTH]=APL_NULL_STRING;
+	char  chr_p_buf[BUFFER_LEN_A]=APL_NULL_STRING;
+	int 	int_l_error_flag = APL_SUCCESS;
+	int 	int_p_no_gfcid = 0;
+	INTL_REPT_STRUCT_H *l_intl_rept_struct_ha = NULL;	
+   char                  chr_g_restart_data[APL_RESTARTDATA_LENGTH];
+    short                 g_restart_data_i;
+
+EXEC SQL VAR chr_g_restart_data is string;
+
+	sqlca.sqlcode = 0;
+
+
+	printf("Inside wrapper\n");	
+	memset(chr_p_filename_a,APL_NULL_CHAR,APL_FILENAME_LENGTH);
+	strcpy(chr_p_filename_a,g_mt_commonsys_params_struct_h.nation_code);
+	strcat(chr_p_filename_a,P_STATIC_CODE);
+
+	strcpy(chr_p_inifile,getenv("INTL_ROOT_PATH"));
+	strcat(chr_p_inifile,"intl_sun.cfg");
+	printf(": Before reading chr_token for upload\n");	
+
+	/* OPT:AIX if ( APL_FAILURE == CO_ReadToken(p_fp_inifile,"SESAM_GFCIDUPLOAD_DIR",chr_p_gfupload,&l_debug_info_ptr))		 */
+	if ( APL_FAILURE == CO_ReadToken(p_fp_inifile,"SESAM_GFCIDUPLOAD_DIR",chr_p_gfupload,l_debug_info_ptr))		
+	{
+		CO_ProcMonitor(p_fp_logfile,"E:Could not read the GFCID Upload directory from intl_sun.cfg",NULL,NULL);
+		APL_GOBACK_FAIL	
+	}
+	printf(": Before reading chr_token for hoff\n");	
+	if ( APL_FAILURE == CO_ReadToken(p_fp_inifile,"INTL_CUST_HF_PATH",chr_p_gfhoff,l_debug_info_ptr))		
+	{
+		CO_ProcMonitor(p_fp_logfile,"E:Could not read the GFCID HOFF directory from intl_sun.cfg",NULL,NULL);
+		APL_GOBACK_FAIL	
+	}
+	printf(": After reading chr_token for hoff\n");	
+
+   
+	strcpy(chr_p_feedfile_name, chr_p_gfupload);
+   strcat(chr_p_feedfile_name, chr_p_filename_a);
+   strcpy(chr_p_hofffile_name, chr_p_gfhoff);
+   strcat(chr_p_hofffile_name, chr_p_filename_a);
+
+	printf(": Just checking the h_file names \n");
+	if ((strcmp(chr_p_feedfile_name,APL_NULL_STRING)==0  ) || (strcmp(chr_p_hofffile_name,APL_NULL_STRING) == 0))
+	{
+  		if (CO_InsertErr
+  				(l_debug_info_ptr,
+  				ERR_FDFILE_NOTVALID,
+  				
+  				APL_NULL_STRING,
+  				APL_NULL_STRING,
+  				APL_NULL_STRING,
+  				__LINE__,
+  				__FILE__
+  				) != APL_SUCCESS)
+  				APL_GOBACK_FAIL
+	}
+	printf(": Argument0 is %s \n",argv[0]);
+	printf(": Argument1 is %s \n",argv[1]);
+	printf(": Argument2 is %s \n",argv[2]);
+
+
+  EXEC SQL SELECT PROCESSING_STATUS INTO :chr_g_restart_data:g_restart_data_i
+     FROM SYS_BATCHPROC
+     WHERE PROCESS_NAME=:argv[0]
+        AND   PROC_INIT=:argv[1]
+        AND   STARTDATE=:argv[2]
+        AND   STATUS='started'
+     FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+
+  if(APL_ZERO_RESULT_SET)
+   {
+      CO_ProcMonitor(p_fp_logfile,"E:No entry in batch_in_proc",NULL,NULL);
+      APL_GOBACK_FAIL
+   }
+
+  	IS_ANY_ORA_ERROR
+
+   fprintf(p_fp_logfile, "CDBAGFCIDFn successfully locked the batch record\n");
+
+
+
+   if (APL_FAILURE == int_l_error_flag) 
+	{	
+		APL_GOBACK_FAIL
+	}
+   
+
+	if (APL_FAILURE == CR_Proc_GFCIDFile( 	chr_p_feedfile_name,
+													chr_p_hofffile_name,
+													p_fp_logfile,
+                                			argv,
+													&int_p_no_gfcid,
+                                 		l_debug_info_ptr ))
+   {
+      APL_GOBACK_FAIL
+   }
+   strcpy(chr_p_hofffinal_name, chr_p_gfhoff);
+   strcat(chr_p_hofffinal_name, chr_p_filename_a);
+		
+	printf(":Before the handoff h_file movement\n");	
+	printf(": The h_file names are %s %s \n",chr_p_hofffile_name,chr_p_hofffinal_name);
+		
+	memset(chr_p_buf,APL_NULL_CHAR,BUFFER_LEN_A);
+	sprintf(chr_p_buf,"rm -f %s",chr_p_hofffinal_name);
+	system(chr_p_buf);
+	link(chr_p_hofffile_name,chr_p_hofffinal_name);
+	unlink(chr_p_hofffile_name);
+	
+
+	l_intl_rept_struct_ha = (INTL_REPT_STRUCT_H *)calloc(1, sizeof(INTL_REPT_STRUCT_H));
+   APL_MALLOC_FAIL(l_intl_rept_struct_ha) ;
+
+   sprintf(l_intl_rept_struct_ha->report_name,"%s",chr_p_filename_a);
+   strcpy(l_intl_rept_struct_ha->report_desc, APL_HOFF_FILE_DESC);
+   strcpy(l_intl_rept_struct_ha->report_date, argv[2]);
+   l_intl_rept_struct_ha->report_width = 100 ;
+   strcpy(l_intl_rept_struct_ha->task_desc, argv[5]);
+   strcpy(l_intl_rept_struct_ha->fe_be_ind, APL_BE_IND);
+   strcpy(l_intl_rept_struct_ha->usr, argv[3]);
+
+   if (APL_FAILURE == CO_Proc_DBRptIns( l_intl_rept_struct_ha, l_debug_info_ptr))
+   {
+     APL_GOBACK_FAIL
+   }
+
+   APL_GOBACK_SUCCESS
+
+   RETURN_SUCCESS :
+	{
+		CO_ProcMonitor(p_fp_logfile," Successful ! in CDBAGFCIDFn",l_debug_info_ptr,NULL);
+   	if (int_p_no_gfcid==0) 
+		fprintf(p_fp_logfile, "No GFCID Updated\n");
+		else
+		fprintf(p_fp_logfile, "No of GFCID Updated is %d\n",int_p_no_gfcid);
+
+   	return(APL_SUCCESS);
+	}
+   RETURN_FAILURE :
+	{
+		CO_ProcMonitor(p_fp_logfile," Failed in CDBAGFCIDFn",l_debug_info_ptr,NULL);
+   	if (int_p_no_gfcid==0) 
+		fprintf(p_fp_logfile, "No GFCID Updated\n");
+		else
+		fprintf(p_fp_logfile, "No of GFCID Updated is %d\n",int_p_no_gfcid);
+   	return(APL_FAILURE);
+	}
+}
+
+int CR_Proc_GFCIDFile( 	char	*chr_p_feedfile_name,
+							char	*p_hofffilename,
+                		FILE  *p_fp_logfile,
+                		char  **argv,
+                		int   *int_p_no_gfcid,
+                		DEBUG_INFO_STRUCT_H **l_debug_info_ptr )
+{
+
+
+	struct 	sqlca sqlca;
+	
+	
+
+	FILE		*p_fp_gfcid_output;
+	FILE  	*p_fp_feedfile;
+	FILE  	*p_fp_tempfeedfile;
+   char  	chr_h_date[APL_DATE_LEN]=APL_NULL_STRING;
+	char 		chr_p_sys_date[APL_DATE_LEN]=APL_NULL_STRING;
+	char 		p_dt[8]=APL_NULL_STRING;
+	char 		chr_p_record_date[11]=APL_NULL_STRING;
+	char 		chr_p_gsspl_date[APL_DATE_LEN]=APL_NULL_STRING;
+	char 		chr_p_buf[BUFFER_LEN_A]=APL_NULL_STRING;
+	char 		chr_p_linebuf[APL_MAXLINE_SIZE]=APL_NULL_STRING;
+	char 		chr_p_taillinebuf[APL_MAXLINE_SIZE]=APL_NULL_STRING;
+	char 		chr_p_client[APL_CLIENT_LENGTH]=APL_NULL_STRING;
+	char 		chr_p_country_code[3]=APL_NULL_STRING;
+	char 		h_nation_code[3]=APL_NULL_STRING;
+	char 		chr_p_basenumber[APL_CLIENT_LENGTH]=APL_NULL_STRING;
+	char 		chr_p_gfcid[APL_CLIENT_LENGTH]=APL_NULL_STRING;
+	char 		chr_p_process_flg[APL_FLAG_LENGTH]=APL_NULL_STRING;
+	char 		chr_p_status_code[2]=APL_NULL_STRING;	
+	char 		chr_p_temp_client[APL_CLIENT_LENGTH];	
+	char 		chr_p_temp_basenumber[APL_CLIENT_LENGTH];	
+	char		chr_p_temp_filename[APL_FILENAME_LENGTH]=APL_NULL_STRING;
+	char		chr_p_before[BUFFER_LEN_A]=APL_NULL_STRING;
+	char		chr_p_after[BUFFER_LEN_A]=APL_NULL_STRING;
+	/* OPT:AIX int 		int_p_condexists 	= APL_SUCCESS; */
+	short 		int_p_condexists 	= APL_SUCCESS;
+
+	int 		int_p_client_len=0;
+	int		int_h_date_diff=0;
+	char	 	**temp;
+	int 		int_l_count = 0;
+	short 	i_nation_code;
+	short 	i_date;
+   char                  chr_g_restart_data[APL_RESTARTDATA_LENGTH];
+    short                 g_restart_data_i;
+
+EXEC SQL VAR chr_g_restart_data is string;
+
+	EXEC SQL VAR h_nation_code is STRING;
+	EXEC SQL VAR chr_p_gsspl_date is STRING;
+	EXEC SQL VAR p_dt is STRING;
+	EXEC SQL VAR chr_h_date is STRING;
+
+	
+	if ( APL_FAILURE == CO_RtvSysDt( chr_p_sys_date, l_debug_info_ptr))
+	{APL_GOBACK_FAIL}
+	printf(":Got the chr_date in main processtion\n");	
+	
+	if (APL_SUCCESS == CO_Chk_CntryEnabled ("UPLOAD",
+                                 		"GFCID_UPLOAD",
+                           				&int_p_condexists,
+                        					l_debug_info_ptr))
+	{
+		if(int_p_condexists > 0)
+		{
+			
+			strcat(p_hofffilename,".tmp");
+			printf(": The feed h_file to be opened is %s\n",chr_p_feedfile_name);
+			if ( (p_fp_feedfile =fopen(chr_p_feedfile_name,"r") ) == NULL)
+  		 	{	
+				if(  (p_fp_gfcid_output  = fopen(p_hofffilename, "w+" ) ) == NULL )
+				{
+					printf("Error Opening the h_file in write h_mode\n");		
+				
+				}
+				CO_ProcMonitor(p_fp_logfile," Failed in CDBAGFCIDUpdFn while opening the upload file",l_debug_info_ptr,NULL);	  		
+				APL_GOBACK_SUCCESS 
+			}
+			memset(chr_p_linebuf,APL_NULL_CHAR,APL_MAXLINE_SIZE);
+         
+
+			fscanf(p_fp_feedfile,"%[^\n]\n",chr_p_linebuf);
+			fclose(p_fp_feedfile);
+			printf(": The h_line chr_buffer read is %s \n",chr_p_linebuf);
+			if((strncmp(chr_p_linebuf,"HEADER",6)!=0) || (strncmp(chr_p_linebuf+8,g_mt_commonsys_params_struct_h.nation_code,2)!=0))
+         {
+				printf(":Inside Header check <%s>\n",chr_p_linebuf); //AIX -Warnings Removal
+					
+			   if ( ( p_fp_gfcid_output=fopen(p_hofffilename,"w+" ) )== NULL)
+				{
+					printf("Error Opening the h_file in write h_mode\n");
+					APL_GOBACK_FAIL
+				}
+				CO_ProcMonitor(p_fp_logfile,
+                    " File Does Not Contain h_code word chr_header \n",
+                     l_debug_info_ptr,
+                     NULL);
+           	APL_GOBACK_SUCCESS
+			}
+		 	p_dt[0] = chr_p_sys_date[6];
+         p_dt[1] = chr_p_sys_date[7];
+         p_dt[2] = chr_p_sys_date[8];
+         p_dt[3] = chr_p_sys_date[9];
+         p_dt[4] = chr_p_sys_date[3];
+         p_dt[5] = chr_p_sys_date[4];
+         p_dt[6] = chr_p_sys_date[0];
+         p_dt[7] = chr_p_sys_date[1];
+         p_dt[8] = APL_NULL_CHAR;
+			printf(": The chr_date is %s \n",p_dt);
+			if(strncmp(chr_p_linebuf+11,p_dt,8) !=0)
+         {
+             if (  (p_fp_gfcid_output  = fopen(p_hofffilename, "w+" ) ) == (FILE *)NULL )
+				 {
+				 	printf("Error Opening the h_file in write h_mode\n");
+					APL_GOBACK_FAIL
+			 	 }
+				 CO_ProcMonitor(p_fp_logfile,
+            	        " File Does Not Contain valid chr_date \n",
+                        l_debug_info_ptr,
+								NULL);
+             APL_GOBACK_SUCCESS
+			}
+			strcpy(chr_p_temp_filename,chr_p_feedfile_name);
+			strcat(chr_p_temp_filename,".tmp");
+			
+			
+			memset(chr_p_buf,APL_NULL_CHAR,BUFFER_LEN_A);
+			
+			sprintf(chr_p_buf, "tail -1  %s >  %s", chr_p_feedfile_name,chr_p_temp_filename);
+			printf(":The chr_value of chr_p_buf is %s\n", chr_p_buf);
+			system(chr_p_buf);
+			
+			if ( (p_fp_tempfeedfile =fopen(chr_p_temp_filename,"r") ) == NULL)
+			{
+				CO_ProcMonitor(p_fp_logfile," Failed in CDBAGFCIDUpdFn while opening the temporary file",l_debug_info_ptr,NULL);
+				APL_GOBACK_FAIL
+			}
+			printf(": Opened the temporary h_file for tail h_line\n");
+			memset(chr_p_taillinebuf,APL_NULL_CHAR,APL_MAXLINE_SIZE);
+         fscanf(p_fp_tempfeedfile,"%[^\n]\n",chr_p_taillinebuf);
+			fclose(p_fp_tempfeedfile);
+			printf(": The tail h_line is %s \n",chr_p_taillinebuf);
+			if((strncmp(chr_p_taillinebuf,"TRAILER",7)!=0) || (strncmp(chr_p_taillinebuf+8,g_mt_commonsys_params_struct_h.nation_code,2)!=0))
+      	 {
+			   if ( ( p_fp_gfcid_output=fopen(p_hofffilename,"w+" ) )== NULL)
+				{
+					printf("Error Opening the h_file in write h_mode\n");
+					APL_GOBACK_FAIL
+				}
+           	CO_ProcMonitor	(p_fp_logfile,
+                     "File Does Not Contain h_code word trailer \n",
+                    	l_debug_info_ptr,
+                     NULL);
+                     APL_GOBACK_SUCCESS
+        	}
+			printf(": successful after trailer validations \n");
+		 	p_dt[0] = chr_p_sys_date[6];
+         p_dt[1] = chr_p_sys_date[7];
+         p_dt[2] = chr_p_sys_date[8];
+         p_dt[3] = chr_p_sys_date[9];
+         p_dt[4] = chr_p_sys_date[3];
+         p_dt[5] = chr_p_sys_date[4];
+         p_dt[6] = chr_p_sys_date[0];
+         p_dt[7] = chr_p_sys_date[1];
+         p_dt[8] = APL_NULL_CHAR;
+         if(strncmp(chr_p_taillinebuf+11,p_dt,8) !=0)
+         {
+			   if ( ( p_fp_gfcid_output=fopen(p_hofffilename,"w+" ) )== NULL)
+				{
+					printf("Error Opening the h_file in write h_mode\n");
+				}
+             CO_ProcMonitor(	p_fp_logfile,
+			    				"File Does Not Contain valid chr_date \n",
+								l_debug_info_ptr,
+								NULL);
+				APL_GOBACK_SUCCESS
+ 			}
+			
+			printf(": All validations over \n");
+			if (  (p_fp_gfcid_output  = fopen(p_hofffilename, "w+" ) ) == (FILE *)NULL )
+		   {
+			 	printf("Error Opening the h_file in write h_mode\n");
+		   }
+			
+			
+			memset(chr_p_buf,APL_NULL_CHAR,BUFFER_LEN_A);
+			sprintf(chr_p_buf, "cat %s | tail -n  +2 | sort > %s", chr_p_feedfile_name,chr_p_temp_filename);
+			system(chr_p_buf);
+			
+			if ( (p_fp_feedfile =fopen(chr_p_temp_filename,"r") ) == NULL)
+			{
+			 	printf("Error Opening the h_file after sort please contact support \n");
+             CO_ProcMonitor(	p_fp_logfile,
+			    				"File could not be opened after sorting : contact support \n",
+								l_debug_info_ptr,
+								NULL);
+				APL_GOBACK_FAIL
+
+			}
+			
+			fprintf(p_fp_gfcid_output,"%s\n",chr_p_linebuf);	
+			
+			
+			EXEC SQL SELECT to_date(FIELD_VAL,'yyyymmdd')
+			into :chr_h_date
+			FROM PRO_GSSPLVAL 
+			where MAIN_FUN='ACC_MAINT'
+			AND SUB_PROCESS='GFCID_UPLOAD'
+			AND NATION=:g_mt_commonsys_params_struct_h.nation_code;
+			IS_ANY_ORA_ERROR
+			*int_p_no_gfcid=0;
+			printf("the chr_h_date from gssplval is %s\n",chr_h_date);
+
+			while(1)
+			{
+				memset(chr_p_linebuf,APL_NULL_CHAR,APL_MAXLINE_SIZE);
+            fscanf(p_fp_feedfile,"%[^\n]\n",chr_p_linebuf);
+				
+				if (feof(p_fp_feedfile))
+				{	
+					break;
+				}
+				memset(chr_p_record_date,'\0',11);		
+				memset(chr_p_client,'\0',APL_CLIENT_LENGTH+2);
+				memset(chr_p_basenumber,'\0',APL_CLIENT_LENGTH+2);
+				memset(chr_p_gfcid,'\0',APL_CLIENT_LENGTH);
+				memset(chr_p_country_code,'\0',APL_FLAG_LENGTH);
+				
+				strncpy(chr_p_record_date,chr_p_linebuf,10);
+				strncpy(chr_p_client,chr_p_linebuf+26,12);
+				strncpy(chr_p_country_code,chr_p_linebuf+81,2);
+				strncpy(chr_p_basenumber,chr_p_linebuf+83,12);
+				strncpy(chr_p_gfcid,chr_p_linebuf+95,10);
+
+				printf("The chr_value of chr_date is %s \n",chr_p_record_date);
+
+				EXEC SQL SELECT to_date(:chr_p_record_date,'yyyy-chr_mm-dd') - to_date(:chr_h_date)
+				INTO :int_h_date_diff
+				FROM DUAL;
+				IS_ANY_ORA_ERROR
+				
+				if (int_h_date_diff <0)
+				{
+					memset(chr_p_status_code,APL_NULL_CHAR,2);
+					strcpy(chr_p_status_code,GF_IGNORERR_DATE);
+					strncpy(chr_p_linebuf+297,chr_p_status_code,2);
+					CO_ProcMonitor(  p_fp_logfile,
+								  "The chr_date in the record or the country h_code does not match",
+								   l_debug_info_ptr,
+								   NULL);
+					 fprintf(p_fp_gfcid_output,"%s\n",chr_p_linebuf);
+					continue;
+				}
+				if(strcmp(chr_p_country_code,g_mt_commonsys_params_struct_h.nation_code)!=0 )
+				{
+					memset(chr_p_status_code,APL_NULL_CHAR,2);
+					strcpy(chr_p_status_code,GF_IGNORERR_CNTRY);
+					strncpy(chr_p_linebuf+297,chr_p_status_code,2);
+					CO_ProcMonitor(  p_fp_logfile,
+								  "The chr_date in the record or the country h_code does not match",
+								   l_debug_info_ptr,
+								   NULL);
+					fprintf(p_fp_gfcid_output,"%s\n",chr_p_linebuf);
+					continue;
+				}
+				strcpy(chr_p_temp_client,chr_p_client);
+				int_p_client_len =11; 
+				while(chr_p_client[int_p_client_len] ==' ')
+				{
+					chr_p_temp_client[int_p_client_len] = APL_NULL_CHAR;
+					int_p_client_len--;
+					if(int_p_client_len <0)
+					{
+						break;
+					}
+				}
+				memset(chr_p_client,APL_NULL_CHAR,APL_CLIENT_LENGTH);
+				strcpy(chr_p_client,chr_p_temp_client);
+				printf("The client read is %s\n",chr_p_client);
+				strcpy(chr_p_temp_basenumber,chr_p_basenumber);
+				int_p_client_len =11; 
+				while(chr_p_basenumber[int_p_client_len] ==' ')
+				{
+					chr_p_temp_basenumber[int_p_client_len] = APL_NULL_CHAR;
+					int_p_client_len--;
+					if(int_p_client_len <0)
+					{
+						break;
+					}
+				}
+				memset(chr_p_basenumber,APL_NULL_CHAR,APL_CLIENT_LENGTH);
+				memset(chr_p_status_code,APL_NULL_CHAR,2);
+				strcpy(chr_p_basenumber,chr_p_temp_basenumber);
+				printf("The base number  read is %s\n",chr_p_basenumber);
+				strcpy(chr_p_status_code,"00");		
+				 if (  CR_Chk_GFCIDAcc( 	chr_p_client, 
+                    						  	chr_p_basenumber,
+                    							chr_p_status_code, 
+                     						l_debug_info_ptr) == APL_FAILURE)
+         	{
+            	CO_ProcMonitor(p_fp_logfile,"E:Unsuccessful in Account Validate Function",NULL,NULL);	
+					APL_GOBACK_FAIL
+         	}
+				printf("The status_ind h_code after validations is %s\n",chr_p_status_code);
+				if (!strcmp(chr_p_status_code,"00"))
+				{
+					if (CR_Mod_GFCIDAcc (	chr_p_client,
+												chr_p_basenumber,
+												chr_p_gfcid,
+												chr_p_status_code,
+												chr_p_before,
+												chr_p_after,
+												l_debug_info_ptr)==APL_FAILURE)
+					{
+            		CO_ProcMonitor(p_fp_logfile,"E:Unsuccessful in Update Account Function",NULL,NULL);	
+						APL_GOBACK_FAIL
+					}
+					printf("The gfcid count before is %d\n",*int_p_no_gfcid);
+					*int_p_no_gfcid=*int_p_no_gfcid+1;
+					printf("The gfcid count after is %d\n",*int_p_no_gfcid);
+  					
+					CO_ProcMonitor(p_fp_logfile,chr_p_before,NULL,NULL);
+  					CO_ProcMonitor(p_fp_logfile,chr_p_after,NULL,NULL);
+
+				}
+				strncpy(chr_p_linebuf+297,chr_p_status_code,2);
+				fprintf(p_fp_gfcid_output,"%s\n",chr_p_linebuf);
+
+			}
+			if(*int_p_no_gfcid==0)
+			{
+             CO_ProcMonitor(	p_fp_logfile,
+			    				"File contains no proper records for update \n",
+								l_debug_info_ptr,
+								NULL);
+			}
+			fprintf(p_fp_gfcid_output,"%s\n",chr_p_taillinebuf);
+			
+			EXEC SQL DELETE FROM PRO_GSSPLVAL
+		 	where MAIN_FUN='ACC_MAINT'
+		 	AND SUB_PROCESS='GFCID_UPLOAD'
+		 	AND NATION=:g_mt_commonsys_params_struct_h.nation_code;
+		 	IS_ANY_ORA_ERROR
+			
+			memset (chr_p_gsspl_date,APL_NULL_CHAR,APL_DATE_LEN);
+			
+			EXEC SQL SELECT to_char(SYS_DATE,'yyyymmdd') INTO chr_p_gsspl_date from pro_sys_date;
+			IS_ANY_ORA_ERROR
+			strcpy(h_nation_code,g_mt_commonsys_params_struct_h.nation_code);		
+
+			EXEC SQL INSERT INTO PRO_GSSPLVAL (MAIN_FUN,SUB_PROCESS,FIELD_VAL,NATION) 
+			VALUES ('ACC_MAINT','GFCID_UPLOAD',:chr_p_gsspl_date,:h_nation_code);
+
+			IS_ANY_ORA_ERROR
+		}
+		APL_GOBACK_SUCCESS	
+	}
+	else
+	{
+	 	APL_GOBACK_FAIL
+	} 
+  
+  RETURN_SUCCESS :
+	{
+		EXEC SQL COMMIT WORK;
+		CO_ProcMonitor(p_fp_logfile, "Record Committed\n", NULL,NULL);
+
+    	EXEC SQL SELECT PROCESSING_STATUS INTO :chr_g_restart_data:g_restart_data_i
+     		FROM SYS_BATCHPROC
+     	WHERE PROCESS_NAME=:argv[0]
+     		AND PROC_INIT=:argv[1]
+     		AND STARTDATE=:argv[2]
+     		AND STATUS='started'
+     	FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+     	if(APL_ZERO_RESULT_SET) 
+		{
+     		CO_ProcMonitor(p_fp_logfile,"E:No entry in batch_in_proc",NULL,NULL);
+     		APL_GOBACK_FAIL
+      }
+		CO_Proc_RptClose(p_fp_gfcid_output, &l_debug_info_ptr);
+		CO_Proc_RptClose(p_fp_feedfile, &l_debug_info_ptr);
+		memset(chr_p_buf,APL_NULL_CHAR,BUFFER_LEN_A);
+		sprintf(chr_p_buf,"rm -f %s",chr_p_temp_filename);
+		system(chr_p_buf);
+		return(APL_SUCCESS);
+	}
+  RETURN_FAILURE :
+	{
+		EXEC SQL ROLLBACK WORK;
+		CO_ProcMonitor(p_fp_logfile, "Got Errors : ", NULL,NULL);
+		CO_ProcMonitor(p_fp_logfile, "Rolling Back\n", NULL,NULL);
+		CO_Proc_RptClose(p_fp_gfcid_output, &l_debug_info_ptr);
+		CO_Proc_RptClose(p_fp_feedfile, &l_debug_info_ptr);
+		memset(chr_p_buf,APL_NULL_CHAR,BUFFER_LEN_A);
+		sprintf(chr_p_buf,"rm -f %s",chr_p_temp_filename);
+		system(chr_p_buf);
+
+		return(APL_FAILURE);
+	}
+
+}
+
+int	CR_Chk_GFCIDAcc(	char 	*chr_p_client,
+								char	*chr_p_basenumber,
+								char	*chr_p_status_code,
+								DEBUG_INFO_STRUCT_H  **l_debug_info_ptr)
+{
+
+	struct   sqlca sqlca;
+	char h_dl_client[APL_CLIENT_LENGTH]=APL_NULL_STRING;
+	char h_mstclt[APL_CLIENT_LENGTH]=APL_NULL_STRING;
+	char chr_h_mstacc_chk[APL_CLIENT_LENGTH]=APL_NULL_STRING;
+	char l_temp_cln_code[11]=APL_NULL_STRING;
+
+	EXEC SQL VAR h_dl_client IS STRING;
+	EXEC SQL VAR h_mstclt IS STRING;
+	EXEC SQL VAR chr_h_mstacc_chk IS STRING;
+
+	strcpy(h_dl_client,chr_p_client);
+	strcpy(h_mstclt,chr_p_basenumber);
+	
+	EXEC SQL SELECT cln_code into :l_temp_cln_code
+            FROM MT_CLIENT
+            WHERE cln_code=rtrim(ltrim(:h_dl_client));
+	
+	printf("The client is %s \n",h_dl_client);
+	printf("The sqlcode = %d \n",sqlca.sqlcode);
+
+
+	if (sqlca.sqlcode < 0)
+   {
+      strcpy(chr_p_status_code,GF_FATAL_ERROR);
+   }
+   if (sqlca.sqlcode == 1403)
+   {
+      strcpy(chr_p_status_code,GF_CLI_NOT_FOUND);
+		APL_GOBACK_SUCCESS
+
+   }
+	if (sqlca.sqlcode==0)
+	{
+		sqlca.sqlcode=0;
+		EXEC SQL SELECT CLN_CODE into :l_temp_cln_code
+		FROM MT_CLIENT 
+		WHERE CLN_CODE=rtrim(ltrim(:h_dl_client)) 
+		AND STATUS ='AA';
+		if (sqlca.sqlcode == 1403)
+   	{
+      	strcpy(chr_p_status_code,GF_CLI_STATUS_INVALID);
+   	}
+		if (sqlca.sqlcode < 0)
+   	{
+      	strcpy(chr_p_status_code,GF_FATAL_ERROR);
+			APL_GOBACK_SUCCESS
+   	}
+		if (sqlca.sqlcode==0)
+		{
+			EXEC SQL SELECT CLN_CODE into :l_temp_cln_code
+         	   FROM MT_CLIENT
+            	WHERE CLN_CODE=rtrim(ltrim(:h_mstclt));
+			if (sqlca.sqlcode < 0)
+  		 	{
+      		strcpy(chr_p_status_code,GF_FATAL_ERROR);
+				APL_GOBACK_SUCCESS
+   		}
+   		if (sqlca.sqlcode == 1403)
+   		{
+				strcpy(chr_p_status_code,GF_MSTCLI_NOT_FOUND);
+				APL_GOBACK_SUCCESS
+
+   		}
+			if (sqlca.sqlcode==0)
+			{	
+				sqlca.sqlcode=0;
+				EXEC SQL SELECT CLN_CODE into :l_temp_cln_code
+				FROM MT_CLIENT
+ 				WHERE CLN_CODE=rtrim(ltrim(:h_mstclt))
+      		AND STATUS ='AA';
+				if (sqlca.sqlcode == 1403)
+				{
+    				strcpy(chr_p_status_code,GF_MSTCLI_STATUS_INVALID);
+      		}	
+				if (sqlca.sqlcode < 0)
+  		 		{
+      			strcpy(chr_p_status_code,GF_FATAL_ERROR);
+					APL_GOBACK_SUCCESS
+   			}
+				if (sqlca.sqlcode==0)
+				{
+					sqlca.sqlcode=0;
+
+					EXEC SQL SELECT rtrim(ltrim(cln_master)) into :chr_h_mstacc_chk FROM MT_CLIENT
+					WHERE CLN_CODE=rtrim(ltrim(:h_dl_client));
+
+					if (sqlca.sqlcode < 0)
+  		 			{
+      				strcpy(chr_p_status_code,GF_FATAL_ERROR);
+						APL_GOBACK_SUCCESS
+   				}
+					printf("The master client passed is %s\n",h_mstclt);	
+					printf("The master client selected is %s\n",chr_h_mstacc_chk);	
+					if (strcmp(chr_h_mstacc_chk,h_mstclt))
+					{
+						strcpy(chr_p_status_code,GF_MSTCLI_NOMTCH);
+					}
+			   }	
+			}
+		}
+
+	}
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS :
+	{
+		 return(APL_SUCCESS);	
+	}
+	RETURN_FAILURE :
+	{
+		 return(APL_FAILURE);
+	}
+
+}
+
+int	CR_Mod_GFCIDAcc(	char 	*chr_p_client,
+							char	*chr_p_basenumber,
+							char *chr_p_gfcid,
+							char	*chr_p_status_code,
+							char *chr_p_before,
+							char *chr_p_after,
+							DEBUG_INFO_STRUCT_H  **l_debug_info_ptr)
+
+{
+	struct   sqlca sqlca;
+	char 	h_dl_client[APL_CLIENT_LENGTH] = APL_NULL_STRING;
+	char 	h_mstclt[APL_CLIENT_LENGTH]=APL_NULL_STRING;
+	char 	h_uniq_gcustody_id[APL_CLIENT_LENGTH]=APL_NULL_STRING;
+	char 	chr_h_orig_gfcid[APL_CLIENT_LENGTH]=APL_NULL_STRING;
+	char	chr_h_date[APL_DATE_LEN]=APL_NULL_STRING;
+	short i_orig_gfcid;
+
+	EXEC SQL VAR h_dl_client IS STRING;
+	EXEC SQL VAR h_mstclt IS STRING;
+	EXEC SQL VAR h_uniq_gcustody_id IS STRING;
+	
+	strcpy(h_mstclt,chr_p_basenumber);
+	strcpy(h_dl_client,chr_p_client);
+	strcpy(h_uniq_gcustody_id,chr_p_gfcid);
+
+	if ( APL_FAILURE == CO_RtvSysDtTime( chr_h_date, l_debug_info_ptr))
+	   {APL_GOBACK_FAIL}
+	
+	EXEC SQL SELECT CLN_UNIQ_GCUSTODY_ID  into :chr_h_orig_gfcid:i_orig_gfcid from MT_CLIENT
+	WHERE CLN_CODE=rtrim(ltrim(:h_dl_client))
+	AND CLN_MASTER=rtrim(ltrim(:h_mstclt))
+	AND STATUS ='AA';
+	if ((sqlca.sqlcode < 0)||(sqlca.sqlcode==1403))
+  	{
+  		strcpy(chr_p_status_code,GF_FATAL_ERROR);
+  	}
+	sprintf(chr_p_before,"The before image values are (%s)|(%s)|(%s)",chr_p_client,chr_p_basenumber,chr_h_orig_gfcid); 
+
+	EXEC SQL UPDATE MT_CLIENT SET CLN_UNIQ_GCUSTODY_ID=:h_uniq_gcustody_id, access_stamp=:chr_h_date
+ 	WHERE CLN_CODE=rtrim(ltrim(:h_dl_client))
+	AND CLN_MASTER=rtrim(ltrim(:h_mstclt))
+   AND STATUS ='AA';
+		
+	if ((sqlca.sqlcode < 0)||(sqlca.sqlcode==1403))
+  	{
+  		strcpy(chr_p_status_code,GF_FATAL_ERROR);
+  	}
+	memset(chr_h_orig_gfcid,APL_NULL_CHAR,APL_CLIENT_LENGTH);	
+	EXEC SQL SELECT CLN_UNIQ_GCUSTODY_ID into :chr_h_orig_gfcid:i_orig_gfcid from MT_CLIENT
+	WHERE CLN_CODE=rtrim(ltrim(:h_dl_client))
+	AND CLN_MASTER=rtrim(ltrim(:h_mstclt))
+	AND STATUS ='AA';
+	if ((sqlca.sqlcode < 0)||(sqlca.sqlcode==1403))
+  	{
+  		strcpy(chr_p_status_code,GF_FATAL_ERROR);
+  	}
+	sprintf(chr_p_after,"The after image values are (%s)|(%s)|(%s)",chr_p_client,chr_p_basenumber,chr_h_orig_gfcid); 
+	
+	
+	APL_GOBACK_SUCCESS
+	RETURN_SUCCESS:
+  	{
+  		return(APL_SUCCESS);
+	}
+   RETURN_FAILURE:
+  	{
+	 	return(APL_FAILURE);	
+	}
+}

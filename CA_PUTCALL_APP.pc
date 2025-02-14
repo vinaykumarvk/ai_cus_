@@ -1,0 +1,691 @@
+/*
+ *    COPYRIGHT NOTICE
+ *
+ *   Copyright 2005 Polaris Software Lab Limited. All rights reserved.
+ *
+ *   These materials are confidential and proprietary to
+ *    Polaris Software Lab Limited and no part of these materials should
+ *    be reproduced, published, transmitted or distributed in any form or
+ *    by any means, electronic, mechanical, photocopying, recording or
+ *    otherwise, or stored in any information storage or retrieval system
+ *    of any nature nor should the materials be disclosed to third parties
+ *    or used in any other manner for which this is not authorized, without
+ *    the prior express written authorization of Polaris Software Lab Limited.
+*/
+/*********************************************************************
+ *
+ * Module Name         :      Master Maintenance
+ *
+ * File Name           :      CA_PUTCALL_APP.pc
+ *
+ * Description         :      This file contains db functions for updating
+ *                            Master Details.
+ *
+ *
+ *            Version Control Block
+ *
+ * Date        Version     Author         Description       RFS No.
+ * ---------   --------  ------------     -------------     ---------
+ * 06/04/2006   1.0       Vaibhav        New file       CA_PUTCALL_APP
+ * 26/08/2020   1.1       kotubabu N     Linux Migration    Kotak Implementation
+ *
+ *********************************************************************/
+
+
+#include "CO_HostStructdef.h"
+#include "CA_InterFace.h"
+#include "CA_Common.h"
+
+EXEC SQL INCLUDE SQLCA.H;
+/* Added by kotubabu for Linux Migration-Start*/
+#ifdef OS_LINUX
+FILE *l_logfile2 ;
+FILE *l_usr_logfile ;
+#else
+FILE *l_logfile2 = APL_OUT_FILE;
+FILE *l_usr_logfile = APL_OUT_FILE;
+#endif
+/* Added by kotubabu for Linux Migration--End*/
+
+
+int CA_PutCall_DLPopulate(	CA_PUTCALL_APP_STRUCT_H	*p_ca_putcall_app_struct_h,
+									CA_DEAL_STRUCT_H  *p_ca_deal_struct_h,
+									INTL_ENV_DATA_STRUCT_H	*p_intl_envdatastruct_h,
+									DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+    /* Added by kotubabu for Linux Migration-Start*/
+	   #ifdef OS_LINUX
+        l_logfile2 = APL_OUT_FILE;
+        l_usr_logfile = APL_OUT_FILE;
+       #endif 
+    /* Added by kotubabu-End*/
+	CA_PUTCALL_APP_STRUCT_H	l_ca_putcall_struct_h;
+	CA_PUTCALL_APP_STRUCT_I	l_ca_putcall_struct_i;
+	MT_INSTRUMENT_STRUCT_H  l_mt_instrument_struct_h;
+	MT_CLIENT_STRUCT_H      l_mt_client_struct_h;
+	char l_deal_dt[APL_DATE_LEN] = APL_NULL_STRING;
+	int int_result = 0;
+	char l_status_ind[10] = APL_NULL_STRING;
+	int l_future_date = 0;
+
+	memset(&l_ca_putcall_struct_h,0,sizeof(l_ca_putcall_struct_h));
+	memset(&l_ca_putcall_struct_i,0,sizeof(l_ca_putcall_struct_i));
+	memset(&l_mt_instrument_struct_h,0,sizeof(l_mt_instrument_struct_h));
+	memset(&l_mt_client_struct_h,0,sizeof(l_mt_client_struct_h));
+	Alert("Selecting oput call data ");
+	EXEC SQL SELECT *
+				INTO :l_ca_putcall_struct_h:l_ca_putcall_struct_i
+				FROM CA_PUTCALL_APP
+				WHERE INSTR_CODE 	=:p_ca_putcall_app_struct_h -> h_instr_code
+				AND 	CLN_CODE 	=:p_ca_putcall_app_struct_h -> h_cln_code
+				AND 	NOTICE_DATE	=:p_ca_putcall_app_struct_h -> h_notice_date;
+	IS_ANY_ORA_ERROR
+	if(sqlca.sqlcode == 1403)
+		APL_GOBACK_FAIL
+	Alert("Selecting Instrument");
+	if ( CA_ChkInstrument(		l_ca_putcall_struct_h.h_instr_code,
+										&l_mt_instrument_struct_h,
+										&int_result,
+										l_debug_info_ptr) == APL_FAILURE)
+		APL_GOBACK_FAIL
+	if ( int_result == ERR_INSTR_NOTFND )
+		APL_GOBACK_FAIL
+	if ( int_result == ERR_UNAUTH_INSTR )
+		APL_GOBACK_FAIL
+
+	Alert("Selecting Client");
+	if ( CA_ChkAcc(	l_ca_putcall_struct_h.h_cln_code,
+							&l_mt_client_struct_h,
+							&int_result,
+							l_debug_info_ptr) == APL_FAILURE)
+		APL_GOBACK_FAIL
+	
+	if ( int_result == ERR_ACCNOT_FND )
+		APL_GOBACK_FAIL
+	if ( int_result == ERR_ACCOUNT_UNAUTH )
+		APL_GOBACK_FAIL
+
+/** UAT Fix SGS deal dt should not be dependent on value date **/
+/***
+	if(strlen(l_ca_putcall_struct_h.h_value_date))
+		strcpy(l_deal_dt,l_ca_putcall_struct_h.h_value_date);
+	else ***/
+		strcpy(l_deal_dt,l_ca_putcall_struct_h.h_notice_date);
+
+	EXEC SQL SELECT to_date(:l_deal_dt) - sys_date
+				INTO :l_future_date
+				FROM PRO_SYS_DATE;
+	IS_ANY_ORA_ERROR
+
+	if(l_future_date > 0)
+		strcpy(l_status_ind ,CA_DEAL_CONF_STAT);
+
+
+	strcpy(p_ca_deal_struct_h -> h_dl_client,l_ca_putcall_struct_h.h_cln_code);
+	strcpy(p_ca_deal_struct_h -> h_dlt,l_deal_dt);
+	strcpy(p_ca_deal_struct_h -> h_instr_code,l_ca_putcall_struct_h.h_instr_code);
+	if(!strcmp(l_mt_core_sys_params_struct_h.loc_proc_ind, APL_YES_IND))
+		strcpy(p_ca_deal_struct_h -> h_loccode,APL_NSDL_DEPO);
+	strcpy(p_ca_deal_struct_h -> h_classofdl, DEALTYPE_CORP_A   );
+	strcpy(p_ca_deal_struct_h -> h_currencycode, l_mt_instrument_struct_h.h_currency_cd);
+	strcpy(p_ca_deal_struct_h -> h_ex_arena,     l_mt_instrument_struct_h.h_ex_arena);
+	if(!strcmp(l_mt_instrument_struct_h.h_reg_br_ind,APL_INSTRU_REGD))	
+		strcpy(p_ca_deal_struct_h  -> h_reginstr_ind,APL_YES_IND);
+	else
+		strcpy(p_ca_deal_struct_h  -> h_reginstr_ind,APL_NO_IND);
+	if(   !strcmp(l_mt_core_sys_params_struct_h.proc_reg_ind, APL_YES_IND) &&
+			!strcmp(l_mt_instrument_struct_h.h_reg_br_ind,APL_INSTRU_BEAR))
+		strcpy(p_ca_deal_struct_h  -> h_pos_stat, STATUS_POS_000);
+	else if(!strcmp(l_mt_core_sys_params_struct_h.proc_reg_ind, APL_YES_IND) &&
+			!strcmp(l_mt_instrument_struct_h.h_reg_br_ind,APL_INSTRU_REGD))
+		strcpy(p_ca_deal_struct_h  -> h_pos_stat, STATUS_POS_001);
+
+	if(CA_Rtv_LrDealType(   CA_PUTCALL_IND,
+				APL_DEAL_DVP,
+				APL_NULL_STRING,
+				l_mt_instrument_struct_h.h_reg_br_ind,
+				p_ca_deal_struct_h ->h_dlt,
+				p_ca_deal_struct_h -> h_lrdltype,
+				p_ca_deal_struct_h -> h_ndsbldate,
+				l_debug_info_ptr)==  APL_FAILURE)
+	{
+		Alert("Failed In CA_Rtv_LrDealType");
+		APL_GOBACK_FAIL
+	}
+	strcpy(p_ca_deal_struct_h -> h_dealcd,APL_DEAL_DVP);
+	if (APL_FAILURE == CR_Proc_InstrQtyRound( l_ca_putcall_struct_h.h_put_call_qty,
+															p_ca_deal_struct_h -> h_instr_code,
+															&(p_ca_deal_struct_h -> h_qty),
+															l_debug_info_ptr ))
+		APL_GOBACK_FAIL
+
+
+	p_ca_deal_struct_h -> h_pr = l_ca_putcall_struct_h.h_put_call_rate;
+	p_ca_deal_struct_h -> h_amt = l_ca_putcall_struct_h.h_put_call_rate * p_ca_deal_struct_h -> h_qty;
+
+	/*added by siva.ganapathi for ISKB - 2263 -- Started*/
+	strcpy(p_ca_deal_struct_h -> h_misinfo,l_ca_putcall_struct_h.h_r_corp_id);
+	printf("value of misinfo is |%s|\n",p_ca_deal_struct_h -> h_misinfo);	
+	printf("value of corp id  is |%s|\n",l_ca_putcall_struct_h.h_r_corp_id);
+	/*added by siva.ganapathi for ISKB - 2263 -- Ended*/
+
+	if (  !strcmp(l_mt_core_sys_params_struct_h.proc_reg_ind, APL_YES_IND) &&
+			!strcmp(l_mt_instrument_struct_h.h_reg_br_ind,APL_INSTRU_REGD) &&
+			!strcmp(l_mt_client_struct_h.h_allow_regflag, APL_YES_IND))
+		strcpy(p_ca_deal_struct_h  -> h_pos_stat, STATUS_POS_003);
+
+	if( CA_ChkPosition(  p_ca_deal_struct_h -> h_instr_code,
+								p_ca_deal_struct_h -> h_dl_client,
+								APL_NSDL_DEPO,
+								p_ca_deal_struct_h   -> h_qty,
+								p_ca_deal_struct_h   -> h_pos_stat,
+								p_ca_deal_struct_h   -> h_deal_status,
+								&(p_ca_deal_struct_h -> h_delta_000),
+								&(p_ca_deal_struct_h -> h_delta_001),
+								&(p_ca_deal_struct_h -> h_delta_002),
+								"FREE",
+								l_status_ind,
+								APL_NULL_STRING,
+								l_debug_info_ptr) == APL_FAILURE)
+		APL_GOBACK_FAIL
+
+
+	if(CA_SbiRptPopulate(	CA_PUTCALL_IND,
+									APL_NULL_STRING,
+									l_mt_instrument_struct_h.h_reg_br_ind,
+									p_ca_deal_struct_h -> h_dlt,
+									p_ca_deal_struct_h,
+									l_debug_info_ptr) == APL_FAILURE)
+		APL_GOBACK_FAIL
+
+RETURN_SUCCESS:
+   APL_FUNCTION_RET_SUCCESS(APL_OUT_FILE)
+
+RETURN_FAILURE:
+	APL_FUNCTION_RET_FAILURE(APL_OUT_FILE)
+
+}
+int CA_PutCall_DL( 	CA_PUTCALL_APP_STRUCT_H *p_ca_putcall_app_struct_h,
+							INTL_ENV_DATA_STRUCT_H	*p_intl_envdatastruct_h,
+							DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+    /* Added by kotubabu for Linux Migration -Start*/
+	   #ifdef OS_LINUX
+        l_logfile2 = APL_OUT_FILE;
+        l_usr_logfile = APL_OUT_FILE;
+       #endif
+    /* Added by kotubabu for Linux Migration-End*/
+	struct sqlca sqlca;
+	CA_DEAL_STRUCT_H l_ca_deal_struct_h;
+	char l_refno[17] = APL_NULL_STRING;
+	memset(&l_ca_deal_struct_h,0,sizeof(l_ca_deal_struct_h));
+	if(CA_PutCall_DLPopulate( p_ca_putcall_app_struct_h,
+										&l_ca_deal_struct_h,
+			                     p_intl_envdatastruct_h,
+										l_debug_info_ptr)		== APL_FAILURE)
+	{
+		Alert("Failed in CA_PutCall_DLPopulate");
+		APL_GOBACK_FAIL
+	}
+
+	if (CO_GenRefno(CA_PUTCALL_IND,
+											APL_NULL_STRING,
+											l_ca_deal_struct_h.h_dealcd,
+											l_ca_deal_struct_h.h_indentity_no,
+											l_debug_info_ptr) == APL_FAILURE)
+	{
+
+		Alert("Failed in CO_GenRefno");
+		APL_GOBACK_FAIL
+	}
+	
+	if ( CA_Mod_NewTrade(  &l_ca_deal_struct_h,
+									p_intl_envdatastruct_h,
+									l_refno,
+									l_debug_info_ptr) == APL_FAILURE)
+	{
+		Alert("Failed in CA_Mod_NewTrade");
+		APL_GOBACK_FAIL
+	}
+
+
+
+RETURN_SUCCESS:
+   APL_FUNCTION_RET_SUCCESS(APL_OUT_FILE)
+
+RETURN_FAILURE:
+	APL_FUNCTION_RET_FAILURE(APL_OUT_FILE)
+}
+
+
+int CA_ModDbCA_PUTCALL_APP(CA_PUTCALL_APP_STRUCT_H *p_ca_putcall_app_struct_h,INTL_ENV_DATA_STRUCT_H *p_intl_envdatastruct_h,DEBUG_INFO_STRUCT_H **l_debug_info_ptr) 
+{
+	/* Added by kotubabu for Linux Migration-Start*/
+	   #ifdef OS_LINUX
+        l_logfile2 = APL_OUT_FILE;
+        l_usr_logfile = APL_OUT_FILE;
+       #endif 
+    /* Added by kotubabu-End*/
+	/* Variable Declarations */
+  CA_PUTCALL_APP_STRUCT_I *l_ca_putcall_app_struct_i;
+
+  struct sqlca sqlca;
+
+  char chr_acc_stamp_compare[APL_DATE_LEN] = APL_NULL_STRING;
+  char chr_status_compare[APL_STATUS_LEN] = APL_NULL_STRING;
+  char chr_sys_access_stamp[APL_DATE_LEN] = APL_NULL_STRING;
+  short p_i_maker, p_i_makerdt, p_i_checker, p_i_checkerdt, p_i_access_stamp;
+  short p_i_access_stamp_compare;
+  short p_i_status = 0;
+  int int_error_flag = APL_SUCCESS;
+  int int_l_rowexists = 0;
+  char  *l_key_codes[4];
+  char  *l_key_values[4];
+  char  chr_l_table_name[50] = APL_NULL_STRING;
+  char  chr_l_field_val[40] = APL_NULL_STRING;
+  char  chr_msg_param_struct[201] = APL_NULL_STRING;
+
+  int	int_retval = APL_SUCCESS;
+#ifdef APL_THREADS
+    APL_SET_CONTEXT
+    EXEC SQL CONTEXT USE :my_ctx_local;
+#endif
+
+	 APL_FUNCTION_ENTER(APL_OUT_FILE)
+
+  l_ca_putcall_app_struct_i=(CA_PUTCALL_APP_STRUCT_I*)calloc(1,sizeof(CA_PUTCALL_APP_STRUCT_I));
+
+  APL_MALLOC_FAIL(l_ca_putcall_app_struct_i)
+
+  p_i_maker =0;
+  p_i_makerdt =0;
+  p_i_checker =0;
+  p_i_checkerdt =0;
+  p_i_access_stamp =0;
+  p_i_access_stamp_compare =0;
+
+ if (!strlen(p_ca_putcall_app_struct_h->h_instr_code)) l_ca_putcall_app_struct_i->i_instr_code =-1;
+     else l_ca_putcall_app_struct_i->i_instr_code =0;
+
+if (!strlen(p_ca_putcall_app_struct_h->h_cln_code)) l_ca_putcall_app_struct_i->i_cln_code =-1;
+     else l_ca_putcall_app_struct_i->i_cln_code =0;
+
+if (!strlen(p_ca_putcall_app_struct_h->h_notice_date)) l_ca_putcall_app_struct_i->i_notice_date =-1;
+     else l_ca_putcall_app_struct_i->i_notice_date =0;
+
+if (!strlen(p_ca_putcall_app_struct_h->h_status)) l_ca_putcall_app_struct_i->i_status =-1;
+     else l_ca_putcall_app_struct_i->i_status =0;
+
+if (!strlen(p_ca_putcall_app_struct_h->h_maker)) l_ca_putcall_app_struct_i->i_maker =-1;
+     else l_ca_putcall_app_struct_i->i_maker =0;
+
+if (!strlen(p_ca_putcall_app_struct_h->h_maker_dt)) l_ca_putcall_app_struct_i->i_maker_dt =-1;
+     else l_ca_putcall_app_struct_i->i_maker_dt =0;
+
+if (!strlen(p_ca_putcall_app_struct_h->h_access_stamp)) l_ca_putcall_app_struct_i->i_access_stamp =-1;
+     else l_ca_putcall_app_struct_i->i_access_stamp =0;
+
+if (!strlen(p_ca_putcall_app_struct_h->h_checker)) l_ca_putcall_app_struct_i->i_checker =-1;
+     else l_ca_putcall_app_struct_i->i_checker =0;
+
+if (!strlen(p_ca_putcall_app_struct_h->h_checker_dt)) l_ca_putcall_app_struct_i->i_checker_dt =-1;
+     else l_ca_putcall_app_struct_i->i_checker_dt =0;
+
+if (!strlen(p_ca_putcall_app_struct_h->h_info_seq)) l_ca_putcall_app_struct_i->i_info_seq =-1;
+     else l_ca_putcall_app_struct_i->i_info_seq =0;
+
+if (!strlen(p_ca_putcall_app_struct_h->h_pymt_send_msg_ind)) l_ca_putcall_app_struct_i->i_pymt_send_msg_ind =-1;
+     else l_ca_putcall_app_struct_i->i_pymt_send_msg_ind =0;
+
+if (!strlen(p_ca_putcall_app_struct_h->h_processed_date)) l_ca_putcall_app_struct_i->i_processed_date =-1;
+     else l_ca_putcall_app_struct_i->i_processed_date =0;
+
+if (!strlen(p_ca_putcall_app_struct_h->h_r_corp_id)) l_ca_putcall_app_struct_i->i_r_corp_id =-1;
+     else l_ca_putcall_app_struct_i->i_r_corp_id =0;
+
+
+ if(CO_RtvSysDtTime(chr_sys_access_stamp,l_debug_info_ptr) !=APL_SUCCESS)
+	{
+		APL_GOBACK_FAIL
+	}
+	
+ if (!strcmp(p_intl_envdatastruct_h->h_mode,APL_FUNC_INPUT))
+	{
+
+		APL_IF_DEBUG
+ 	{
+  		CO_ProcMonitor(APL_OUT_FILE, "Entered Input of Function CA_ModDbCA_PUTCALL_APP\n",
+													NULL,p_intl_envdatastruct_h);
+ 	}
+
+		strcpy(p_ca_putcall_app_struct_h->h_status,STATUS_UAUTH);
+	    l_ca_putcall_app_struct_i->i_status =0;
+   		strcpy(p_ca_putcall_app_struct_h->h_maker,p_intl_envdatastruct_h->usr);
+		l_ca_putcall_app_struct_i->i_maker=0;
+		strcpy(p_ca_putcall_app_struct_h->h_maker_dt,chr_sys_access_stamp);
+		l_ca_putcall_app_struct_i->i_maker_dt=0;
+		strcpy(p_ca_putcall_app_struct_h->h_access_stamp,chr_sys_access_stamp);
+		l_ca_putcall_app_struct_i->i_access_stamp =0;
+		strcpy(p_ca_putcall_app_struct_h->h_checker,APL_NULL_STRING);
+		strcpy(p_ca_putcall_app_struct_h->h_checker_dt,APL_NULL_STRING);
+
+
+		EXEC SQL INSERT INTO CA_PUTCALL_APP VALUES (:p_ca_putcall_app_struct_h:l_ca_putcall_app_struct_i);
+
+		IS_ANY_ORA_ERROR_AND_DUPLICATE(MAP_DET_EXIST,APL_NULL_STRING,APL_NULL_STRING,APL_NULL_STRING)
+	}
+	else
+	{
+
+	l_key_codes[0]="INSTR_CODE";
+	l_key_codes[1]="CLN_CODE";
+    l_key_codes[2]="NOTICE_DATE";
+	l_key_codes[3]=APL_NULL_STRING;
+	
+	
+	l_key_values[0]=p_ca_putcall_app_struct_h -> h_instr_code;
+	l_key_values[1]=p_ca_putcall_app_struct_h -> h_cln_code;
+	l_key_values[2]=p_ca_putcall_app_struct_h -> h_notice_date;
+	l_key_values[3]= APL_NULL_STRING;
+
+		
+   strcpy(chr_l_table_name,"CA_PUTCALL_APP");
+
+    int_retval = CR_Rtv_MastChldChrVal( l_key_codes,
+                                        l_key_values,
+                                        chr_l_table_name,
+                                        "ACCESS_STAMP",
+                                        chr_l_field_val,
+                                        l_debug_info_ptr);
+
+    if (int_retval != APL_SUCCESS)
+         APL_GOBACK_FAIL
+
+		strcpy(chr_acc_stamp_compare,chr_l_field_val);
+    
+		int_retval = CR_Rtv_MastChldChrVal( l_key_codes,
+                                        l_key_values,
+                                        chr_l_table_name,
+                                        "STATUS",
+                                        chr_l_field_val,
+                                        l_debug_info_ptr);
+
+    if (int_retval != APL_SUCCESS)
+         APL_GOBACK_FAIL
+
+		strcpy(chr_status_compare,chr_l_field_val);
+	}
+
+ if (!strcmp(p_intl_envdatastruct_h->h_mode,APL_FUNC_MODIFY))
+	{
+  	p_i_checker =-1;
+  	p_i_checkerdt =-1;
+		strcpy(p_ca_putcall_app_struct_h->h_checker,APL_NULL_STRING);
+		strcpy(p_ca_putcall_app_struct_h->h_checker_dt,APL_NULL_STRING);
+
+		APL_IF_DEBUG
+ 	{
+  		CO_ProcMonitor(APL_OUT_FILE, "Entered modify of Function MT_ModDBNoDlvDet\n",
+													NULL,p_intl_envdatastruct_h);
+ 	}
+
+	   if (!strcmp(p_ca_putcall_app_struct_h->h_access_stamp,chr_acc_stamp_compare))
+	   {
+			strcpy(p_ca_putcall_app_struct_h->h_access_stamp,chr_sys_access_stamp);
+			l_ca_putcall_app_struct_i->i_access_stamp =0;
+       strcpy(p_ca_putcall_app_struct_h->h_status,STATUS_UAUTH);
+			l_ca_putcall_app_struct_i->i_status =0;
+
+			EXEC SQL UPDATE CA_PUTCALL_APP  SET 
+            	    INSTR_CODE =:p_ca_putcall_app_struct_h->h_instr_code:l_ca_putcall_app_struct_i->i_instr_code,
+					CLN_CODE =:p_ca_putcall_app_struct_h->h_cln_code:l_ca_putcall_app_struct_i->i_cln_code,
+					NOTICE_DATE =:p_ca_putcall_app_struct_h->h_notice_date:l_ca_putcall_app_struct_i->i_notice_date,
+					INSTR_TYPE =:p_ca_putcall_app_struct_h->h_instr_type:l_ca_putcall_app_struct_i->i_instr_type,
+					VALUE_DATE =:p_ca_putcall_app_struct_h->h_value_date:l_ca_putcall_app_struct_i->i_value_date,
+					AVL_QTY =:p_ca_putcall_app_struct_h->h_avl_qty:l_ca_putcall_app_struct_i->i_avl_qty,
+					PUT_CALL_QTY =:p_ca_putcall_app_struct_h->h_put_call_qty:l_ca_putcall_app_struct_i->i_put_call_qty,
+					PUT_CALL_VALUE =:p_ca_putcall_app_struct_h->h_put_call_value:l_ca_putcall_app_struct_i->i_put_call_value,
+					PUT_CALL_RATE =:p_ca_putcall_app_struct_h->h_put_call_rate:l_ca_putcall_app_struct_i->i_put_call_rate,
+					STATUS =:p_ca_putcall_app_struct_h->h_status:l_ca_putcall_app_struct_i->i_status,
+					MAKER =:p_intl_envdatastruct_h->usr:p_i_maker,
+					MAKER_DT =:chr_sys_access_stamp:p_i_makerdt,
+					CHECKER =:p_ca_putcall_app_struct_h->h_checker:p_i_checker,
+					CHECKER_DT =:p_ca_putcall_app_struct_h->h_checker:p_i_checkerdt,
+					ACCESS_STAMP =:p_ca_putcall_app_struct_h->h_access_stamp:l_ca_putcall_app_struct_i->i_access_stamp,
+					INFO_SEQ =:p_ca_putcall_app_struct_h->h_info_seq:l_ca_putcall_app_struct_i->i_info_seq,
+					PYMT_SEND_MSG_IND =:p_ca_putcall_app_struct_h->h_pymt_send_msg_ind:l_ca_putcall_app_struct_i->i_pymt_send_msg_ind,
+					PROCESSED_DATE =:p_ca_putcall_app_struct_h->h_processed_date:l_ca_putcall_app_struct_i->i_processed_date,
+					R_CORP_ID =:p_ca_putcall_app_struct_h->h_r_corp_id:l_ca_putcall_app_struct_i->i_r_corp_id
+					
+				WHERE 
+					INSTR_CODE =:p_ca_putcall_app_struct_h->h_instr_code AND 
+					CLN_CODE =:p_ca_putcall_app_struct_h->h_cln_code AND         
+					NOTICE_DATE =:p_ca_putcall_app_struct_h->h_notice_date;        
+              
+					IS_ANY_ORA_ERROR;	
+	   }
+		else 
+	   {
+			if (CO_InsertErr
+			(l_debug_info_ptr,
+			 ERR_ACCESSSTAMP_CHGD, 
+			 APL_NULL_STRING,
+			 APL_NULL_STRING,
+			 APL_NULL_STRING,
+			 __LINE__,
+			 __FILE__
+			) != APL_SUCCESS)
+			APL_GOBACK_FAIL
+			APL_GOBACK_FAIL
+	   } 
+	}
+
+ if (!strcmp(p_intl_envdatastruct_h->h_mode,APL_FUNC_AUTHORISE))
+	{
+
+		APL_IF_DEBUG
+ 	{
+  		CO_ProcMonitor(APL_OUT_FILE, "Entered authorize of Function MT_ModDBNoDlvDet\n",
+													NULL,p_intl_envdatastruct_h);
+ 	}
+
+		if (!strcmp(p_ca_putcall_app_struct_h->h_access_stamp,chr_acc_stamp_compare))
+	   {
+   		if(strcmp(p_ca_putcall_app_struct_h->h_status,STATUS_DEL_UAUTH))
+	    	{
+	    		strcpy(p_ca_putcall_app_struct_h->h_access_stamp,chr_sys_access_stamp);
+	    		l_ca_putcall_app_struct_i->i_access_stamp =0;
+   	    	strcpy(p_ca_putcall_app_struct_h->h_checker,p_intl_envdatastruct_h->usr);
+	    		l_ca_putcall_app_struct_i->i_checker=0;
+  	    	strcpy(p_ca_putcall_app_struct_h->h_checker_dt,chr_sys_access_stamp);
+	    		l_ca_putcall_app_struct_i->i_checker_dt=0;
+          strcpy(p_ca_putcall_app_struct_h->h_status,STATUS_AUTH);
+	    		l_ca_putcall_app_struct_i->i_status =0;
+
+				if(CA_PutCall_DL(	p_ca_putcall_app_struct_h,
+										p_intl_envdatastruct_h,
+										l_debug_info_ptr) == APL_FAILURE)
+					APL_GOBACK_FAIL
+
+	    		EXEC SQL UPDATE CA_PUTCALL_APP SET 
+					CHECKER =:p_intl_envdatastruct_h->usr:p_i_checker,
+					CHECKER_DT =:chr_sys_access_stamp:p_i_access_stamp,
+					ACCESS_STAMP =:chr_sys_access_stamp:p_i_access_stamp,
+					STATUS =:p_ca_putcall_app_struct_h->h_status:l_ca_putcall_app_struct_i->i_status
+				WHERE 
+					INSTR_CODE =:p_ca_putcall_app_struct_h->h_instr_code AND 
+					CLN_CODE =:p_ca_putcall_app_struct_h->h_cln_code AND         
+					NOTICE_DATE =:p_ca_putcall_app_struct_h->h_notice_date;   
+
+				IS_ANY_ORA_ERROR;	
+
+				if(strcmp(p_ca_putcall_app_struct_h->h_r_corp_id,APL_NULL_STRING)!=0)
+				{
+					memset(chr_msg_param_struct,APL_NULL_CHAR,201);
+					strcpy(chr_msg_param_struct,p_ca_putcall_app_struct_h->h_instr_code);
+					strcat(chr_msg_param_struct,";");
+					strcat(chr_msg_param_struct,"PO;");
+					strcat(chr_msg_param_struct,p_ca_putcall_app_struct_h->h_notice_date);
+					strcat(chr_msg_param_struct,";");
+        			if (GBDbInsIMSGENT("556N02",
+			                          p_ca_putcall_app_struct_h->h_r_corp_id,
+						                 p_ca_putcall_app_struct_h->h_cln_code,
+						                 'Y',
+						                chr_msg_param_struct,
+						                l_debug_info_ptr) == APL_FAILURE)
+				   APL_GOBACK_FAIL
+				}
+
+			}
+   	   else  
+	    	{
+	    		EXEC SQL DELETE CA_PUTCALL_APP 
+				WHERE 
+					INSTR_CODE =:p_ca_putcall_app_struct_h->h_instr_code AND 
+					CLN_CODE =:p_ca_putcall_app_struct_h->h_cln_code AND         
+					NOTICE_DATE =:p_ca_putcall_app_struct_h->h_notice_date;   
+          
+			   IS_ANY_ORA_ERROR
+	    	}
+	   }
+		else 
+	   {
+			if (CO_InsertErr
+			(l_debug_info_ptr,
+			 ERR_ACCESSSTAMP_CHGD, 
+			 APL_NULL_STRING,
+			 APL_NULL_STRING,
+			 APL_NULL_STRING,
+			 __LINE__,
+			 __FILE__
+			) != APL_SUCCESS)
+			APL_GOBACK_FAIL
+			APL_GOBACK_FAIL
+	   } 
+	}
+
+ if (!strcmp(p_intl_envdatastruct_h->h_mode,APL_FUNC_RESET))
+	{
+
+		APL_IF_DEBUG
+ 	{
+  		CO_ProcMonitor(APL_OUT_FILE, "Entered reset of Function MT_ModDBNoDlvDet\n",
+													NULL,p_intl_envdatastruct_h);
+ 	}
+
+		if (!strcmp(p_ca_putcall_app_struct_h->h_access_stamp,chr_acc_stamp_compare))
+	   {
+   		if(!strcmp(p_ca_putcall_app_struct_h->h_status,STATUS_DEL_UAUTH))
+	    	{
+	    		strcpy(p_ca_putcall_app_struct_h->h_access_stamp,chr_sys_access_stamp);
+	    		l_ca_putcall_app_struct_i->i_access_stamp =0;
+   	    	strcpy(p_ca_putcall_app_struct_h->h_checker,p_intl_envdatastruct_h->usr);
+	    		l_ca_putcall_app_struct_i->i_checker=0;
+  	    	strcpy(p_ca_putcall_app_struct_h->h_checker_dt,chr_sys_access_stamp);
+	    		l_ca_putcall_app_struct_i->i_checker_dt=0;
+          strcpy(p_ca_putcall_app_struct_h->h_status,STATUS_AUTH);
+	    		l_ca_putcall_app_struct_i->i_status =0;
+
+	    		EXEC SQL UPDATE CA_PUTCALL_APP SET 
+           	CHECKER =:p_intl_envdatastruct_h->usr:p_i_checker,
+            	CHECKER_DT =:chr_sys_access_stamp:p_i_access_stamp,
+					ACCESS_STAMP =:chr_sys_access_stamp:p_i_access_stamp,
+            	STATUS =:p_ca_putcall_app_struct_h->h_status:l_ca_putcall_app_struct_i->i_status
+				WHERE 
+					INSTR_CODE =:p_ca_putcall_app_struct_h->h_instr_code AND 
+					CLN_CODE =:p_ca_putcall_app_struct_h->h_cln_code AND         
+					NOTICE_DATE =:p_ca_putcall_app_struct_h->h_notice_date;   
+
+				IS_ANY_ORA_ERROR;	
+			}
+	   }
+		else 
+	   {
+			if (CO_InsertErr
+			(l_debug_info_ptr,
+			 ERR_ACCESSSTAMP_CHGD, 
+			 APL_NULL_STRING,
+			 APL_NULL_STRING,
+			 APL_NULL_STRING,
+			 __LINE__,
+			 __FILE__
+			) != APL_SUCCESS)
+			APL_GOBACK_FAIL
+			APL_GOBACK_FAIL
+	   } 
+	}
+
+ if (!strcmp(p_intl_envdatastruct_h->h_mode,APL_FUNC_DELETE))
+	{
+  	p_i_checker =-1;
+  	p_i_checkerdt =-1;
+		strcpy(p_ca_putcall_app_struct_h->h_checker,APL_NULL_STRING);
+		strcpy(p_ca_putcall_app_struct_h->h_checker_dt,APL_NULL_STRING);
+
+		APL_IF_DEBUG
+ 	{
+  		CO_ProcMonitor(APL_OUT_FILE, "Entered delete of Function MT_ModDBNoDlvDet\n",
+													NULL,p_intl_envdatastruct_h);
+ 	}
+
+	   if (!strcmp(p_ca_putcall_app_struct_h->h_access_stamp,chr_acc_stamp_compare))
+	   {
+			strcpy(p_ca_putcall_app_struct_h->h_access_stamp,chr_sys_access_stamp);
+			l_ca_putcall_app_struct_i->i_access_stamp =0;
+       strcpy(p_ca_putcall_app_struct_h->h_status,STATUS_DEL_UAUTH);
+			l_ca_putcall_app_struct_i->i_status =0;
+
+			EXEC SQL UPDATE CA_PUTCALL_APP SET 
+            	MAKER =:p_intl_envdatastruct_h->usr:p_i_maker,
+					MAKER_DT =:chr_sys_access_stamp:p_i_makerdt,
+					CHECKER =:p_ca_putcall_app_struct_h->h_checker:p_i_checker,
+					CHECKER_DT =:p_ca_putcall_app_struct_h->h_checker:p_i_checkerdt,
+            		STATUS =:p_ca_putcall_app_struct_h->h_status:l_ca_putcall_app_struct_i->i_status,
+					ACCESS_STAMP =:chr_sys_access_stamp:p_i_access_stamp
+				WHERE 
+					INSTR_CODE =:p_ca_putcall_app_struct_h->h_instr_code AND 
+					CLN_CODE =:p_ca_putcall_app_struct_h->h_cln_code AND         
+					NOTICE_DATE =:p_ca_putcall_app_struct_h->h_notice_date;   
+ 
+              
+					IS_ANY_ORA_ERROR;	
+	   }
+		else 
+	   {
+			if (CO_InsertErr
+			(l_debug_info_ptr,
+			 ERR_ACCESSSTAMP_CHGD, 
+			 APL_NULL_STRING,
+			 APL_NULL_STRING,
+			 APL_NULL_STRING,
+			 __LINE__,
+			 __FILE__
+			) != APL_SUCCESS)
+			APL_GOBACK_FAIL
+			APL_GOBACK_FAIL
+	   } 
+	}
+
+
+ if (int_error_flag == APL_FAILURE)
+	{
+		APL_GOBACK_FAIL
+	}
+ APL_GOBACK_SUCCESS
+
+ RETURN_SUCCESS :
+	{
+		APL_FUNCTION_RET_SUCCESS(APL_OUT_FILE)
+		free(l_ca_putcall_app_struct_i);
+		return(APL_SUCCESS);
+	}
+  RETURN_FAILURE :
+	{
+ 	APL_FUNCTION_RET_FAILURE(APL_OUT_FILE)
+		free(l_ca_putcall_app_struct_i);
+		return(APL_FAILURE);
+	}
+
+}
+

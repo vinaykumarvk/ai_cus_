@@ -1,0 +1,589 @@
+/*
+ *    COPYRIGHT NOTICE
+ *
+ *   Copyright 2005 Polaris Software Lab Limited. All rights reserved.
+ *
+ *   These materials are confidential and proprietary to 
+ *    Polaris Software Lab Limited and no part of these materials should
+ *    be reproduced, published, transmitted or distributed in any form or
+ *    by any means, electronic, mechanical, photocopying, recording or 
+ *    otherwise, or stored in any information storage or retrieval system
+ *    of any nature nor should the materials be disclosed to third parties
+ *    or used in any other manner for which this is not authorized, without
+ *    the prior express written authorization of Polaris Software Lab Limited.
+ */
+/*********************************************************************
+ *
+ * Module Name         :	
+ *
+ * File Name           :
+ *
+ * Description         :	
+ *
+ *           
+ *
+ *            Version Control Block
+ *
+ * Date        Version		Author               Description
+ * ---------   --------	 ---------------  ---------------------------
+ *					
+ *
+ *********************************************************************/
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+
+   
+
+#include "stdio_64.h"
+#include "CR_Common.h"
+EXEC SQL INCLUDE SQLCA;
+
+#define	COMMIT_COUNT_B	300
+#define PAGE_SIZE		25
+#define MIN_DEN_VAL	0.01
+
+int EM_ConvSec(	char **p_argv,
+		FILE *fl_userlog,
+		FILE *fl_repfile,
+		char *chr_l_genreponly,
+		INTL_ENV_DATA_STRUCT_H	*p_intl_envdatastruct_h,
+		DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	char	chr_h_restart_data[50]			=	APL_NULL_STRING;
+	char	chr_h_batch_in_proc_progname[40]		=	APL_NULL_STRING;
+	char	chr_h_batch_in_proc_statinfo[71]		=	APL_NULL_STRING;
+	char	chr_h_batch_in_proc_startdate[APL_DATE_LEN]	=	APL_NULL_STRING;
+	char	chr_h_batch_in_proc_rowid[APL_ROWID_LEN]	=	APL_NULL_STRING;
+	char	chr_h_batch_in_proc_status[15]		=	APL_NULL_STRING;
+	short 	i_restart_info 				=	0;
+	short	int_i_batch_in_proc_rowid 			=	0;
+	short	i_ccy_code				=	0;
+	short	i_securitycd				=	0;
+	short	i_total_pdcapital				=	0;
+	short	i_nominal_val				=	0;
+	short	i_min_den_acc				=	0;
+	short	i_typeofsec				=	0;
+	int	int_l_fetch_cnt				=	0;
+	int	int_l_batch_cnt				=	0;
+	int	int_l_retstat				=	0;
+	int	int_l_pg_num				=	1;
+	double	h_total_pdcapital_new				=	0;
+	double	h_total_pdcapital				=	0;
+	double	h_nominal_val_new				=	0;
+	double	h_nominal_val				=	0;
+	double	h_fx_rt				=	0;
+	char	chr_h_ccy_code[APL_CCYCODE_LEN]		=	APL_NULL_STRING;
+	char	h_securitycd[APL_INSTRUMENTCODE_LEN]		=	APL_NULL_STRING;
+	char	h_typeofsec[APL_INSTRU_TYPE_LEN]		=	APL_NULL_STRING;
+	char	chr_h_ccy_code_new[APL_CCYCODE_LEN]		=	APL_NULL_STRING;
+	char	h_sys_dt[APL_DATE_LEN]		=	APL_NULL_STRING;
+	double	dbl_h_min_den_acc_new			=	0;
+	double	dbl_h_min_den_acc				=	0;
+	struct	sqlca	sqlca;
+
+
+	EXEC SQL BEGIN DECLARE SECTION;
+	EXEC SQL VAR chr_h_batch_in_proc_progname IS STRING;
+	EXEC SQL VAR chr_h_batch_in_proc_startdate IS STRING;
+	EXEC SQL VAR chr_h_batch_in_proc_rowid IS STRING;
+	EXEC SQL VAR chr_h_batch_in_proc_status IS STRING;
+	EXEC SQL VAR chr_h_restart_data IS STRING;
+	EXEC SQL VAR chr_h_ccy_code IS STRING;
+	EXEC SQL VAR chr_h_ccy_code_new IS STRING;
+	EXEC SQL VAR h_securitycd IS STRING;
+	EXEC SQL VAR h_typeofsec IS STRING;
+	
+	EXEC SQL END DECLARE SECTION;
+
+
+	strcpy(chr_h_batch_in_proc_progname,p_argv[0]);
+	strcpy(chr_h_batch_in_proc_startdate,p_argv[2]);
+
+	EXEC SQL SELECT ROWID, PROCESSING_STATUS
+	INTO :chr_h_batch_in_proc_rowid :int_i_batch_in_proc_rowid,:chr_h_restart_data :i_restart_info
+	FROM SYS_BATCHPROC
+	WHERE PROCESS_NAME = :chr_h_batch_in_proc_progname
+	AND STARTDATE	= :chr_h_batch_in_proc_startdate
+	AND STATUS		= 'started'
+	FOR UPDATE OF PROCESSING_STATUS ,STATUS;
+
+
+	if (sqlca.sqlcode <0)
+	{
+		fprintf(fl_userlog,"Batch_in_proc table cannot be locked.\n");
+		APL_GOBACK_FAIL
+	}
+
+	if (APL_ZERO_RESULT_SET)
+	{
+		fprintf(fl_userlog,"No entry for this process_name %s ,start_dt %s in batch table\n",chr_h_batch_in_proc_progname,chr_h_batch_in_proc_startdate);
+		CO_InsertErr(	l_debug_info_ptr,
+				DB_ERR_NO,
+				ltoa(sqlca.sqlcode),
+				APL_NULL_STRING,
+				APL_NULL_STRING,
+				__LINE__,
+				__FILE__);
+		APL_GOBACK_FAIL
+	}
+
+	strcpy(chr_h_batch_in_proc_statinfo,APL_NULL_STRING);
+
+	EXEC SQL UPDATE SYS_BATCHPROC
+	SET STAT_DET	=	:chr_h_batch_in_proc_statinfo
+	WHERE PROCESS_NAME	=	:chr_h_batch_in_proc_progname
+	AND STARTDATE	=	:chr_h_batch_in_proc_startdate
+	AND STATUS	=	'started';
+
+	if (sqlca.sqlcode <0)
+	{
+		fprintf(fl_userlog,"Batch_in_proc table cannot be locked.\n");
+		
+		CO_InsertErr(	l_debug_info_ptr,
+				DB_ERR_NO,
+				ltoa(sqlca.sqlcode),
+				APL_NULL_STRING,
+				APL_NULL_STRING,
+				__LINE__,
+				__FILE__);
+		APL_GOBACK_FAIL
+	}
+	
+		if (i_restart_info == -1)
+		{
+			strcpy(chr_h_restart_data," ");
+		}
+
+		EXEC SQL DECLARE cur_csecurity CURSOR FOR
+		SELECT A.CURRENCY_CD,A.INSTR_CODE,A.TOTAL_PDCAPITA,A.NOMINAL_VALUE,A.MIN_FMT_DL_QTY,A.INSTR_TYPE
+		FROM MT_INSTRUMENT A
+		WHERE NOT EXISTS
+		(SELECT B.INSTR_CODE FROM PRO_EURO_TEMP B WHERE
+		A.INSTR_CODE = B.INSTR_CODE AND B.PROC_AREA = 'CNSEC')
+		AND
+		A.INSTR_CODE > :chr_h_restart_data
+		ORDER BY A.INSTR_CODE;
+	
+
+
+	if (APL_FAILURE == CO_RtvSysDt(h_sys_dt,l_debug_info_ptr))
+	{
+		fprintf(fl_userlog,"EM_ConvSec: Error in getting system chr_date\n");
+		APL_GOBACK_FAIL
+	}
+
+	EXEC SQL SELECT FIELD_VAL INTO :chr_h_ccy_code_new FROM PRO_GSSPLVAL
+	WHERE MAIN_FUN = 'EMUCONV'
+	AND SUB_PROCESS = 'EMU_CCY' AND NATION = 'GR';
+	
+	IS_ANY_ORA_ERROR
+
+	EXEC SQL OPEN cur_csecurity;
+	fprintf(fl_repfile,"\n----------------------------------------------------------------------------------------------------\n");
+	fprintf(fl_repfile," Report for EMU conversion of Security                Page : %ld",int_l_pg_num);
+	fprintf(fl_repfile,"\n----------------------------------------------------------------------------------------------------\n\n");
+	fprintf(fl_repfile,"\n----------------------------------------------------------------------------------------------------");
+	fprintf(fl_repfile,"\n            CCY  SECODE          TOT_PAIDUP_CAP              NOMVAL              MIN_DEN_ACC TIPOSEC\n");
+	fprintf(fl_repfile,"\n----------------------------------------------------------------------------------------------------\n");
+	
+	for(;;)
+	{
+		EXEC SQL FETCH cur_csecurity
+		INTO	:chr_h_ccy_code :i_ccy_code,
+			:h_securitycd :i_securitycd,
+			:h_total_pdcapital :i_total_pdcapital,
+			:h_nominal_val :i_nominal_val,
+			:dbl_h_min_den_acc :i_min_den_acc,
+			:h_typeofsec :i_typeofsec;
+		IS_ANY_ORA_ERROR
+
+		if (APL_ZERO_RESULT_SET)
+		{
+			EXEC SQL CLOSE cur_csecurity;
+			if (int_l_fetch_cnt == 0)
+			{
+				fprintf(fl_userlog,"EM_ConvSec: No records to be processed\n");
+				APL_GOBACK_SUCCESS
+			}
+			else
+			{
+				if (!strcmp(chr_l_genreponly,"N"))
+				{
+
+				
+
+					EXEC SQL UPDATE SYS_BATCHPROC
+					SET PROCESSING_STATUS = :h_securitycd
+					WHERE PROCESS_NAME  = :chr_h_batch_in_proc_progname
+					AND STARTDATE   = :chr_h_batch_in_proc_startdate
+					AND STATUS      = 'started';
+
+					IS_ANY_ORA_ERROR
+
+					EXEC SQL COMMIT;
+					IS_ANY_ORA_ERROR
+					fprintf(fl_userlog,"EM_ConvSec: All the records were converted to Euro Successfully\n");
+					EXEC SQL SELECT ROWID
+					INTO :chr_h_batch_in_proc_rowid
+					FROM SYS_BATCHPROC
+					WHERE PROCESS_NAME = :chr_h_batch_in_proc_progname
+					AND STARTDATE   = :chr_h_batch_in_proc_startdate
+					AND STATUS              = 'started'
+					FOR UPDATE OF PROCESSING_STATUS ,STATUS;
+					
+					if ((sqlca.sqlcode <0) || (APL_ZERO_RESULT_SET))
+					{
+						fprintf(fl_userlog,"Batch_in_proc table cannot be locked.\n");
+						CO_InsertErr( l_debug_info_ptr,
+								DB_ERR_NO,
+								ltoa(sqlca.sqlcode),
+								APL_NULL_STRING,
+								APL_NULL_STRING,
+								__LINE__,
+								__FILE__);
+	
+						APL_GOBACK_FAIL
+					}
+
+
+					APL_GOBACK_SUCCESS
+				}
+				else
+				{
+					fprintf(fl_userlog,"EM_ConvSec: Reports generated successfully without committing the changes to the database\n");
+					APL_GOBACK_SUCCESS
+				}
+			}
+		}
+		
+		if (!strcmp(h_typeofsec,APL_INSTRU_FMT))
+		{
+		
+			if (APL_FAILURE == IV_Proc_ConvToFxFn(	chr_h_ccy_code,
+							chr_h_ccy_code_new,
+							g_mt_commonsys_params_struct_h.dom_ccy,
+							h_sys_dt,
+							&h_fx_rt,
+							&int_l_retstat,
+							l_debug_info_ptr))
+			{
+				fprintf(fl_userlog,"EM_ConvSec: Exchg rate for %s to %s, Not int_found.\n",chr_h_ccy_code,chr_h_ccy_code_new);
+				APL_GOBACK_FAIL
+			}
+
+			h_nominal_val_new = h_nominal_val;
+
+			h_total_pdcapital_new = (h_fx_rt * h_total_pdcapital);
+
+			
+ 
+			
+			CO_Round(h_total_pdcapital_new,2,&h_total_pdcapital_new);
+			dbl_h_min_den_acc_new = MIN_DEN_VAL;
+		}
+		else
+		{
+			h_nominal_val_new = h_nominal_val;
+			h_total_pdcapital_new = h_total_pdcapital;
+			dbl_h_min_den_acc_new = dbl_h_min_den_acc;
+		}
+		
+		
+ 
+	
+		
+		fprintf(fl_repfile,"Before Conv:%-3s %8s %22.2lf %18.2lf %25.2lf %3s\n",chr_h_ccy_code,h_securitycd,h_total_pdcapital,h_nominal_val,dbl_h_min_den_acc,h_typeofsec);
+		fprintf(fl_repfile," After Conv:%-3s %8s %22.2lf %18.2lf %25.2lf %3s\n\n",chr_h_ccy_code_new,h_securitycd,h_total_pdcapital_new,h_nominal_val_new,dbl_h_min_den_acc_new,h_typeofsec);
+
+
+		if (!strcmp(chr_l_genreponly,"N"))
+		{
+		
+
+			EXEC SQL UPDATE MT_INSTRUMENT
+			SET CURRENCY_CD = :chr_h_ccy_code_new,
+			    TOTAL_PDCAPITA = :h_total_pdcapital_new,
+			    NOMINAL_VALUE	= :h_nominal_val_new,
+			    MIN_FMT_DL_QTY = :dbl_h_min_den_acc_new
+			WHERE INSTR_CODE = :h_securitycd
+			AND INSTR_TYPe = :h_typeofsec;
+
+			IS_ANY_ORA_ERROR
+
+		
+
+			EXEC SQL INSERT INTO PRO_EURO_TEMP (INSTR_CODE,PROC_AREA,INFO)
+			VALUES (:h_securitycd,'CNSEC',:h_typeofsec);
+
+			IS_ANY_ORA_ERROR
+
+			if (int_l_batch_cnt == COMMIT_COUNT_B)
+			{
+				int_l_batch_cnt = 0;
+
+			
+
+				EXEC SQL UPDATE SYS_BATCHPROC
+				SET PROCESSING_STATUS = :h_securitycd	
+				WHERE PROCESS_NAME	= :chr_h_batch_in_proc_progname
+				AND STARTDATE	= :chr_h_batch_in_proc_startdate
+				AND STATUS	= 'started';
+				
+				IS_ANY_ORA_ERROR
+
+				EXEC SQL COMMIT;
+
+				IS_ANY_ORA_ERROR
+
+				EXEC SQL SELECT ROWID
+				INTO :chr_h_batch_in_proc_rowid
+				FROM SYS_BATCHPROC
+				WHERE PROCESS_NAME = :chr_h_batch_in_proc_progname
+				AND STARTDATE   = :chr_h_batch_in_proc_startdate
+				AND STATUS              = 'started'
+				FOR UPDATE OF PROCESSING_STATUS ,STATUS;
+
+				if ((sqlca.sqlcode <0) || (APL_ZERO_RESULT_SET))
+				{
+					fprintf(fl_userlog,"Batch_in_proc table cannot be locked.\n");
+					CO_InsertErr( l_debug_info_ptr,
+							DB_ERR_NO,
+							ltoa(sqlca.sqlcode),
+							APL_NULL_STRING,
+							APL_NULL_STRING,
+							__LINE__,
+							__FILE__);
+							APL_GOBACK_FAIL
+				}
+
+			}
+
+			int_l_batch_cnt++;
+		}
+		if(( int_l_fetch_cnt >= PAGE_SIZE) && (((int_l_fetch_cnt-1)%PG_SIZE)==0))
+		{
+			fprintf(fl_repfile,"\n\n.......End of int_page %ld.........\n",int_l_pg_num);
+			int_l_pg_num++;
+			fprintf(fl_repfile,"\f");
+			fprintf(fl_repfile,"\n----------------------------------------------------------------------------------------------------\n");
+			fprintf(fl_repfile," Report for EMU conversion of Security               Page : %ld",int_l_pg_num);
+			fprintf(fl_repfile,"\n----------------------------------------------------------------------------------------------------\n\n");
+			fprintf(fl_repfile,"\n-----------------------------------------------------------------------------------------------------\n");
+			fprintf(fl_repfile,"\n            CCY  SECODE          TOT_PAIDUP_CAP              NOMVAL              MIN_DEN_ACC TIPOSEC\n");
+			fprintf(fl_repfile,"\n------------------------------------------------------------------------------------------------------");
+		}
+
+		int_l_fetch_cnt++;
+
+	}	
+
+	RETURN_SUCCESS:
+	EXEC SQL UPDATE SYS_BATCHPROC
+	SET STATUS = 'completed',
+	    STAT_DET = :int_l_fetch_cnt
+	WHERE PROCESS_NAME = :chr_h_batch_in_proc_progname
+	AND STARTDATE  = :chr_h_batch_in_proc_startdate
+	AND STATUS     = 'started';
+
+	IS_ANY_ORA_ERROR
+	EXEC SQL COMMIT;
+	IS_ANY_ORA_ERROR
+	return APL_SUCCESS;
+
+	RETURN_FAILURE:
+	EXEC SQL ROLLBACK;
+	EXEC SQL CLOSE cur_csecurity;	
+	return APL_FAILURE;
+}
+
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+
+   
+
+
+
+main(int argc,char **argv)
+{
+	int EM_ConvSec(char **,FILE *,FILE *,char *,INTL_ENV_DATA_STRUCT_H *,DEBUG_INFO_STRUCT_H **);
+	struct sqlca sqlca;
+	DEBUG_INFO_STRUCT_H *l_error_node = (DEBUG_INFO_STRUCT_H *)NULL;
+	DEBUG_INFO_STRUCT_H		**l_debug_info_ptr		= &l_error_node;
+	INTL_ENV_DATA_STRUCT_H	*p_intlenv_data_struct_h	= (INTL_ENV_DATA_STRUCT_H *) NULL;
+	int			int_l_retval		= 0;
+	/* Added by kotubabu for Linux Migration -Start*/
+    #ifdef OS_LINUX
+	FILE			*l_finifile		= (FILE *) NULL;
+	FILE			*fl_userlog		= (FILE *) NULL;
+	FILE			*fl_repfile		= (FILE *) NULL;
+    #else
+    FILE *l_finifile = APL_OUT_FILE;
+    FILE *fl_userlog = APL_OUT_FILE;
+	FILE *fl_repfile = APL_OUT_FILE;
+    #endif
+    #ifdef OS_LINUX
+     l_finifile = APL_OUT_FILE;
+	 fl_userlog = APL_OUT_FILE;
+	 fl_repfile = APL_OUT_FILE;
+    #endif
+   /* Added by kotubabu for Linux Migration-End*/
+
+	char			chr_l_inifile[PATH_LENGTH]	= APL_NULL_STRING;
+	char			usr[APL_USERID_LEN]	= APL_NULL_STRING;
+	char			chr_custody_id_b[APL_USERID_LEN]	= APL_NULL_STRING;
+	char			chr_pwd[APL_PASSWD_LEN]	= APL_NULL_STRING;
+	char			chr_l_genreponly[2];
+	short			int_l_condexists_A		= 0;
+
+	EXEC SQL BEGIN DECLARE SECTION;
+	EXEC SQL VAR usr IS STRING;
+	EXEC SQL VAR chr_pwd IS STRING;
+	EXEC SQL END DECLARE SECTION;
+	sqlca.sqlcode = 0;
+
+
+	p_intlenv_data_struct_h	= (INTL_ENV_DATA_STRUCT_H*)calloc(1,sizeof(INTL_ENV_DATA_STRUCT_H));
+	APL_MALLOC_FAIL(p_intlenv_data_struct_h);
+
+
+
+	strcpy(chr_l_inifile,getenv("INTL_ROOT_PATH"));
+	strcat(chr_l_inifile,"intl_sun.cfg");
+	
+	if ((l_finifile = fopen(chr_l_inifile,"r")) == NULL)
+	{
+		exit(-1);
+	}
+
+
+
+
+
+	APL_FETCH_DB_LOGIN_DETAILS(l_finifile, chr_custody_id_b, usr, chr_pwd, APL_OUT_FILE,
+								l_debug_info_ptr)
+
+	EXEC SQL CONNECT :usr IDENTIFIED BY :chr_pwd;
+	IS_ANY_ORA_ERROR
+
+
+
+
+
+
+	if (APL_FAILURE == CO_Rtv_RptFileName(	"5A",
+						APL_LOGFILE_DESC,
+						100,
+						argv[5],
+						argv,
+						&fl_userlog,
+						l_debug_info_ptr))
+	{
+		exit(-1);
+	}
+
+
+	if (APL_FAILURE == CO_Rtv_RptFileName(     "CS",
+						"SEC_REPORT_FILE",
+						100,
+						argv[5],
+						argv,
+						&fl_repfile,
+						l_debug_info_ptr))
+	{
+		exit(-1);
+	}
+
+	EXEC SQL COMMIT WORK;
+	IS_ANY_ORA_ERROR
+
+
+	strcpy(chr_l_genreponly,argv[9]);
+	strcpy(p_intlenv_data_struct_h->usr, argv[3]);
+	strcpy(p_intlenv_data_struct_h->h_mode,argv[4]);
+
+
+	if (APL_FAILURE == CO_RtvSysParams(l_debug_info_ptr))
+	{
+		fprintf(fl_userlog,"Failed To Get System Parameters\n");
+		APL_GOBACK_FAIL
+	}
+	
+
+	if (APL_FAILURE == CO_Chk_CntryEnabled(   "EMUCONV",
+						"EMU_CONV_SEC",
+						&int_l_condexists_A,
+						l_debug_info_ptr))
+	{
+		fprintf(fl_userlog,"Failed while checking the country conditions\n");
+		APL_GOBACK_FAIL
+	}
+	
+	if(int_l_condexists_A <= 0)
+	{
+		fprintf(fl_userlog,"No entry for EMU_CONV_SEC in cntry_sys_params\n");
+		APL_GOBACK_SUCCESS
+	}
+		
+		
+
+	fprintf(fl_userlog,"Calling the Securities conversion processtion\n");
+		
+
+
+	if (APL_FAILURE == EM_ConvSec(	argv,
+					fl_userlog,
+					fl_repfile,
+					chr_l_genreponly,
+					p_intlenv_data_struct_h,
+					l_debug_info_ptr))
+	{
+		fprintf(fl_userlog,"The Securities conversion returned failure \n");
+
+		CO_FreeErrLst(l_debug_info_ptr);
+		EXEC SQL ROLLBACK WORK RELEASE;
+		IS_ANY_ORA_ERROR
+		APL_GOBACK_FAIL
+	}
+	else
+	{
+		EXEC SQL COMMIT WORK RELEASE;
+		IS_ANY_ORA_ERROR
+		fprintf(fl_userlog,"EM_ConvSec: The Securities conversion returned success \n");
+		APL_GOBACK_SUCCESS
+	}
+
+	APL_GOBACK_SUCCESS
+
+
+	RETURN_SUCCESS:
+	CO_Proc_RptClose(fl_userlog,l_debug_info_ptr);
+	CO_Proc_RptClose(fl_repfile,l_debug_info_ptr);
+	exit(0);
+
+	RETURN_FAILURE:
+	CO_Proc_RptClose(fl_userlog,l_debug_info_ptr);
+	CO_Proc_RptClose(fl_repfile,l_debug_info_ptr);
+	exit(-1);
+
+}

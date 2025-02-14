@@ -1,0 +1,2288 @@
+#include "stdio_64.h"
+#include <string.h>
+#include <stdlib.h>
+
+#include "IV_Control_A.h"
+#include "IV_Pymt.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+
+int IV_CLTSETUP_update(char *l_str_client,char *l_str_paydate,double l_dbl_authpaidamt,
+						char *l_str_bccy,int *int_p_retstat, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+double l_dbl_totauthpaid =0.0;
+
+
+       EXEC SQL UPDATE IV_CLIENTSETUP SET 
+			TOTAL_OSAMOUNT = TOTAL_OSAMOUNT-:l_dbl_authpaidamt,
+			LAST_PYMT_DATE = :l_str_paydate,
+			LAST_PYMT_CCY =:l_str_bccy,
+			LAST_PYMT_AMT =:l_dbl_authpaidamt
+			WHERE CLIENT  = :l_str_client;
+	
+
+		if(sqlca.sqlcode!=0)
+		{
+			printf("\n sqlca.sqlcode = [%d]",sqlca.sqlcode);
+			APL_GOBACK_FAIL
+		}
+			else
+			APL_GOBACK_SUCCESS		
+		
+
+	RETURN_SUCCESS:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of IV_CLTSETUP_update().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_SUCCESS;
+
+	RETURN_FAILURE:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of IV_CLTSETUP_update().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_FAILURE;
+
+}
+
+
+
+//to calculate the billing amount for all services  of the bill_date--> billing_date
+int IV_Calc_BillAmt(char * ch_dl_client,char * billing_date,double *l_dbl_conf_amt, double  				*l_dbl_conf_amt_1,double *l_dbl_bill_amt,int *int_p_retstat,
+				DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+int l_int_count = 0;
+char l_chr_cons_ind = 'N';
+double l_confamt =0.0;
+double l_confamt_1 = 0.0;
+double l_billamt =0.0;
+
+
+EXEC SQL SELECT NVL(COUNT(*),0) INTO :l_int_count
+ FROM IV_SERVICE_CHRG  
+ WHERE CLIENT = :ch_dl_client  AND 
+ CONS_FLAG = 'C' AND
+ TO_CHAR(DATEOF_BILLING,'DD/MM/YYYY')= substr(:billing_date,0,10);
+
+
+
+ if(sqlca.sqlcode==0)
+ { // AIX - Warnings
+	 if(l_int_count)
+                 l_chr_cons_ind =     'C';
+	 else                 
+                 l_chr_cons_ind =      'I';           
+ } 
+
+
+	 EXEC SQL SELECT NVL(SUM(SERVICE_AMT),0) INTO :l_confamt FROM IV_CHEQUE_DET WHERE 
+	 CLIENT = :ch_dl_client AND TO_CHAR(BILL_DATE,'DD/MM/YYYY') = SUBSTR(:billing_date,0,10);
+
+
+
+*l_dbl_conf_amt = l_confamt;
+
+
+EXEC SQL SELECT ROUND(SUM(COMM_AMT)+SUM(NIL_FEES_ADJ)+SUM(MINIMUMFEE_ADJ)+SUM(MAXIMUM_FEE_ADJ),2) 
+	 INTO  :l_billamt
+ FROM IV_SERVICE_CHRG  
+ WHERE CLIENT = :ch_dl_client  AND 
+ CONS_FLAG = :l_chr_cons_ind AND 	
+ TO_CHAR(DATEOF_BILLING,'DD/MM/YYYY')= substr(:billing_date,0,10);
+
+if(sqlca.sqlcode !=0 )
+	{
+	Alert("\n FILE::IV_Pymnt_Mnt_A.pc :: failed in bill_calculation sqlca.sqlcode = [%d]",sqlca.sqlcode);
+	APL_GOBACK_FAIL
+	}
+
+Alert("\n the actual bill amount is   [%lf]",l_billamt);
+
+*l_dbl_bill_amt = l_billamt;
+
+
+EXEC SQL SELECT NVL(SUM(CONF_AMT),0) INTO :l_confamt_1 FROM IV_CHEQUE 
+		      WHERE CLIENT = :ch_dl_client AND 
+			  TO_CHAR(BILL_DATE,'DD/MM/YYYY') = SUBSTR(:billing_date,0,10);
+
+Alert("\n l_confamt_1 = [%lf]",l_confamt_1);
+
+*l_dbl_conf_amt_1 = l_confamt_1;
+
+if ( sqlca.sqlcode < 0 )
+	{
+		char chr_l_buffer[KEY_LENGTH];
+
+		memset(chr_l_buffer, APL_NULL_CHAR, KEY_LENGTH);
+
+		ltoa_r(sqlca.sqlcode, chr_l_buffer, KEY_LENGTH - 1);
+
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+		CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, chr_l_buffer, 
+			       APL_NULL_STRING, APL_NULL_STRING, 
+			       __LINE__, __FILE__);
+
+		APL_GOBACK_FAIL
+	}
+	else if ( sqlca.sqlcode == 1403 )
+	{
+		*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+
+		APL_GOBACK_FAIL
+	}
+
+   *int_p_retstat = IV_SUCCESS;
+   APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of IV_Calc_BillAmt().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_SUCCESS;
+
+	RETURN_FAILURE:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of IV_Calc_BillAmt().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_FAILURE;
+}
+
+
+
+//calculate total os amount for iv_cheque i.e. client wise and not service wise
+//This function need not be used since the total os amount cant be received 
+//through other way
+int IV_Calc_TOTOSAmt(char * ch_dl_client,double *l_dbl_tot_os_amt,char *l_chr_bill_date,
+					int *int_p_retstat, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+int l_int_count = 0;
+ 
+
+printf("__shailesh 1 ch_dl_client = [%s]",ch_dl_client);
+
+
+//to get total os amt 
+EXEC SQL SELECT A.TOT_OS_AMT,A.BILL_DATE INTO :l_dbl_tot_os_amt,:l_chr_bill_date FROM IV_CHEQUE A,IV_CHEQUE B    
+WHERE A.CLIENT = B.CLIENT AND
+      A.CLIENT = :ch_dl_client AND 
+      A.DATEOF_PAYMENT = (SELECT MAX(DATEOF_PAYMENT) FROM IV_CHEQUE WHERE CLIENT = :ch_dl_client) AND
+      B.INDEN_NUM = (SELECT MAX(INDEN_NUM) FROM IV_CHEQUE WHERE DATEOF_PAYMENT = A.DATEOF_PAYMENT)
+      AND ROWNUM < 2;
+
+ printf("\n IVT sqlca.sqlcode = [%d]",sqlca.sqlcode);
+ 	 if ( sqlca.sqlcode == 1403 || sqlca.sqlcode == 1405)
+	{
+		l_dbl_tot_os_amt = 0;
+		//*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+
+		//APL_GOBACK_FAIL
+	}
+    else if ( sqlca.sqlcode < 0 )
+	{
+		char chr_l_buffer[KEY_LENGTH];
+
+		memset(chr_l_buffer, APL_NULL_CHAR, KEY_LENGTH);
+
+		ltoa_r(sqlca.sqlcode, chr_l_buffer, KEY_LENGTH - 1);
+
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+		CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, chr_l_buffer, 
+			       APL_NULL_STRING, APL_NULL_STRING, 
+			       __LINE__, __FILE__);
+
+		APL_GOBACK_FAIL
+	}
+
+   *int_p_retstat = IV_SUCCESS;
+   APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of IV_Calc_TOTOSAmt().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_SUCCESS;
+
+	RETURN_FAILURE:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of IV_Calc_TOTOSAmt().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_FAILURE;
+}
+
+int IV_CalcServwise_TotOS(char *l_chr_client,long l_int_servcode,double *l_dbt_servtotos_amt,int *int_p_retstat, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+int l_int_count = 0;
+ 
+
+printf("__shailesh 1f l_chr_client = [%s]",l_chr_client);
+
+
+EXEC SQL SELECT TOT_OS_AMT INTO :l_dbt_servtotos_amt FROM IV_CHEQUE_DET WHERE 
+	CLIENT = :l_chr_client  AND SERVICE_CD = :l_int_servcode AND 
+	INDEN_NUM = (SELECT MAX(INDEN_NUM) FROM IV_CHEQUE_DET WHERE CLIENT = :l_chr_client);
+
+ printf("\n IVOS sqlca.sqlcode = [%d]",sqlca.sqlcode);
+ 	 if ( sqlca.sqlcode == 1403 )
+	{
+		l_dbt_servtotos_amt = 0;
+		//*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+
+		//APL_GOBACK_FAIL
+	}
+    else if ( sqlca.sqlcode < 0 )
+	{
+		char chr_l_buffer[KEY_LENGTH];
+
+		memset(chr_l_buffer, APL_NULL_CHAR, KEY_LENGTH);
+
+		ltoa_r(sqlca.sqlcode, chr_l_buffer, KEY_LENGTH - 1);
+
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+		CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, chr_l_buffer, 
+			       APL_NULL_STRING, APL_NULL_STRING, 
+			       __LINE__, __FILE__);
+
+		APL_GOBACK_FAIL
+	}
+
+   *int_p_retstat = IV_SUCCESS;
+   APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+		
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of IV_CalcServwise_TotOS().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_SUCCESS;
+
+	RETURN_FAILURE:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of IV_CalcServwise_TotOS().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_FAILURE;
+}
+
+
+int IV_Calc_OSAmt(char *l_chr_client,char *l_chr_billdate,int *int_p_retstat, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	
+    //*l_dbl_osamt =0;
+
+	printf("\n  Calc  1 ");
+    *int_p_retstat = IV_SUCCESS;
+    APL_GOBACK_SUCCESS
+	printf("\n  Calc  2 ");
+	RETURN_SUCCESS:
+		
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of IV_Calc_OSAmt().\n",
+                     (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_SUCCESS;
+/* AIX - Warnings
+	RETURN_FAILURE:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of IV_Calc_OSAmt().\n",
+                     (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_FAILURE;
+*/
+}
+
+/*
+shailesh 13-12-2007 
+int  IV_Calc_TotPaymentAmt(char *l_chr_client,char *l_chr_billdate,double *l_dbl_pymt_amt,          							                         int *int_l_retstat, 																			DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+l_dbl_amt =0.0;
+	EXEC SQL SELECT SUM(SERVICE_AMT)  INTO :l_dbl_amt 
+	FROM IV_CHEQUE_DET WHERE CLIENT =:l_chr_client
+	AND TO_CHAR(BILL_DATE,'DD/MM/YYYY') =SUBSTR(:l_chr_billdate,0,10);
+
+	if(sqlca.sqlcode ! =0)
+			printf("IVTO sqlca.sqlcode = [%d]",sqlca.sqlcode);
+}*/
+
+int IV_PymtExist(char *l_chr_client,char *l_chr_bill_date,int *l_int_payexists,int *int_p_retstat, 					 DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+	{
+		int l_int_tmpcnt =0;
+		  EXEC SQL SELECT COUNT(*) INTO :l_int_tmpcnt  FROM IV_CHEQUE 
+ 			       WHERE CLIENT = :l_chr_client AND 
+				    TO_CHAR(BILL_DATE,'DD/MM/YYYY') =SUBSTR(:l_chr_bill_date,0,10);
+				   	
+
+
+			if(sqlca.sqlcode == 0)
+						*l_int_payexists = l_int_tmpcnt;
+			else
+						*l_int_payexists = 0;
+
+return APL_SUCCESS;
+
+	}
+
+
+int IV_GetIndenNum(char *client,
+				   char *bill_date,		
+				   char *pymnt_dt,
+				   char h_tot_srv, 
+				   long service_cd,
+				   int *l_int_inden_num,	
+                   int *int_p_retstat,
+				   DEBUG_INFO_STRUCT_H **l_debug_info_ptr)	
+ {
+	int l_int_cnt = 0;
+	EXEC SQL SELECT NVL(MAX(INDEN_NUM),0) INTO :l_int_cnt FROM 
+		IV_CHEQUE WHERE  CLIENT = :client AND
+		TO_CHAR(BILL_DATE,'DD/MM/YYYY') = SUBSTR(:bill_date,0,10);
+		
+	l_int_cnt++;
+	*l_int_inden_num = l_int_cnt;
+	
+	if(sqlca.sqlcode != 0)
+		APL_GOBACK_FAIL		
+
+	*int_p_retstat = IV_SUCCESS;
+
+   	APL_GOBACK_SUCCESS
+		
+	RETURN_SUCCESS:
+		
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of IV_GetIndenNum().\n",(DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_SUCCESS;
+
+	RETURN_FAILURE:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of IV_GetIndenNum().\n",(DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_FAILURE;
+
+ }
+
+
+int IV_Calc_S_BillAmt(char * ch_dl_client,char * billing_date,long l_service_cd,double *l_dbl_bill_amt,int *int_p_retstat, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+int l_int_count = 0;
+char l_chr_cons_ind = 'N';
+double l_confamt =0.0;
+double l_confamt_1 = 0.0;
+double l_billamt =0.0;
+
+Alert("\n 150208 ch_dl_client = [%s]",ch_dl_client);
+Alert("\n 150208 billing_date = [%s]",billing_date);
+EXEC SQL SELECT NVL(COUNT(*),0) INTO :l_int_count
+ FROM IV_SERVICE_CHRG  
+ WHERE CLIENT = :ch_dl_client  AND 
+ CONS_FLAG = 'C' AND
+ TO_CHAR(DATEOF_BILLING,'DD/MM/YYYY')= substr(:billing_date,0,10);
+
+
+ if(sqlca.sqlcode==0)
+ { // AIX - Warnings
+	 if(l_int_count)
+                 l_chr_cons_ind =     'C';
+	 else                 
+                 l_chr_cons_ind =      'I';           
+ }
+ Alert("\n 150208 l_chr_cons_ind = [%c]",l_chr_cons_ind);
+ Alert("\n 150208 l_service_cd = [%ld]",l_service_cd);
+
+EXEC SQL SELECT ROUND(SUM(COMM_AMT)+SUM(NIL_FEES_ADJ)+SUM(MINIMUMFEE_ADJ)+SUM(MAXIMUM_FEE_ADJ),2) 
+ INTO  :l_billamt
+ FROM IV_SERVICE_CHRG  
+ WHERE CLIENT = :ch_dl_client  AND 
+ CONS_FLAG = :l_chr_cons_ind AND 	
+ SERVICE_CD = :l_service_cd AND
+ TO_CHAR(DATEOF_BILLING,'DD/MM/YYYY')= substr(:billing_date,0,10);
+
+ Alert("\n 150208 l_billamt = [%lf]",l_billamt);
+
+ printf("\n SU sqlca.sqlcode = [%d]",sqlca.sqlcode);
+
+
+if(sqlca.sqlcode == 1403)
+	{
+	     Alert("\n This service was not used in selected billing period");
+		APL_GOBACK_FAIL
+	}
+else
+if(sqlca.sqlcode!=0)
+	{
+		CO_InsertErr(l_debug_info_ptr, ERR_BILL_AMNT_ZERO, 
+				       APL_NULL_STRING, APL_NULL_STRING, 
+				       APL_NULL_STRING, __LINE__, __FILE__);
+					   
+		printf("\n Bill amount for this client or cons_flag or service code not found \n");
+		APL_GOBACK_FAIL
+	}
+	else
+		*l_dbl_bill_amt = l_billamt;	
+
+ printf("\n SU1 sqlca.sqlcode = [%d]",sqlca.sqlcode);
+
+
+
+   *int_p_retstat = IV_SUCCESS;
+   APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of IV_Calc_S_BillAmt().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_SUCCESS;
+
+	RETURN_FAILURE:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of IV_Calc_S_BillAmt().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_FAILURE;
+}
+
+
+
+
+
+
+int  IV_Calc_S_PaidAmt(char *l_chr_client, 
+						char *bill_date,
+						long service_cd,
+						double *l_s_dbl_paid_amt,
+						int *int_p_retstat, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+double l_dbl_s_amtpaid = 0;
+EXEC SQL SELECT NVL(SUM(CONF_AMT),0) INTO :l_dbl_s_amtpaid
+	FROM IV_CHEQUE WHERE CLIENT = :l_chr_client
+	AND SERVICE_CD = :service_cd
+	AND STATUS NOT IN ('D')
+	AND TO_CHAR(BILL_DATE,'DD/MM/YYYY') = SUBSTR(:bill_date,0,10);
+
+if(sqlca.sqlcode == 0)
+		*l_s_dbl_paid_amt = l_dbl_s_amtpaid;
+else
+				
+{
+	APL_GOBACK_FAIL
+}
+
+   *int_p_retstat = IV_SUCCESS;
+   APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of IV_Calc_S_PaidAmt().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_SUCCESS;
+
+	RETURN_FAILURE:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of IV_Calc_S_PaidAmt().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_FAILURE;
+}
+
+
+
+
+
+int IV_Calc_S_AuthPaidAmt(char *l_chr_client, 
+						char *bill_date,
+						long service_cd,
+						double *l_s_dbl_paid_amt,
+						int *int_p_retstat, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+double l_dbl_s_amtpaid = 0;
+EXEC SQL SELECT NVL(SUM(CONF_AMT),0) INTO :l_dbl_s_amtpaid 
+	FROM IV_CHEQUE WHERE CLIENT = :l_chr_client 
+	AND SERVICE_CD = :service_cd 
+	AND STATUS  IN ('A') 
+	AND TO_CHAR(BILL_DATE,'DD/MM/YYYY') = SUBSTR(:bill_date,0,10);
+
+if(sqlca.sqlcode == 0)
+		*l_s_dbl_paid_amt = l_dbl_s_amtpaid;
+else
+				
+{
+	APL_GOBACK_FAIL
+}
+
+   *int_p_retstat = IV_SUCCESS;
+   APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of IV_Calc_S_AuthPaidAmt().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_SUCCESS;
+
+	RETURN_FAILURE:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of IV_Calc_S_AuthPaidAmt().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_FAILURE;
+}
+
+
+int IV_IVPymt_T_Exist(char *l_chr_client, 
+						char *bill_date,
+						int *l_int_pymt_exist,
+						int *int_p_retstat, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+	{
+	
+     int  l_int_exist = 0;
+    
+	
+	/*Changes done for CS0096130 on 30-Mar-2022  Status Check removed Start*/
+	/* EXEC SQL SELECT NVL(COUNT(*),0) INTO  :l_int_exist
+	FROM  IV_CHEQUE WHERE
+	CLIENT = :l_chr_client
+	AND TO_CHAR(BILL_DATE,'DD/MM/YYYY') = SUBSTR(:bill_date,0,10)
+	AND SERVICE_CD = 0 AND	STATUS NOT IN ('D');
+	*/
+	
+	EXEC SQL SELECT NVL(COUNT(*),0) INTO  :l_int_exist
+	FROM  IV_CHEQUE WHERE
+	CLIENT = :l_chr_client
+	AND TO_CHAR(BILL_DATE,'DD/MM/YYYY') = SUBSTR(:bill_date,0,10)
+	AND SERVICE_CD = 0 ;
+	
+	/*Changes done for CS0096130 on 30-Mar-2022  Status Check removed End */
+	printf("\n IVC1 sqlca.sqlcode = [%d]",sqlca.sqlcode);
+	printf("\n IVCl_int_exist = [%d]",l_int_exist);
+	if(l_int_exist)
+	*l_int_pymt_exist = 1;
+	else
+	*l_int_pymt_exist = 0;
+
+    *int_p_retstat = IV_SUCCESS;
+   APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of IV_IVPymt_T_Exist().\n", 
+                     (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_SUCCESS;
+/* AIX - Warnings	
+	RETURN_FAILURE:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of IV_IVPymt_T_Exist().\n", 
+                     (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_FAILURE;
+*/
+	}
+
+
+
+	int IV_IVPymt_S_Exist(char *l_chr_client, 
+						char *bill_date,
+						int *l_int_pymt_exist,
+						int *int_p_retstat, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+	{
+	
+	int  l_int_exist = 0;
+	
+	/*Changes done for CS0096130 on 30-Mar-2022  Status Check removed Start */
+	
+    /* EXEC SQL SELECT NVL(COUNT(*),0) INTO  :l_int_exist
+	FROM  IV_CHEQUE WHERE
+	CLIENT = :l_chr_client
+	AND TO_CHAR(BILL_DATE,'DD/MM/YYYY') = SUBSTR(:bill_date,0,10)
+	AND SERVICE_CD <> 0 AND	STATUS NOT IN ('D');
+	*/
+	
+	EXEC SQL SELECT NVL(COUNT(*),0) INTO  :l_int_exist
+	FROM  IV_CHEQUE WHERE
+	CLIENT = :l_chr_client
+	AND TO_CHAR(BILL_DATE,'DD/MM/YYYY') = SUBSTR(:bill_date,0,10)
+	AND SERVICE_CD <> 0 ;
+	
+	/*Changes done for CS0096130 on 30-Mar-2022  Status Check removed End */
+	
+	*l_int_pymt_exist = l_int_exist;
+   *int_p_retstat = IV_SUCCESS;
+   APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of IV_IVPymt_S_Exist().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_SUCCESS;
+/* AIX - Warnings	
+	RETURN_FAILURE:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of IV_IVPymt_S_Exist().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_FAILURE;
+*/
+	}
+
+
+
+
+//Function to insert into as well as update the IV_CHEQUE_A table
+int IV_Mod_IVCHEQUE_A(IV_CHEQUE_A_STRUCT l_iv_cheque_a_struct,
+							int *int_p_retstat, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+int l_int_cheque_a_exist =0 ;
+double l_dbl_authpmt = 0.0;
+double l_dbl_unauthpmt = 0.0;
+double l_dbl_bill_amt =0.0;
+
+printf("\n IVA l_iv_cheque_a_struct.bill_amt = [%lf]",l_iv_cheque_a_struct.bill_amt);
+
+I_IV_CHEQUE_A_STRUCT l_i_iv_cheque_a_struct;
+
+l_dbl_authpmt=0.0 ;
+l_iv_cheque_a_struct.auth_pymt=0.0;
+EXEC SQL SELECT NVL(SUM(CONF_AMT),0) INTO :l_dbl_authpmt
+	FROM IV_CHEQUE WHERE CLIENT = :l_iv_cheque_a_struct.client
+	AND TO_CHAR(BILL_DATE,'DD/MM/YYYY') = SUBSTR(:l_iv_cheque_a_struct.bill_date,0,10) 
+	AND STATUS IN ('A')
+	AND SERVICE_CD NOT IN (0);
+if(sqlca.sqlcode != 0)
+	{
+	Alert("\n  sqlca.sqlcode = [%d]",sqlca.sqlcode);
+	APL_GOBACK_FAIL
+	}
+	else
+	{
+		l_iv_cheque_a_struct.auth_pymt = l_dbl_authpmt;
+	}
+
+	
+l_dbl_unauthpmt =0.0 ;
+l_iv_cheque_a_struct.unauth_pymt=0.0;
+EXEC SQL SELECT NVL(SUM(CONF_AMT),0) INTO :l_dbl_unauthpmt
+	FROM IV_CHEQUE WHERE CLIENT =:l_iv_cheque_a_struct.client
+	AND TO_CHAR(BILL_DATE,'DD/MM/YYYY') = SUBSTR(:l_iv_cheque_a_struct.bill_date,0,10) 
+	AND STATUS IN ('U');
+
+	if(sqlca.sqlcode != 0)
+	{
+		Alert("\n  sqlca.sqlcode = [%d]",sqlca.sqlcode);
+		APL_GOBACK_FAIL
+	}
+	else
+	{
+		l_iv_cheque_a_struct.unauth_pymt = l_dbl_unauthpmt;
+	}
+	printf("\n IV_Mod_IVCHEQUE_A l_iv_cheque_a_struct.bill_amt= [%lf]",l_iv_cheque_a_struct.bill_amt);
+	printf("\n IV_Mod_IVCHEQUE_A l_dbl_unauthpmt= [%lf]",l_dbl_unauthpmt);
+	Alert("\n  l_dbl_authpmt= [%lf]",l_dbl_authpmt);
+
+	if((l_iv_cheque_a_struct.bill_amt+1) < (l_dbl_unauthpmt+l_dbl_authpmt))
+	{
+	Alert("\n The Bill Amt is less than sum of authorized and unauthorized amount");
+	CO_InsertErr(l_debug_info_ptr,ERR_PYMTAMTGREATER , 
+				       APL_NULL_STRING, APL_NULL_STRING,
+				       APL_NULL_STRING, __LINE__, __FILE__);
+
+	APL_GOBACK_FAIL
+	}
+
+	l_iv_cheque_a_struct.os_amt = l_iv_cheque_a_struct.bill_amt - l_dbl_authpmt;
+		
+		printf("\n IV_Mod_IVCHEQUE_A1 l_iv_cheque_a_struct.bill_amt= [%lf]",l_iv_cheque_a_struct.bill_amt);
+		printf("\n IV_Mod_IVCHEQUE_A1 l_iv_cheque_a_struct.client= [%s]", l_iv_cheque_a_struct.client);
+		printf("\n IV_Mod_IVCHEQUE_A1 l_iv_cheque_a_struct.bill_date = [%s]",l_iv_cheque_a_struct.bill_date);
+		printf("\n IV_Mod_IVCHEQUE_A1 l_iv_cheque_a_struct.os_amt= [%lf]",l_iv_cheque_a_struct.os_amt);
+		printf("\n IV_Mod_IVCHEQUE_A1 l_iv_cheque_a_struct.unauth_pymt= [%lf]",l_iv_cheque_a_struct.unauth_pymt);
+		printf("\n IV_Mod_IVCHEQUE_A1 l_iv_cheque_a_struct.auth_pymt= [%lf]",l_iv_cheque_a_struct.auth_pymt);
+
+		EXEC SQL UPDATE IV_CHEQUE_A 
+		SET
+		OS_AMT = :l_iv_cheque_a_struct.bill_amt - :l_dbl_authpmt,
+		UNAUTH_PAID_AMT = :l_dbl_unauthpmt,
+		AUTH_PAID_AMT = :l_dbl_authpmt 
+		WHERE CLIENT = :l_iv_cheque_a_struct.client
+		AND TO_CHAR(BILL_DATE,'DD/MM/YYYY') = SUBSTR(:l_iv_cheque_a_struct.bill_date,0,10);
+		printf("\nIVP sqlca.sqlcode = [%d]",sqlca.sqlcode);
+
+if(sqlca.sqlcode == 1403)
+	{
+
+                printf("\n IV_Mod_IVCHEQUE_A2 l_iv_cheque_a_struct.bill_amt= [%lf]",l_iv_cheque_a_struct.bill_amt);
+                printf("\n IV_Mod_IVCHEQUE_A2 l_iv_cheque_a_struct.client= [%s]", l_iv_cheque_a_struct.client);
+                printf("\n IV_Mod_IVCHEQUE_A2 l_iv_cheque_a_struct.bill_date = [%s]",l_iv_cheque_a_struct.bill_date);
+                printf("\n IV_Mod_IVCHEQUE_A2 l_iv_cheque_a_struct.os_amt= [%lf]",l_iv_cheque_a_struct.os_amt);
+                printf("\n IV_Mod_IVCHEQUE_A2 l_iv_cheque_a_struct.unauth_pymt= [%lf]",l_iv_cheque_a_struct.unauth_pymt);
+                printf("\n IV_Mod_IVCHEQUE_A2 l_iv_cheque_a_struct.auth_pymt= [%lf]",l_iv_cheque_a_struct.auth_pymt);
+
+
+
+		EXEC SQL INSERT INTO  IV_CHEQUE_A 
+		 //VALUES (:l_iv_cheque_a_struct INDICATOR :l_i_iv_cheque_a_struct);
+		VALUES (:l_iv_cheque_a_struct);
+		printf("\n IV_Mod_IVCHEQUE_A2 sqlca.sqlcode = [%d]-",sqlca.sqlcode);
+		if(sqlca.sqlcode !=0)
+			APL_GOBACK_FAIL
+
+	}
+else
+	if(sqlca.sqlcode != 0 )
+	{
+		Alert("\n sqlca.sqlcode = [%d]",sqlca.sqlcode);
+		APL_GOBACK_FAIL
+	}
+	
+	EXEC SQL COMMIT;
+   *int_p_retstat = IV_SUCCESS;
+   APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of IV_Mod_IVCHEQUE_A().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_SUCCESS;
+	
+	RETURN_FAILURE:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of IV_Mod_IVCHEQUE_A().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_FAILURE;
+
+	}
+
+
+
+int IV_Mod_IVPymt_S(IV_CHEQUE_STRUCT *p_iv_cheque_struct_a,
+		    const INTL_ENV_DATA_STRUCT_H *p_intl_envdatastruct_h, 
+		    int *int_p_retstat, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	printf("\n shailesh Entered1  IV_Mod_IVPymt_S");
+	double l_dbl_billamt =0.0;
+	double l_dbl_os_amt =0.0;
+	double l_dbl_pymt_amt=0.0;
+	int int_l_retstat =0 ;
+	double l_dbl_conf_amt =0.0;
+	double l_dbl_conf_amt_1 =0.0;
+
+	extern int CO_RtvSysDtTime(char *chr_l_sys_date_time, 
+					DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+
+	char chr_l_usermode, *chr_l_last = (char *)NULL;
+	char chr_l_sys_date_time[APL_DATE_LEN], chr_l_sys_date[APL_DATE_LEN];
+	char chr_l_actionflag;/*added by siva.ganapathi*/
+
+
+	printf("\n shailesh1 --IV_Mod_IVPymt_S  ---1");
+	EXEC SQL BEGIN DECLARE SECTION;
+
+		IV_CHEQUE_STRUCT l_iv_cheque_structa;
+		EXEC SQL VAR l_iv_cheque_structa.client IS STRING;
+		EXEC SQL VAR l_iv_cheque_structa.dateof_payment IS STRING;
+		EXEC SQL VAR l_iv_cheque_structa.bill_date IS STRING;
+		EXEC SQL VAR l_iv_cheque_structa.b_ccycd IS STRING;
+		EXEC SQL VAR l_iv_cheque_structa.maker IS STRING;
+		EXEC SQL VAR l_iv_cheque_structa.maker_dt IS STRING;
+		EXEC SQL VAR l_iv_cheque_structa.access_stamp IS STRING;
+		EXEC SQL VAR l_iv_cheque_structa.checker IS STRING;
+		EXEC SQL VAR l_iv_cheque_structa.checker_dt IS STRING;
+		EXEC SQL VAR l_iv_cheque_structa.pymt_clt IS STRING;
+		EXEC SQL VAR l_iv_cheque_structa.ae_dt IS STRING;
+		EXEC SQL VAR l_iv_cheque_structa.cheque_det IS STRING;
+		EXEC SQL VAR l_iv_cheque_structa.tds_amt IS STRING;	
+
+		
+		I_IV_CHEQUE_STRUCT l_i_iv_cheque_struct = {0, 0, 0, 0, 0, 0, 0, 0, 
+						                           0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+		
+		struct sqlca sqlca;
+
+	EXEC SQL END DECLARE SECTION;
+
+	#ifdef APL_THREADS
+		APL_SET_CONTEXT
+		EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	printf("\n shailesh3 --IV_Mod_IVPymt  ---2");
+
+	/*Added by siva.ganapathi for ISKB_2222 on 17-03-2009 -- Started*/
+	
+	if ( !strcmp(p_intl_envdatastruct_h->h_mode, APL_FUNC_INPUT) )
+	{
+		chr_l_usermode = 'I';
+	}
+	else if ( !strcmp(p_intl_envdatastruct_h->h_mode, APL_FUNC_MODIFY) )
+	{
+		chr_l_usermode = 'M';
+	}
+		else if ( !strcmp(p_intl_envdatastruct_h->h_mode, APL_FUNC_DELETE) )
+	{
+		chr_l_usermode = 'D';
+	}
+	else if ( !strcmp(p_intl_envdatastruct_h->h_mode, APL_FUNC_AUTHORISE) )
+	{
+		chr_l_usermode = 'A';
+	}	
+
+	printf("\n chr_l_usermode  is %c",chr_l_usermode);
+        //printf("\n action is %c ",p_intl_envdatastruct_h->h_process); Changes done for AIX Migration
+        printf("\n action is %s ",p_intl_envdatastruct_h->h_process);
+
+	if ( chr_l_usermode == 'M' || chr_l_usermode == 'I')
+	{
+		if ( !strcmp(p_intl_envdatastruct_h->h_process, ACTION_DEL_IND) )
+		{
+			chr_l_actionflag = 'R';
+		}
+	}
+	
+	if(chr_l_usermode == 'D')
+	{
+			chr_l_actionflag = 'R';
+	}
+
+	printf("\n chr_l_actionflag is = [%c]",chr_l_actionflag);
+        /*Added by siva.ganapathi for ISKB_2222 on 17-03-2009 -- Ended*/
+
+	memset(chr_l_sys_date_time, APL_NULL_CHAR, APL_DATE_LEN);
+
+	if (APL_FAILURE == CO_RtvSysDtTime(chr_l_sys_date_time, l_debug_info_ptr))
+	{
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+		APL_GOBACK_FAIL
+	}
+
+	
+	printf("\n shailesh4 --IV_Mod_IVPymt  ---3");
+
+	strcpy(chr_l_sys_date, chr_l_sys_date_time);
+	strcpy(chr_l_sys_date, strtok_r(chr_l_sys_date, " ", &chr_l_last));
+	strcat(chr_l_sys_date, APL_NULL_TIME);
+
+	memset(l_iv_cheque_structa.client, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+	memset(l_iv_cheque_structa.dateof_payment, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(l_iv_cheque_structa.bill_date, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(l_iv_cheque_structa.b_ccycd, APL_NULL_CHAR, APL_CCYCODE_LEN);
+	memset(l_iv_cheque_structa.maker, APL_NULL_CHAR, APL_USERID_LEN);
+	memset(l_iv_cheque_structa.maker_dt, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(l_iv_cheque_structa.access_stamp, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(l_iv_cheque_structa.checker, APL_NULL_CHAR, APL_USERID_LEN);
+	memset(l_iv_cheque_structa.checker_dt, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(l_iv_cheque_structa.pymt_clt, APL_NULL_CHAR, 24);
+	memset(l_iv_cheque_structa.ae_dt, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(l_iv_cheque_structa.cheque_det, APL_NULL_CHAR, 100);		
+	memset(l_iv_cheque_structa.tds_amt, APL_NULL_CHAR, 21);			
+
+
+
+
+
+	l_iv_cheque_structa.inden_num = 0;
+	l_iv_cheque_structa.pay_seq = 0;
+	l_iv_cheque_structa.conf_amt = 0.0;
+	l_iv_cheque_structa.status_pymt = NULL;
+	l_iv_cheque_structa.proc_num = 0;
+
+	strcpy(l_iv_cheque_structa.client, p_iv_cheque_struct_a->client);
+	strcpy(l_iv_cheque_structa.dateof_payment, p_iv_cheque_struct_a->dateof_payment);
+	strcpy(l_iv_cheque_structa.bill_date, p_iv_cheque_struct_a->bill_date);
+	strcpy(l_iv_cheque_structa.b_ccycd, p_iv_cheque_struct_a->b_ccycd);
+	strcpy(l_iv_cheque_structa.access_stamp, chr_l_sys_date_time);
+	strcpy(l_iv_cheque_structa.cheque_det, p_iv_cheque_struct_a->cheque_det);	/* added by Vedavati HDFCIV_006 */ 
+	strcpy(l_iv_cheque_structa.tds_amt, p_iv_cheque_struct_a->tds_amt);		/* added by Vedavati HDFCIV_006 */ 
+
+	/*Added by siva.ganapathi for ISKB_2222 on 17-03-2009 -- Started*/ 
+        printf("siva p_iv_cheque_struct_a->bill_amt is [%lf]",p_iv_cheque_struct_a->bill_amt);
+	printf("siva p_iv_cheque_struct_a->conf_amt is [%lf]",p_iv_cheque_struct_a->conf_amt);
+	printf("siva p_iv_cheque_struct_a->os_amt is [%lf]",p_iv_cheque_struct_a->os_amt);
+        /*Added by siva.ganapathi for ISKB_2222 on 17-03-2009 -- Ended*/
+	l_iv_cheque_structa.inden_num = p_iv_cheque_struct_a->inden_num;
+	l_iv_cheque_structa.bill_amt = p_iv_cheque_struct_a->bill_amt;
+	l_iv_cheque_structa.service_cd = p_iv_cheque_struct_a->service_cd;
+	l_iv_cheque_structa.conf_amt = p_iv_cheque_struct_a->conf_amt;
+	l_iv_cheque_structa.os_amt = p_iv_cheque_struct_a->os_amt;
+	//shailesh180208l_iv_cheque_structa.os_amt = l_iv_cheque_structa.bill_amt - l_iv_cheque_structa.conf_amt;
+
+printf("\n 301107  l_iv_cheque_structa.bill_amt = [%lf]",l_iv_cheque_structa.bill_amt);
+printf("\n 301107  l_iv_cheque_structa.conf_amt = [%lf]",l_iv_cheque_structa.conf_amt);
+printf("\n 301107  l_iv_cheque_structa.os_amt = [%lf]",l_iv_cheque_structa.os_amt);
+
+
+			
+strcpy(l_iv_cheque_structa.maker, p_intl_envdatastruct_h->usr);
+strcpy(l_iv_cheque_structa.maker_dt, chr_l_sys_date);
+strcpy(l_iv_cheque_structa.pymt_clt, p_iv_cheque_struct_a->pymt_clt);
+	
+
+
+	printf("\n shailesh  before updating IV_CHEQUE");
+	printf("\n l_iv_cheque_structa.conf_amt = [%lf]",l_iv_cheque_structa.conf_amt);
+	printf("\n l_iv_cheque_structa.status_pymt = [%c]",l_iv_cheque_structa.status_pymt);
+	printf("\n l_iv_cheque_structa.maker = [%s]",l_iv_cheque_structa.maker);
+	printf("\n l_iv_cheque_structa.maker_dt = [%s]",l_iv_cheque_structa.maker_dt);
+	printf("\n l_iv_cheque_structa.access_stamp = [%s]",l_iv_cheque_structa.access_stamp);
+	printf("\n l_iv_cheque_structa.bill_amt = [%lf]",l_iv_cheque_structa.bill_amt);
+	printf("\n l_iv_cheque_structa.dateof_payment = [%s]",l_iv_cheque_structa.dateof_payment);	
+	printf("\n l_iv_cheque_structa.client = [%s]",l_iv_cheque_structa.client);					
+	printf("\n l_iv_cheque_structa.inden_num = [%d]",l_iv_cheque_structa.inden_num);				
+	printf("\n l_iv_cheque_structa.bill_date = [%s]",l_iv_cheque_structa.bill_date);				
+	printf("\n p_iv_cheque_struct_a->access_stamp = [%s]",p_iv_cheque_struct_a->access_stamp);									
+	printf("\n p_iv_cheque_struct_a->cheque_det = [%s]",p_iv_cheque_struct_a->cheque_det);
+
+	
+	/*Added by siva.ganapathi for ISKB_2222 on 17-03-2009 -- Started*/
+        if(chr_l_actionflag == 'R')
+	{
+		
+		printf("\n action flag = 'R'");
+		
+
+		EXEC SQL UPDATE IV_CHEQUE
+			 SET STATUS = 'D', 
+			     MAKER = :l_iv_cheque_structa.maker , 
+			     MAKER_DT = :l_iv_cheque_structa.maker_dt, 
+			     ACCESS_STAMP = :l_iv_cheque_structa.access_stamp 
+			 WHERE ((DATEOF_PAYMENT = :l_iv_cheque_structa.dateof_payment) AND
+				(CLIENT = :l_iv_cheque_structa.client) AND
+				(INDEN_NUM = :l_iv_cheque_structa.inden_num) AND
+				(BILL_DATE = :l_iv_cheque_structa.bill_date));
+
+		Alert("\n sqlca.sqlcode = [%d]",sqlca.sqlcode);
+
+	}
+	else
+	{
+	 l_iv_cheque_structa.status_pymt = 'U';
+
+	
+		EXEC SQL UPDATE IV_CHEQUE
+			 SET CONF_AMT = :l_iv_cheque_structa.conf_amt
+				       INDICATOR :l_i_iv_cheque_struct.i_pm_amount, 
+			     CHEQUE_DET = :l_iv_cheque_structa.cheque_det 
+						INDICATOR :l_i_iv_cheque_struct.i_pm_amount,
+			     STATUS = :l_iv_cheque_structa.status_pymt 
+					   INDICATOR :l_i_iv_cheque_struct.i_pm_amount, 
+			     MAKER = :l_iv_cheque_structa.maker
+				      INDICATOR :l_i_iv_cheque_struct.i_pm_amount, 
+			     MAKER_DT = :l_iv_cheque_structa.maker_dt
+					INDICATOR :l_i_iv_cheque_struct.i_pm_amount, 
+			     ACCESS_STAMP = :l_iv_cheque_structa.access_stamp
+			           INDICATOR :l_i_iv_cheque_struct.i_pm_amount,
+			          /****** added by Vedavati HDFCIV_006 ******/ 
+				BILL_AMT =:l_iv_cheque_structa.bill_amt,//shailesh 261007
+				OS_AMT =:l_iv_cheque_structa.os_amt,//shailesh 261007
+				TOT_OS_AMT =:l_iv_cheque_structa.tot_os_amt//shailesh 261007
+			     /*****************************************/
+	 WHERE (
+		 TO_CHAR(DATEOF_PAYMENT,'DD/MM/YYYY') = SUBSTR(:l_iv_cheque_structa.dateof_payment,0,10) AND	(CLIENT = :l_iv_cheque_structa.client) AND
+			(INDEN_NUM = :l_iv_cheque_structa.inden_num) AND
+			 TO_CHAR(BILL_DATE,'DD/MM/YYYY') = SUBSTR(:l_iv_cheque_structa.bill_date,0,10) AND
+			TO_CHAR(ACCESS_STAMP,'DD/MM/YYYY HH24:MI:SS') =:p_iv_cheque_struct_a->access_stamp );
+
+	Alert("\n sqlca.sqlcode = [%d]",sqlca.sqlcode);
+		
+	if ( sqlca.sqlcode < 0 )
+	{
+		char chr_l_buffer[KEY_LENGTH];
+
+		memset(chr_l_buffer, APL_NULL_CHAR, KEY_LENGTH);
+
+		ltoa_r(sqlca.sqlcode, chr_l_buffer, KEY_LENGTH - 1);
+
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+		CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, chr_l_buffer, 
+			       APL_NULL_STRING, APL_NULL_STRING, 
+			       __LINE__, __FILE__);
+
+		APL_GOBACK_FAIL
+	}
+	else if ( sqlca.sqlcode == 1403 )
+	{
+		*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+
+		APL_GOBACK_FAIL
+	}
+
+	*int_p_retstat = IV_SUCCESS;
+
+	strcpy(p_iv_cheque_struct_a->access_stamp,l_iv_cheque_structa.access_stamp);
+	
+	APL_GOBACK_SUCCESS
+
+	}
+       /*Added by siva.ganapathi for ISKB_2222 on 17-03-2009 -- Ended*/
+	RETURN_SUCCESS:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of IV_Mod_IVPymt_S().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_SUCCESS;
+
+	RETURN_FAILURE:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of IV_Mod_IVPymt_S().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_FAILURE;
+}
+
+
+int IV_Del_IVPymt_S(IV_CHEQUE_STRUCT *p_iv_cheque_struct_a,
+		    const INTL_ENV_DATA_STRUCT_H *p_intl_envdatastruct_h, 
+		    int *int_p_retstat, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+printf("\n access stamp is %s",p_iv_cheque_struct_a->access_stamp);
+printf("\n bill date is %s",p_iv_cheque_struct_a->bill_date);
+//printf("\n service code is %d",p_iv_cheque_struct_a->service_cd); Changes done for AIX Migration
+printf("\n service code is %ld",p_iv_cheque_struct_a->service_cd);
+printf("\n Inden num is %d",p_iv_cheque_struct_a->inden_num);
+printf("\n Client %s",p_iv_cheque_struct_a->client);
+
+EXEC SQL  DELETE FROM IV_CHEQUE WHERE
+		CLIENT = :p_iv_cheque_struct_a->client 
+		AND	 TO_CHAR(BILL_DATE,'DD/MM/YYYY') = SUBSTR(:p_iv_cheque_struct_a->bill_date,0,10) 
+		AND	 SERVICE_CD = :p_iv_cheque_struct_a->service_cd 
+		AND	 INDEN_NUM = :p_iv_cheque_struct_a->inden_num 
+		AND  TO_CHAR(ACCESS_STAMP,'DD/MM/YYYY HH24:MI:SS') =:p_iv_cheque_struct_a->access_stamp;
+
+	Alert("\n sqlca.sqlcode = [%d]",sqlca.sqlcode);
+		
+	if ( sqlca.sqlcode < 0 )
+	{
+		char chr_l_buffer[KEY_LENGTH];
+
+		memset(chr_l_buffer, APL_NULL_CHAR, KEY_LENGTH);
+
+		ltoa_r(sqlca.sqlcode, chr_l_buffer, KEY_LENGTH - 1);
+
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+		CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, chr_l_buffer, 
+			       APL_NULL_STRING, APL_NULL_STRING, 
+			       __LINE__, __FILE__);
+
+		APL_GOBACK_FAIL
+	}
+	else if ( sqlca.sqlcode == 1403 )
+	{
+		*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+
+		APL_GOBACK_FAIL
+	}
+
+	*int_p_retstat = IV_SUCCESS;
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of IV_Del_IVPymt_S().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_SUCCESS;
+
+	RETURN_FAILURE:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of IV_Del_IVPymt_S().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_FAILURE;
+}
+
+
+
+
+int IV_Del_IVPymt_T(IV_CHEQUE_STRUCT *p_iv_cheque_struct_a,
+		    const INTL_ENV_DATA_STRUCT_H *p_intl_envdatastruct_h, 
+		    int *int_p_retstat, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+
+		EXEC SQL  DELETE FROM IV_CHEQUE WHERE
+		CLIENT = :p_iv_cheque_struct_a->client 
+		AND  TO_CHAR(BILL_DATE,'DD/MM/YYYY') = SUBSTR(:p_iv_cheque_struct_a->bill_date,0,10) 
+		AND  TO_CHAR(ACCESS_STAMP,'DD/MM/YYYY HH24:MI:SS') =:p_iv_cheque_struct_a->access_stamp  
+		AND  STATUS NOT IN ('A');
+
+	if ( sqlca.sqlcode < 0 )
+	{
+		char chr_l_buffer[KEY_LENGTH];
+
+		memset(chr_l_buffer, APL_NULL_CHAR, KEY_LENGTH);
+
+		ltoa_r(sqlca.sqlcode, chr_l_buffer, KEY_LENGTH - 1);
+
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+		CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, chr_l_buffer, 
+			       APL_NULL_STRING, APL_NULL_STRING, 
+			       __LINE__, __FILE__);
+
+		APL_GOBACK_FAIL
+	}
+	else if ( sqlca.sqlcode == 1403 )
+	{
+		*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+
+		APL_GOBACK_FAIL
+	}
+
+	*int_p_retstat = IV_SUCCESS;
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of IV_Del_IVPymt_T().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_SUCCESS;
+
+	RETURN_FAILURE:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of IV_Del_IVPymt_T().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_FAILURE;
+}
+
+
+
+
+int IV_Auth_S_IVPymt(IV_CHEQUE_STRUCT *p_iv_cheque_struct_a,
+		    const INTL_ENV_DATA_STRUCT_H *p_intl_envdatastruct_h, 
+		    int *int_p_retstat, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+
+Alert("\n Entered the IV_Auth_S_IVPymt function ");
+extern int CO_RtvSysDtTime(char *chr_l_sys_date_time, 
+				DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+
+
+	double l_dbl_conf_amt =0.0;
+	double l_dbl_conf_amt_1 =0.0;
+	
+
+	extern int CO_RtvSysDtTime(char *chr_l_sys_date_time,DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+	char chr_l_usermode, *chr_l_last = (char *)NULL;
+	char chr_l_sys_date_time[APL_DATE_LEN], chr_l_sys_date[APL_DATE_LEN];
+
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+		IV_CHEQUE_STRUCT l_iv_cheque_struct;
+		EXEC SQL VAR l_iv_cheque_struct.client IS STRING;
+		EXEC SQL VAR l_iv_cheque_struct.dateof_payment IS STRING;
+		EXEC SQL VAR l_iv_cheque_struct.bill_date IS STRING;
+		EXEC SQL VAR l_iv_cheque_struct.b_ccycd IS STRING;
+		EXEC SQL VAR l_iv_cheque_struct.maker IS STRING;
+		EXEC SQL VAR l_iv_cheque_struct.maker_dt IS STRING;
+		EXEC SQL VAR l_iv_cheque_struct.access_stamp IS STRING;
+		EXEC SQL VAR l_iv_cheque_struct.checker IS STRING;
+		EXEC SQL VAR l_iv_cheque_struct.checker_dt IS STRING;
+		EXEC SQL VAR l_iv_cheque_struct.pymt_clt IS STRING;
+		EXEC SQL VAR l_iv_cheque_struct.ae_dt IS STRING;
+		EXEC SQL VAR l_iv_cheque_struct.cheque_det IS STRING;	 
+		EXEC SQL VAR l_iv_cheque_struct.tds_amt IS STRING;
+
+
+		I_IV_CHEQUE_STRUCT l_i_iv_cheque_struct = {0, 0, 0, 0, 0, 0, 0, 0, 
+						                           0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+		struct sqlca sqlca;
+
+	EXEC SQL END DECLARE SECTION;
+
+	#ifdef APL_THREADS
+		APL_SET_CONTEXT
+		EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	Alert("\n shailesh --IV_Auth_S_IVPymt  ---2");
+
+
+	memset(chr_l_sys_date_time, APL_NULL_CHAR, APL_DATE_LEN);
+
+	if (APL_FAILURE == CO_RtvSysDtTime(chr_l_sys_date_time, l_debug_info_ptr))
+	{
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+		APL_GOBACK_FAIL
+	}
+
+	if ( !strcmp(p_intl_envdatastruct_h->h_mode, APL_FUNC_INPUT) )
+	{
+		chr_l_usermode = 'I';
+	}
+	else if ( !strcmp(p_intl_envdatastruct_h->h_mode, APL_FUNC_MODIFY) )	
+	{
+		chr_l_usermode = 'M';
+	}
+	else if ( !strcmp(p_intl_envdatastruct_h->h_mode, APL_FUNC_DELETE) )	
+	{
+		chr_l_usermode = 'D';
+	}
+	else if ( !strcmp(p_intl_envdatastruct_h->h_mode, APL_FUNC_AUTHORISE)|| !strcmp(p_intl_envdatastruct_h->h_mode,"BAT") )	
+	{
+		chr_l_usermode = 'A';
+	}
+	memset(l_iv_cheque_struct.client, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+	memset(l_iv_cheque_struct.dateof_payment, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(l_iv_cheque_struct.bill_date, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(l_iv_cheque_struct.b_ccycd, APL_NULL_CHAR, APL_CCYCODE_LEN);
+	memset(l_iv_cheque_struct.maker, APL_NULL_CHAR, APL_USERID_LEN);
+	memset(l_iv_cheque_struct.maker_dt, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(l_iv_cheque_struct.access_stamp, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(l_iv_cheque_struct.checker, APL_NULL_CHAR, APL_USERID_LEN);
+	memset(l_iv_cheque_struct.checker_dt, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(l_iv_cheque_struct.pymt_clt, APL_NULL_CHAR, 24);
+	memset(l_iv_cheque_struct.ae_dt, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(l_iv_cheque_struct.cheque_det, APL_NULL_CHAR, 100);		
+	memset(l_iv_cheque_struct.tds_amt, APL_NULL_CHAR, 21);
+
+	Alert("\n shailesh --IV_Auth_S_IVPymt  ---3");
+
+	strcpy(chr_l_sys_date, chr_l_sys_date_time);
+	strcpy(chr_l_sys_date, strtok_r(chr_l_sys_date," ",&chr_l_last));
+	strcat(chr_l_sys_date, APL_NULL_TIME);
+
+				
+
+	//INITIALIZING THE STRUCTURE MEMBER
+	l_iv_cheque_struct.inden_num = 0;
+	l_iv_cheque_struct.pay_seq = 0;
+	l_iv_cheque_struct.conf_amt = 0.0;
+	l_iv_cheque_struct.status_pymt = NULL;
+	l_iv_cheque_struct.proc_num = 0;
+	
+
+	strcpy(l_iv_cheque_struct.client,p_iv_cheque_struct_a->client);
+	strcpy(l_iv_cheque_struct.dateof_payment,p_iv_cheque_struct_a->dateof_payment);
+	strcpy(l_iv_cheque_struct.bill_date,p_iv_cheque_struct_a->bill_date);
+	strcpy(l_iv_cheque_struct.b_ccycd,p_iv_cheque_struct_a->b_ccycd);
+	strcpy(l_iv_cheque_struct.access_stamp,chr_l_sys_date_time);
+	strcpy(l_iv_cheque_struct.cheque_det,p_iv_cheque_struct_a->cheque_det);	 
+	strcpy(l_iv_cheque_struct.tds_amt, p_iv_cheque_struct_a->tds_amt);	
+
+	l_iv_cheque_struct.inden_num = p_iv_cheque_struct_a->inden_num;
+	l_iv_cheque_struct.bill_amt = p_iv_cheque_struct_a->bill_amt;
+	l_iv_cheque_struct.service_cd = p_iv_cheque_struct_a->service_cd;
+	l_iv_cheque_struct.conf_amt = p_iv_cheque_struct_a->conf_amt;
+	l_iv_cheque_struct.os_amt = l_iv_cheque_struct.bill_amt - l_iv_cheque_struct.conf_amt;	
+	l_iv_cheque_struct.status_pymt = 'A';
+	l_iv_cheque_struct.pay_seq = p_iv_cheque_struct_a->pay_seq;
+	/*modified by shruthi kumbla for ISKB_1737 */
+	strcpy(l_iv_cheque_struct.checker,p_iv_cheque_struct_a->checker);
+	strcpy(l_iv_cheque_struct.checker_dt,chr_l_sys_date);
+	//strcpy(l_iv_cheque_struct.ae_dt, p_iv_cheque_struct_a->ae_dt);
+
+	Alert("\n shailesh 261007 before updating IV_CHEQUE");
+	
+		EXEC SQL UPDATE IV_CHEQUE
+			 SET 
+				STATUS = :l_iv_cheque_struct.status_pymt 
+					   INDICATOR :l_i_iv_cheque_struct.i_pm_amount, 
+			    CHECKER = :l_iv_cheque_struct.checker
+				      INDICATOR :l_i_iv_cheque_struct.i_pm_amount, 
+			    CHECKER_DT = :l_iv_cheque_struct.checker_dt 
+					INDICATOR :l_i_iv_cheque_struct.i_pm_amount, 
+        	     ACCESS_STAMP = :l_iv_cheque_struct.access_stamp
+					     INDICATOR :l_i_iv_cheque_struct.i_pm_amount,
+				PAY_SEQ = :l_iv_cheque_struct.pay_seq INDICATOR :l_i_iv_cheque_struct.i_pm_amount,
+				BILL_AMT = :l_iv_cheque_struct.bill_amt,
+				OS_AMT   = :l_iv_cheque_struct.os_amt
+			 	WHERE (
+		      TO_CHAR(DATEOF_PAYMENT,'DD/MM/YYYY') =  SUBSTR(:l_iv_cheque_struct.dateof_payment,0,10) AND
+			           (CLIENT = :l_iv_cheque_struct.client) AND
+			  (INDEN_NUM = :l_iv_cheque_struct.inden_num) AND
+			 TO_CHAR(BILL_DATE,'DD/MM/YYYY') = SUBSTR(:l_iv_cheque_struct.bill_date,0,10) AND
+			  TO_CHAR(ACCESS_STAMP,'DD/MM/YYYY HH24:MI:SS') =:p_iv_cheque_struct_a->access_stamp );
+
+
+	
+		if ( sqlca.sqlcode < 0 )
+	{
+		char chr_l_buffer[KEY_LENGTH];
+
+		memset(chr_l_buffer, APL_NULL_CHAR, KEY_LENGTH);
+
+		ltoa_r(sqlca.sqlcode, chr_l_buffer, KEY_LENGTH - 1);
+
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+		CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, chr_l_buffer, 
+			       APL_NULL_STRING, APL_NULL_STRING, 
+			       __LINE__, __FILE__);
+
+		APL_GOBACK_FAIL
+	}
+	else if ( sqlca.sqlcode == 1403 )
+	{
+		*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+		Alert("\n IV_Pymnt_Mnt_A.pc ::  ___");
+		APL_GOBACK_FAIL
+	}
+
+	*int_p_retstat = IV_SUCCESS;
+
+	strcpy(p_iv_cheque_struct_a->access_stamp,l_iv_cheque_struct.access_stamp);
+	
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of IV_Auth_S_IVPymt().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_SUCCESS;
+
+	RETURN_FAILURE:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of IV_Auth_S_IVPymt().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+	
+	return APL_FAILURE;	
+} 
+
+
+
+int IV_Auth_T_IVPymt(IV_CHEQUE_STRUCT *p_iv_cheque_struct_a,
+		    const INTL_ENV_DATA_STRUCT_H *p_intl_envdatastruct_h, 
+		    int *int_p_retstat, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+Alert("\n Entered the IV_Auth_S_IVPymt function ");
+extern int CO_RtvSysDtTime(char *chr_l_sys_date_time, 
+				DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+	double l_dbl_conf_amt =0.0;
+	double l_dbl_conf_amt_1 =0.0;
+	long l_serv_code = 0.0;
+	double l_dbl_service_amt = 0.0;
+	int l_int_cnt =0;
+	int l_int_s_inden_num = 0;
+	
+	extern int CO_RtvSysDtTime(char *chr_l_sys_date_time,DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+	char chr_l_usermode, *chr_l_last = (char *)NULL;
+	char chr_l_sys_date_time[APL_DATE_LEN], chr_l_sys_date[APL_DATE_LEN];
+	char l_chr_cons_ind='N';
+	char l_str_billdate[APL_DATE_LEN];
+	char l_bccy_cd[4] = APL_NULL_STRING;
+	char chr_l_cod_cmamt[20]             = APL_NULL_STRING;
+	int  int_l_retcmamt = 0;
+
+	char chr_h_comments[4000]  = APL_NULL_STRING;	/*Added by siva.ganapathi for ISKB_2222 on 17-03-2009 -- Started*/
+	char p_key_value[4000]  = APL_NULL_STRING;
+	char chr_h_param_str_temp[4000] = APL_NULL_STRING; 
+	char chr_h_entity_name[20] = APL_NULL_STRING;
+	char chr_l_audit_data[4000] = APL_NULL_STRING;
+	char chr_l_data_key[4000] = APL_NULL_STRING;
+	int	 int_ret_val;
+	char retval[100] = APL_NULL_STRING;/*Added by siva.ganapathi for ISKB_2222 on 17-03-2009 -- Ended*/
+
+
+
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+		IV_CHEQUE_STRUCT l_iv_cheque_struct;
+		EXEC SQL VAR l_iv_cheque_struct.client IS STRING;
+		EXEC SQL VAR l_iv_cheque_struct.dateof_payment IS STRING;
+		EXEC SQL VAR l_iv_cheque_struct.bill_date IS STRING;
+		EXEC SQL VAR l_iv_cheque_struct.b_ccycd IS STRING;
+		EXEC SQL VAR l_iv_cheque_struct.maker IS STRING;
+		EXEC SQL VAR l_iv_cheque_struct.maker_dt IS STRING;
+		EXEC SQL VAR l_iv_cheque_struct.access_stamp IS STRING;
+		EXEC SQL VAR l_iv_cheque_struct.checker IS STRING;
+		EXEC SQL VAR l_iv_cheque_struct.checker_dt IS STRING;
+		EXEC SQL VAR l_iv_cheque_struct.pymt_clt IS STRING;
+		EXEC SQL VAR l_iv_cheque_struct.ae_dt IS STRING;
+		EXEC SQL VAR l_iv_cheque_struct.cheque_det IS STRING;	 
+		EXEC SQL VAR l_iv_cheque_struct.tds_amt IS STRING;
+
+	
+	I_IV_CHEQUE_STRUCT l_i_iv_cheque_struct = {0, 0, 0, 0, 0, 0, 0, 0, 
+					                           0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+	
+		struct sqlca sqlca;
+
+	EXEC SQL END DECLARE SECTION;
+
+	#ifdef APL_THREADS
+		APL_SET_CONTEXT
+		EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	Alert("\n shailesh --IV_Auth_T_IVPymt  ---2");
+
+
+	memset(chr_l_sys_date_time, APL_NULL_CHAR, APL_DATE_LEN);
+
+	if (APL_FAILURE == CO_RtvSysDtTime(chr_l_sys_date_time, l_debug_info_ptr))
+	{
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+		APL_GOBACK_FAIL
+	}
+
+	if ( !strcmp(p_intl_envdatastruct_h->h_mode, APL_FUNC_INPUT) )
+	{
+		chr_l_usermode = 'I';
+	}
+	else if ( !strcmp(p_intl_envdatastruct_h->h_mode, APL_FUNC_MODIFY) )	
+	{
+		chr_l_usermode = 'M';
+	}
+	else if ( !strcmp(p_intl_envdatastruct_h->h_mode, APL_FUNC_DELETE) )	
+	{
+		chr_l_usermode = 'D';
+	}
+	else if ( !strcmp(p_intl_envdatastruct_h->h_mode, APL_FUNC_AUTHORISE)|| !strcmp(p_intl_envdatastruct_h->h_mode,"BAT") )	
+	{
+		chr_l_usermode = 'A';
+	}
+	memset(l_iv_cheque_struct.client, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+	memset(l_iv_cheque_struct.dateof_payment, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(l_iv_cheque_struct.bill_date, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(l_iv_cheque_struct.b_ccycd, APL_NULL_CHAR, APL_CCYCODE_LEN);
+	memset(l_iv_cheque_struct.maker, APL_NULL_CHAR, APL_USERID_LEN);
+	memset(l_iv_cheque_struct.maker_dt, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(l_iv_cheque_struct.access_stamp, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(l_iv_cheque_struct.checker, APL_NULL_CHAR, APL_USERID_LEN);
+	memset(l_iv_cheque_struct.checker_dt, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(l_iv_cheque_struct.pymt_clt, APL_NULL_CHAR, 24);
+	memset(l_iv_cheque_struct.ae_dt, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(l_iv_cheque_struct.cheque_det, APL_NULL_CHAR, 100);		
+	memset(l_iv_cheque_struct.tds_amt, APL_NULL_CHAR, 21);
+
+	Alert("\n shailesh --IV_Auth_T_IVPymt  ---3");
+
+	strcpy(chr_l_sys_date, chr_l_sys_date_time);
+	strcpy(chr_l_sys_date, strtok_r(chr_l_sys_date," ",&chr_l_last));
+	strcat(chr_l_sys_date, APL_NULL_TIME);
+
+	//INITIALIZING THE STRUCTURE MEMBER
+	l_iv_cheque_struct.inden_num = 0;
+	l_iv_cheque_struct.pay_seq = 0;
+	l_iv_cheque_struct.conf_amt = 0.0;
+	l_iv_cheque_struct.status_pymt = NULL;
+	//l_iv_cheque_struct.proc_num = 0;
+	
+
+	strcpy(l_iv_cheque_struct.client,p_iv_cheque_struct_a->client);
+	strcpy(l_iv_cheque_struct.dateof_payment,p_iv_cheque_struct_a->dateof_payment);
+	strcpy(l_iv_cheque_struct.bill_date,p_iv_cheque_struct_a->bill_date);
+	strcpy(l_iv_cheque_struct.b_ccycd,p_iv_cheque_struct_a->b_ccycd);
+	strcpy(l_iv_cheque_struct.access_stamp,chr_l_sys_date_time);
+	strcpy(l_iv_cheque_struct.cheque_det,p_iv_cheque_struct_a->cheque_det);	 
+	strcpy(l_iv_cheque_struct.tds_amt, p_iv_cheque_struct_a->tds_amt);	
+	strcpy(l_iv_cheque_struct.adjust_entry, p_iv_cheque_struct_a->adjust_entry);	
+
+	l_iv_cheque_struct.inden_num = p_iv_cheque_struct_a->inden_num;
+	l_iv_cheque_struct.bill_amt = p_iv_cheque_struct_a->bill_amt;
+	l_iv_cheque_struct.service_cd = p_iv_cheque_struct_a->service_cd;
+	l_iv_cheque_struct.conf_amt = p_iv_cheque_struct_a->conf_amt;
+	l_iv_cheque_struct.os_amt = l_iv_cheque_struct.bill_amt - l_iv_cheque_struct.conf_amt;	
+	l_iv_cheque_struct.status_pymt = 'A';
+	l_iv_cheque_struct.pymt_ind = p_iv_cheque_struct_a->pymt_ind;
+	l_iv_cheque_struct.pay_seq = p_iv_cheque_struct_a->pay_seq;
+	if(l_iv_cheque_struct.pymt_ind  == 'D')
+	strcpy(l_iv_cheque_struct.checker,"SYSTEM");
+	else
+	{
+		/*modified by shruthi kumbla for ISKB_1737 */
+		strcpy(l_iv_cheque_struct.checker,p_iv_cheque_struct_a->checker);
+	}
+	strcpy(l_iv_cheque_struct.checker_dt,chr_l_sys_date);
+	//strcpy(l_iv_cheque_struct.ae_dt, p_iv_cheque_struct_a->ae_dt);
+	Alert("\n shailesh 261007 before updating IV_CHEQUE");
+	
+		EXEC SQL UPDATE IV_CHEQUE
+			 SET 
+				STATUS = :l_iv_cheque_struct.status_pymt 
+					   INDICATOR :l_i_iv_cheque_struct.i_pm_amount, 
+			    CHECKER = :l_iv_cheque_struct.checker
+				      INDICATOR :l_i_iv_cheque_struct.i_pm_amount, 
+			    CHECKER_DT = :l_iv_cheque_struct.checker_dt 
+					INDICATOR :l_i_iv_cheque_struct.i_pm_amount, 
+        	     ACCESS_STAMP = :l_iv_cheque_struct.access_stamp
+					     INDICATOR :l_i_iv_cheque_struct.i_pm_amount,
+				PAY_SEQ = :l_iv_cheque_struct.pay_seq INDICATOR :l_i_iv_cheque_struct.i_pm_amount,
+				BILL_AMT = :l_iv_cheque_struct.bill_amt,
+				OS_AMT   = 0
+			 	WHERE (
+		   TO_CHAR(DATEOF_PAYMENT,'DD/MM/YYYY') =  SUBSTR(:l_iv_cheque_struct.dateof_payment,0,10) AND
+		  (CLIENT = :l_iv_cheque_struct.client) AND
+		 TO_CHAR(BILL_DATE,'DD/MM/YYYY') = SUBSTR(:l_iv_cheque_struct.bill_date,0,10) AND
+		  TO_CHAR(ACCESS_STAMP,'DD/MM/YYYY HH24:MI:SS') =:p_iv_cheque_struct_a->access_stamp );
+
+
+Alert("\n Siva  mode is [%s]",p_intl_envdatastruct_h->h_mode); /*Added by siva.ganapathi for ISKB_2222 on 17-03-2009 -- Started*/
+
+if(	!strcmp(p_intl_envdatastruct_h->h_mode,"BAT"))
+{	
+	
+	Alert("\n Adding details to audit log table in batch mode : ");
+
+	strcpy((char *)p_intl_envdatastruct_h->h_mode , "BAT"); //Changes done for AIX Migration
+	strcpy((char *)p_intl_envdatastruct_h->processtion,"IV_CHEQUE");//Changes done for AIX Migration
+	
+	Alert("\n Siva  l_chr_dl_client = [%s]",l_iv_cheque_struct.client);
+	Alert("\n Siva l_chr_bill_date = [%s]",l_iv_cheque_struct.bill_date);
+	Alert("\n Siva Inden Num is = [%d]",l_iv_cheque_struct.inden_num);
+
+	//Alert("chr_l_data_key is [%s]",chr_l_data_key);
+	
+	//Create_Paramstr(chr_l_data_key,"BILL_DATE",l_iv_cheque_struct.bill_date);
+	//Create_Paramstr(chr_l_data_key,"DL_CLIENT",l_iv_cheque_struct.client);
+	//Create_Paramstr(chr_l_data_key,"INDEN_NUM","1");
+
+	//Alert("chr_l_data_key is [%s]",chr_l_data_key);
+
+	strcpy(chr_h_comments,"Record Authorized");
+
+
+	Alert("Param String is - [%s]\n", chr_h_param_str_temp);
+
+	Create_Paramstr(chr_h_param_str_temp,"MODE","BAT");
+	Create_Paramstr(chr_h_param_str_temp,"DL_CLIENT",l_iv_cheque_struct.client);
+	Create_Paramstr(chr_h_param_str_temp,"BILL_DATE",l_iv_cheque_struct.bill_date);
+	Create_Paramstr(chr_h_param_str_temp,"INDEN_NUM","1");
+	Create_Paramstr(chr_h_param_str_temp,"DATEOF_PAYMENT",l_iv_cheque_struct.dateof_payment);
+	Create_Paramstr(chr_h_param_str_temp,"PYMT_CLASS","T");
+	
+	CO_ToStr(l_iv_cheque_struct.bill_amt,18,2,retval);
+	CO_Trim(retval,'0','R',retval,l_debug_info_ptr);
+	
+	//	ltoa(l_iv_cheque_struct.bill_amt)
+	Create_Paramstr(chr_h_param_str_temp,"BILL_AMT",retval);
+	Create_Paramstr(chr_h_param_str_temp,"SERVICE_CD","");
+	Create_Paramstr(chr_h_param_str_temp,"SERVICE_AMT","");
+	Create_Paramstr(chr_h_param_str_temp,"CHEQUE_DET",l_iv_cheque_struct.cheque_det);
+	strcat(chr_h_param_str_temp,AUDIT_DATA_FIELD_SEPRTR);
+
+
+	Alert("Param String is - [%s]\n", chr_h_param_str_temp);
+
+
+	//strcpy(chr_h_entity_name,p_intl_envdatastruct_h->processtion);
+	
+	strcpy(chr_h_entity_name,"IV_CHEQUE");
+
+	Alert("Entity Name is - [%s]\n", chr_h_entity_name);
+
+
+	/*int_retval =0;
+	int_retval  = CO_PopulateAuditString(p_entity_name,p_param_str_temp,p_audit_data,p_datavalue, l_debug_info_ptr);
+	if (int_retval != APL_SUCCESS)
+	APL_GOBACK_FAIL
+		
+	int_retval = 0;
+	int_retval = CO_Upd_AudLog_Chk_SysOnline( p_intl_envdatastruct_h,p_audit_data,chr_l_data_key,p_comments,l_debug_info_ptr);
+	if (int_retval != APL_SUCCESS)
+	APL_GOBACK_FAIL*/
+
+	int_ret_val = CO_PopulateAuditString(chr_h_entity_name,chr_h_param_str_temp,chr_l_audit_data,chr_l_data_key);
+		
+	
+	Alert("Entity Name is - [%s]\n", chr_h_entity_name);
+	Alert("Audit data is - [%s]\n", chr_l_audit_data);
+	Alert("Data Key is - [%s]\n", chr_l_data_key);
+	Alert("Comments is- [%s]\n", chr_h_comments);
+
+
+	int_ret_val = 0;
+	int_ret_val = CO_Upd_AudLog_Chk_SysOnline((INTL_ENV_DATA_STRUCT_H *)p_intl_envdatastruct_h,chr_l_audit_data,chr_l_data_key,chr_h_comments,l_debug_info_ptr);//Changes done for AIX Migration
+	
+	if (int_ret_val != APL_SUCCESS)
+	APL_GOBACK_FAIL
+
+
+}	/*Added by siva.ganapathi for ISKB_2222 on 17-03-2009 -- Started*/
+
+
+
+	
+		if ( sqlca.sqlcode < 0 )
+	{
+		char chr_l_buffer[KEY_LENGTH];
+
+		memset(chr_l_buffer, APL_NULL_CHAR, KEY_LENGTH);
+
+		ltoa_r(sqlca.sqlcode, chr_l_buffer, KEY_LENGTH - 1);
+
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+		CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, chr_l_buffer, 
+			       APL_NULL_STRING, APL_NULL_STRING, 
+			       __LINE__, __FILE__);
+
+		APL_GOBACK_FAIL
+	}
+	else if ( sqlca.sqlcode == 1403 )
+	{
+		*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+		Alert("\n IV_Pymnt_Mnt_A.pc ::  ___");
+		APL_GOBACK_FAIL
+	}
+
+
+
+	//After status gets updated split the total amount into service-wise amount
+strcpy(l_iv_cheque_struct.maker,p_iv_cheque_struct_a->maker);
+strcpy(l_iv_cheque_struct.maker_dt,p_iv_cheque_struct_a->maker_dt);
+strcpy(l_iv_cheque_struct.pymt_clt,p_iv_cheque_struct_a->pymt_clt);
+
+
+	l_int_s_inden_num =1;/*modified by siva.ganapathi for ISKB_2222 on 3/16/2009*/
+
+	//retrieving the  servcie-amount  from iv_service_chrg
+    EXEC SQL SELECT NVL(COUNT(*),0) INTO :l_int_cnt FROM IV_SERVICE_CHRG WHERE
+		CLIENT =:l_iv_cheque_struct.client AND
+	CONS_FLAG ='C' AND 
+    TO_CHAR(DATEOF_BILLING,'DD/MM/YYYY') =  SUBSTR(:l_iv_cheque_struct.bill_date,0,10);
+	//TO_CHAR(TO_DATE(:l_iv_cheque_struct.bill_date,'DD/MM/YYYY HH:MI:SS'),'dd/mm/yyyy');
+
+	   if(sqlca.sqlcode!=0)
+      {
+         printf("\n IVc- sqlca.sqlcode = [%d]",sqlca.sqlcode);
+         APL_GOBACK_FAIL
+      }
+
+if(l_int_cnt)
+			l_chr_cons_ind = 'C';
+else
+			l_chr_cons_ind = 'I';
+
+
+
+Alert("\n shailesh l_chr_cons_ind = [%c]",l_chr_cons_ind);
+Alert("\n shailesh  l_chr_dl_client = [%s]",l_iv_cheque_struct.client);
+Alert("\n shailesh  l_chr_bill_date = [%s]",l_iv_cheque_struct.bill_date);
+strcpy(l_str_billdate,l_iv_cheque_struct.bill_date);
+memset(l_iv_cheque_struct.bill_date, APL_NULL_CHAR, APL_DATE_LEN);
+strncpy(l_iv_cheque_struct.bill_date,l_str_billdate,10);
+Alert("\n shailesh  l_str_billdate= [%s]",l_str_billdate);
+Alert("\n shailesh  l_iv_cheque_struct.bill_date= [%s]",l_iv_cheque_struct.bill_date);
+	/*Addition of condition added by siva.ganapathi for ISKB_2685 on 29/10/2009 -- started*/
+	    EXEC SQL DECLARE PYMT_AUTH_SPLIT CURSOR FOR 
+    	SELECT SERVICE_CD,COMM_AMT+NIL_FEES_ADJ+MINIMUMFEE_ADJ+MAXIMUM_FEE_ADJ,B_CCYCD  
+	FROM IV_SERVICE_CHRG  WHERE  CONS_FLAG =:l_chr_cons_ind AND 
+		CLIENT = :l_iv_cheque_struct.client AND
+	 	TRUNC(DATEOF_BILLING) = TO_DATE(:l_iv_cheque_struct.bill_date,'DD/MM/YYYY')
+		AND COMM_AMT+NIL_FEES_ADJ+MINIMUMFEE_ADJ+MAXIMUM_FEE_ADJ != 0;
+	/*Addition of condition added by siva.ganapathi for ISKB_2685 on 29/10/2009 -- Ended*/
+
+			if(sqlca.sqlcode!=0)
+		{
+			printf("\n AFTER DECLARE PYMT_AUTH_SPLIT sqlca.sqlcode = [%d]",sqlca.sqlcode);
+			APL_GOBACK_FAIL
+		}
+
+	
+
+   EXEC SQL OPEN PYMT_AUTH_SPLIT;
+
+   	l_iv_cheque_struct.bill_amt = l_dbl_service_amt;
+    l_iv_cheque_struct.os_amt =  0;
+	l_iv_cheque_struct.tot_os_amt =  0;
+	//l_iv_cheque_struct.pymt_ind='T';
+	l_iv_cheque_struct.proc_num = 0;
+	for(;;)
+	{
+		Alert("\n shailesh  entered FOR");
+		
+		EXEC SQL FETCH PYMT_AUTH_SPLIT 
+		INTO :l_serv_code,:l_dbl_service_amt,:l_bccy_cd;
+		Alert("\n l_serv_code = [%ld]",l_serv_code);
+		Alert("\n l_dbl_service_amt = [%lf]",l_dbl_service_amt);
+		Alert("\n l_bccy_cd = [%s]",l_bccy_cd);
+		Alert("\n l_iv_cheque_struct.pymt_ind = [%c]",l_iv_cheque_struct.pymt_ind);
+
+    	if(sqlca.sqlcode == 1403)
+			break;
+
+			if(sqlca.sqlcode < 0)
+		{
+			printf("Fetch of cursor ORA Error  - |%d|\n", sqlca.sqlcode);
+			printf("Error : Critical Error in Fetch of cursor \n");
+			break;
+		}
+		
+	l_int_s_inden_num++;
+
+	memset(chr_l_cod_cmamt, APL_NULL_CHAR, 20);
+	int_l_retcmamt = IV_Proc_Round(&l_dbl_service_amt,
+					l_bccy_cd,
+					chr_l_cod_cmamt,
+					l_debug_info_ptr);
+
+	if (int_l_retcmamt == 1)
+	{
+		l_dbl_service_amt = 0.0;
+		sscanf(chr_l_cod_cmamt, "%lf", &l_dbl_service_amt);
+	}
+	else
+	{
+		APL_GOBACK_FAIL
+	}
+
+	Alert("\n Round l_dbl_service_amt = [%lf]",l_dbl_service_amt);
+	l_iv_cheque_struct.inden_num = l_int_s_inden_num;
+	l_iv_cheque_struct.service_cd = l_serv_code;
+    l_iv_cheque_struct.conf_amt = l_dbl_service_amt;
+	l_iv_cheque_struct.bill_amt = l_dbl_service_amt;
+
+	Alert("\n siva  l_iv_cheque_struct.bill_date= [%s]",l_iv_cheque_struct.bill_date);/*Added by siva.ganapathi for ISKB_2222 on 3/16/2009 -- started*/
+	if(l_int_s_inden_num == 2)
+	{
+		strcat(l_iv_cheque_struct.bill_date," 12:00:00");
+		Alert("\n siva  l_iv_cheque_struct.bill_date= [%s]",l_iv_cheque_struct.bill_date);
+	} /*Added by siva.ganapathi for ISKB_2222 on 3/16/2009 -- Ended*/
+
+	EXEC SQL INSERT INTO IV_CHEQUE  
+		  VALUES(:l_iv_cheque_struct);	
+
+	if(sqlca.sqlcode!=0)
+		{
+			printf("\n sqlca.sqlcode = [%d]",sqlca.sqlcode);
+			APL_GOBACK_FAIL
+		}
+	Alert("\n shailesh 291007 --inserted");
+	
+	} //end of cursor
+
+	EXEC SQL CLOSE PYMT_AUTH_SPLIT;
+
+	if(sqlca.sqlcode != 0)
+	{
+		Alert("\n__FILE::IV_Pymnt_Mnt_A.pc");
+		APL_GOBACK_FAIL
+	}
+
+	*int_p_retstat = IV_SUCCESS;
+
+	strcpy(p_iv_cheque_struct_a->access_stamp,l_iv_cheque_struct.access_stamp);
+	
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of IV_Auth_T_IVPymt().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_SUCCESS;
+
+	RETURN_FAILURE:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of IV_Auth_T_IVPymt().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+	
+	return APL_FAILURE;	
+} 
+
+
+
+
+
+
+int  IV_GetPaySeq(char *l_chr_client,int *l_int_pay_seq,int *int_p_retstat, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+int l_int_seq =0;
+EXEC SQL SELECT NVL(MAX(PAY_SEQ),0) INTO :l_int_seq FROM IV_CHEQUE 
+		WHERE CLIENT = :l_chr_client
+		AND STATUS = 'A';
+
+if(sqlca.sqlcode !=0 )
+	{
+	Alert("\n FILE::IV_Pymnt_Mnt_A.pc  sqlca.sqlcode = [%d]",sqlca.sqlcode);
+	APL_GOBACK_FAIL
+	}
+l_int_seq++;
+*l_int_pay_seq = l_int_seq;
+int_p_retstat = IV_SUCCESS;
+APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of \
+			IV_GetPaySeq().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_SUCCESS;
+
+	RETURN_FAILURE:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of\
+			IV_GetPaySeq().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+	return APL_FAILURE;
+
+} 
+
+
+
+//Only cheque details should be allowed to modify in toal mode payments
+int IV_Mod_IVPymt_T(IV_CHEQUE_STRUCT *p_iv_cheque_struct_a,
+		    const INTL_ENV_DATA_STRUCT_H *p_intl_envdatastruct_h, 
+		    int *int_p_retstat, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	Alert("\n shailesh Entered  IV_Mod_IVPymt_T");
+	double l_dbl_billamt =0.0;
+	double l_dbl_os_amt =0.0;
+	double l_dbl_pymt_amt=0.0;
+	int int_l_retstat =0 ;
+	double l_dbl_conf_amt =0.0;
+	double l_dbl_conf_amt_1 =0.0;
+	extern int CO_RtvSysDtTime(char *chr_l_sys_date_time, 
+					DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+	char chr_l_usermode, *chr_l_last = (char *)NULL;
+	char chr_l_sys_date_time[APL_DATE_LEN], chr_l_sys_date[APL_DATE_LEN];
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+		IV_CHEQUE_STRUCT l_iv_cheque_structa;
+		EXEC SQL VAR l_iv_cheque_structa.client IS STRING;
+		EXEC SQL VAR l_iv_cheque_structa.dateof_payment IS STRING;
+		EXEC SQL VAR l_iv_cheque_structa.bill_date IS STRING;
+		EXEC SQL VAR l_iv_cheque_structa.b_ccycd IS STRING;
+		EXEC SQL VAR l_iv_cheque_structa.maker IS STRING;
+		EXEC SQL VAR l_iv_cheque_structa.maker_dt IS STRING;
+		EXEC SQL VAR l_iv_cheque_structa.access_stamp IS STRING;
+		EXEC SQL VAR l_iv_cheque_structa.checker IS STRING;
+		EXEC SQL VAR l_iv_cheque_structa.checker_dt IS STRING;
+		EXEC SQL VAR l_iv_cheque_structa.pymt_clt IS STRING;
+		EXEC SQL VAR l_iv_cheque_structa.ae_dt IS STRING;
+		EXEC SQL VAR l_iv_cheque_structa.cheque_det IS STRING;	
+		EXEC SQL VAR l_iv_cheque_structa.tds_amt IS STRING;	
+
+
+			I_IV_CHEQUE_STRUCT l_i_iv_cheque_struct = {0, 0, 0, 0, 0, 0, 0, 0, 
+						                           0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+		
+		struct sqlca sqlca;
+
+	EXEC SQL END DECLARE SECTION;
+
+	#ifdef APL_THREADS
+		APL_SET_CONTEXT
+		EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	
+	memset(chr_l_sys_date_time, APL_NULL_CHAR, APL_DATE_LEN);
+
+	if (APL_FAILURE == CO_RtvSysDtTime(chr_l_sys_date_time, l_debug_info_ptr))
+	{
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+		APL_GOBACK_FAIL
+	}
+
+	Alert("\n shailesh --IV_Mod_IVPymt_T  ---3");
+
+	strcpy(chr_l_sys_date, chr_l_sys_date_time);
+	strcpy(chr_l_sys_date, strtok_r(chr_l_sys_date, " ", &chr_l_last));
+	strcat(chr_l_sys_date, APL_NULL_TIME);
+
+	memset(l_iv_cheque_structa.client, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+	memset(l_iv_cheque_structa.dateof_payment, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(l_iv_cheque_structa.bill_date, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(l_iv_cheque_structa.b_ccycd, APL_NULL_CHAR, APL_CCYCODE_LEN);
+	memset(l_iv_cheque_structa.maker, APL_NULL_CHAR, APL_USERID_LEN);
+	memset(l_iv_cheque_structa.maker_dt, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(l_iv_cheque_structa.access_stamp, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(l_iv_cheque_structa.checker, APL_NULL_CHAR, APL_USERID_LEN);
+	memset(l_iv_cheque_structa.checker_dt, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(l_iv_cheque_structa.pymt_clt, APL_NULL_CHAR, 24);
+	memset(l_iv_cheque_structa.ae_dt, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(l_iv_cheque_structa.cheque_det, APL_NULL_CHAR, 100);		
+	memset(l_iv_cheque_structa.tds_amt, APL_NULL_CHAR, 21);			
+
+
+	l_iv_cheque_structa.inden_num = 0;
+	l_iv_cheque_structa.pay_seq = 0;
+	l_iv_cheque_structa.conf_amt = 0.0;
+	l_iv_cheque_structa.status_pymt = NULL;
+	l_iv_cheque_structa.proc_num = 0;
+
+	strcpy(l_iv_cheque_structa.client, p_iv_cheque_struct_a->client);
+	strcpy(l_iv_cheque_structa.dateof_payment, p_iv_cheque_struct_a->dateof_payment);
+	strcpy(l_iv_cheque_structa.bill_date, p_iv_cheque_struct_a->bill_date);
+	strcpy(l_iv_cheque_structa.b_ccycd, p_iv_cheque_struct_a->b_ccycd);
+	strcpy(l_iv_cheque_structa.access_stamp, chr_l_sys_date_time);
+	strcpy(l_iv_cheque_structa.cheque_det, p_iv_cheque_struct_a->cheque_det);	
+	strcpy(l_iv_cheque_structa.tds_amt, p_iv_cheque_struct_a->tds_amt);	
+
+	//l_iv_cheque_structa.inden_num = p_iv_cheque_struct_a->inden_num;
+	l_iv_cheque_structa.bill_amt = p_iv_cheque_struct_a->bill_amt;
+	l_iv_cheque_structa.service_cd = 0;
+	l_iv_cheque_structa.conf_amt = p_iv_cheque_struct_a->conf_amt;
+	l_iv_cheque_structa.os_amt = 0;//Since total mode payment
+
+	Alert("\n shailesh --IV_Mod_IVPymt_T  ---4");
+		
+	Alert("\n shailesh --IV_Mod_IVPymt_T chr_l_usermode = [%c] ---",chr_l_usermode);
+	
+//l_iv_cheque_structa.tot_os_amt = p_iv_cheque_struct_a->tot_os_amt;
+
+		strcpy(l_iv_cheque_structa.maker, p_intl_envdatastruct_h->usr);
+		strcpy(l_iv_cheque_structa.maker_dt, chr_l_sys_date);
+		strcpy(l_iv_cheque_structa.pymt_clt, p_iv_cheque_struct_a->pymt_clt);
+	
+   l_iv_cheque_structa.status_pymt = 'U';
+	Alert("\n shailesh 261007 before updating IV_CHEQUE");
+	Alert("\n l_iv_cheque_structa.cheque_det = [%s]",l_iv_cheque_structa.cheque_det);
+		EXEC SQL UPDATE IV_CHEQUE
+			 SET CHEQUE_DET = :l_iv_cheque_structa.cheque_det
+				       INDICATOR :l_i_iv_cheque_struct.i_pm_amount, 
+			     STATUS = :l_iv_cheque_structa.status_pymt 
+					   INDICATOR :l_i_iv_cheque_struct.i_pm_amount, 
+			     MAKER = :l_iv_cheque_structa.maker
+				      INDICATOR :l_i_iv_cheque_struct.i_pm_amount, 
+			     MAKER_DT = :l_iv_cheque_structa.maker_dt
+					INDICATOR :l_i_iv_cheque_struct.i_pm_amount, 
+			     ACCESS_STAMP = :l_iv_cheque_structa.access_stamp
+			           INDICATOR :l_i_iv_cheque_struct.i_pm_amount
+		 WHERE (
+			 TO_CHAR(DATEOF_PAYMENT,'DD/MM/YYYY') = SUBSTR(:l_iv_cheque_structa.dateof_payment,0,10) 
+  			 AND	(CLIENT = :l_iv_cheque_structa.client) 
+			 AND	TO_CHAR(BILL_DATE,'DD/MM/YYYY') = SUBSTR(:l_iv_cheque_structa.bill_date,0,10)
+			 AND    TO_CHAR(ACCESS_STAMP,'DD/MM/YYYY HH24:MI:SS') =:p_iv_cheque_struct_a->access_stamp);
+		Alert("\n sqlca.sqlcode = [%d]",sqlca.sqlcode);
+		
+	
+	if ( sqlca.sqlcode < 0 )	
+	{
+		char chr_l_buffer[KEY_LENGTH];
+
+		memset(chr_l_buffer, APL_NULL_CHAR, KEY_LENGTH);
+
+		ltoa_r(sqlca.sqlcode, chr_l_buffer, KEY_LENGTH - 1);
+
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+		CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, chr_l_buffer, 
+			       APL_NULL_STRING, APL_NULL_STRING, 
+			       __LINE__, __FILE__);
+
+		APL_GOBACK_FAIL
+	}
+	else if ( sqlca.sqlcode == 1403 )
+	{
+		*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+
+		APL_GOBACK_FAIL
+	}
+
+	*int_p_retstat = IV_SUCCESS;
+
+	
+	strcpy(p_iv_cheque_struct_a->access_stamp,l_iv_cheque_structa.access_stamp);
+	
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of IV_Mod_IVPymt_T().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_SUCCESS;
+
+	RETURN_FAILURE:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of IV_Mod_IVPymt_T().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_FAILURE;
+}
+
+
+
+
+
+
+int IV_Del_IVCHEQUE_A(char *l_str_client,char *l_str_bill_date,
+							int *int_p_retstat, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+Alert("\n INSIDE --IV_Del_IVCHEQUE_A");
+
+EXEC SQL DELETE FROM IV_CHEQUE_A WHERE 
+		CLIENT = :l_str_client AND
+		TO_CHAR(BILL_DATE,'DD/MM/YYYY') = SUBSTR(:l_str_bill_date,0,10);
+if(sqlca.sqlcode != 0)
+	{
+	Alert("\n Failed in IV_Del_IVCHEQUE_A");
+	APL_GOBACK_FAIL
+	}
+
+
+   *int_p_retstat = IV_SUCCESS;
+   APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of IV_Del_IVCHEQUE_A().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_SUCCESS;
+	
+	RETURN_FAILURE:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of IV_Del_IVCHEQUE_A().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_FAILURE;
+
+	}
+
+	
+int IV_GetPrevAmt_S(IV_CHEQUE_STRUCT l_iv_cheque_struct_a,double *l_dbl_prev_amt_s,int 								*int_p_retstat, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+double l_prevamt = 0.0;
+
+	EXEC SQL SELECT  CONF_AMT INTO :l_prevamt FROM IV_CHEQUE 
+		WHERE CLIENT = :l_iv_cheque_struct_a.client AND
+			  SERVICE_CD = :l_iv_cheque_struct_a.service_cd AND
+			  INDEN_NUM = :l_iv_cheque_struct_a.inden_num AND
+			  TO_CHAR(BILL_DATE,'DD/MM/YYYY')= SUBSTR(:l_iv_cheque_struct_a.bill_date,0,10) AND
+			   TO_CHAR(DATEOF_PAYMENT,'DD/MM/YYYY')= SUBSTR(:l_iv_cheque_struct_a.dateof_payment,0,10);
+
+if(sqlca.sqlcode != 0)
+	{
+	Alert("\n sqlca.sqlcode = [%d]",sqlca.sqlcode);
+	APL_GOBACK_FAIL
+	}
+
+Alert("\n l_prevamt = [%lf]",l_prevamt);
+*l_dbl_prev_amt_s = l_prevamt;
+*int_p_retstat = IV_SUCCESS;
+   APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of IV_GetPrevAmt_S().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_SUCCESS;
+	
+	RETURN_FAILURE:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of IV_GetPrevAmt_S().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_FAILURE;
+
+	}
+
+/**************Added By siva.ganapathi for ISKB_2222 on 17-03-2009 START **********/
+
+/******************************************************************************************
+ *                                                                                        *
+ * Function Name         : Create_Paramstr												  *
+ *                                                                                        *
+ * Description           : This fucntion is used to prepare the param sting for sub tabs  *
+ *                         in case if we Authorize all Button							  *
+ *																						  *
+ *                                                                                        *
+ *                                                                                        *
+ * Parameter                  Type                      Mode     Description              *
+ * ------------               --------                  -----    ---------------          *
+ * param_string				 char *                           	param string variable	  *
+ *																to this we append label   *                                                            	                    
+ *																and value				  *
+ *																						  *
+ * label					 char *								this label we append to   *
+ *                                                               param string             *                                                                  
+ *																						  *
+ * value					 char *						      	 this value we append to  *
+ *																  param string            *                                                              *
+ *																						  *
+ *                                                                                        *
+ * Return Values        :      1                                                          *
+ *                                                                                        *
+ *                                                                                        *
+ ******************************************************************************************/
+
+int Create_Paramstr( char *param_string,char *label,char *value )
+{
+		strcat(param_string,(char *)AUDIT_DATA_FIELD_SEPRTR);
+		strcat(param_string,label);
+		strcat(param_string,(char *)AUDIT_DATA_VALUE_SEPRTR);
+		strcat(param_string,value);
+		return 1;	
+}
+/**************Added By siva.ganapathi for ISKB_2222 on 17-03-2009 Ended **********/
+/*added by siva.ganapathi*/
+int IV_GetStatus(const IV_CLIENT_PYMT_STRUCT_H *p_iv_client_pymt_struct_h_a, 
+		    char *p_status,int *int_p_retstat, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{	
+	char l_status;
+	
+	printf("Inside the IV_GetStatus() function");
+
+	printf("\n Client code is p_iv_client_pymt_struct_h_a->client	= [%s]", p_iv_client_pymt_struct_h_a->client);
+	printf("\n Bill date is p_iv_client_pymt_struct_h_a->bill_date = [%s]",p_iv_client_pymt_struct_h_a->bill_date);
+	printf("\n Inden num is p_iv_client_pymt_struct_h_a->inden_num = [%d]",p_iv_client_pymt_struct_h_a->inden_num);
+	printf("\n Payment date is p_iv_client_pymt_struct_h_a->pymnt_dt = [%s]",p_iv_client_pymt_struct_h_a->pymnt_dt);
+
+
+	EXEC SQL SELECT STATUS INTO :l_status
+			 FROM IV_CHEQUE 
+			 WHERE CLIENT								= :p_iv_client_pymt_struct_h_a->client AND
+				   TO_CHAR(BILL_DATE,'DD/MM/YYYY')		= SUBSTR(:p_iv_client_pymt_struct_h_a->bill_date,0,10)  AND
+				   INDEN_NUM							= :p_iv_client_pymt_struct_h_a->inden_num AND
+       		       TO_CHAR(DATEOF_PAYMENT,'DD/MM/YYYY')	= SUBSTR(:p_iv_client_pymt_struct_h_a->pymnt_dt,0,10);
+	
+	printf("\n Status of the record is %c",l_status);
+	
+	*p_status = l_status;
+
+	if(sqlca.sqlcode != 0)
+	{
+	Alert("\n sqlca.sqlcode = [%d]",sqlca.sqlcode);
+	APL_GOBACK_FAIL
+	}
+	
+	*int_p_retstat = IV_SUCCESS;
+   APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "\n Exiting successfully out of IV_GetPrevAmt_S().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_SUCCESS;
+	
+	RETURN_FAILURE:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "\n Exiting unsuccessfully out of IV_GetPrevAmt_S().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_FAILURE;
+}

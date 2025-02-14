@@ -1,0 +1,1156 @@
+
+
+	
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+
+
+#include "CR_Common.h"
+#include "CA_Common.h"
+#include "CO_Commdef.h"
+
+
+
+#define	S_SRL_NBR_LEN			3
+
+
+#define  MSG_PARAM_STRUCT_SEP ";"
+#define  LOCAL_LEN_EVNT_NBR 3
+
+
+EXEC SQL INCLUDE SQLCA.H;
+
+
+
+
+
+static	int 	CA_PymtAuth(CA_CAPYMT_AUT_STRUCT_H    *p_ca_capymt_aut_struct_h_a,
+					              INTL_ENV_DATA_STRUCT_H   *p_intlenv_data_struct_h,
+  		      				     DEBUG_INFO_STRUCT_H         **l_debug_info_ptr
+                  				);
+
+static	int 	CA_PymtRst(CA_CAPYMT_AUT_STRUCT_H    *p_ca_capymt_aut_struct_h_a,
+				                 	INTL_ENV_DATA_STRUCT_H   *p_intlenv_data_struct_h,
+  	      				         DEBUG_INFO_STRUCT_H         **l_debug_info_ptr
+                  				);
+
+static	int	CA_Mod_RstPymtMsg(CA_CHK_DET_STRUCT_H		*p_ca_chk_det_struct_h,
+									CA_CAPYMT_AUT_STRUCT_H	*p_ca_capymt_aut_struct_h_a,
+									double					*p_cur_pmt,
+									double					*p_qty_recd,
+									char						*pro_sys_date,
+									char						*access_stamp,
+									DEBUG_INFO_STRUCT_H			**l_debug_info_ptr
+									);
+
+
+
+
+
+int CA_Mod_PymtAuth( CA_CAPYMT_AUT_STRUCT_H  	 *p_ca_capymt_aut_struct_h_a,
+                    INTL_ENV_DATA_STRUCT_H     *p_intlenv_data_struct_h,
+  	                 DEBUG_INFO_STRUCT_H      	 	 **l_debug_info_ptr
+     	            )
+{
+		struct sqlca sqlca;
+		unsigned int int_gp_count=0;
+		char chr_sys_sts_auth[APL_STATUS_LEN] ={APL_STS_AUTH};
+
+
+
+
+   int int_h_no_rec=0;
+   char chr_h_redenom_type[EVT_CLASS_]           =  {EVT_REDOM};
+
+
+ EXEC SQL VAR chr_h_redenom_type     is string;
+
+
+		#ifdef	APL_THREADS
+			APL_SET_CONTEXT
+			EXEC SQL CONTEXT USE :my_ctx_local;
+		#endif
+
+	CO_ProcMonitor(APL_OUT_FILE,"Entered A_DbAuthPymtFn",NULL,p_intlenv_data_struct_h);
+
+
+
+  
+
+   EXEC SQL SELECT NVL(count(*),0)
+   INTO :int_h_no_rec
+   FROM CAEVENT
+   WHERE corp_id=:p_ca_capymt_aut_struct_h_a->h_corp_id
+   AND   CA_EVENT=:chr_h_redenom_type ;
+
+   if ( ( int_h_no_rec != 0) )
+      {
+            CO_InsertErr(        l_debug_info_ptr,
+											  ERR_REDN_EVNTPAY_MNT_NOTALLOWED,
+                                   p_intlenv_data_struct_h->h_mode,
+                                   APL_NULL_STRING,
+                                   APL_NULL_STRING,
+                                    __LINE__,
+                                    __FILE__
+                                    );
+        APL_GOBACK_FAIL
+      }
+
+
+
+
+
+
+	
+	
+	EXEC SQL SELECT NVL(count(*),0)
+	INTO :int_gp_count
+	FROM CAGLPYMT
+	WHERE corp_id=:p_ca_capymt_aut_struct_h_a->h_corp_id
+	AND	stat_pymt <> :chr_sys_sts_auth
+	AND	rownum < 2	;
+
+	IS_ANY_ORA_ERROR
+
+	if ( int_gp_count > 0 )
+	{
+		INSERT_GLOB_PYMT_WARNING_PAY
+	}
+
+	if ( CO_ChkErr(*l_debug_info_ptr) == APL_SUCCESS )
+	{
+		APL_GOBACK_FAIL
+	}
+
+
+	if (	(	!strcmp(p_intlenv_data_struct_h->h_mode,APL_FUNC_AUTHORISE)	)	)
+		{
+			#	ifdef	SYS_DEBUG
+			fprintf(APL_OUT_FILE,"\nMode is Authorise \n");
+			fprintf(APL_OUT_FILE,"\n Primary proc_init of record to be authorised is (%s)\n(%s)\n(%d)",p_ca_capymt_aut_struct_h_a->h_corp_id,p_ca_capymt_aut_struct_h_a->h_dl_client,p_ca_capymt_aut_struct_h_a->h_pymt_srl_nbr);
+			#	endif
+
+			if (	CA_PymtAuth(	p_ca_capymt_aut_struct_h_a,
+										p_intlenv_data_struct_h,
+										l_debug_info_ptr
+										) == APL_FAILURE)
+				{
+					APL_GOBACK_FAIL
+				}
+			else
+				{
+					APL_GOBACK_SUCCESS
+				}
+		}
+
+	if (	(	!strcmp(p_intlenv_data_struct_h->h_mode,APL_FUNC_RESET)	)	)
+		{
+			#	ifdef	SYS_DEBUG
+			fprintf(APL_OUT_FILE,"\n iMode isReset \n");
+			fprintf(APL_OUT_FILE,"\n Primary proc_init of record to be authorised is (%s)\n(%s)\n(%d)",p_ca_capymt_aut_struct_h_a->h_corp_id,p_ca_capymt_aut_struct_h_a->h_dl_client,p_ca_capymt_aut_struct_h_a->h_pymt_srl_nbr);
+			#	endif
+			if (	CA_PymtRst		(p_ca_capymt_aut_struct_h_a,
+												p_intlenv_data_struct_h,
+												l_debug_info_ptr
+											) == APL_FAILURE)
+
+				{
+					APL_GOBACK_FAIL
+				}
+			else
+				{
+					APL_GOBACK_SUCCESS
+				}
+		}
+	
+		
+		APL_GOBACK_SUCCESS
+		RETURN_SUCCESS	:
+		
+		{
+			CO_ProcMonitor(APL_OUT_FILE,"Exiting CA_Mod_PymtAuth successfully",NULL,p_intlenv_data_struct_h);
+			return (APL_SUCCESS);
+		}
+		RETURN_FAILURE	:
+		{
+			CO_ProcMonitor(APL_OUT_FILE,"Exiting CA_Mod_PymtAuth unsuccessfully",NULL,p_intlenv_data_struct_h);
+			return (APL_FAILURE);
+		}
+}
+
+
+
+static	int CA_PymtAuth(	CA_CAPYMT_AUT_STRUCT_H 	*p_ca_capymt_aut_struct_h_a,
+										INTL_ENV_DATA_STRUCT_H	*p_intlenv_data_struct_h,
+						   			DEBUG_INFO_STRUCT_H 			**l_debug_info_ptr
+								)
+{
+	
+	
+
+	struct	sqlca	sqlca;
+	CA_CHK_DET_STRUCT_H		*l_ca_chk_det_struct_h=NULL;
+	CA_CHK_DET_STRUCT_I		*l_ca_chk_det_struct_i=NULL;
+	CA_CHK_PYMT_STRUCT_H	*l_ca_chk_pymt_struct_h=NULL;
+	char		h_ora_rowid[APL_ROWID_LEN] =APL_NULL_STRING;
+	char		chr_h_rowidimg[APL_ROWID_LEN] = APL_NULL_STRING;
+	double	h_curr_pymt=0.0;
+	short		i_curr_pymt=0;
+	double	h_quantity_recd=0.0;
+	short		i_quantity_recd=0;
+	
+	double	h_quantity_paid=0.0;
+	short		i_quantity_paid=0;
+	
+	char		chr_h_pay_date[APL_DATE_LEN]=APL_NULL_STRING;
+	short		i_pay_date=0;
+	char		h_loccode[APL_LOCNCODE_LENGTH] = APL_NULL_STRING;
+	short		i_loccode=0;
+	char		chr_h_rtv_access_stamp[APL_DATE_LEN] = APL_NULL_STRING;
+	short		i_rtv_access_stamp=0;
+	char		chr_h_rtv_maker[APL_USERID_LEN] = APL_NULL_STRING;
+	short		i_rtv_maker=0;
+	char		chr_h_rtv_checker[APL_USERID_LEN] = APL_NULL_STRING;
+	short		i_rtv_checker=0;
+	char		h_pymt_stat[APL_STATUS_LEN] = APL_NULL_STRING;
+	short		i_pymt_stat=0;
+	char		h_typeofinstr[APL_INSTRU_TYPE_LEN] = APL_NULL_STRING;
+	short		i_typeofinstr=0;
+
+	char		chr_str_eqv_srl_nbr[S_SRL_NBR_LEN] = APL_NULL_STRING;		
+	char		h_sys_dt[APL_DATE_LEN] = APL_NULL_STRING;
+	short		i_sys_date=0;
+	char		*int_pos;
+	char		h_checker[APL_USERID_LEN] = APL_NULL_STRING;
+	short		i_checker=0;
+	char		chr_h_upd_pay_stat[APL_STATUS_LEN] = APL_NULL_STRING;
+	short		i_upd_pay_stat=0;
+	char		chr_h_upd_access_stamp[APL_DATE_LEN] = APL_NULL_STRING;
+	short		i_upd_access_stamp=0;
+	char		chr_sys_sts_rev[APL_STATUS_LEN]=APL_NULL_STRING ;
+	
+		#ifdef	APL_THREADS
+			APL_SET_CONTEXT
+			EXEC SQL CONTEXT USE :my_ctx_local;
+		#endif
+
+	CO_ProcMonitor(APL_OUT_FILE,"Entered S_PaymentAuth",NULL,p_intlenv_data_struct_h);
+
+	
+	strcpy(chr_sys_sts_rev,STATUS_REVERSED);
+
+	
+	if(	!strlen(p_ca_capymt_aut_struct_h_a->h_corp_id	)	)
+		
+			APL_DATA_MISSING("Event ID",APL_NULL_STRING,APL_NULL_STRING)
+
+	if(	!strlen(p_ca_capymt_aut_struct_h_a->h_dl_client	)	)
+		
+			APL_DATA_MISSING("Account",APL_NULL_STRING,APL_NULL_STRING)
+	
+	if(	p_ca_capymt_aut_struct_h_a->h_pymt_srl_nbr	==	0		)
+		
+			APL_DATA_MISSING("Payment Serial Number",APL_NULL_STRING,APL_NULL_STRING)
+	
+	if(	!strlen(p_ca_capymt_aut_struct_h_a->h_access_stamp	)	)
+			APL_DATA_MISSING("Access Stamp missing ",APL_NULL_STRING,APL_NULL_STRING)
+ 
+	if	(	CO_ChkErr(*l_debug_info_ptr)	 == APL_SUCCESS	)
+		APL_GOBACK_FAIL
+	
+	
+			fprintf(APL_OUT_FILE,"\n about to select record based on corp_id :(%s)\n(%s)\n(%d)\n",p_ca_capymt_aut_struct_h_a->h_corp_id,p_ca_capymt_aut_struct_h_a->h_dl_client,p_ca_capymt_aut_struct_h_a->h_pymt_srl_nbr); 
+	
+	
+			
+
+			EXEC SQL VAR	chr_h_rtv_maker is string;
+			EXEC SQL VAR	chr_h_rtv_checker is string;
+			EXEC SQL VAR   h_loccode is string; 
+
+			
+
+			
+			
+			
+
+			strcpy(chr_str_eqv_srl_nbr,ltoa(p_ca_capymt_aut_struct_h_a->h_pymt_srl_nbr) )	;		
+
+			
+			
+			EXEC SQL SELECT ROWID,
+								NVL(CURR_PYMT,0),
+								NVL(QUANTITY_RECEIVED,0),
+								NVL(QUANTITY_PAID,0),
+								DATEOF_PAYMENT,
+								LOCATION_CD,
+								ACCESS_STAMP,
+								STAT_PYMT,
+								MAKER,
+								CHECKER
+
+						INTO	:h_ora_rowid,
+								:h_curr_pymt:i_curr_pymt,
+								:h_quantity_recd:i_quantity_recd,
+								:h_quantity_paid:i_quantity_paid,
+								:chr_h_pay_date:i_pay_date,
+								:h_loccode:i_loccode,
+								:chr_h_rtv_access_stamp:i_rtv_access_stamp,
+								:h_pymt_stat:i_pymt_stat,
+								:chr_h_rtv_maker:i_rtv_maker,
+								:chr_h_rtv_checker:i_rtv_checker
+
+			FROM 		CACHEQUE 
+        	WHERE 
+				CORP_ID			=:p_ca_capymt_aut_struct_h_a->h_corp_id 	AND
+				CLIENT		=:p_ca_capymt_aut_struct_h_a->h_dl_client	AND
+				SEQNUM_PAY	=:p_ca_capymt_aut_struct_h_a->h_pymt_srl_nbr
+      	FOR UPDATE OF	CACHEQUE.STAT_PYMT;
+		
+			IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET( ERR_PAYMNT_NOTFND_A,
+																p_ca_capymt_aut_struct_h_a->h_corp_id,
+																p_ca_capymt_aut_struct_h_a->h_dl_client,
+																chr_str_eqv_srl_nbr
+																)	
+		# 	ifdef SYS_DEBUG
+		fprintf(APL_OUT_FILE,"\nRetreived rowid is :(%s)\n",h_ora_rowid);		
+		fprintf(APL_OUT_FILE,"\nRetreived access stamp is :(%s)\n",chr_h_rtv_access_stamp);		
+		#	endif
+
+		
+		
+		
+		if (	
+				strcmp(	p_ca_capymt_aut_struct_h_a->h_access_stamp,
+							chr_h_rtv_access_stamp
+						)
+			)		
+			{
+				CO_InsertErr(l_debug_info_ptr,
+									ERR_ACCESSSTAMP_CHGD,
+									APL_NULL_STRING,
+									APL_NULL_STRING,
+									APL_NULL_STRING,
+									__LINE__,
+									__FILE__
+									);
+				APL_GOBACK_FAIL
+			}
+
+		#	ifdef SYS_DEBUG
+			fprintf(APL_OUT_FILE,"\nAccess stamp check has passed\n");		
+		#	endif
+	
+		
+		
+		
+
+		if	(	i_rtv_checker	!= -1	)
+			{
+				CO_InsertErr(l_debug_info_ptr,
+									ERR_PAYMNT_AUTHORIZED_A,
+									p_ca_capymt_aut_struct_h_a->h_corp_id,
+									p_ca_capymt_aut_struct_h_a->h_dl_client,
+									chr_str_eqv_srl_nbr,
+									__LINE__,
+									__FILE__
+									);
+				APL_GOBACK_FAIL
+			}
+		
+		
+		
+
+		if	(	!strcmp(p_intlenv_data_struct_h->usr,chr_h_rtv_maker)	)
+			{
+				CO_InsertErr(l_debug_info_ptr,
+									ERR_MAKER_CHECKER_SAME,
+									p_intlenv_data_struct_h->usr,
+									APL_NULL_STRING,
+									APL_NULL_STRING,
+									__LINE__,
+									__FILE__
+									);
+				APL_GOBACK_FAIL
+			}
+	
+		
+		
+		
+
+			if	(	strcmp(h_pymt_stat,APL_STATUS_UNAUTH)	)
+			{
+				EXEC SQL SELECT 	ROWID
+				INTO					:chr_h_rowidimg
+				FROM CACHEQUEMG 
+        		WHERE 
+						CORP_ID=:p_ca_capymt_aut_struct_h_a->h_corp_id 				AND
+						CLIENT		=:p_ca_capymt_aut_struct_h_a->h_dl_client		AND
+						SEQNUM_PAY	=:p_ca_capymt_aut_struct_h_a->h_pymt_srl_nbr
+      		FOR UPDATE OF	CACHEQUEMG.STAT_PYMT;
+			
+				IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET( ERR_PAYMNTIMG_NOTFND,
+																	p_ca_capymt_aut_struct_h_a->h_corp_id,
+																	p_ca_capymt_aut_struct_h_a->h_dl_client,
+																	chr_str_eqv_srl_nbr
+																	)	
+			}
+
+	
+
+	l_ca_chk_det_struct_h=(CA_CHK_DET_STRUCT_H *)calloc(	1,sizeof(CA_CHK_DET_STRUCT_H)	);
+	APL_MALLOC_FAIL(l_ca_chk_det_struct_h) 
+
+
+	l_ca_chk_det_struct_i=(CA_CHK_DET_STRUCT_I *)calloc(	1,sizeof(CA_CHK_DET_STRUCT_I)	);
+	APL_MALLOC_FAIL(l_ca_chk_det_struct_i) 
+
+	l_ca_chk_pymt_struct_h=(CA_CHK_PYMT_STRUCT_H *)calloc( 1,sizeof(CA_CHK_PYMT_STRUCT_H));
+	APL_MALLOC_FAIL(l_ca_chk_pymt_struct_h) 
+	
+	
+
+
+	
+	
+	
+
+	if	(	CA_CheckStatus( p_ca_capymt_aut_struct_h_a->h_corp_id,	
+							  	 p_ca_capymt_aut_struct_h_a->h_dl_client,	
+							  	 h_loccode,	
+				      		l_ca_chk_det_struct_h,	
+				      		l_ca_chk_det_struct_i,	
+								p_intlenv_data_struct_h,
+								l_debug_info_ptr
+									)		==	APL_FAILURE
+		)
+			{
+				APL_GOBACK_FAIL
+			}
+
+	
+	
+	
+	
+
+	if	(	!strcmp(h_pymt_stat,APL_STATUS_UNAUTH)	||
+			!strcmp(h_pymt_stat,STATUS_RDY_PYMT)	||
+			!strcmp(h_pymt_stat,STATUS_CHNG_RDY_PYMT)	
+		)
+	{
+		strcpy(l_ca_chk_pymt_struct_h->corp_id,p_ca_capymt_aut_struct_h_a->h_corp_id);
+		strcpy(l_ca_chk_pymt_struct_h->client,p_ca_capymt_aut_struct_h_a->h_dl_client);
+		l_ca_chk_pymt_struct_h->curr_pymt		=	h_curr_pymt;
+		l_ca_chk_pymt_struct_h->quantity_received		=	h_quantity_recd;
+		l_ca_chk_pymt_struct_h->quantity_received		=	h_quantity_paid;
+
+		if		(CA_Chk_SumPymt(	l_ca_chk_pymt_struct_h,
+								   		l_ca_chk_det_struct_h,
+					            		p_intlenv_data_struct_h,
+											l_debug_info_ptr
+										)
+				 		==	APL_FAILURE
+				)
+			{
+				APL_GOBACK_FAIL
+			}
+	 }
+		
+
+		if (	CO_RtvSysDtTime(h_sys_dt,l_debug_info_ptr) == APL_FAILURE )
+		{
+			APL_GOBACK_FAIL
+		}
+
+		strcpy(chr_h_upd_access_stamp,h_sys_dt);
+
+		
+
+		strcpy(h_sys_dt,strtok_r(h_sys_dt," ",&int_pos));
+		strcat(h_sys_dt,APL_NULL_TIME);
+	
+		
+	
+		strcpy(h_checker,p_intlenv_data_struct_h->usr);
+
+		
+		
+		
+		
+		
+		
+
+		
+		if	(	!strcmp(h_pymt_stat,STATUS_DEL_UNAUTH)	)
+			{
+				strcpy(chr_h_upd_pay_stat,STATUS_DELETED_A);
+			}
+
+		
+		
+					
+		if	(
+				(!strcmp(h_pymt_stat,STATUS_CHNG_RDY_PYMT))	||
+				(!strcmp(h_pymt_stat,APL_STATUS_UNAUTH))
+			)
+			{
+				strcpy(chr_h_upd_pay_stat,STATUS_RDY_PYMT);
+			}				
+
+	
+		
+		
+		
+		if	(	!strcmp(h_pymt_stat,STATUS_REV_UAUTH)	)
+			{
+					
+				strcpy(chr_h_upd_pay_stat,STATUS_REVERSED);
+			}
+
+		 
+		
+		
+
+		if ( !strcmp(chr_h_upd_pay_stat,STATUS_DELETED_A) )
+		{		
+		EXEC SQL DELETE
+		CACHEQUE
+		WHERE
+		ROWID			=	:h_ora_rowid;
+	
+		IS_ANY_ORA_ERROR	
+		}
+		else
+		{
+
+		EXEC SQL UPDATE
+		CACHEQUE
+		SET
+			CHECKER		=	:h_checker:i_checker,
+			CHECKER_DT	=	:h_sys_dt:i_sys_date,		
+			STAT_PYMT		=	:chr_h_upd_pay_stat:i_upd_pay_stat,			
+			PROCESSED_DATE		=	:h_sys_dt:i_sys_date,
+			HF_DATE  =  DECODE(:chr_h_upd_pay_stat,:chr_sys_sts_rev,NULL,HF_DATE),
+			ACCESS_STAMP	=:chr_h_upd_access_stamp
+		WHERE
+			ROWID			=	:h_ora_rowid;
+		
+		IS_ANY_ORA_ERROR
+
+		}
+		
+		
+		
+
+		if	(	!strcmp(h_pymt_stat,STATUS_REV_UAUTH)	)
+
+			{
+				if	(	CA_Mod_RstPymtMsg		(		l_ca_chk_det_struct_h,
+													p_ca_capymt_aut_struct_h_a,
+													&h_curr_pymt,
+													&h_quantity_recd,
+													h_sys_dt,
+													chr_h_upd_access_stamp,
+													l_debug_info_ptr
+												)	==		APL_FAILURE
+					)
+					{
+						APL_GOBACK_FAIL
+					}
+			}
+		
+		
+		
+ 
+
+		if	(	strcmp(h_pymt_stat,APL_STATUS_UNAUTH)	)
+			{				
+				EXEC SQL DELETE
+				FROM
+				CACHEQUEMG
+				WHERE	
+						ROWID=:chr_h_rowidimg;	
+	
+				IS_ANY_ORA_ERROR
+			}
+
+
+
+			APL_GOBACK_SUCCESS
+			RETURN_SUCCESS	:
+		{
+			APL_FREE(l_ca_chk_det_struct_h);
+			APL_FREE(l_ca_chk_det_struct_i);
+			APL_FREE(l_ca_chk_pymt_struct_h);
+			CO_ProcMonitor(APL_OUT_FILE,"Exiting CA_PymtAuth successfully",NULL,p_intlenv_data_struct_h);
+			return (APL_SUCCESS);
+		}
+		RETURN_FAILURE	:
+		{
+			APL_FREE(l_ca_chk_det_struct_h);
+			APL_FREE(l_ca_chk_det_struct_i);
+			APL_FREE(l_ca_chk_pymt_struct_h);
+			CO_ProcMonitor(APL_OUT_FILE,"Exiting CA_PymtAuth unsuccessfully",NULL,p_intlenv_data_struct_h);
+			return (APL_FAILURE);
+		}
+}
+
+
+
+static	int 	CA_PymtRst( CA_CAPYMT_AUT_STRUCT_H    *p_ca_capymt_aut_struct_h_a,
+				                  INTL_ENV_DATA_STRUCT_H   *p_intlenv_data_struct_h,
+  	      				         DEBUG_INFO_STRUCT_H         **l_debug_info_ptr
+                  				)
+{
+	CA_CACHEQUE_STRUCT_H		*l_ca_cachequeimg_struct_h		=	NULL;
+	CA_CACHEQUE_STRUCT_I		*l_ca_cachequeimg_struct_i		=	NULL;
+	CA_CHK_DET_STRUCT_H			*l_ca_chk_det_struct_h			=	NULL;
+	CA_CHK_DET_STRUCT_I			*l_ca_chk_det_struct_i			=	NULL;
+	CA_CHK_PYMT_STRUCT_H		*l_ca_chk_pymt_struct_h			=	NULL;
+	char		h_ora_rowid[APL_ROWID_LEN];					
+	char		chr_h_rowidimg[APL_ROWID_LEN];					
+	char		chr_h_rtv_access_stamp[APL_DATE_LEN];
+	short		i_rtv_access_stamp=0;
+	char		chr_h_rtv_checker[APL_USERID_LEN];
+	short		i_rtv_checker=0;
+	char		chr_h_rtv_maker[APL_USERID_LEN];
+	short		i_rtv_maker=0;
+	char		h_pymt_stat[APL_STATUS_LEN];
+	short		i_pymt_stat=0;
+	double	h_curr_pymt=0;
+	short		i_curr_pymt=0;
+	double	h_quantity_recd=0;
+   short		i_quantity_recd=0;
+	
+	double	h_quantity_paid=0;
+   short		i_quantity_paid=0;
+	
+
+
+		#ifdef	APL_THREADS
+			APL_SET_CONTEXT
+			EXEC SQL CONTEXT USE :my_ctx_local;
+		#endif
+
+	CO_ProcMonitor(APL_OUT_FILE,"Entered S_PaymentReset",NULL,p_intlenv_data_struct_h);
+	# ifdef DEBUG_FLAG
+			fprintf(APL_OUT_FILE,"\n Primary proc_init of record to be reset is (%s)\n(%s)\n(%d)",p_ca_capymt_aut_struct_h_a->h_corp_id,p_ca_capymt_aut_struct_h_a->h_dl_client,p_ca_capymt_aut_struct_h_a->h_pymt_srl_nbr);
+	#	endif
+	
+	
+	
+	if(	!strlen(p_ca_capymt_aut_struct_h_a->h_corp_id	)	)
+			APL_DATA_MISSING("Payment record Primary Key",APL_NULL_STRING,APL_NULL_STRING)
+	
+	if(	!strlen(p_ca_capymt_aut_struct_h_a->h_dl_client	)	)
+		
+			APL_DATA_MISSING("Account",APL_NULL_STRING,APL_NULL_STRING)
+	
+	if(	p_ca_capymt_aut_struct_h_a->h_pymt_srl_nbr	==	0		)
+		
+			APL_DATA_MISSING("Payment Serial Number",APL_NULL_STRING,APL_NULL_STRING)
+	if(	!strlen(p_ca_capymt_aut_struct_h_a->h_access_stamp	)	)
+			APL_DATA_MISSING("Access Stamp missing ",APL_NULL_STRING,APL_NULL_STRING)
+
+	if	(	CO_ChkErr(*l_debug_info_ptr)	 == APL_SUCCESS	)
+		APL_GOBACK_FAIL
+	
+	
+	(l_ca_cachequeimg_struct_h)	=	(CA_CACHEQUE_STRUCT_H*)calloc(1,sizeof(CA_CACHEQUE_STRUCT_H));
+	APL_MALLOC_FAIL(l_ca_cachequeimg_struct_h);
+	
+	(l_ca_cachequeimg_struct_i)	=	(CA_CACHEQUE_STRUCT_I*)calloc(1,sizeof(CA_CACHEQUE_STRUCT_I));
+	APL_MALLOC_FAIL(l_ca_cachequeimg_struct_i);
+
+	
+
+	l_ca_chk_det_struct_h=(CA_CHK_DET_STRUCT_H *)calloc(	1,sizeof(CA_CHK_DET_STRUCT_H)	);
+	APL_MALLOC_FAIL(l_ca_chk_det_struct_h) 
+
+
+	l_ca_chk_det_struct_i=(CA_CHK_DET_STRUCT_I *)calloc(	1,sizeof(CA_CHK_DET_STRUCT_I)	);
+	APL_MALLOC_FAIL(l_ca_chk_det_struct_i) 
+	
+	(l_ca_chk_pymt_struct_h)	=	(CA_CHK_PYMT_STRUCT_H *)calloc(1,sizeof(CA_CHK_PYMT_STRUCT_H));
+	APL_MALLOC_FAIL(l_ca_chk_pymt_struct_h)
+	
+			
+
+			EXEC SQL VAR	l_ca_cachequeimg_struct_h->h_corp_id 	 is string;
+			EXEC SQL VAR	l_ca_cachequeimg_struct_h->h_dl_client 	 is string;
+			EXEC SQL VAR	l_ca_cachequeimg_struct_h->h_pymt_inst	 is string;
+			EXEC SQL VAR	l_ca_cachequeimg_struct_h->h_maker 	 is string;
+			EXEC SQL VAR	l_ca_cachequeimg_struct_h->h_checker 	 is string;
+			EXEC SQL VAR	l_ca_cachequeimg_struct_h->h_txn_indentity_no is string;
+			EXEC SQL VAR	l_ca_cachequeimg_struct_h->h_loccode  is string;
+			EXEC SQL VAR	chr_h_rtv_maker is string;
+			EXEC SQL VAR	chr_h_rtv_checker is string;
+
+			
+
+			
+			
+			EXEC SQL SELECT 	ROWID,
+									ACCESS_STAMP,
+									NVL(CURR_PYMT,0),
+									NVL(QUANTITY_RECEIVED,0),
+									NVL(QUANTITY_PAID,0),
+									STAT_PYMT,
+									MAKER,
+									CHECKER
+ 
+			INTO					:h_ora_rowid,
+									:chr_h_rtv_access_stamp:i_rtv_access_stamp,
+									:h_curr_pymt:i_curr_pymt,
+									:h_quantity_recd:i_quantity_recd,
+									:h_quantity_paid:i_quantity_paid,
+									:h_pymt_stat:i_pymt_stat,
+									:chr_h_rtv_maker:i_rtv_maker,	 
+									:chr_h_rtv_checker:i_rtv_checker	 
+			
+			FROM CACHEQUE 
+        	WHERE 
+						CORP_ID=:p_ca_capymt_aut_struct_h_a->h_corp_id			AND 
+						CLIENT 	=:p_ca_capymt_aut_struct_h_a->h_dl_client AND
+						SEQNUM_PAY =:p_ca_capymt_aut_struct_h_a->h_pymt_srl_nbr
+      	FOR UPDATE OF	CACHEQUE.STAT_PYMT;
+
+			IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET( ERR_PAYMNT_NOTFND_A,
+																APL_NULL_STRING,	
+																APL_NULL_STRING,	
+																APL_NULL_STRING
+																	)	
+		
+		
+		if (	
+				strcmp(	p_ca_capymt_aut_struct_h_a->h_access_stamp,
+							chr_h_rtv_access_stamp
+						)
+			)		
+			{
+				CO_InsertErr(l_debug_info_ptr,
+									ERR_ACCESSSTAMP_CHGD,
+									APL_NULL_STRING,
+									APL_NULL_STRING,
+									APL_NULL_STRING,
+									__LINE__,
+									__FILE__
+									);
+				APL_GOBACK_FAIL
+			}
+
+		
+		
+
+		if	(	i_rtv_checker	!= -1	)
+			{
+				CO_InsertErr(l_debug_info_ptr,
+									ERR_EVNT_AUTHORIZED,
+									APL_NULL_STRING,
+									APL_NULL_STRING,
+									APL_NULL_STRING,
+									__LINE__,
+									__FILE__
+									);
+				APL_GOBACK_FAIL
+			}
+		
+		
+		
+
+		if	(	!strcmp(p_intlenv_data_struct_h->usr,chr_h_rtv_maker)	)
+			{
+				CO_InsertErr(l_debug_info_ptr,
+									ERR_MAKER_CHECKER_SAME,
+									p_intlenv_data_struct_h->usr,
+									APL_NULL_STRING,
+									APL_NULL_STRING,
+									__LINE__,
+									__FILE__
+									);
+				APL_GOBACK_FAIL
+			}
+
+		
+
+		if	(	!strcmp(h_pymt_stat,APL_STATUS_UNAUTH)	)
+			{
+				CO_InsertErr(l_debug_info_ptr,
+									ERR_CANT_RESET,
+									h_pymt_stat,
+									APL_NULL_STRING,
+									APL_NULL_STRING,
+									__LINE__,
+									__FILE__
+									);
+				APL_GOBACK_FAIL
+			}
+
+		
+
+			EXEC SQL SELECT 	ROWID,
+									CACHEQUEMG.* 
+			INTO					:chr_h_rowidimg,
+									:l_ca_cachequeimg_struct_h:l_ca_cachequeimg_struct_i	 
+			FROM CACHEQUEMG 
+        	WHERE 
+						CORP_ID		=:p_ca_capymt_aut_struct_h_a->h_corp_id	AND
+						CLIENT 	=:p_ca_capymt_aut_struct_h_a->h_dl_client AND
+						SEQNUM_PAY =:p_ca_capymt_aut_struct_h_a->h_pymt_srl_nbr
+      	FOR UPDATE OF	CACHEQUEMG.STAT_PYMT;
+
+			IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET( ERR_PAYMNTIMG_NOTFND,
+																APL_NULL_STRING,	
+																APL_NULL_STRING,	
+																APL_NULL_STRING
+																)	
+	
+	
+	
+	
+
+	if	(	CA_CheckStatus( p_ca_capymt_aut_struct_h_a->h_corp_id,	
+				    		   p_ca_capymt_aut_struct_h_a->h_dl_client,	
+							   l_ca_cachequeimg_struct_h->h_loccode,	
+				      		l_ca_chk_det_struct_h,	
+				      		l_ca_chk_det_struct_i,	
+								p_intlenv_data_struct_h,
+								l_debug_info_ptr
+									)		==	APL_FAILURE
+		)
+			{
+				APL_GOBACK_FAIL
+			}
+
+	#	ifdef	SYS_DEBUG
+		fprintf(APL_OUT_FILE,"\nValue in main table (%lf) \n",l_ca_cachequeimg_struct_h->h_quantity_recd);
+	#	endif
+
+	
+	
+
+		strcpy(l_ca_chk_pymt_struct_h->corp_id,p_ca_capymt_aut_struct_h_a->h_corp_id);
+		strcpy(l_ca_chk_pymt_struct_h->client,p_ca_capymt_aut_struct_h_a->h_dl_client);
+		l_ca_chk_pymt_struct_h->curr_pymt		=	(l_ca_cachequeimg_struct_h->h_curr_pymt -
+														 h_curr_pymt);
+		l_ca_chk_pymt_struct_h->quantity_received		=	(l_ca_cachequeimg_struct_h->h_quantity_recd -
+														 h_quantity_recd);
+		l_ca_chk_pymt_struct_h->quantity_paid		=	(l_ca_cachequeimg_struct_h->h_quantity_paid -
+														 h_quantity_paid);
+
+
+		
+		if		(CA_Chk_SumPymt(	l_ca_chk_pymt_struct_h,
+								   		l_ca_chk_det_struct_h,
+					            		p_intlenv_data_struct_h,
+											l_debug_info_ptr
+										)
+				 		==	APL_FAILURE
+				)
+			{
+				APL_GOBACK_FAIL
+			}
+
+	
+
+		if	(	CA_Mod_Pymt(	l_ca_cachequeimg_struct_h,
+											l_ca_cachequeimg_struct_i,
+											h_ora_rowid,
+											l_debug_info_ptr
+										)	==	APL_FAILURE
+				)
+			APL_GOBACK_FAIL	
+
+			EXEC SQL DELETE
+			FROM CACHEQUEMG
+			WHERE
+					ROWID=:chr_h_rowidimg;
+
+			IS_ANY_ORA_ERROR
+
+
+			APL_GOBACK_SUCCESS
+			RETURN_SUCCESS	:
+		
+		{
+			APL_FREE(l_ca_cachequeimg_struct_h);
+			APL_FREE(l_ca_cachequeimg_struct_i);
+			APL_FREE(l_ca_chk_det_struct_h);
+			APL_FREE(l_ca_chk_det_struct_i);
+			APL_FREE(l_ca_chk_pymt_struct_h);
+			
+			CO_ProcMonitor(APL_OUT_FILE,"Exiting CA_PymtRst successfully",NULL,p_intlenv_data_struct_h);
+			return (APL_SUCCESS);
+		}
+		RETURN_FAILURE	:
+		{
+			APL_FREE(l_ca_cachequeimg_struct_h);
+			APL_FREE(l_ca_cachequeimg_struct_i);
+			APL_FREE(l_ca_chk_det_struct_h);
+			APL_FREE(l_ca_chk_det_struct_i);
+			APL_FREE(l_ca_chk_pymt_struct_h);
+			
+			CO_ProcMonitor(APL_OUT_FILE,"Exiting CA_PymtRst unsuccessfully",NULL,p_intlenv_data_struct_h);
+			return (APL_FAILURE);
+		}
+}
+
+
+	
+static	int	CA_Mod_RstPymtMsg		(	CA_CHK_DET_STRUCT_H		*p_ca_chk_det_struct_h,
+											CA_CAPYMT_AUT_STRUCT_H	*p_ca_capymt_aut_struct_h_a,
+											double					*p_cur_pmt,
+											double					*p_qty_recd,
+											char						*chr_p_sys_date,
+											char						*chr_p_access_stamp,
+											DEBUG_INFO_STRUCT_H			**l_debug_info_ptr
+										)
+{
+	double	l_entitl_received_amt=0;
+	double	l_entitl_quantity_received=0;
+	double	l_event_received_amt=0;
+	double	l_event_quantity_received=0;
+	double	l_qty_paid=0;
+	short 	i_qty_paid=0;
+	char		l_deal_ref_no[17] =APL_NULL_STRING;
+	short 	i_deal_ref_no = 0;
+	char 		l_op_evt_class[3] = APL_NULL_STRING;
+	short 	i_op_evt_class	=0;
+	int		int_ent_cls_flg=0;
+	int		int_event_cls_flg=0;
+	char		h_evt_stat[APL_STATUS_LEN];
+	char		h_entitl_stat[APL_STATUS_LEN];
+	char		chr_rev_msg[MSGCD_LEN];
+   char     chr_str_pay_srl_nbr[LOCAL_LEN_EVNT_NBR];
+   char     chr_msg_param_struct[201];
+	char		h_pymt_send_msg_ind[APL_FLAG_LENGTH] = APL_NULL_STRING;
+	short		i_pymt_send_msg_ind=0;
+
+		#ifdef	APL_THREADS
+			APL_SET_CONTEXT
+			EXEC SQL CONTEXT USE :my_ctx_local;
+		#endif
+
+	#	ifdef	SYS_DEBUG
+		fprintf(APL_OUT_FILE,"\n Entering CA_Mod_RstPymtMsg \n");
+	#	endif
+	strcpy(h_evt_stat,APL_NULL_STRING);
+	strcpy(h_entitl_stat,APL_NULL_STRING);
+   
+   strcpy(chr_str_pay_srl_nbr,ltoa(p_ca_capymt_aut_struct_h_a->h_pymt_srl_nbr) );
+   
+   strcpy(chr_msg_param_struct,chr_str_pay_srl_nbr);
+   strcat(chr_msg_param_struct,MSG_PARAM_STRUCT_SEP);
+
+		if	(	*p_cur_pmt	!=	0)
+			{
+				l_entitl_received_amt	=	(	p_ca_chk_det_struct_h->h_entl_amt_recd	-	
+												(*p_cur_pmt)
+											);
+			}
+
+				
+		if	(	*p_qty_recd	!=	0)
+			{
+				l_entitl_quantity_received	=	(	p_ca_chk_det_struct_h->h_entl_quantity_recd	-	
+												(*p_qty_recd)
+											);
+			}	
+
+		
+		
+
+	
+		if	(	(l_entitl_received_amt	==	0)	&&
+				(l_entitl_quantity_received	== 0)
+			)
+			{
+				strcpy(h_entitl_stat,STATUS_RDY_PYMT);
+			}
+
+		else if	(	!strcmp(p_ca_chk_det_struct_h->h_entitl_stat,
+						STATUS_MSG_PAID_CLSD)
+					)	
+					{
+						strcpy(h_entitl_stat,STATUS_PART_PAID);
+					}
+		else
+					{
+						strcpy(h_entitl_stat,p_ca_chk_det_struct_h->h_entitl_stat);
+					}
+
+		#	ifdef	SYS_DEBUG
+			fprintf( APL_OUT_FILE,"Updated values of :\n Entititlement Status :(%s), Qty Recd :(%f), Inc recd :(%f)\n",h_entitl_stat,l_entitl_quantity_received,l_entitl_received_amt);
+		#	endif
+			
+
+			EXEC	SQL	UPDATE	CAENTITLEMENT
+			SET
+					RECEIVED_AMT			=:l_entitl_received_amt,
+					QUANTITY_RECEIVED			=:l_entitl_quantity_received,
+					STATUS			=:h_entitl_stat, /*Smita Changed Col Names - HDFCCA Base Ver*/
+					PROCESSED_DATE			=:chr_p_sys_date,
+					ACCESS_STAMP	=:chr_p_access_stamp
+			WHERE
+					CORP_ID				=:p_ca_capymt_aut_struct_h_a->h_corp_id	AND
+					CLIENT			=:p_ca_capymt_aut_struct_h_a->h_dl_client;
+
+			IS_ANY_ORA_ERROR
+		
+
+		if	(	*p_cur_pmt	!=	0)
+			{
+				l_event_received_amt	=	(	p_ca_chk_det_struct_h->h_evt_amt_recd	-	
+												(*p_cur_pmt)
+											);
+			}
+
+				
+		if	(	*p_qty_recd	!=	0)
+			{
+				l_event_quantity_received	=	(	p_ca_chk_det_struct_h->h_evt_quantity_recd	-	
+												(*p_qty_recd)
+											);
+			}	
+
+		
+		
+
+			if	(	(l_event_received_amt	==	0)	&&
+					(l_event_quantity_received	== 0)
+				)
+				{
+					strcpy(h_evt_stat,STATUS_RDY_PYMT);
+				}
+
+			else if	(	!strcmp(p_ca_chk_det_struct_h->h_evt_stat,
+										STATUS_MSG_PAID_CLSD)
+						)	
+							{
+								strcpy(h_evt_stat,STATUS_PART_PAID);
+							}
+			else
+					{
+						strcpy(h_evt_stat,p_ca_chk_det_struct_h->h_evt_stat);
+					}
+			
+		#	ifdef	SYS_DEBUG
+			fprintf( APL_OUT_FILE,"Updated values of :\n Event Status :(%s), Qty Recd :(%f), Inc recd :(%f)\n",h_evt_stat,l_event_quantity_received,l_event_received_amt);
+		#	endif
+		
+/*Smita - Changed Col Name - HDFCCA_BaseVer*/
+			EXEC	SQL	UPDATE	CAEVENT
+			SET
+					RECEIVED_AMT			=:l_event_received_amt,
+					QUANTITY_RECEIVED			=:l_event_quantity_received,
+					STATUS		=:h_evt_stat,
+					PROCESSED_DATE			=:chr_p_sys_date,
+					ACCESS_STAMP	=:chr_p_access_stamp
+			WHERE
+					CORP_ID				=:p_ca_capymt_aut_struct_h_a->h_corp_id;
+
+			IS_ANY_ORA_ERROR
+		
+		
+			EXEC SQL SELECT PYMT_SEND_MSG_IND
+			INTO :h_pymt_send_msg_ind:i_pymt_send_msg_ind
+			FROM CAEVENT
+			WHERE
+					CORP_ID				=:p_ca_capymt_aut_struct_h_a->h_corp_id;
+
+			IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_EVNT_FOR_PAYMNT_NOTFND,p_ca_capymt_aut_struct_h_a->h_corp_id,APL_NULL_STRING,APL_NULL_STRING)
+
+				EXEC SQL SELECT OP_EVT_CLASS
+							INTO :l_op_evt_class:i_op_evt_class
+							FROM CAEVENT 
+							WHERE CORP_ID =:p_ca_capymt_aut_struct_h_a->h_corp_id;
+			IS_ANY_ORA_ERROR
+	
+			if ( !strcmp(h_pymt_send_msg_ind,APL_YES_IND) )
+			{	
+			if	(	!strcmp(p_ca_chk_det_struct_h->h_evt_class,EVT_BOND_REDMP)	) 	
+				{
+					strcpy(chr_rev_msg,REV_MSG_BOND_RDMP);
+				}
+
+			else if(	!strcmp(p_ca_chk_det_struct_h->h_evt_class,EVT_CASH_DIV)	||
+					!strcmp(p_ca_chk_det_struct_h->h_evt_class,EVT_BOND)	||
+					!strcmp(p_ca_chk_det_struct_h->h_evt_class,EVT_DECR_VAL)	
+				)			 	
+				{
+					strcpy(chr_rev_msg,REV_MSG_DIV);
+				}
+
+			else if(	!strcmp(p_ca_chk_det_struct_h->h_evt_class,EVT_STOK_DIV)	||
+					!strcmp(p_ca_chk_det_struct_h->h_evt_class,EVT_BONUS)		||	
+					!strcmp(p_ca_chk_det_struct_h->h_evt_class,EVT_RHTS)	 ||
+					!strcmp(p_ca_chk_det_struct_h->h_evt_class,EVT_OFFER)	
+				) 	
+				{
+					strcpy(chr_rev_msg,REV_MSG_STOCK);
+				}
+			else if((	!strcmp(p_ca_chk_det_struct_h->h_evt_class,"CV")) || ((!strcmp(p_ca_chk_det_struct_h->h_evt_class,"SP")) && (strcmp(l_op_evt_class,"AM")==0)))
+				{
+					EXEC SQL SELECT QUANTITY_PAID , DEAL_IDENTITY_NO
+								INTO :l_qty_paid:i_qty_paid,:l_deal_ref_no:i_deal_ref_no
+								FROM CACHEQUE
+								WHERE CORP_ID =:p_ca_capymt_aut_struct_h_a->h_corp_id
+								AND   CLIENT =:p_ca_capymt_aut_struct_h_a->h_dl_client
+								AND SEQNUM_PAY =:chr_str_pay_srl_nbr;
+					IS_ANY_ORA_ERROR
+					
+					strcpy(chr_rev_msg,"566R03");
+					memset(chr_msg_param_struct,APL_NULL_CHAR,201);
+					strcpy(chr_msg_param_struct,l_deal_ref_no);
+   				strcat(chr_msg_param_struct,MSG_PARAM_STRUCT_SEP);
+			      strcat(chr_msg_param_struct,ltoa((*p_qty_recd)));
+   				strcat(chr_msg_param_struct,MSG_PARAM_STRUCT_SEP);
+			      strcat(chr_msg_param_struct,"CV");
+				   strcat(chr_msg_param_struct,MSG_PARAM_STRUCT_SEP);
+			      strcat(chr_msg_param_struct,ltoa(l_qty_paid));
+				   strcat(chr_msg_param_struct,MSG_PARAM_STRUCT_SEP);
+					
+				}
+
+			if	 (		(	GBDbInsIMSGENT(	chr_rev_msg, 
+                                       p_ca_capymt_aut_struct_h_a->h_corp_id,
+                                       p_ca_capymt_aut_struct_h_a->h_dl_client,
+													APL_YES_FLAG,
+													chr_msg_param_struct,
+													l_debug_info_ptr)	==	APL_FAILURE
+						)
+					)
+						APL_GOBACK_FAIL	
+			}
+
+
+		
+			APL_GOBACK_SUCCESS
+			RETURN_SUCCESS	:
+		
+		{
+			# ifdef	SYS_DEBUG
+				fprintf(APL_OUT_FILE,"\nExiting CA_Mod_RstPymtMsg successfully\n");
+			#	endif
+			
+			return (APL_SUCCESS);
+		}
+		RETURN_FAILURE	:
+		{
+			# ifdef	SYS_DEBUG
+				fprintf(APL_OUT_FILE,"\nExiting CA_Mod_RstPymtMsg unsuccessfully\n");
+			#	endif
+			
+			return (APL_FAILURE);
+		}
+}	
+

@@ -1,0 +1,720 @@
+
+
+
+
+
+
+
+#include "CO_HostStructdef.h" 
+
+EXEC SQL INCLUDE SQLCA.H;
+
+#define	COMMIT_COUNT_G 5
+#define  PAGELENGTH 24
+#define  FILE_NAME_LEN 13
+#define  APL_FILENAME_LENGTH 13
+#define  SEPARATOR "|"
+#define  AMOUNT_LEN_B  18
+#define  APL_MAXLINE_SIZE 90
+#define  LCL_FEED_SIZE 1000
+#define  LCL_ISIN_LEN 13
+
+//main(int argc,char **argv)
+int main(int argc,char **argv)//Changes done for AIX Migration
+{
+   DEBUG_INFO_STRUCT_H *l_debug_info_ptr = NULL;
+	INTL_ENV_DATA_STRUCT_H l_intl_env_data_h;
+	FILE *l_finifile;
+
+	
+
+	char chr_p_client[APL_CLIENT_LENGTH];
+	char chr_p_refno[APL_TXNREFNO_LEN];
+	char chr_p_action[APL_FLAG_LENGTH];
+	char chr_p_serialno[3];
+
+   int int_l_retval=0;
+
+	int int_num = 0;
+
+	char **temp;
+	char *y;
+	char chr_p_buf[BUFFER_LEN] = APL_NULL_STRING;
+   char chr_uname[APL_USERID_LEN] = APL_NULL_STRING;
+   char chr_custody_id_b[APL_USERID_LEN] = APL_NULL_STRING;
+   char chr_passwd[APL_PASSWD_LEN] = APL_NULL_STRING;
+	char chr_l_logdir[PATH_LENGTH] = APL_NULL_STRING;
+	char chr_l_uploaddir[PATH_LENGTH] = APL_NULL_STRING;
+	char chr_l_inifile[PATH_LENGTH] = APL_NULL_STRING;
+	FILE *l_logfile;
+
+   EXEC SQL VAR chr_uname IS STRING;
+   EXEC SQL VAR chr_passwd IS STRING;
+
+	memset(&l_intl_env_data_h, NULL, sizeof(INTL_ENV_DATA_STRUCT_H));
+
+	memset(chr_p_client, NULL, APL_CLIENT_LENGTH);
+	memset(chr_p_refno, NULL, APL_TXNREFNO_LEN);
+	memset(chr_p_action, NULL, APL_FLAG_LENGTH);
+	memset(chr_p_serialno, NULL, 3);
+	memset(chr_p_buf, NULL, BUFFER_LEN);
+	
+	strcpy(chr_l_inifile,getenv("INTL_ROOT_PATH"));
+	strcat(chr_l_inifile,"intl_sun.cfg");
+
+	if ( ( l_finifile=fopen(chr_l_inifile,"r") ) == NULL)
+	{
+		APL_GOBACK_FAIL
+	}
+
+	
+
+	
+
+	APL_FETCH_DB_LOGIN_DETAILS(l_finifile, chr_custody_id_b, chr_uname, chr_passwd, APL_OUT_FILE, &l_debug_info_ptr)
+
+	
+
+   EXEC SQL CONNECT :chr_uname IDENTIFIED BY :chr_passwd;
+
+   if (sqlca.sqlcode)
+   {
+     	APL_GOBACK_FAIL
+   }
+   else
+   {
+		
+
+		if (APL_FAILURE == CO_Rtv_RptFileName(	"3O",
+														APL_LOGFILE_DESC,
+														100,
+														argv[5],
+														argv,
+														&l_logfile,
+														&l_debug_info_ptr ) )
+		{
+			APL_GOBACK_FAIL
+		}
+
+		
+
+		EXEC SQL COMMIT WORK;
+
+		if (sqlca.sqlcode)
+		{
+			CO_ProcMonitor(l_logfile, "Could not commit after opening chr_log file", NULL, NULL);
+			CO_Proc_RptClose(l_logfile, &l_debug_info_ptr);
+			APL_GOBACK_FAIL
+		}
+
+		
+
+	   CO_ProcMonitor(l_logfile, "String split processtion called", NULL, NULL);
+
+		if (APL_FAILURE == CO_SplitStr(	argv[9],
+													'|',
+													&int_num,
+													&temp ))
+		{
+	  		CO_ProcMonitor(l_logfile, "String split processtion failed", NULL, NULL);
+			CO_Proc_RptClose(l_logfile, &l_debug_info_ptr);
+			APL_GOBACK_FAIL
+		}
+
+		if (int_num ==0)
+		{
+			CO_ProcMonitor(l_logfile, "There were no params. Mandatory data missing", NULL, NULL);
+			CO_Proc_RptClose(l_logfile, &l_debug_info_ptr);
+			APL_GOBACK_FAIL
+		}
+
+      strcpy(chr_p_client, temp[0]);
+      strcpy(chr_p_refno, temp[1]);
+      strcpy(chr_p_action, temp[2]);
+      strcpy(chr_p_serialno, temp[3]);
+
+		
+
+		strcpy(l_intl_env_data_h.usr, argv[3]);
+		strcpy(l_intl_env_data_h.h_mode, argv[4]);
+		strcpy(l_intl_env_data_h.processtion, argv[5]);
+		strcpy(l_intl_env_data_h.auth_req, argv[6]);
+		strcpy(l_intl_env_data_h.subprocess, argv[7]);
+		strcpy(l_intl_env_data_h.h_process, argv[8]);
+
+		
+
+		if (APL_FAILURE == CO_RtvSysParams(&l_debug_info_ptr))
+		{
+			CO_ProcMonitor(l_logfile, "Could Not Get System Params", NULL, NULL);
+			CO_Proc_RptClose(l_logfile, &l_debug_info_ptr);
+			APL_GOBACK_FAIL
+		}
+
+				fprintf(l_logfile, "Successfully got Sys Params\n");
+				fprintf(l_logfile, "userid   : (%s)\n",l_intl_env_data_h.usr);
+				fprintf(l_logfile, "mode     : (%s)\n",l_intl_env_data_h.h_mode);
+				fprintf(l_logfile, "function : (%s)\n",l_intl_env_data_h.processtion);
+				fprintf(l_logfile, "auth_req : (%s)\n",l_intl_env_data_h.auth_req);
+				fprintf(l_logfile, "subfun   : (%s)\n",l_intl_env_data_h.subprocess);
+				fprintf(l_logfile, "action   : (%s)\n",l_intl_env_data_h.h_process);
+
+	if (!strlen(chr_p_client))
+	{
+   	CO_InsertErr
+        (&l_debug_info_ptr,
+        ERR_MAND_DATA_MISSING, 
+			
+      	"Account",
+      	APL_NULL_STRING,
+      	APL_NULL_STRING,
+     	 	__LINE__,
+      	__FILE__
+      	);
+		CO_ProcMonitor(l_logfile,"No data given!!, You're out !!\n",
+			&l_debug_info_ptr,&l_intl_env_data_h);
+		CO_Proc_RptClose(l_logfile, &l_debug_info_ptr);
+		APL_GOBACK_FAIL
+	}
+
+	if (!strlen(chr_p_refno))
+	{
+   	CO_InsertErr
+        (&l_debug_info_ptr,
+        ERR_MAND_DATA_MISSING, 
+			
+      	"Reference Number",
+      	APL_NULL_STRING,
+      	APL_NULL_STRING,
+     	 	__LINE__,
+      	__FILE__
+      	);
+		CO_ProcMonitor(l_logfile,"No data given!!, You're out !!\n",
+			&l_debug_info_ptr,&l_intl_env_data_h);
+		CO_Proc_RptClose(l_logfile, &l_debug_info_ptr);
+		APL_GOBACK_FAIL
+	}
+	if (!strlen(chr_p_action))
+	{
+   	CO_InsertErr
+        (&l_debug_info_ptr,
+        ERR_MAND_DATA_MISSING, 
+			
+      	"Type of Ticket",
+      	APL_NULL_STRING,
+      	APL_NULL_STRING,
+     	 	__LINE__,
+      	__FILE__
+      	);
+		CO_ProcMonitor(l_logfile,"No data given!!, You're out !!\n",
+			&l_debug_info_ptr,&l_intl_env_data_h);
+		CO_Proc_RptClose(l_logfile, &l_debug_info_ptr);
+		APL_GOBACK_FAIL
+	}
+	
+
+      	int_l_retval = MT_Proc_MP(chr_p_client, 
+										chr_p_refno, 
+										chr_p_action, 
+										chr_p_serialno, 
+										&int_num,
+										temp,
+										argv,
+										l_logfile, 
+										&l_intl_env_data_h, 
+										&l_debug_info_ptr);
+
+      	if ( int_l_retval == APL_FAILURE )
+      	{
+				CO_ProcMonitor(l_logfile, "Unsuccessful in MT_Proc_MP Exiting from main", NULL, NULL);
+				CO_ProcMonitor(l_logfile, "Rolling Back", NULL, NULL);
+				CO_Proc_RptClose(l_logfile, &l_debug_info_ptr);
+				EXEC SQL ROLLBACK WORK RELEASE;
+         	APL_GOBACK_FAIL
+      	}
+      	else
+      	{
+					CO_ProcMonitor(l_logfile, "CDBManPGenFn Successful , Exiting from main", NULL, NULL);
+
+        	 	EXEC SQL UPDATE SYS_BATCHPROC
+         		SET  status = 'completed'
+         			WHERE PROCESS_NAME=:argv[0]
+         				AND   PROC_INIT=:argv[1]
+         				AND   STARTDATE=:argv[2]
+         				AND   STATUS='started';
+
+				if (sqlca.sqlcode)
+				{
+					CO_ProcMonitor(l_logfile, "Could not update batch_in_proc to completed", NULL, NULL);
+					CO_Proc_RptClose(l_logfile, &l_debug_info_ptr);
+					EXEC SQL ROLLBACK WORK RELEASE;
+					APL_GOBACK_FAIL
+				}
+				EXEC SQL COMMIT WORK RELEASE;
+				if (sqlca.sqlcode)
+				{
+					CO_ProcMonitor(l_logfile, "Could not do final commit", NULL, NULL);
+					CO_Proc_RptClose(l_logfile, &l_debug_info_ptr);
+					EXEC SQL ROLLBACK WORK RELEASE;
+					APL_GOBACK_FAIL
+				}
+         	APL_GOBACK_SUCCESS
+      	}
+		}
+
+		RETURN_SUCCESS : exit(0);
+		RETURN_FAILURE : exit(-1);
+}
+
+int MT_Proc_MP(char *chr_p_client,
+					char *chr_p_refno,
+					char *chr_p_action,
+					char *chr_p_serialno,
+					int *int_num,
+					char **temp,
+					char **argv,
+					FILE *p_logfile,
+					INTL_ENV_DATA_STRUCT_H *p_intl_envdatastruct_h,
+					DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+  
+
+  FILE *l_fp_MPrRst   = NULL;
+
+  struct sqlca sqlca;	
+
+  char chr_l_now[APL_DATE_LEN] = APL_NULL_STRING;
+  char chr_l_logfile_name[FILE_NAME_LEN] = APL_NULL_STRING;
+  char chr_l_lock_stamp[APL_DATE_LEN] =APL_NULL_STRING;
+
+  int int_l_error_flag = APL_SUCCESS;
+  int int_l_chkflg = 0;
+  int int_l_no_nomprrst = 0;
+  int int_l_no_unmatch = 0;
+  short l_i_lock =0;
+   char                  chr_g_restart_data[APL_RESTARTDATA_LENGTH];
+    short                 g_restart_data_i;
+
+EXEC SQL VAR chr_g_restart_data is string;
+	
+  sqlca.sqlcode = 0;
+
+
+
+		fprintf(p_logfile, "Entered Function MT_Proc_MP\n");
+		fprintf(p_logfile, "Account  : (%s)\n", chr_p_client);
+		fprintf(p_logfile, "Refno    : (%s)\n", chr_p_refno);
+		fprintf(p_logfile, "Action   : (%s)\n", chr_p_action);
+		fprintf(p_logfile, "Serialno : (%s)\n", chr_p_serialno);
+	
+   
+
+  EXEC SQL SELECT PROCESSING_STATUS INTO :chr_g_restart_data:g_restart_data_i
+     FROM SYS_BATCHPROC
+     WHERE PROCESS_NAME=:argv[0]
+        AND   PROC_INIT=:argv[1]
+        AND   STARTDATE=:argv[2]
+        AND   STATUS='started'
+     FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+
+  if(APL_ZERO_RESULT_SET) 
+ 	{
+   	CO_ProcMonitor(p_logfile,"E:No entry in batch_in_proc\n",NULL,NULL);
+   	APL_GOBACK_FAIL
+   }
+
+  IS_ANY_ORA_ERROR
+	
+		fprintf(p_logfile, "CDBManPGenFn successfully locked the batch record\n");
+
+   
+
+   if (APL_FAILURE == CO_Rtv_RptFileName(	"RM", 
+				"Manifold Prints Reset",
+				160,
+				p_intl_envdatastruct_h->processtion,
+				argv,
+				&l_fp_MPrRst,
+				l_debug_info_ptr ))
+      {
+      APL_GOBACK_FAIL
+      }
+
+	EXEC SQL SELECT ACCESS_STAMP INTO :chr_l_lock_stamp:l_i_lock FROM DL_DEAL
+			WHERE CLIENT =:chr_p_client
+				AND IDENTIY_NO =:chr_p_refno
+					FOR UPDATE OF DEAL_STAT;
+
+	IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_DEAL_NF,
+												chr_p_client,
+												chr_p_refno,
+												APL_NULL_STRING);
+
+   if (APL_FAILURE == MT_Prnt_MPHdr(l_fp_MPrRst))
+      {
+      APL_GOBACK_FAIL
+      }
+
+   if (APL_FAILURE == MT_Proc_MPRst(chr_p_client,
+											chr_p_refno,
+											chr_p_action,
+											chr_p_serialno,
+											int_num,
+											temp,
+											l_fp_MPrRst,
+											p_logfile,
+											argv,
+											p_intl_envdatastruct_h,
+											l_debug_info_ptr ))
+   {
+      APL_GOBACK_FAIL
+   }
+
+	if (CO_ChkErr(*l_debug_info_ptr) == APL_SUCCESS)
+		{APL_GOBACK_FAIL}
+
+   APL_GOBACK_SUCCESS
+
+     RETURN_SUCCESS :
+
+
+   MT_Prnt_MPLine(l_fp_MPrRst);
+
+   if (APL_FAILURE == CO_Proc_RptClose(	l_fp_MPrRst,
+													l_debug_info_ptr)) 
+      {
+      APL_GOBACK_FAIL
+      }
+
+   return(APL_SUCCESS);
+
+    RETURN_FAILURE :
+
+
+   MT_Prnt_MPLine(l_fp_MPrRst);
+
+   CO_Proc_RptClose(l_fp_MPrRst, l_debug_info_ptr); 
+
+   return(APL_FAILURE);
+
+}
+
+int MT_Proc_MPRst(char *chr_p_client,
+			char *chr_p_refno,
+			char *chr_p_action,
+			char *chr_p_serialno,
+			int  *int_num,
+			char **temp,
+			FILE *p_fp_mprrst,
+			FILE *p_logfile,
+			char **argv,
+			INTL_ENV_DATA_STRUCT_H *p_intl_envdatastruct_h,
+			DEBUG_INFO_STRUCT_H **l_debug_info_ptr )
+{
+	 
+
+   struct sqlca sqlca ;
+
+	char chr_p_mantype[12];
+	int int_slno_ctr =4; 
+
+	
+
+	int int_l_pglen_m =0; 
+	int int_retval = APL_SUCCESS;
+   char chr_p_buf[BUFFER_LEN] =APL_NULL_STRING;
+   char                  chr_g_restart_data[APL_RESTARTDATA_LENGTH];
+    short                 g_restart_data_i;
+
+EXEC SQL VAR chr_g_restart_data is string;
+	
+	if ((!strcmp(chr_p_action,"3")) ||
+			(!strcmp(chr_p_action,"4")))
+	{
+	while (*int_num >3)
+	{  
+		int_retval = APL_SUCCESS;
+		memset(chr_p_mantype,APL_NULL_CHAR,12);
+
+		if (!strcmp(chr_p_action,"1"))
+		{
+			strcpy(chr_p_mantype,"Deliver");
+			strcpy(chr_p_action,"D");
+		}
+		else {if (!strcmp(chr_p_action,"2"))
+		{
+			strcpy(chr_p_mantype,"Recieve");
+			strcpy(chr_p_action,"R");
+		}
+		else {if (!strcmp(chr_p_action,"3"))
+		{
+			strcpy(chr_p_mantype,"Temp Out");
+			strcpy(chr_p_action,"O");
+		}
+		else {if (!strcmp(chr_p_action,"4"))
+		{
+			strcpy(chr_p_mantype,"Temp Return");
+			strcpy(chr_p_action,"T");
+		}}}}
+
+		int_retval = APL_SUCCESS;
+
+		CO_FreeErrLst(l_debug_info_ptr) ;
+
+		int_retval = CR_Proc_MPRst (chr_p_client,
+                  chr_p_refno,
+                  chr_p_action,
+                  chr_p_serialno,
+						p_logfile,
+                  p_intl_envdatastruct_h,
+                  l_debug_info_ptr);
+
+		if (int_retval == APL_SUCCESS)
+		{
+		   CO_ProcMonitor(p_logfile,"CBRstManPFn Succesful.For the trade\n", l_debug_info_ptr, p_intl_envdatastruct_h);
+   		memset(chr_p_buf,APL_NULL_CHAR,BUFFER_LEN);
+   		sprintf(chr_p_buf, "\tAccount : (%s)\n",chr_p_client);
+   		CO_ProcMonitor(p_logfile, chr_p_buf, l_debug_info_ptr, p_intl_envdatastruct_h);
+   		sprintf(chr_p_buf, "\tRef No  : (%s)\n",chr_p_refno);
+   		CO_ProcMonitor(p_logfile, chr_p_buf, l_debug_info_ptr, p_intl_envdatastruct_h);
+   		sprintf(chr_p_buf, "\tTicket  : (%s)\n",chr_p_action);
+   		CO_ProcMonitor(p_logfile, chr_p_buf, l_debug_info_ptr, p_intl_envdatastruct_h);
+			if(strlen(chr_p_serialno))
+			{
+   			sprintf(chr_p_buf, "\tSerial No : (%s)\n",chr_p_serialno);
+			}
+   		CO_ProcMonitor(p_logfile, chr_p_buf, l_debug_info_ptr, p_intl_envdatastruct_h);
+
+			
+			
+			fprintf(p_fp_mprrst, "%-10s    %-16s    %-12s      %s\n",	chr_p_client, 
+																									chr_p_refno, 
+																									chr_p_mantype,
+																									"Reset"); 
+			
+
+		 	if (++int_l_pglen_m == PAGELENGTH) 
+			{
+				MT_Prnt_MPLine(p_fp_mprrst);
+				fprintf(p_fp_mprrst, "\f");
+				MT_Prnt_MPHdr(p_fp_mprrst);
+				int_l_pglen_m = 7;
+			}
+		}
+		else
+		{
+		   CO_ProcMonitor(p_logfile,
+         "CBRstManPFn FAILED.For the trade\n", l_debug_info_ptr, p_intl_envdatastruct_h);
+   		memset(chr_p_buf,APL_NULL_CHAR,BUFFER_LEN);
+   		sprintf(chr_p_buf, "\tAccount : (%s)\n",chr_p_client);
+   		CO_ProcMonitor(p_logfile, chr_p_buf, l_debug_info_ptr, p_intl_envdatastruct_h);
+   		sprintf(chr_p_buf, "\tRef No  : (%s)\n",chr_p_refno);
+   		CO_ProcMonitor(p_logfile, chr_p_buf, l_debug_info_ptr, p_intl_envdatastruct_h);
+   		sprintf(chr_p_buf, "\tTicket  : (%s)\n",chr_p_action);
+   		CO_ProcMonitor(p_logfile, chr_p_buf, l_debug_info_ptr, p_intl_envdatastruct_h);
+			if(strlen(chr_p_serialno))
+			{
+   			sprintf(chr_p_buf, "\tSerial No : (%s)\n",chr_p_serialno);
+			}
+   		CO_ProcMonitor(p_logfile, chr_p_buf, l_debug_info_ptr, p_intl_envdatastruct_h);
+
+			
+			
+			fprintf(p_fp_mprrst, "%-10s    %-16s    %-12s      %s\n",	chr_p_client, 
+																									chr_p_refno, 
+																									chr_p_mantype,
+																									"Not Reset"); 
+			
+
+		 	if (++int_l_pglen_m == PAGELENGTH) 
+			{
+				MT_Prnt_MPLine(p_fp_mprrst);
+				fprintf(p_fp_mprrst, "\f");
+				MT_Prnt_MPHdr(p_fp_mprrst);
+				int_l_pglen_m = 7;
+			}
+		}
+		(*int_num)--;
+		if(*int_num >3)
+		{
+		strcpy(chr_p_serialno,temp[int_slno_ctr]);
+		int_slno_ctr++;
+		}
+	 }
+	 }
+	if ((!strcmp(chr_p_action,"1")) ||
+			(!strcmp(chr_p_action,"2")))
+	{
+		int_retval = APL_SUCCESS;
+		memset(chr_p_mantype,APL_NULL_CHAR,12);
+
+		if (!strcmp(chr_p_action,"1"))
+		{
+			strcpy(chr_p_mantype,"Deliver");
+			strcpy(chr_p_action,"D");
+		}
+		else {if (!strcmp(chr_p_action,"2"))
+		{
+			strcpy(chr_p_mantype,"Recieve");
+			strcpy(chr_p_action,"R");
+		}
+		else {if (!strcmp(chr_p_action,"3"))
+		{
+			strcpy(chr_p_mantype,"Temp Out");
+			strcpy(chr_p_action,"O");
+		}
+		else {if (!strcmp(chr_p_action,"4"))
+		{
+			strcpy(chr_p_mantype,"Temp Return");
+			strcpy(chr_p_action,"T");
+		}}}}
+
+		int_retval = CR_Proc_MPRst (chr_p_client,
+                  chr_p_refno,
+                  chr_p_action,
+                  chr_p_serialno,
+						p_logfile,
+                  p_intl_envdatastruct_h,
+                  l_debug_info_ptr);
+
+		if (int_retval == APL_SUCCESS)
+		{
+		   CO_ProcMonitor(p_logfile,
+         "CBRstManPFn Succesful.For the trade\n", l_debug_info_ptr, p_intl_envdatastruct_h);
+   		memset(chr_p_buf,APL_NULL_CHAR,BUFFER_LEN);
+   		sprintf(chr_p_buf, "\tAccount : (%s)\n",chr_p_client);
+   		sprintf(chr_p_buf, "\tRef No  : (%s)\n",chr_p_refno);
+   		sprintf(chr_p_buf, "\tTicket  : (%s)\n",chr_p_action);
+			if(strlen(chr_p_serialno))
+			{
+   			sprintf(chr_p_buf, "\tSerial No : (%s)\n",chr_p_serialno);
+			}
+   		CO_ProcMonitor(p_logfile, chr_p_buf, l_debug_info_ptr, p_intl_envdatastruct_h);
+
+			
+			
+			fprintf(p_fp_mprrst, "%-10s    %-16s    %-12s      %s\n",	chr_p_client, 
+																									chr_p_refno, 
+																									chr_p_mantype,
+																									"Reset"); 
+			
+			
+		 	if (++int_l_pglen_m == PAGELENGTH) 
+			{
+				MT_Prnt_MPLine(p_fp_mprrst);
+				fprintf(p_fp_mprrst, "\f");
+				MT_Prnt_MPHdr(p_fp_mprrst);
+				int_l_pglen_m = 7;
+			}
+		}
+		else
+		{
+		   CO_ProcMonitor(p_logfile,
+         "CBRstManPFn FAILED.For the trade\n", l_debug_info_ptr, p_intl_envdatastruct_h);
+   		memset(chr_p_buf,APL_NULL_CHAR,BUFFER_LEN);
+   		sprintf(chr_p_buf, "\tAccount : (%s)\n",chr_p_client);
+   		sprintf(chr_p_buf, "\tRef No  : (%s)\n",chr_p_refno);
+   		sprintf(chr_p_buf, "\tTicket  : (%s)\n",chr_p_action);
+			if(strlen(chr_p_serialno))
+			{
+   			sprintf(chr_p_buf, "\tSerial No : (%s)\n",chr_p_serialno);
+			}
+   		CO_ProcMonitor(p_logfile, chr_p_buf, l_debug_info_ptr, p_intl_envdatastruct_h);
+
+			
+
+			fprintf(p_fp_mprrst, "%-10s    %-16s    %-12s      %s\n",	chr_p_client, 
+																									chr_p_refno, 
+																									chr_p_mantype,
+																									"Not Reset"); 
+			
+
+		 	if (++int_l_pglen_m == PAGELENGTH) 
+			{
+				MT_Prnt_MPLine(p_fp_mprrst);
+				fprintf(p_fp_mprrst, "\f");
+				MT_Prnt_MPHdr(p_fp_mprrst);
+				int_l_pglen_m = 7;
+			}
+		}
+		(*int_num)--;
+		if(*int_num >3)
+		{
+		strcpy(chr_p_serialno,temp[int_slno_ctr]);
+		int_slno_ctr++;
+		}
+	 }
+	if (APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+		{
+			fprintf(p_logfile, "\n\nGoing to free errors\n\n");
+
+		fprintf(p_logfile, "Failed to reset the trade\n\n");
+		CO_ProcMonitor(p_logfile, "Got Errors : ", l_debug_info_ptr, p_intl_envdatastruct_h);
+		CO_FreeErrLst(l_debug_info_ptr);
+		}
+
+
+  if (CO_ChkErr(*l_debug_info_ptr) ==APL_SUCCESS)
+     {APL_GOBACK_FAIL } 
+
+  APL_GOBACK_SUCCESS
+ 
+  RETURN_SUCCESS :
+	{
+		EXEC SQL COMMIT WORK;
+
+    	EXEC SQL SELECT PROCESSING_STATUS INTO :chr_g_restart_data:g_restart_data_i
+     		FROM SYS_BATCHPROC
+     	WHERE PROCESS_NAME=:argv[0]
+     		AND PROC_INIT=:argv[1]
+     		AND STARTDATE=:argv[2]
+     		AND STATUS='started'
+     	FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+     	if(APL_ZERO_RESULT_SET) 
+		{
+     		CO_ProcMonitor(p_logfile,"E:No entry in batch_in_proc",NULL,NULL);
+     		APL_GOBACK_FAIL
+      }
+
+		CO_ProcMonitor(p_logfile, "No Errors: ", l_debug_info_ptr, p_intl_envdatastruct_h);
+		CO_FreeErrLst(l_debug_info_ptr);
+
+		return(APL_SUCCESS);
+	}
+
+  RETURN_FAILURE :
+	{
+		EXEC SQL ROLLBACK WORK;
+		CO_ProcMonitor(p_logfile, "Got Errors : ", l_debug_info_ptr, p_intl_envdatastruct_h);
+		CO_FreeErrLst(l_debug_info_ptr);
+
+		return(APL_FAILURE);
+	}
+}
+
+int MT_Prnt_MPHdr(FILE *fp)
+{
+   int i;
+   for (i=0;i<75;fprintf(fp, "-"),i++);
+   fprintf(fp, "\n%12sManifold Print Reset Status\n"," ");
+   for (i=0;i<75;fprintf(fp, "-"),i++);
+	
+	fprintf(fp, "\n\nAccount       Reference Number     Ticket Type      Status\n");
+	
+   for (i=0;i<75;fprintf(fp, "-"),i++);
+   fprintf(fp, "\n");
+   return(1);
+}
+
+int MT_Prnt_MPLine(FILE *fp)
+{
+   int i;
+   for (i=0;i<75;fprintf(fp, "-"),i++);
+   fprintf(fp, "\n");
+   return(1);
+}
+
+

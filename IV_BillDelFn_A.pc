@@ -1,0 +1,439 @@
+
+
+
+
+
+#include "stdio_64.h"
+#include <math.h>    
+#include <string.h>  
+#include <stdlib.h>  
+
+#include "IV_Control_A.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+
+
+int IV_Proc_PassBillLedgerEntry(const char *p_billdate, const char *p_client, 
+	 		  const long p_servcode, const double p_servamt, 
+			  const char *p_blccycode, DEBUG_INFO_STRUCT_H **l_debug_info_ptr) 
+{
+	
+
+	extern int IV_Rtv_IVLEDGERMaxSeqNum(IV_LEDGER_STRUCT *l_iv_ledger_structa, 
+					   char *chr_l_rowid, int *int_l_retstat, 
+					   DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+	extern int IV_Rtv_IVLEDGERSameDocDt(IV_LEDGER_STRUCT *l_iv_ledger_structa, 
+					   char *chr_l_rowid, int *int_l_retstat, 
+					   DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+	extern int IV_Mod_IVLEDGERNew(IV_LEDGER_STRUCT *l_iv_ledger_structa, int *int_l_retstat, 
+				  DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+	extern int IV_Mod_IVLEDGERAmt(IV_LEDGER_STRUCT *l_iv_ledger_structa, 
+				      char *chr_l_rowid, int *int_l_retstat, 
+				      DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+	
+
+	char chr_l_rowid[APL_ROWID_LEN], chr_l_buffer1[BUFFER_LEN];
+	char chr_l_existsamedocdtandtypeind = 'N', chr_l_isopenosamtrunbal = 'N';
+	int int_l_returnval = 0, int_l_retstat = 0;
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+		double h_os_amount = 0.0, h_run_balance = 0.0; 
+		double h_cum_os_amount = 0.0, h_last_run_balance = 0.0;
+		IV_LEDGER_STRUCT l_iv_ledger_structa;
+		EXEC SQL VAR l_iv_ledger_structa.client IS STRING;
+		EXEC SQL VAR l_iv_ledger_structa.dateof_doc IS STRING;
+		EXEC SQL VAR l_iv_ledger_structa.b_ccycd IS STRING;
+
+		short int int_i_os_amt = 0, int_i_run_bal = 0;
+		struct sqlca sqlca;
+
+	EXEC SQL END DECLARE SECTION;
+
+	#ifdef APL_THREADS
+		APL_SET_CONTEXT
+		EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	if ( !strlen(p_client) )
+	{
+		APL_DATA_MISSING("Account", APL_NULL_STRING, APL_NULL_STRING)
+	}
+
+	if ( !strlen(p_billdate) )
+	{
+		APL_DATA_MISSING("Billing Date", APL_NULL_STRING, 
+				 APL_NULL_STRING)
+	}
+
+	if ( !strlen(p_blccycode) )
+	{
+		APL_DATA_MISSING("Billing Ccy Code", APL_NULL_STRING, 
+				 APL_NULL_STRING)
+	}
+
+	memset(chr_l_buffer1, APL_NULL_CHAR, BUFFER_LEN);
+	sprintf(chr_l_buffer1, "%ld", p_servcode);
+
+	if ( !strlen(chr_l_buffer1) )
+	{
+		APL_DATA_MISSING("Service Code", APL_NULL_STRING, 
+				 APL_NULL_STRING)
+	}
+
+	memset(chr_l_buffer1, APL_NULL_CHAR, BUFFER_LEN);
+	sprintf(chr_l_buffer1, "%lf", p_servamt);
+
+	if ( !strlen(chr_l_buffer1) )
+	{
+		APL_DATA_MISSING("Bill Amount", APL_NULL_STRING, 
+				 APL_NULL_STRING)
+	}
+
+	
+
+	memset(chr_l_rowid, APL_NULL_CHAR, APL_ROWID_LEN);
+	memset(l_iv_ledger_structa.client, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+	memset(l_iv_ledger_structa.dateof_doc, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(l_iv_ledger_structa.b_ccycd, APL_NULL_CHAR, APL_CCYCODE_LEN);
+
+	strcpy(l_iv_ledger_structa.client, p_client);
+	strcpy(l_iv_ledger_structa.dateof_doc, p_billdate);
+	strcpy(l_iv_ledger_structa.b_ccycd, p_blccycode);
+	l_iv_ledger_structa.service_cd = p_servcode;
+	l_iv_ledger_structa.class_ind = 'B';
+	l_iv_ledger_structa.service_amt = 0.0;
+	l_iv_ledger_structa.out_stand_amt = 0.0;
+	l_iv_ledger_structa.run_balance = 0.0;
+	l_iv_ledger_structa.inden_num = 0;
+
+	if ( APL_FAILURE == IV_Rtv_IVLEDGERMaxSeqNum(&l_iv_ledger_structa, chr_l_rowid, 
+						    &int_l_retstat, l_debug_info_ptr) )
+	{
+		if ( int_l_retstat == IV_CRITCAL_ERROR_IND )
+		{
+			APL_GOBACK_FAIL
+		}
+	}
+	else 
+	{
+	     
+
+		strcpy(l_iv_ledger_structa.dateof_doc, p_billdate);
+
+		int_l_returnval = IV_Rtv_IVLEDGERSameDocDt(&l_iv_ledger_structa, chr_l_rowid, 
+						      &int_l_retstat, l_debug_info_ptr);
+
+		if ( int_l_returnval == APL_FAILURE )
+		{
+			if ( int_l_retstat == IV_NO_DATA_FOUND_ERR )
+			{
+				chr_l_existsamedocdtandtypeind = 'N';
+			}
+			else if ( int_l_retstat == IV_CRITCAL_ERROR_IND )
+			{
+				APL_GOBACK_FAIL
+			}
+		}
+		else
+		{
+			chr_l_existsamedocdtandtypeind = 'Y';
+		}
+	}
+
+	EXEC SQL DECLARE OSAmtRunBal CURSOR FOR
+		 SELECT OUT_STAND_AMT, RUN_BALANCE
+		 FROM IV_LEDGER
+		 WHERE ((CLIENT = :p_client) AND
+			(SERVICE_CD = :p_servcode) AND
+			(CLASS_IND != 'C'))
+		 ORDER BY DATEOF_DOC, INDEN_NUM;
+
+	EXEC SQL OPEN OSAmtRunBal;
+
+	IS_ANY_ORA_ERROR
+
+	chr_l_isopenosamtrunbal = 'Y';
+
+	while (1)
+	{
+		EXEC SQL FETCH OSAmtRunBal 
+			 INTO :h_os_amount INDICATOR :int_i_os_amt, 
+			      :h_run_balance INDICATOR :int_i_run_bal;
+
+		IS_ANY_ORA_ERROR
+
+		if ( sqlca.sqlcode == 1403 )
+			break;
+
+		h_cum_os_amount += h_os_amount;
+
+		h_last_run_balance = h_run_balance;
+	}
+		
+	EXEC SQL CLOSE OSAmtRunBal;
+
+	chr_l_isopenosamtrunbal = 'N';
+	
+     
+
+	
+
+	if ( !APL_DOUBLE_EQUAL(h_cum_os_amount, h_last_run_balance) )
+	{
+		char chr_l_buffer[KEY_LENGTH];
+
+		memset(chr_l_buffer, APL_NULL_CHAR, KEY_LENGTH);
+
+		ltoa_r(p_servcode, chr_l_buffer, KEY_LENGTH - 1);
+
+		
+
+		CO_InsertWarning(l_debug_info_ptr, ERR_BILLLEDGER_DATA_INTEGRITY, APL_NULL_STRING, 
+			       (char *)p_client, chr_l_buffer, __LINE__, __FILE__); //Changes done for AIX Migration
+
+		CO_OkWarning(*l_debug_info_ptr);
+	}
+
+	if ( chr_l_existsamedocdtandtypeind == 'N' )
+	{
+		l_iv_ledger_structa.inden_num += 1;
+		l_iv_ledger_structa.class_ind = 'B';
+		strcpy(l_iv_ledger_structa.client, p_client);
+		strcpy(l_iv_ledger_structa.dateof_doc, p_billdate);
+		l_iv_ledger_structa.service_cd = p_servcode;
+		strcpy(l_iv_ledger_structa.b_ccycd, p_blccycode);
+
+		if ( (p_servcode != OVERBILLING) && 
+		     (p_servcode != VOLDISCOUNTFEE) )
+		
+		{
+			l_iv_ledger_structa.service_amt = p_servamt;
+			l_iv_ledger_structa.out_stand_amt = p_servamt;
+			l_iv_ledger_structa.run_balance = h_cum_os_amount + p_servamt;
+		}
+		else
+		{
+			
+
+			l_iv_ledger_structa.service_amt = p_servamt;
+
+		     
+
+			l_iv_ledger_structa.out_stand_amt = 0.0;
+			l_iv_ledger_structa.run_balance = 0.0;
+		}
+
+		int_l_returnval = IV_Mod_IVLEDGERNew(&l_iv_ledger_structa, &int_l_retstat, 
+					      l_debug_info_ptr);
+
+		if ( int_l_returnval == APL_FAILURE )
+		{
+			APL_GOBACK_FAIL
+		}
+
+		APL_GOBACK_SUCCESS
+	}
+	else 
+	{
+		if ( p_servcode != OVERBILLING )
+		{
+			l_iv_ledger_structa.service_amt = l_iv_ledger_structa.service_amt + p_servamt;
+			l_iv_ledger_structa.out_stand_amt = l_iv_ledger_structa.out_stand_amt + p_servamt;
+			l_iv_ledger_structa.run_balance = h_cum_os_amount + p_servamt;
+		}
+		else
+		{
+			
+
+			l_iv_ledger_structa.service_amt = l_iv_ledger_structa.service_amt + p_servamt;
+			l_iv_ledger_structa.out_stand_amt = 0.0;
+			l_iv_ledger_structa.run_balance = 0.0;
+		}
+
+		if (APL_FAILURE == IV_Mod_IVLEDGERAmt(&l_iv_ledger_structa, chr_l_rowid, 
+						      &int_l_retstat, l_debug_info_ptr))
+		{
+			APL_GOBACK_FAIL
+		}
+
+		APL_GOBACK_SUCCESS
+
+	} 
+
+	RETURN_SUCCESS:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of \
+IV_Proc_PassBillLedgerEntry().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_SUCCESS;
+
+	RETURN_FAILURE:
+
+		if ( chr_l_isopenosamtrunbal == 'Y' )
+		{
+			EXEC SQL CLOSE OSAmtRunBal;
+		}
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of\
+ IV_Proc_PassBillLedgerEntry().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_FAILURE;
+}
+
+
+
+int IV_Proc_PassCreditLedgerEntry(const char *p_client, const char *chr_p_sys_date, 
+			    const double p_creditamt, const char *p_blccycode, 
+			    DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	
+
+	extern int IV_Rtv_IVLEDGERMaxSeqNum(IV_LEDGER_STRUCT *l_iv_ledger_structa, 
+					   char *chr_l_rowid, int *int_l_retstat, 
+					   DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+	extern int IV_Mod_IVLEDGERNew(IV_LEDGER_STRUCT *l_iv_ledger_structa, int *int_l_retstat, 
+				  DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+	extern int IV_Mod_IVLEDGERAmt(IV_LEDGER_STRUCT *l_iv_ledger_structa, char *chr_l_rowid, 
+				  int *int_l_retstat, DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+	
+
+	char chr_l_rowid[APL_ROWID_LEN], chr_l_buffer1[BUFFER_LEN];
+	int int_l_returnval = 0, int_l_retstat = 0;
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+		IV_LEDGER_STRUCT l_iv_ledger_structa;
+		EXEC SQL VAR l_iv_ledger_structa.client IS STRING;
+		EXEC SQL VAR l_iv_ledger_structa.dateof_doc IS STRING;
+		EXEC SQL VAR l_iv_ledger_structa.b_ccycd IS STRING;
+
+		I_IV_LEDGER_STRUCT l_i_iv_ledger_struct = {0, 0, 0, 0, 0, 0, 0, 0, 0};
+		struct sqlca sqlca;
+
+	EXEC SQL END DECLARE SECTION;
+
+	#ifdef APL_THREADS
+		APL_SET_CONTEXT
+		EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	if ( !strlen(p_client) )
+	{
+		APL_DATA_MISSING("Account", APL_NULL_STRING, APL_NULL_STRING)
+	}
+
+	if ( !strlen(chr_p_sys_date) )
+	{
+		APL_DATA_MISSING("Ledger Date", APL_NULL_STRING, 
+				 APL_NULL_STRING)
+	}
+
+	memset(chr_l_buffer1, APL_NULL_CHAR, BUFFER_LEN);
+	sprintf(chr_l_buffer1, "%lf", p_creditamt);
+
+	if ( !strlen(chr_l_buffer1) )
+	{
+		APL_DATA_MISSING("Credit Amount", APL_NULL_STRING, 
+				 APL_NULL_STRING)
+	}
+
+	if ( !strlen(p_blccycode) )
+	{
+		APL_DATA_MISSING("Ccy Code", APL_NULL_STRING, APL_NULL_STRING)
+	}
+
+	
+
+	memset(chr_l_rowid, APL_NULL_CHAR, APL_ROWID_LEN);
+	memset(l_iv_ledger_structa.client, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+	memset(l_iv_ledger_structa.dateof_doc, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(l_iv_ledger_structa.b_ccycd, APL_NULL_CHAR, APL_CCYCODE_LEN);
+
+	l_iv_ledger_structa.service_amt = 0.0;
+	l_iv_ledger_structa.out_stand_amt = 0.0;
+	l_iv_ledger_structa.run_balance = 0.0;
+
+	l_iv_ledger_structa.inden_num = 0;
+
+	strcpy(l_iv_ledger_structa.client, p_client);
+	strcpy(l_iv_ledger_structa.dateof_doc, chr_p_sys_date);
+	strcpy(l_iv_ledger_structa.b_ccycd, p_blccycode);
+	l_iv_ledger_structa.class_ind = 'C';
+
+	int_l_returnval = IV_Rtv_IVLEDGERMaxSeqNum(&l_iv_ledger_structa, chr_l_rowid, &int_l_retstat, 
+					      l_debug_info_ptr);
+
+	if ( (int_l_returnval == APL_FAILURE) && (int_l_retstat == IV_CRITCAL_ERROR_IND) )
+	{
+		APL_GOBACK_FAIL
+	}
+
+	if ( l_iv_ledger_structa.inden_num )
+	{
+		l_iv_ledger_structa.out_stand_amt = 0.0;
+		l_iv_ledger_structa.run_balance = 0.0;
+		l_iv_ledger_structa.class_ind = 'C';
+
+		int_l_returnval = IV_Mod_IVLEDGERAmt(&l_iv_ledger_structa, chr_l_rowid, 
+						 &int_l_retstat, l_debug_info_ptr);
+
+		if ( int_l_returnval == APL_FAILURE )
+		{
+			APL_GOBACK_FAIL
+		}
+	}
+
+	l_iv_ledger_structa.service_cd = EXCESSCREDITFEE;
+	strcpy(l_iv_ledger_structa.client, p_client);
+	strcpy(l_iv_ledger_structa.dateof_doc, chr_p_sys_date);
+	l_iv_ledger_structa.inden_num += 1;
+	l_iv_ledger_structa.service_amt = p_creditamt;
+	l_iv_ledger_structa.run_balance = p_creditamt;
+	l_iv_ledger_structa.out_stand_amt = p_creditamt;
+	l_iv_ledger_structa.class_ind = 'C';
+	strcpy(l_iv_ledger_structa.b_ccycd, p_blccycode);
+
+	int_l_returnval = IV_Mod_IVLEDGERNew(&l_iv_ledger_structa, &int_l_retstat, l_debug_info_ptr);
+
+	if ( int_l_returnval == APL_FAILURE )
+	{
+		APL_GOBACK_FAIL
+	}
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of \
+IV_Proc_PassCreditLedgerEntry().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_SUCCESS;
+
+	RETURN_FAILURE:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of\
+ IV_Proc_PassCreditLedgerEntry().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_FAILURE;
+}

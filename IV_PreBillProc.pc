@@ -1,0 +1,2016 @@
+
+
+
+
+
+#include "stdio_64.h"
+#include <string.h> 
+#include "IV_Control_A.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+
+
+int IV_Chk_Fee(int *int_p_retstat,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	long h_admcust_code, h_admtxn_code; /* Bageshri fix */
+	EXEC SQL BEGIN DECLARE SECTION;
+
+	long  int_h_serv_code = 0;
+	char chr_h_serv_desc[IV_DESC_LEN];
+	char chr_h_status_flg_a;
+	short i_service_cd = 0, i_serv_detail = 0;
+	EXEC SQL VAR h_admcust_code IS LONG;
+	EXEC SQL VAR h_admtxn_code IS LONG;
+	EXEC SQL VAR chr_h_serv_desc IS STRING;
+	struct sqlca sqlca;
+
+	EXEC SQL END DECLARE SECTION;
+
+	int int_fetch_cnt = 0;
+	int int_is_chk_fee_cur_open = 0;
+	h_admtxn_code = 0;
+	h_admcust_code = 0;
+	
+	sqlca.sqlcode = 0;
+	memset(chr_h_serv_desc, APL_NULL_CHAR, IV_DESC_LEN);
+	*int_p_retstat = IV_SUCCESS;
+
+	EXEC SQL SELECT STAT_IND
+	INTO :chr_h_status_flg_a
+	FROM IV_CLIENTSETUP
+	WHERE CLIENT = :chr_g_cb_code; 
+
+	if (sqlca.sqlcode < 0)
+	{
+		fprintf(fp, "Error in fetching Internal Account Status\n");
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+	}
+
+	IS_ANY_ORA_ERROR
+
+	if (chr_h_status_flg_a != 'A')
+	{
+		fprintf(fp,"Error :  'Internal Account Code %s not Authorised in the Billing System\n",chr_g_cb_code);
+		*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+	}
+	
+	IF_COND_NOT_EXISTS("ADMIN_CHARGE","NO_CUST_ADMIN")
+	{
+		h_admcust_code = 3;
+	}
+	IF_COND_NOT_EXISTS("ADMIN_CHARGE","NO_TXN_ADMIN")
+	{
+		h_admtxn_code = 4;
+	}
+
+
+	EXEC SQL DECLARE chk_fee_cur CURSOR FOR
+	SELECT service_cd,service_det 
+	FROM IV_SERV_MAST 
+	WHERE std_feeind = 'Y' AND STATUS='AA' 
+			AND service_cd NOT IN (98,99,99999,99998,15,16,28,99997,99996) 
+			AND service_cd NOT IN( :h_admcust_code, :h_admtxn_code )
+			AND service_cd NOT IN 
+			(SELECT distinct(service_cd)
+			 FROM IV_CLIENTFEE 
+			 WHERE client = :chr_g_cb_code);
+
+	EXEC SQL OPEN chk_fee_cur;
+	
+	if (sqlca.sqlcode < 0)
+	{
+		fprintf(fp,"Error in accessing table for client %s. Please contact support\n",chr_g_cb_code);
+		fflush(fp);
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+	}
+
+	IS_ANY_ORA_ERROR;
+
+	int_is_chk_fee_cur_open = 1;
+
+	for( ; ; )
+	{
+		int_h_serv_code = 0;
+		memset(chr_h_serv_desc, APL_NULL_CHAR, IV_DESC_LEN);
+
+		EXEC SQL FETCH chk_fee_cur 
+		INTO :int_h_serv_code:i_service_cd, chr_h_serv_desc:i_serv_detail;
+
+		if ( sqlca.sqlcode < 0 )
+		{
+			*int_p_retstat = IV_CRITCAL_ERROR_IND;
+		}
+
+		IS_ANY_ORA_ERROR
+
+		if(sqlca.sqlcode == 1403)
+		{
+			if(int_fetch_cnt != 0)
+			{
+				*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+			}
+			break;
+		}
+
+		fprintf(fp,"Error : Fee  not defined for service %ld(%s) for Internal client %s\n",int_h_serv_code,
+						chr_h_serv_desc,chr_g_cb_code);
+		fflush(fp);
+		int_fetch_cnt++;
+	}
+
+	EXEC SQL CLOSE chk_fee_cur;
+	int_is_chk_fee_cur_open = 0;
+	if(*int_p_retstat != IV_SUCCESS)
+	{
+		APL_GOBACK_FAIL;
+	}
+	else
+	{
+		*int_p_retstat = IV_SUCCESS;
+		APL_GOBACK_SUCCESS;
+	}
+RETURN_SUCCESS:
+	if(int_is_chk_fee_cur_open == 1)
+	{
+		EXEC SQL CLOSE chk_fee_cur;
+	}
+	CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of IV_Chk_Fee().\n", NULL, NULL);
+	return APL_SUCCESS;
+
+RETURN_FAILURE:
+	if(int_is_chk_fee_cur_open == 1)
+	{
+		EXEC SQL CLOSE chk_fee_cur;
+	}
+	CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of IV_Chk_Fee().\n", NULL, NULL);
+	return APL_FAILURE;
+
+}
+
+
+
+int IV_Chk_FeeParam(int *int_p_retstat,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	long h_admcust_code, h_admtxn_code; /* Bageshri fix */
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+	char chr_h_param_code[IV_PARAM_LEN], h_dl_client[APL_CLIENT_LENGTH];
+	char chr_h_str[IV_PARAM_LEN];
+	long  int_h_serv_code;
+	int int_fee_cnt=0;
+	short i_dl_client = 0, i_parameter_cd = 0, i_service_cd = 0;
+	char h_apl_frm_date[9] = APL_NULL_STRING;  /* Added by monica for kotak ISKB_1737 */
+	short i_apl_frm_date = 0;  /* Added by monica for kotak ISKB_1737 */
+	EXEC SQL VAR chr_h_param_code IS STRING;
+	EXEC SQL VAR h_dl_client IS STRING;
+	EXEC SQL VAR chr_h_str     IS STRING;
+	EXEC SQL VAR h_admcust_code IS LONG;
+	EXEC SQL VAR h_admtxn_code IS LONG;
+	EXEC SQL VAR h_apl_frm_date IS STRING;  /* Added by monica for kotak ISKB_1737 */
+	struct sqlca sqlca;
+
+	EXEC SQL END DECLARE SECTION;
+
+	char *z,chr_p_param_str[IV_PARAM_LEN];
+	char *chr_p_param_ind=NULL,*chr_o_param_val=NULL;
+	char *t;
+	char chr_p_param_val[IV_PARAM_LEN],chr_o_param_ind[IV_PARAM_LEN];
+	char chr_b_param_str[IV_PARAM_LEN],chr_p_param_code[IV_PARAM_LEN],*chr_l_group_ind=NULL;
+	char chr_t_param_str[IV_PARAM_LEN],chr_grp_str[IV_PARAM_LEN],chr_l_buf[BUFFER_LEN];
+	int i,j,k,int_p_cnt=0;
+	int int_p_proc_next = 0,int_fetch_cnt=0,int_retstat=0;
+	int int_is_param_cur_open = 0,int_is_cfee_open = 0;
+
+	sqlca.sqlcode = 0;
+
+	chr_l_group_ind = (char *)calloc(IV_GRP_LEN,sizeof(char));
+	z = (char *)calloc(IV_PARAM_LEN,sizeof(char));
+	t = (char *)calloc(IV_PARAM_LEN,sizeof(char));
+
+	APL_MALLOC_FAIL(chr_l_group_ind);
+
+	memset(chr_p_param_str,APL_NULL_CHAR,IV_PARAM_LEN);
+	memset(chr_grp_str,APL_NULL_CHAR,IV_PARAM_LEN);
+	memset(chr_t_param_str,APL_NULL_CHAR,IV_PARAM_LEN);
+	memset(chr_b_param_str,APL_NULL_CHAR,IV_PARAM_LEN);
+	memset(chr_p_param_val,APL_NULL_CHAR,IV_PARAM_LEN);
+	memset(chr_p_param_code,APL_NULL_CHAR,IV_PARAM_LEN);
+	memset(chr_o_param_ind,APL_NULL_CHAR,IV_PARAM_LEN);
+	memset(chr_l_buf,APL_NULL_CHAR,BUFFER_LEN);
+	memset(chr_l_group_ind,APL_NULL_CHAR,IV_GRP_LEN);
+
+	*int_p_retstat = IV_SUCCESS;
+
+	APL_IF_DEBUG
+	{
+  		CO_ProcMonitor(TechRep, "Entered IV_Chk_Fee\n",NULL,NULL);
+		fprintf(TechRep, "Now checking fees for the client %s\n", chr_g_cb_code);
+	}
+
+	strcpy(h_dl_client, chr_g_cb_code);
+
+	h_admcust_code = 0;
+	h_admtxn_code = 0 ;
+	
+	/* Now check if cond exist then dont calculate adm charges ** Fix */
+	IF_COND_NOT_EXISTS("ADMIN_CHARGE","NO_CUST_ADMIN")
+	h_admcust_code = 3;
+	IF_COND_NOT_EXISTS("ADMIN_CHARGE","NO_TXN_ADMIN")
+	h_admtxn_code = 4 ;
+
+	EXEC SQL DECLARE param_cur  CURSOR FOR
+	SELECT distinct(service_cd)
+	FROM IV_SERV_DEPEND
+	WHERE 
+			service_cd NOT IN 
+			(SELECT service_cd 
+			 FROM IV_CLIENTPARAM 
+			 WHERE client = :chr_g_cb_code)
+			 AND  service_cd NOT IN (:h_admcust_code , :h_admtxn_code )
+	ORDER BY SERVICE_CD;
+
+	
+
+	EXEC SQL OPEN param_cur;
+
+	if (sqlca.sqlcode < 0)
+	{
+		fprintf(fp,"Error in accessing table for client %s. Please contact support\n",h_dl_client);
+		fflush(fp);
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+	}
+
+	IS_ANY_ORA_ERROR;
+	int_is_param_cur_open = 1;
+
+	for( ; ; )
+	{
+		int_h_serv_code = 0;
+
+		EXEC SQL FETCH param_cur INTO :int_h_serv_code:i_service_cd;
+
+		if ( sqlca.sqlcode < 0 )
+		{
+			*int_p_retstat = IV_CRITCAL_ERROR_IND;
+		}
+
+		IS_ANY_ORA_ERROR
+
+		if ( APL_ZERO_RESULT_SET )
+		{
+			if(int_fetch_cnt != 0)
+			{
+				*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+			}
+
+			break;
+		}
+
+		fprintf(fp,"Error : Dependency not defined for Service %ld for  Internal client %s\n", int_h_serv_code, chr_g_cb_code);
+		fflush(fp);
+
+		int_fetch_cnt++;
+	}
+
+	EXEC SQL CLOSE param_cur;
+	int_is_param_cur_open = 0;
+
+	int_is_cfee_open = 0;
+	int_fetch_cnt = 0;
+
+	EXEC SQL DECLARE cfee CURSOR FOR
+	SELECT client,service_cd,parameter_cd 
+	FROM IV_CLIENTPARAM
+	WHERE client = :chr_g_cb_code
+	ORDER BY SERVICE_CD;
+
+	
+
+	EXEC SQL OPEN cfee;
+
+	if (sqlca.sqlcode < 0)
+	{
+		fprintf(fp,"Error in accessing table for client %s. Please contact support\n",h_dl_client);
+		fflush(fp);
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+	}
+
+	IS_ANY_ORA_ERROR;
+
+	int_is_cfee_open = 1;
+
+	for( ; ; )
+	{
+		memset(h_dl_client, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+		memset(chr_h_param_code, APL_NULL_CHAR, IV_PARAM_LEN);
+		int_h_serv_code = 0;
+
+		EXEC SQL FETCH cfee 
+		INTO :h_dl_client:i_dl_client, 
+				:int_h_serv_code:i_service_cd,
+				:chr_h_param_code:i_parameter_cd;
+
+		if ( sqlca.sqlcode < 0 )
+		{
+			*int_p_retstat = IV_CRITCAL_ERROR_IND;
+		}
+
+		IS_ANY_ORA_ERROR
+
+		if ( APL_ZERO_RESULT_SET )
+		{
+			break;
+		}
+
+		int_fetch_cnt++;
+		int_p_cnt = 0;
+
+		strcpy(chr_p_param_code,chr_h_param_code);
+		strcat(chr_p_param_code, ";");
+		chr_p_param_ind = strtok_r(chr_p_param_code,";",&z);
+		memset(chr_b_param_str, APL_NULL_CHAR, IV_PARAM_LEN);
+		memset(chr_p_param_str, APL_NULL_CHAR, IV_PARAM_LEN);
+
+	/* Added by monica for kotak ISKB_1737 starts */
+	EXEC SQL SELECT to_char(MAX(to_date(apl_frm_date,'MM/YYYY')),'MON-YYYY') into :h_apl_frm_date:i_apl_frm_date FROM IV_CLIENT_SERV_BASIS,SYS_IVCONTROLPARAM 
+	WHERE CLIENT = :h_dl_client AND service_cd = :int_h_serv_code AND  to_date(apl_frm_date,'MM/YYYY') <= B_UPTO_DATE;
+	IS_ANY_ORA_ERROR
+	printf("\n application from date |%s| \n",h_apl_frm_date);
+	/* Added by monica for kotak ISKB_1737 ends */	
+
+		while(1)
+		{
+			++int_p_cnt;
+
+			if(strcmp(chr_p_param_ind,chr_o_param_ind) != 0)
+			{
+				memset(chr_p_param_val, APL_NULL_CHAR, IV_PARAM_LEN);
+			}
+
+			int_retstat = IV_SUCCESS;
+
+			if(APL_FAILURE == IV_Rtv_ParamVal(chr_p_param_ind,chr_p_param_val,int_h_serv_code,&int_retstat,l_debug_info_ptr))
+			{
+				fprintf(fp,"Error in accessing table. Please contact support\n");
+				fflush(fp);
+				int_bl_err_level = 1;
+
+				if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+				{
+					CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+
+					CO_FreeErrLst(l_debug_info_ptr);
+				}
+				*int_p_retstat = int_retstat;
+			}
+
+			if(strlen(chr_p_param_str) > 0)
+				strcat(chr_p_param_str,";");
+
+			strcat(chr_p_param_str,chr_p_param_val);
+			strcpy(chr_o_param_ind,chr_p_param_ind);
+			chr_p_param_ind = strtok_r(NULL,";",&z);
+
+			if( !strlen(chr_p_param_val) )
+			{
+				if (int_p_cnt == 1)
+					break;
+				else
+				{
+					int_p_proc_next = 1;
+					--int_p_cnt;
+				}
+			}
+
+			if( !chr_p_param_ind )
+			{
+				--int_p_cnt;
+				int_p_proc_next = 1;
+				strcat(chr_p_param_str,"\0");
+				strcpy(chr_h_str,chr_p_param_str);
+
+				EXEC SQL SELECT NVL(COUNT(*),0) 
+				INTO :int_fee_cnt 
+				FROM IV_CLIENTFEE
+				WHERE client = :h_dl_client AND 
+						service_cd = :int_h_serv_code AND 
+						proc_data_val = :chr_h_str AND
+						apl_frm_date =:h_apl_frm_date;    /* Added by monica for kotak ISKB_1737 */
+				Alert("int_fee_cnt code is  |%d|",int_fee_cnt);
+				if(sqlca.sqlcode < 0)
+				{
+					fprintf(fp,"Error in accessing table for client %s. Please contact support\n",h_dl_client);
+					fflush(fp);
+					*int_p_retstat = IV_CRITCAL_ERROR_IND;
+				}
+
+				IS_ANY_ORA_ERROR;
+
+				if(int_fee_cnt == 0)
+				{
+					chr_l_group_ind[0] = '\0';
+
+					int_retstat = IV_SUCCESS;
+
+					if(APL_FAILURE == IV_Chk_Grp(chr_p_param_str, 
+								chr_h_param_code, 
+								&chr_l_group_ind, 
+								chr_grp_str, 
+								int_h_serv_code,
+								h_dl_client, 
+								h_apl_frm_date,   /* Added by monica for kotak ISKB_1737 */
+								&int_retstat,
+								l_debug_info_ptr))
+					{
+						if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+						{
+							CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+
+							CO_FreeErrLst(l_debug_info_ptr);
+						}
+						*int_p_retstat = int_retstat;
+					}
+
+					if( !strlen(chr_grp_str) )
+					{
+						fprintf(fp, "Error : Fee not defined for client %s for service %ld for parameter %s\n", h_dl_client,int_h_serv_code,chr_p_param_str);//AIX Warning Removal 
+						fflush(fp);
+						*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+					}
+
+				}
+
+				while (strlen(chr_p_param_val) > 0)
+				{
+					int_retstat = IV_SUCCESS;
+ 
+					if(APL_FAILURE == IV_Rtv_ParamVal(chr_o_param_ind,chr_p_param_val,int_h_serv_code,&int_retstat,l_debug_info_ptr))
+					{
+						fprintf(fp,"Error in accessing table. Please contact support\n");
+						fflush(fp);
+
+						if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+						{
+							CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+
+							CO_FreeErrLst(l_debug_info_ptr);
+						}
+						*int_p_retstat = int_retstat;
+					}
+
+					if(strlen(chr_p_param_val) > 0)
+					{
+						strcpy(chr_p_param_str,chr_b_param_str);
+
+						
+
+						strcat(chr_p_param_str,chr_p_param_val);
+						strcpy(chr_h_str,chr_p_param_str);
+
+						EXEC SQL SELECT NVL(COUNT(*),0) 
+						INTO :int_fee_cnt
+						FROM IV_CLIENTFEE
+						WHERE client = :h_dl_client AND 
+								service_cd = :int_h_serv_code AND 
+								proc_data_val = :chr_h_str AND
+								apl_frm_date =:h_apl_frm_date;    /* Added by monica for kotak ISKB_1737 */
+
+						if ( sqlca.sqlcode < 0 )
+							*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+						IS_ANY_ORA_ERROR;
+
+						if(int_fee_cnt == 0)
+						{
+							chr_l_group_ind[0] = '\0';
+
+							int_retstat = IV_SUCCESS;
+					
+							if(APL_FAILURE == IV_Chk_Grp(chr_p_param_str, 
+										chr_h_param_code, 
+										&chr_l_group_ind, 
+										chr_grp_str, 
+										int_h_serv_code, 
+										h_dl_client, 
+										h_apl_frm_date,   /* Added by monica for kotak ISKB_1737 */
+										&int_retstat,
+										l_debug_info_ptr))
+							{
+								if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+								{
+									CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+									CO_FreeErrLst(l_debug_info_ptr);
+								}
+								*int_p_retstat = int_retstat;
+							} 
+
+							if( !strlen(chr_grp_str) )
+							{
+								fprintf(fp,"Error : Fee not defined for client %s for service %ld for parameters %s\n", h_dl_client,int_h_serv_code,chr_h_str);//AIX Warning Removal 
+								fflush(fp);
+								*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+							}
+						} 
+
+					}  
+
+
+				} 
+			}  
+			else
+			{
+				strcat(chr_b_param_str,chr_p_param_val);
+				strcat(chr_b_param_str,";");
+			}
+
+			if (int_p_proc_next == 1)
+			{
+				strcpy(chr_p_param_code,chr_h_param_code);
+				strcat(chr_p_param_code,";");
+				strcat(chr_p_param_code,"\0");
+				strcpy(chr_t_param_str,chr_p_param_str);
+				strcat(chr_t_param_str,";");
+				chr_p_param_ind = strtok_r(chr_p_param_code,";",&z);
+				chr_o_param_val = strtok_r(chr_t_param_str,";",&t);
+				strcpy(chr_p_param_str,"");
+				strcpy(chr_b_param_str,"");
+				strcpy(chr_p_param_val,chr_o_param_val);
+
+				i = 1;
+				k = int_p_cnt;
+				int_p_cnt = 0;
+
+				while (i < k)
+				{
+					++int_p_cnt;
+					strcat(chr_b_param_str,chr_p_param_val);
+					strcat(chr_b_param_str,";");
+					if(strlen(chr_p_param_str) > 0)
+						strcat(chr_p_param_str,";");
+					strcat(chr_p_param_str,chr_p_param_val);
+					chr_p_param_ind = strtok_r(NULL,";",&z);
+					chr_o_param_val = strtok_r(NULL,";",&t);
+					strcpy(chr_p_param_val,chr_o_param_val);
+					++i;
+				}
+
+				strcpy(chr_o_param_ind,chr_p_param_ind);
+				int_p_proc_next = 0;
+			}
+
+		} 
+	} 
+
+	EXEC SQL CLOSE cfee;
+	int_is_cfee_open = 0;
+
+	if(*int_p_retstat != IV_SUCCESS)
+	{
+		APL_GOBACK_FAIL;
+	}
+	else
+	{
+		*int_p_retstat = IV_SUCCESS;
+		APL_GOBACK_SUCCESS;
+	}
+
+RETURN_SUCCESS:
+	if(int_is_cfee_open == 1)
+	{
+		EXEC SQL CLOSE cfee;
+	}
+	if(int_is_param_cur_open == 1)
+	{
+		EXEC SQL CLOSE param_cur ;
+	}
+	APL_FREE(chr_l_group_ind)
+
+	CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of IV_Chk_FeeParam()\n.", NULL, NULL);//AIX Warning Removal 
+	return APL_SUCCESS;
+
+RETURN_FAILURE:
+	if(int_is_cfee_open == 1)
+	{
+		EXEC SQL CLOSE cfee;
+	}
+	if(int_is_param_cur_open == 1)
+	{
+		EXEC SQL CLOSE param_cur ;
+	}
+	APL_FREE(chr_l_group_ind);
+
+	CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of IV_Chk_FeeParam()\n.", NULL, NULL);//AIX Warning Removal 
+	return APL_FAILURE;
+
+}
+
+
+
+int IV_Rtv_ParamVal(char *f_param_code, char *f_param_val, long p_serv_code, int *int_p_retstat, 
+					 DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+
+	char chr_t_param_val[IV_PARAM_LEN],chr_h_param_val[IV_PARAM_LEN];
+	char h_nation[APL_CTRY_CODE_LEN];
+	char chr_l_start_val[IV_PARAM_LEN];
+	short i_proc_data_val = 0;
+	struct sqlca sqlca;
+
+	EXEC SQL VAR chr_t_param_val IS STRING;
+	EXEC SQL VAR chr_l_start_val IS STRING;
+	EXEC SQL VAR chr_h_param_val IS STRING;
+	EXEC SQL VAR h_nation IS STRING;
+
+	EXEC SQL END DECLARE SECTION;
+
+	char *chr_t_param_code = f_param_code;
+	
+	sqlca.sqlcode = 0;
+
+	memset(chr_t_param_val, APL_NULL_CHAR, IV_PARAM_LEN);
+	memset(chr_l_start_val, APL_NULL_CHAR, IV_PARAM_LEN);
+	memset(chr_h_param_val, APL_NULL_CHAR, IV_PARAM_LEN);
+	memset(h_nation, APL_NULL_CHAR, APL_CTRY_CODE_LEN);
+
+	strcpy(chr_t_param_val,f_param_val);
+
+	*int_p_retstat = IV_SUCCESS;
+
+	if(strcmp(chr_t_param_code,"LOCATION") == 0)
+	{
+		if(strlen(chr_t_param_val) != 0)
+		{
+			EXEC SQL SELECT MIN(location_cd) INTO :chr_h_param_val:i_proc_data_val
+		   FROM MT_LOCATION
+			WHERE location_cd > :chr_t_param_val and 
+							    STATUS = 'AA'; /*Smita - HDFCCA Base Version - Changed Col Names*/
+		}
+		else
+		{
+			EXEC SQL SELECT MIN(location_cd) INTO :chr_h_param_val:i_proc_data_val
+		   FROM MT_LOCATION WHERE STATUS = 'AA';
+		}
+	}
+	if(strcmp(chr_t_param_code,"PRODUCT") == 0)
+	{
+		EXEC SQL SELECT MIN(map_val) 
+		INTO :chr_h_param_val:i_proc_data_val
+		FROM PRO_SGENSTAT
+		WHERE map_type = 'INSTR_SUB_TYPE';
+		// AND		nation_code = :chr_g_country;  shailesh 04-08-2008
+		//nation code column used for maintaing instrument type info
+		if(strlen(chr_h_param_val) == 0)
+		{
+			EXEC SQL SELECT MIN(map_val) 
+			INTO :chr_h_param_val:i_proc_data_val
+			FROM PRO_SGENSTAT
+			WHERE map_type = 'INSTR_SUB_TYPE' ;
+			//AND 		nation_code = 'XX';	    shailesh 04-08-2008
+		  //nation code column used for maintaing instrument type info
+			strcpy(h_nation,"XX");
+		}
+		else
+		{
+			strcpy(h_nation,chr_g_country);
+		}
+		if(strlen(chr_t_param_val) != 0)
+		{
+			EXEC SQL SELECT MIN(map_val) 
+			INTO :chr_h_param_val:i_proc_data_val
+			FROM PRO_SGENSTAT
+			WHERE map_type = 'INSTR_SUB_TYPE' AND
+			map_val > :chr_t_param_val;
+			//AND 	nation_code = :h_nation;  shailesh 04-08-2008
+		//nation code column used for maintaing instrument type info
+		}
+		else
+		{
+			EXEC SQL SELECT MIN(map_val) 
+			INTO :chr_h_param_val:i_proc_data_val
+			FROM PRO_SGENSTAT
+			WHERE map_type = 'INSTR_SUB_TYPE';
+			//AND 	nation_code = :h_nation;shailesh 04-08-2008
+		//nation code column used for maintaing instrument type info
+		}
+
+	}
+	if(strcmp(chr_t_param_code,"DEALCD") == 0)
+	{
+		EXEC SQL SELECT MIN(map_val) 
+		INTO :chr_h_param_val:i_proc_data_val
+		FROM PRO_SGENSTAT
+		WHERE map_type = 'DEALCD' AND
+		nation_code = :chr_g_country;
+		if(strlen(chr_h_param_val) == 0)
+		{
+			EXEC SQL SELECT MIN(map_val) 
+			INTO :chr_h_param_val:i_proc_data_val
+			FROM PRO_SGENSTAT
+			WHERE map_type = 'DEALCD' AND
+			nation_code = 'XX';
+			strcpy(h_nation,"XX");
+		}
+		else
+			strcpy(h_nation,chr_g_country);
+		if(strlen(chr_t_param_val) != 0)
+		{
+			EXEC SQL SELECT MIN(map_val) 
+			INTO :chr_h_param_val:i_proc_data_val
+			FROM PRO_SGENSTAT
+			WHERE map_type = 'DEALCD' AND
+			map_val > :chr_t_param_val AND
+			nation_code = :h_nation;
+		}
+		else
+		{	
+			if (p_serv_code == 4)
+			{
+				strcpy(chr_l_start_val,"2");
+			}
+			else
+			{
+				strcpy(chr_l_start_val,"0");
+			}
+			EXEC SQL SELECT MIN(map_val) 
+			INTO :chr_h_param_val:i_proc_data_val
+			FROM PRO_SGENSTAT
+			WHERE map_type = 'DEALCD' AND
+			map_val > :chr_l_start_val AND
+			nation_code = :h_nation;
+		}
+	}
+	if(strcmp(chr_t_param_code,"DEALTYPE") == 0)
+	{
+		EXEC SQL SELECT MIN(map_val) 
+		INTO :chr_h_param_val:i_proc_data_val
+		FROM PRO_SGENSTAT
+		WHERE map_type = 'DEALTYPE' AND
+		to_number(map_val) < 5 AND
+		nation_code = :chr_g_country;
+		if(strlen(chr_h_param_val) == 0)
+		{
+			EXEC SQL SELECT MIN(map_val) 
+			INTO :chr_h_param_val:i_proc_data_val
+			FROM PRO_SGENSTAT
+			WHERE map_type = 'DEALTYPE' AND
+			to_number(map_val) < 5 AND
+			nation_code = 'XX';
+			strcpy(h_nation,"XX");
+		}
+		else
+			strcpy(h_nation,chr_g_country);
+		if(strlen(chr_t_param_val) != 0)
+		{
+			EXEC SQL SELECT MIN(map_val) 
+			INTO :chr_h_param_val:i_proc_data_val
+			FROM PRO_SGENSTAT
+			WHERE map_type = 'DEALTYPE' AND
+			map_val > :chr_t_param_val AND
+			to_number(map_val) < 5  AND
+			nation_code = :h_nation;
+		}
+		else
+		{
+			EXEC SQL SELECT MIN(map_val) 
+			INTO :chr_h_param_val:i_proc_data_val
+			FROM PRO_SGENSTAT
+			WHERE map_type = 'DEALTYPE' AND
+			to_number(map_val) < 5 AND
+			nation_code = :h_nation;
+		}
+	}
+	/* HDFCIV_004 PJ */
+	if(strcmp(chr_t_param_code,"INSTRUMENT") == 0)
+	{
+		if(strlen(chr_t_param_val) != 0)
+		{
+			EXEC SQL SELECT MIN(instr_code) INTO :chr_h_param_val:i_proc_data_val
+		   FROM MT_INSTRUMENT
+			WHERE instr_code > :chr_t_param_val and 
+							    STATUS = 'AA'; 
+		}
+		else
+		{
+			EXEC SQL SELECT MIN(instr_code) INTO :chr_h_param_val:i_proc_data_val
+		   FROM MT_INSTRUMENT WHERE STATUS = 'AA';
+		}
+	}
+
+	if(sqlca.sqlcode < 0)
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+	if(sqlca.sqlcode == 1403)
+		*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+	IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(DB_ERR_NO,APL_NULL_STRING,APL_NULL_STRING,APL_NULL_STRING);
+
+	if(i_proc_data_val == -1)
+		strcpy(chr_h_param_val,APL_NULL_STRING);
+
+	if ( strlen(chr_h_param_val) == 0)
+	{
+		strcpy(f_param_val,"\0");
+	}
+	else
+	{
+		strcpy(f_param_val,"\0");
+		strcat(f_param_val,chr_h_param_val);
+		strcat(f_param_val,"\0");
+	}
+	APL_GOBACK_SUCCESS;
+
+RETURN_SUCCESS:
+	CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of IV_Rtv_ParamVal().\n", NULL, NULL);
+	return APL_SUCCESS;
+
+RETURN_FAILURE:
+	*int_p_retstat = IV_CRITCAL_ERROR_IND;
+	CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of IV_Rtv_ParamVal().\n", NULL, NULL);
+	return APL_FAILURE;
+
+}
+
+
+
+int IV_Chk_Grp(char *g_param_str, char *g_param_code, char **g_param_ind,
+				  char *g_grp_str, int p_srv, char *chr_p_client,char *chr_p_apl_frm_date, int *int_p_retstat,
+				  DEBUG_INFO_STRUCT_H **l_debug_info_ptr)    /* Added apl_frm_date by monica for kotak ISKB_1737 */
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+
+	char  chr_h_param_val[IV_PARAM_LEN],chr_h_group_ind[IV_GRP_LEN];
+	char chr_h_param_code[IV_PARAM_LEN];
+	char h_dl_client[APL_CLIENT_LENGTH];
+	char  chr_h_param_str[IV_PARAM_LEN],chr_v_param_code[IV_PARAM_LEN];
+	char chr_v_param_str[IV_PARAM_LEN],chr_v_group_ind[IV_GRP_LEN];
+	int int_grp_cnt=0;
+	int int_f_serv_code=0;
+	char h_apl_frm_date[9];  /* Added by monica for kotak ISKB_1737 */
+	struct sqlca sqlca;
+
+	EXEC SQL VAR chr_h_param_val IS STRING;
+	EXEC SQL VAR chr_h_group_ind IS STRING;
+	EXEC SQL VAR chr_h_param_code IS STRING;
+	EXEC SQL VAR h_dl_client IS STRING;
+	EXEC SQL VAR chr_h_param_str IS STRING;
+	EXEC SQL VAR chr_v_param_code IS STRING;
+	EXEC SQL VAR chr_v_param_str  IS STRING;
+	EXEC SQL VAR chr_v_group_ind  IS STRING;
+	EXEC SQL VAR h_apl_frm_date IS STRING;  /* Added by monica for kotak ISKB_1737 */
+
+	EXEC SQL END DECLARE SECTION;
+
+	char chr_p_param_code[IV_STRING_LEN],chr_p_group_val[IV_STRING_LEN];
+	char chr_p_param_str[IV_STRING_LEN];
+	char chr_p_group_ind[11],chr_pass_ind[11];
+	char a[IV_PARAM_LEN],b[IV_PARAM_LEN],c[IV_PARAM_LEN],d[IV_PARAM_LEN];
+	char e[IV_PARAM_LEN],chr_l_group_ind[IV_GRP_LEN],chr_r_group_ind[IV_GRP_LEN];
+	char chr_ret_str[IV_PARAM_LEN],chr_fee_str[IV_PARAM_LEN],chr_p_param_ind[IV_GRP_LEN];
+	char **chr_l_paramc = NULL, **chr_l_paramv = NULL, **chr_l_params = NULL;
+	char **chr_l_paramg = NULL, **chr_l_group = NULL;
+	int int_is_grp_cur_open = 0;
+	int int_str_cnt = 1,int_pass_cnt = 1,int_grpelem=0;
+	int int_celem=0,int_velem=0,int_selem=0,int_passelem=0;
+
+	sqlca.sqlcode = 0;
+	int_f_serv_code = p_srv;
+
+	memset(chr_h_param_val, APL_NULL_CHAR, IV_PARAM_LEN);
+	memset(chr_h_group_ind, APL_NULL_CHAR, IV_GRP_LEN);
+	memset(chr_h_param_code, APL_NULL_CHAR, IV_PARAM_LEN);
+	memset(h_dl_client, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+	memset(chr_h_param_str, APL_NULL_CHAR, IV_PARAM_LEN);
+	memset(chr_v_param_code, APL_NULL_CHAR, IV_PARAM_LEN);
+	memset(chr_v_param_str, APL_NULL_CHAR, IV_PARAM_LEN);
+	memset(chr_v_group_ind, APL_NULL_CHAR, IV_GRP_LEN);
+
+	memset(chr_p_param_code, APL_NULL_CHAR, IV_STRING_LEN);
+	memset(chr_p_group_val, APL_NULL_CHAR, IV_STRING_LEN);
+	memset(chr_p_param_str, APL_NULL_CHAR, IV_STRING_LEN);
+	memset(chr_p_group_ind, APL_NULL_CHAR, 11);
+	memset(chr_pass_ind, APL_NULL_CHAR, 11);
+	memset(a, APL_NULL_CHAR, IV_PARAM_LEN);
+	memset(b, APL_NULL_CHAR, IV_PARAM_LEN);
+	memset(c, APL_NULL_CHAR, IV_PARAM_LEN);
+	memset(d, APL_NULL_CHAR, IV_PARAM_LEN);
+	memset(e, APL_NULL_CHAR, IV_PARAM_LEN);
+	memset(chr_l_group_ind, APL_NULL_CHAR, IV_GRP_LEN);
+	memset(chr_r_group_ind, APL_NULL_CHAR, IV_GRP_LEN);
+	memset(chr_ret_str, APL_NULL_CHAR, IV_PARAM_LEN);
+	memset(chr_fee_str, APL_NULL_CHAR, IV_PARAM_LEN);
+	memset(chr_p_param_ind, APL_NULL_CHAR, IV_GRP_LEN);
+
+	strcpy(h_dl_client,chr_p_client);
+	strcpy(g_grp_str,APL_NULL_STRING);
+	strcpy(chr_r_group_ind,*g_param_ind);
+	strcpy(h_apl_frm_date,chr_p_apl_frm_date);  /* Added by monica for kotak ISKB_1737 */
+
+	*int_p_retstat = IV_SUCCESS;
+
+	printf("$$$$$ IV_Chk_Grp Client Code |%s| Service Code |%d|\n",h_dl_client,int_f_serv_code);	/* Bageshri HDFC UAT Fix 16/06/2007 */
+
+	EXEC SQL DECLARE grp_cur CURSOR FOR
+	SELECT PROC_DATA_VAL, GROUP_ID
+	FROM IV_CLIENTFEE
+	WHERE CLIENT = :h_dl_client and
+			SERVICE_CD = :int_f_serv_code and
+			APL_FRM_DATE =:h_apl_frm_date and  /* Added by monica for kotak ISKB_1737 */
+			( INSTR(group_id,'G',1) > 0 );
+
+	EXEC SQL OPEN grp_cur;
+
+	if (  sqlca.sqlcode < 0 )
+	{
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+	}
+
+	IS_ANY_ORA_ERROR;
+
+	int_is_grp_cur_open = 1;
+
+	for( ; ; )
+	{
+		memset(chr_h_param_val, APL_NULL_CHAR, IV_PARAM_LEN);
+		memset(chr_h_group_ind, APL_NULL_CHAR, IV_GRP_LEN);
+
+		EXEC SQL FETCH grp_cur 
+		INTO :chr_h_param_val, :chr_h_group_ind;
+
+		if ( sqlca.sqlcode < 0 )
+		{
+			*int_p_retstat = IV_CRITCAL_ERROR_IND;
+		}
+
+		IS_ANY_ORA_ERROR
+
+		if(sqlca.sqlcode == 1403)
+			break;
+
+		strcpy(chr_h_param_str,g_param_str);
+		strcpy(chr_h_param_code,g_param_code);
+		strcpy(chr_l_group_ind,chr_h_group_ind);
+		strcpy(chr_p_param_ind,chr_r_group_ind);
+		memset(chr_fee_str,'\0',100);
+		memset(chr_ret_str,'\0',100);
+		strcpy(chr_fee_str,chr_h_param_val);
+		strcat(chr_fee_str,APL_NULL_STRING);
+		strcat(chr_h_param_code,";");
+		strcat(chr_h_param_val,";");
+		strcat(chr_h_param_str,";");
+
+		CO_SplitStr(chr_h_group_ind, ';', &int_grpelem, &chr_l_group);
+		strcpy(chr_p_group_ind,chr_l_group[0]);
+
+		CO_SplitStr(chr_h_param_code, ';', &int_celem, &chr_l_paramc);
+		strcpy(chr_p_param_code,chr_l_paramc[0]);
+
+		CO_SplitStr(chr_h_param_val, ';', &int_velem, &chr_l_paramv);
+		strcpy(chr_p_group_val,chr_l_paramv[0]);
+
+		CO_SplitStr(chr_h_param_str, ';', &int_selem, &chr_l_params);
+		strcpy(chr_p_param_str,chr_l_params[0]);
+
+		if(strlen(chr_r_group_ind) > 0)
+		{
+			CO_SplitStr(chr_p_param_ind, ';', &int_passelem, &chr_l_paramg);
+			strcpy(chr_pass_ind,chr_l_paramg[0]);
+
+		}
+		int_str_cnt = 1;
+
+		while(int_str_cnt <= int_grpelem)
+		{
+			if(strcmp(chr_p_group_ind,"G")== 0)
+			{
+				strcpy(chr_v_param_code,chr_p_param_code);
+				strcpy(chr_v_group_ind,chr_p_group_val);
+				strcpy(chr_v_param_str,chr_p_param_str);
+				if(strlen(chr_r_group_ind) == 0)
+				{
+					strcpy(chr_pass_ind,"I");
+				}
+				else
+				{
+					if(strcmp(chr_pass_ind,"G") == 0)
+						strcpy(chr_v_group_ind,chr_p_param_str);
+				}
+				if(strcmp(chr_pass_ind,"I") == 0)
+				{
+					EXEC SQL SELECT count(*) 
+					INTO :int_grp_cnt
+					FROM IV_DATA_GRP
+					WHERE parameter_cd = decode(:chr_v_param_code,'PRODUCT','INSTR_SUB_TYPE',:chr_v_param_code) AND /* Bageshri HDFC UAT Fix 16/06/2007 */
+							GROUP_PRM_CD = :chr_v_group_ind AND
+							GROUP_MEM_VAL = :chr_v_param_str;
+
+					if ( sqlca.sqlcode < 0 )
+					{
+						*int_p_retstat = IV_CRITCAL_ERROR_IND;
+					}
+
+					IS_ANY_ORA_ERROR;
+				}
+				else
+					int_grp_cnt = 1;
+				if(int_grp_cnt > 0)
+				{
+					if(strlen(chr_ret_str) > 0)
+						strcat(chr_ret_str,";");
+					strcat(chr_ret_str,chr_v_group_ind);
+				}
+				else
+				{
+					strcpy(g_grp_str,"\0");
+					break;
+				}
+			}
+			else
+			{
+				if(strlen(chr_ret_str) > 0)
+					strcat(chr_ret_str,";");
+				strcat(chr_ret_str,chr_p_param_str);
+			}
+			if(int_str_cnt != int_grpelem)
+			{
+				strcpy(chr_p_group_ind,chr_l_group[int_str_cnt]);
+				strcpy(chr_p_param_code,chr_l_paramc[int_str_cnt]);
+				strcpy(chr_p_group_val,chr_l_paramv[int_str_cnt]);
+				strcpy(chr_p_param_str,chr_l_params[int_str_cnt]);
+				if(strlen(chr_r_group_ind) > 0)
+				{
+
+					strcpy(chr_p_param_str,chr_l_params[int_pass_cnt]);
+					int_pass_cnt++;
+				}
+			}
+			int_str_cnt++;
+		}
+		if(strcmp(chr_fee_str,chr_ret_str) == 0)
+		{
+			strcpy(g_grp_str,chr_ret_str);
+			strcpy(*g_param_ind,chr_l_group_ind);
+			APL_GOBACK_SUCCESS;
+		}
+		else
+		{
+			strcpy(g_grp_str,APL_NULL_STRING);
+			strcpy(*g_param_ind,APL_NULL_STRING);
+		}
+	}
+
+	EXEC SQL CLOSE grp_cur;
+	int_is_grp_cur_open = 0;
+	APL_GOBACK_SUCCESS;
+
+
+RETURN_SUCCESS:
+	if(int_is_grp_cur_open == 1)
+	{
+		EXEC SQL CLOSE grp_cur;
+	}
+	CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of IV_Chk_Grp().\n", NULL, NULL);
+	return APL_SUCCESS;
+
+RETURN_FAILURE:
+	if(int_is_grp_cur_open == 1)
+	{
+		EXEC SQL CLOSE grp_cur;
+	}
+	*int_p_retstat = IV_CRITCAL_ERROR_IND;
+	CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of IV_Chk_Grp().\n", NULL, NULL);
+	return APL_FAILURE;
+
+}
+
+
+
+int IV_Chk_FeeSetup(char *chr_p_client,int *int_p_retstat,DEBUG_INFO_STRUCT_H **l_debug_info_ptr, char p_regen_flg)
+{		
+
+	EXEC SQL BEGIN DECLARE SECTION;
+	char h_dl_client[APL_CLIENT_LENGTH],h_mstclt[APL_CLIENT_LENGTH];
+	char chr_h_acct_regen[APL_CLIENT_LENGTH],chr_h_sel_stmt[150];
+	char h_clt_status[3]; 
+	short i_dl_client = 0,i_mstclt = 0, i_clt_status = 0;
+	EXEC SQL VAR h_dl_client IS STRING;
+	EXEC SQL VAR chr_h_acct_regen IS STRING;
+	EXEC SQL VAR h_mstclt  IS STRING;
+	EXEC SQL VAR chr_h_sel_stmt IS STRING;
+	struct sqlca sqlca;
+	EXEC SQL END DECLARE SECTION;
+
+	char chr_l_def_fee_acc[APL_CLIENT_LENGTH],chr_l_bl_gen,chr_l_status_flg;
+	char chr_l_param_code[IV_PARAM_LEN],chr_l_acct_str[IV_CLT_LEN];
+	char chr_l_mst_acct_str[IV_CLT_LEN];
+	IV_CLIENTPARAM_STRUCT_H l_iv_clientparam_struct_hb;
+	IV_CLIENTSETUP_STRUCT l_iv_clientsetup_struct;
+	int int_retstat =0;
+	int int_is_acc_cur_open = 0;
+
+	sqlca.sqlcode = 0;
+	memset(chr_l_def_fee_acc,'\0',APL_CLIENT_LENGTH);
+	memset(chr_l_param_code,'\0',IV_PARAM_LEN);
+	memset(chr_l_acct_str,'\0',IV_CLT_LEN);
+	memset(chr_l_mst_acct_str,'\0',IV_CLT_LEN);
+	memset(h_clt_status, APL_NULL_CHAR, 3);
+	if (chr_p_client) strcpy(chr_h_acct_regen,chr_p_client);
+
+	strcpy(chr_h_sel_stmt,"SELECT CLN_CODE, CLN_MASTER, STATUS"); 
+	strcat(chr_h_sel_stmt," FROM MT_CLIENT");
+	strcat(chr_h_sel_stmt," WHERE");
+	if(chr_regen_flg == 'Y' && (strlen(chr_p_client) !=0 ))
+	{
+		strcat(chr_h_sel_stmt," CLN_CODE =  '");
+		strcat(chr_h_sel_stmt,chr_h_acct_regen);
+		strcat(chr_h_sel_stmt,"' AND");
+	}
+	strcat(chr_h_sel_stmt," CLN_BILLABLEIND = 'Y' AND");
+	strcat(chr_h_sel_stmt," STATUS NOT IN ('CA','CU')"); 
+	EXEC SQL PREPARE S FROM :chr_h_sel_stmt;
+
+	EXEC SQL DECLARE acc_cur CURSOR FOR S;
+
+	EXEC SQL OPEN acc_cur;
+
+	if(sqlca.sqlcode < 0)
+	{
+		fprintf(fp,"Error in accessing table for client %s. Please contact support\n",chr_h_acct_regen);
+		fflush(fp);
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+	}
+
+	IS_ANY_ORA_ERROR;
+
+	int_is_acc_cur_open = 1;
+	for(; ; )
+	{
+		memset(h_dl_client, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+		memset(h_mstclt, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+		memset(h_clt_status, APL_NULL_CHAR, 3); 
+
+		EXEC SQL FETCH acc_cur INTO :h_dl_client:i_dl_client,
+											 :h_mstclt:i_mstclt, 
+											 :h_clt_status:i_clt_status;
+
+		if ( sqlca.sqlcode < 0 )
+		{
+			*int_p_retstat = IV_CRITCAL_ERROR_IND;
+		}
+
+		IS_ANY_ORA_ERROR
+
+		if(sqlca.sqlcode == 1403)
+			break;
+
+		 
+
+		if ( (strcmp(h_clt_status, "AA") != 0) && 
+			  (strcmp(h_clt_status, "FU") != 0) && 
+			  (strcmp(h_clt_status, "FA") != 0) )
+		{
+			fprintf(fp, "Error: Account %s not in proper status in Core.\n", h_dl_client);
+			*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+		}
+
+		int_retstat = IV_SUCCESS;
+		memset(&l_iv_clientsetup_struct, APL_NULL_CHAR, sizeof(IV_CLIENTSETUP_STRUCT));
+
+		if(APL_FAILURE == IV_Rtv_IVCUSTSETUP(h_dl_client,&l_iv_clientsetup_struct,&int_retstat,l_debug_info_ptr))
+		{
+			if(int_retstat == IV_CRITCAL_ERROR_IND)
+			{
+				fprintf(fp,"Error in accessing table BCUSTSETUP for Account %s. Please contact support.\n",h_dl_client); 
+				fflush(fp);
+
+				if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+				{
+					CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+
+					CO_FreeErrLst(l_debug_info_ptr);
+				}
+
+
+				APL_GOBACK_FAIL;
+			}
+			else if(int_retstat == IV_NO_DATA_FOUND_ERR)
+			{
+				fprintf(fp,"Error : Account %s is not setup in billing system\n",h_dl_client);
+				fflush(fp);
+				*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+				continue;
+			}
+
+		}
+
+		if( l_iv_clientsetup_struct.stat_ind != 'A' ) 
+		{
+			fprintf(fp,"Error : Billing Details not authorised for client %s.\n",h_dl_client);
+			fflush(fp);
+			*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+			continue;
+		}
+
+		strcpy(chr_l_def_fee_acc,l_iv_clientsetup_struct.default_feeclt);
+		chr_l_bl_gen      = l_iv_clientsetup_struct.b_gen_ind;
+		chr_l_status_flg  = l_iv_clientsetup_struct.stat_ind;
+
+		if(chr_l_bl_gen == 'M')
+		{
+			strcpy(chr_l_acct_str,h_dl_client);
+			strcat(chr_l_acct_str,";");
+			strcat(chr_l_acct_str,chr_l_def_fee_acc);
+			strcat(chr_l_acct_str,";");
+			strcat(chr_l_acct_str,chr_g_cb_code);
+
+			int_retstat = IV_SUCCESS;
+			memset(&l_iv_clientsetup_struct, APL_NULL_CHAR, sizeof(IV_CLIENTSETUP_STRUCT));
+			if(APL_FAILURE == IV_Rtv_IVCUSTSETUP(h_mstclt, &l_iv_clientsetup_struct, &int_retstat, l_debug_info_ptr))
+			{
+				if(int_retstat == IV_CRITCAL_ERROR_IND)
+				{
+					if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+					{
+						CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+
+						CO_FreeErrLst(l_debug_info_ptr);
+					}
+
+					APL_GOBACK_FAIL;
+				}
+				else if(int_retstat == IV_NO_DATA_FOUND_ERR)
+				{
+					*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+					fprintf(fp, "Error: Billing Details of master client %s not int_found for bill to master client %s.\n", h_mstclt, h_dl_client); 
+					continue;
+				}
+
+			}
+			strcpy(chr_l_def_fee_acc,l_iv_clientsetup_struct.default_feeclt);
+			strcpy(chr_l_mst_acct_str,h_mstclt);
+			strcat(chr_l_mst_acct_str,";");
+			strcat(chr_l_mst_acct_str,chr_l_def_fee_acc);
+			strcat(chr_l_mst_acct_str,";");
+			strcat(chr_l_mst_acct_str,chr_g_cb_code);
+
+			int_retstat = IV_SUCCESS;
+			if(APL_FAILURE == IV_Chk_ServDep(chr_l_acct_str,chr_l_mst_acct_str,h_dl_client,h_mstclt,&int_retstat,l_debug_info_ptr))
+			{
+				*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+			}
+
+		} 
+		printf("\n *** 1199 Regen=%c client=%s \n ", p_regen_flg, h_dl_client );
+		if ( p_regen_flg == 'Y' )
+		{
+			EXEC SQL INSERT INTO IV_SELCLIENT  
+						VALUES (:h_dl_client);
+
+			if (sqlca.sqlcode < 0 )
+			{
+				*int_p_retstat = IV_CRITCAL_ERROR_IND;
+			}
+
+			IS_ANY_ORA_ERROR
+		}
+
+	} 
+
+	EXEC SQL CLOSE acc_cur;
+
+	int_is_acc_cur_open = 0;
+	if(*int_p_retstat != IV_SUCCESS)
+	{
+		APL_GOBACK_FAIL
+	}
+	else
+	{
+		APL_GOBACK_SUCCESS
+	}
+
+RETURN_SUCCESS:
+	if(int_is_acc_cur_open == 1)
+	{
+		EXEC SQL CLOSE acc_cur;
+	}
+	CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of IV_Chk_FeeSetup()\n", NULL, NULL);
+	return APL_SUCCESS;
+
+RETURN_FAILURE:
+	if(int_is_acc_cur_open == 1)
+	{
+		EXEC SQL CLOSE acc_cur;
+	}
+	CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of IV_Chk_FeeSetup()\n", NULL, NULL);
+	return APL_FAILURE;
+
+}
+
+
+
+int IV_Chk_MktPrc(int *int_p_retstat,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	EXEC SQL BEGIN DECLARE SECTION;
+	char h_instr_code[APL_INSTRUMENTCODE_LEN],h_bl_prv_dt[APL_DATE_LEN],h_bl_upto_dt[APL_DATE_LEN];
+	short i_instr_code;
+	EXEC SQL VAR h_instr_code IS STRING;
+	EXEC SQL VAR h_bl_prv_dt IS STRING; 
+	EXEC SQL VAR h_bl_upto_dt IS STRING;
+	struct sqlca sqlca;
+	EXEC SQL END DECLARE SECTION;
+
+	double l_mkrt_pr=0;
+	int ptc_count=0;/* vinay kalaskar */
+	int int_retstat=0,int_fetch_cnt=0;
+	int int_is_instr_cur_open = 0;
+
+	char h_bl_proc_dt[APL_DATE_LEN];
+	memset(h_bl_proc_dt, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(h_bl_upto_dt, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(h_bl_prv_dt, APL_NULL_CHAR, APL_DATE_LEN); 
+	strcpy(h_bl_proc_dt,chr_g_bl_proc_dt);
+	strcpy(h_bl_upto_dt,chr_g_bl_upto_dt);
+	strcpy(h_bl_prv_dt, chr_g_bl_prv_dt);
+
+
+	EXEC SQL DECLARE sec_cur CURSOR FOR
+	/* Bageshri HB_IV_003 */
+	    /*SELECT distinct(instr_code) FROM DL_SAFEK;*/
+	/* Bageshri Onsite changes 14092007 -- START */
+/* Retro fitted by pavan for ISKB_2242 Billing Generation and commented the Query - Start*/
+/*
+        SELECT DISTINCT(INSTR_CODE) FROM DL_SAFEK 
+	UNION
+	SELECT DISTINCT(INSTR_CODE) FROM DL_HISSAFEK 
+	WHERE POSIT_DATE BETWEEN TO_DATE(TO_DATE(:h_bl_prv_dt,'DD/MM/YYYY HH:MI:SS PM') + 1 ,'DD/MM/YYYY HH:MI:SS PM')
+		AND TO_DATE(:h_bl_upto_dt,'DD/MM/YYYY HH:MI:SS PM')
+	AND INSTR_CODE NOT IN (SELECT DISTINCT(INSTR_CODE) FROM DL_SAFEK);
+*/
+	SELECT DISTINCT(A.INSTR_CODE) 
+		FROM DL_SAFEK A,MT_INSTRUMENT B, PRO_SYS_DATE C, SYS_IVCONTROLPARAM D 
+	WHERE A.INSTR_CODE = B.INSTR_CODE 
+		AND C.SYS_DATE = D.B_UPTO_DATE
+	UNION
+	SELECT DISTINCT(C.INSTR_CODE) 
+		FROM DL_HISSAFEK C, MT_INSTRUMENT D
+	WHERE C.INSTR_CODE = D.INSTR_CODE 
+		AND	C.POSIT_DATE BETWEEN TO_DATE(TO_DATE(:h_bl_prv_dt,'DD/MM/YYYY HH:MI:SS PM') + 1 ,'DD/MM/YYYY HH:MI:SS PM')
+			AND TO_DATE(:h_bl_upto_dt,'DD/MM/YYYY HH:MI:SS PM')
+		AND C.INSTR_CODE NOT IN (SELECT DISTINCT(A.INSTR_CODE) 
+									FROM DL_SAFEK A,MT_INSTRUMENT B, PRO_SYS_DATE C, SYS_IVCONTROLPARAM D 
+								WHERE A.INSTR_CODE = B.INSTR_CODE 
+									AND C.SYS_DATE = D.B_UPTO_DATE);
+/*Retro fitted by pavan for ISKB_2242 Billing Generation - End*/
+	/* Bageshri 17102007 to skip safek check when upto date is not system date */
+
+	/* Bageshri Onsite changes 14092007 -- END */
+
+	EXEC SQL OPEN sec_cur;
+
+	if(sqlca.sqlcode < 0)
+	{
+		fprintf(fp,"Error in accessing safekeeping table. Please contact support\n");
+		fflush(fp);
+	}
+
+	IS_ANY_ORA_ERROR;
+	int_is_instr_cur_open = 1;
+
+	for( ; ; )
+	{
+		memset(h_instr_code, APL_NULL_CHAR, APL_INSTRUMENTCODE_LEN);
+
+		EXEC SQL FETCH sec_cur INTO :h_instr_code:i_instr_code;
+
+		if ( sqlca.sqlcode < 0 )
+		{
+			*int_p_retstat = IV_CRITCAL_ERROR_IND;
+		}
+
+		IS_ANY_ORA_ERROR
+
+		if(sqlca.sqlcode == 1403)
+		{
+			if(int_fetch_cnt == 0)
+			{
+				*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+			}
+			break;
+		}
+
+		int_fetch_cnt++;
+
+		int_retstat = IV_SUCCESS;
+		l_mkrt_pr = 0.0;
+		
+		/* if(APL_FAILURE == Cdlymktprc(h_instr_code,&l_mkrt_pr,&int_retstat,l_debug_info_ptr))*/
+		/*Commented the Query by pavan for ISKB_2242 Billing Generation - Start*/
+/*              ********** For PTC Check : vinay kalaskar ******************************************
+		commented by Bageshri 19102007 as PTC charges calculaton included in Custody charges
+		
+		EXEC SQL SELECT NVL(COUNT(PTC_VALUE),0) 
+			  INTO :ptc_count FROM MT_PTC_DET 
+			  WHERE INSTR_CODE=:h_instr_code;
+
+		IS_ANY_ORA_ERROR
+
+		if(ptc_count == 0)
+		{
+*/
+		/*Commented the Query by pavan for ISKB_2242 Billing Generation - End*/
+		if(APL_FAILURE == Cdlylocmktprc(h_instr_code,1,&l_mkrt_pr,&h_bl_upto_dt,&int_retstat,l_debug_info_ptr))   /* Bageshri HB_IV_003*/
+		{
+			fprintf(fp,"Error : Market price not found for instrument %s\n",h_instr_code);
+			fflush(fp);
+			*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+
+			if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+			{
+				CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+				CO_FreeErrLst(l_debug_info_ptr);
+			}
+		}
+		/*}*/
+	} 
+
+	EXEC SQL CLOSE sec_cur;
+	int_is_instr_cur_open = 0;
+
+	if(*int_p_retstat != IV_SUCCESS)
+	{
+		APL_GOBACK_FAIL;
+	}
+	else
+	{
+		APL_GOBACK_SUCCESS;
+	}
+
+RETURN_SUCCESS:
+	if(int_is_instr_cur_open == 1)
+	{
+		EXEC SQL CLOSE sec_cur;
+	}
+	CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of IV_Chk_MktPrc().\n", NULL, NULL);
+	return APL_SUCCESS;
+
+RETURN_FAILURE:
+	if(int_is_instr_cur_open == 1)
+	{
+		EXEC SQL CLOSE sec_cur;
+	}
+	CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of IV_Chk_MktPrc().\n", NULL, NULL);
+	return APL_FAILURE;
+
+}
+
+
+
+int IV_Chk_CcySetup(int *int_p_retstat,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+	char chr_h_bill_curr[APL_CCYCODE_LEN];
+	short i_b_ccy = 0;
+	int int_h_count = 0;
+	EXEC SQL VAR chr_h_bill_curr IS STRING;
+	struct sqlca sqlca;
+
+	EXEC SQL END DECLARE SECTION;
+
+	sqlca.sqlcode = 0;
+	memset(chr_h_bill_curr, APL_NULL_CHAR, APL_CCYCODE_LEN);
+
+	EXEC SQL SELECT b_ccy 
+	INTO :chr_h_bill_curr:i_b_ccy
+	FROM INVOICE_SYSTEMPARAM;
+
+	if(sqlca.sqlcode < 0)
+	{
+		fprintf(fp,"Error in accessing table. Please contact support\n");
+		fflush(fp);
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+	}
+
+	IS_ANY_ORA_ERROR;
+
+	if(i_b_ccy == -1 || sqlca.sqlcode == 1403)
+	{
+		fprintf(fp,"Error : System billing currency not setup\n");
+		*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+	}
+	
+	EXEC SQL SELECT NVL(count(*),0) 
+	           INTO :int_h_count
+	           FROM MT_EXCHRATE
+	          WHERE STATUS != 'AA';/*Smita - Changed Col Name - HDFCCA Base Version*/
+
+	if (int_h_count > 0)
+	{
+	   fprintf(fp, "Error : Exchange Rates are Not Authorised\n");
+	   *int_p_retstat = IV_NO_DATA_FOUND_ERR ;
+   }	             
+	if(*int_p_retstat != IV_SUCCESS)
+	{
+		APL_GOBACK_FAIL;
+	}
+	else
+	{
+		APL_GOBACK_SUCCESS;
+	}
+
+RETURN_SUCCESS:
+	CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of IV_Chk_CcySetup().\n", NULL, NULL);
+	return APL_SUCCESS;
+
+RETURN_FAILURE:
+	CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of IV_Chk_CcySetup().\n", NULL, NULL);
+	return APL_FAILURE;
+
+}
+
+
+
+int IV_Chk_OthSrv(int *int_p_retstat,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+	char chr_h_serv_desc[IV_DESC_LEN],h_dl_client[APL_CLIENT_LENGTH];
+	long int_h_serv_code = 0;
+	EXEC SQL VAR chr_h_serv_desc IS STRING;
+	EXEC SQL VAR h_dl_client IS STRING;
+	struct sqlca sqlca;
+
+	EXEC SQL END DECLARE SECTION;
+
+	int int_is_othsrv_cur_open_a = 0;
+	sqlca.sqlcode = 0;
+	memset(chr_h_serv_desc, APL_NULL_CHAR, IV_DESC_LEN);
+	memset(h_dl_client, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+
+	EXEC SQL DECLARE othsrv_cur CURSOR FOR
+	    SELECT a.service_cd,b.service_det,a.client
+	    FROM IV_SERV_OTH a, IV_SERV_MAST b
+	    WHERE service_stat = 'U' AND b.STATUS='AA'
+	    AND a.service_cd = b.service_cd;
+
+	EXEC SQL OPEN othsrv_cur;
+
+	if(sqlca.sqlcode < 0)
+	{
+		fprintf(fp,"Error in accessing table. Please contact support\n");
+		fflush(fp);
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+	}
+
+	IS_ANY_ORA_ERROR;
+
+	int_is_othsrv_cur_open_a = 1;
+
+	for( ; ; )
+	{
+		int_h_serv_code = 0;
+		memset(chr_h_serv_desc, APL_NULL_CHAR, IV_DESC_LEN);
+
+		EXEC SQL FETCH othsrv_cur INTO :int_h_serv_code,:chr_h_serv_desc,:h_dl_client;
+
+		if ( sqlca.sqlcode < 0 )
+		{
+			*int_p_retstat = IV_CRITCAL_ERROR_IND;
+		}
+
+		IS_ANY_ORA_ERROR
+
+		if( APL_ZERO_RESULT_SET )
+			break;
+		else
+		{
+			fprintf(fp,"Error : Other service for client %s for service %s not authorised\n",h_dl_client,chr_h_serv_desc);
+			fflush(fp);
+			*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+		}
+	}
+
+	EXEC SQL CLOSE othsrv_cur;
+	int_is_othsrv_cur_open_a = 0;
+
+	if(*int_p_retstat != IV_SUCCESS)
+	{
+		APL_GOBACK_FAIL;
+	}
+	else
+	{
+		APL_GOBACK_SUCCESS;
+	}
+
+RETURN_SUCCESS:
+	if(int_is_othsrv_cur_open_a == 1)
+	{
+		EXEC SQL CLOSE othsrv_cur;
+	}
+	CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of IV_Chk_OthSrv().\n", NULL, NULL);
+	return APL_SUCCESS;
+
+RETURN_FAILURE:
+	if(int_is_othsrv_cur_open_a == 1)
+	{
+		EXEC SQL CLOSE othsrv_cur;
+	}
+	CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of IV_Chk_OthSrv().\n", NULL, NULL);
+	return APL_FAILURE;
+
+}
+
+
+int IV_Chk_ServDep(char *p_cltt_str,char *p_mst_cltt_str,char *chr_p_client,char *p_mstclt_a,int *int_p_retstat,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+
+	long int_h_serv_code=0;
+	short i_service_cd;
+	struct sqlca sqlca;
+
+	EXEC SQL END DECLARE SECTION;
+
+	IV_CLIENTPARAM_STRUCT_H l_iv_clientparam_struct_hb;
+	int int_retstat = 0,int_is_srv_dep_cur_open = 0;
+	char chr_acct_param_code[IV_PARAM_LEN],chr_mst_param_code[IV_PARAM_LEN];
+
+	memset(chr_acct_param_code,APL_NULL_CHAR,IV_PARAM_LEN);
+	memset(chr_mst_param_code,APL_NULL_CHAR,IV_PARAM_LEN);
+	*int_p_retstat = IV_SUCCESS;
+
+	EXEC SQL DECLARE srv_dep_cur  CURSOR FOR
+	    SELECT distinct(a.service_cd) FROM IV_SERV_MAST a, IV_SERV_DEPEND b
+	    WHERE a.service_cd = b.service_cd AND a.STATUS='AA';
+
+	EXEC SQL OPEN srv_dep_cur;
+
+	if ( sqlca.sqlcode < 0 ) 
+	{
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+	}
+
+	IS_ANY_ORA_ERROR;
+
+	int_is_srv_dep_cur_open = 1;
+
+	for( ; ; )
+	{
+		int_h_serv_code = 0;
+
+		EXEC SQL FETCH srv_dep_cur 
+		INTO :int_h_serv_code:i_service_cd;
+
+		if ( sqlca.sqlcode < 0 )
+		{
+			*int_p_retstat = IV_CRITCAL_ERROR_IND;
+		}
+
+		IS_ANY_ORA_ERROR
+
+		if(sqlca.sqlcode == 1403)
+			break;
+
+		if(APL_FAILURE  == IV_Rtv_ServiceParam(p_cltt_str,int_h_serv_code,
+		    &l_iv_clientparam_struct_hb,&int_retstat,l_debug_info_ptr))
+		{
+			if(int_retstat != IV_NO_DATA_FOUND_ERR)
+			{
+				int_bl_err_level = 1;
+				if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+				{
+					CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+					CO_FreeErrLst(l_debug_info_ptr);
+				}
+				*int_p_retstat = int_retstat;
+				APL_GOBACK_FAIL;
+			}
+		}
+		else
+		{
+			strcpy(chr_acct_param_code,l_iv_clientparam_struct_hb.parameter_cd);
+			if(APL_FAILURE  == IV_Rtv_ServiceParam(p_mst_cltt_str,int_h_serv_code,
+			    &l_iv_clientparam_struct_hb,&int_retstat,l_debug_info_ptr))
+			{
+				if(int_retstat != IV_NO_DATA_FOUND_ERR)
+				{
+					int_bl_err_level = 1;
+					if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+					{
+						CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+						CO_FreeErrLst(l_debug_info_ptr);
+					}
+					*int_p_retstat = int_retstat;
+					APL_GOBACK_FAIL;
+				}
+			}
+			else
+			{
+				strcpy(chr_mst_param_code,l_iv_clientparam_struct_hb.parameter_cd);
+				if(strcmp(chr_acct_param_code,chr_mst_param_code) != 0)
+				{
+					fprintf(fp,"Error : Mismatch in sevice dependencies defined for client %s  master %s for service %ld\n", chr_p_client,p_mstclt_a,int_h_serv_code);//AIX Warning Removal 
+					fflush(fp);
+
+					*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+				}
+			} 
+
+		}
+
+	} 
+
+	EXEC SQL CLOSE srv_dep_cur;
+	int_is_srv_dep_cur_open = 0;
+
+	if ( *int_p_retstat != IV_SUCCESS ) 
+	{
+		APL_GOBACK_FAIL
+	}
+	else
+	{
+		APL_GOBACK_SUCCESS
+	}
+
+RETURN_SUCCESS:
+	if(int_is_srv_dep_cur_open == 1)
+	{
+		EXEC SQL CLOSE srv_dep_cur;
+	}
+	CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of IV_Chk_ServDep().\n", NULL, NULL);
+	return APL_SUCCESS;
+
+RETURN_FAILURE:
+	if(int_is_srv_dep_cur_open == 1)
+	{
+		EXEC SQL CLOSE srv_dep_cur;
+	}
+	CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of IV_Chk_ServDep().\n", NULL, NULL);
+	return APL_FAILURE;
+
+}
+
+
+
+int IV_Chk_Pymt(int *int_p_retstat,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	int int_is_blpymnt_cur_open = 0;
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+		char h_dl_client[APL_CLIENT_LENGTH], h_pymt_dt[APL_DATE_LEN];
+		int h_sequence_num = 0;
+		long int_h_serv_code = 0;
+		short i_dl_client = 0, i_pymt_dt = 0, i_sequence_num = 0, i_service_cd = 0;
+		EXEC SQL VAR h_dl_client IS STRING;
+		EXEC SQL VAR h_pymt_dt IS STRING;
+		struct sqlca sqlca;
+
+	EXEC SQL END DECLARE SECTION;
+
+	sqlca.sqlcode = 0;
+	memset(h_dl_client, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+	memset(h_pymt_dt, APL_NULL_CHAR, APL_DATE_LEN);
+
+	EXEC SQL DECLARE blpymnt_cur CURSOR FOR
+	    SELECT CLIENT, DATEOF_PAYMENT, INDEN_NUM
+	    FROM IV_CHEQUE
+	    WHERE STATUS != 'A';
+
+	EXEC SQL OPEN blpymnt_cur;
+
+	if(sqlca.sqlcode < 0)
+	{
+		fprintf(fp,"Error in accessing table. Please contact support\n");
+		fflush(fp);
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+	}
+
+	IS_ANY_ORA_ERROR;
+
+	int_is_blpymnt_cur_open = 1;
+
+	for( ; ; )
+	{
+		h_sequence_num = 0;
+		memset(h_dl_client, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+		memset(h_pymt_dt, APL_NULL_CHAR, APL_DATE_LEN);
+
+		EXEC SQL FETCH blpymnt_cur
+					INTO :h_dl_client INDICATOR :i_dl_client,
+						  :h_pymt_dt INDICATOR :i_pymt_dt,
+						  :h_sequence_num INDICATOR :i_sequence_num;
+
+		if ( sqlca.sqlcode < 0 )
+		{
+			*int_p_retstat = IV_CRITCAL_ERROR_IND;
+		}
+
+		IS_ANY_ORA_ERROR
+
+		if( APL_ZERO_RESULT_SET )
+			break;
+		else
+		{
+			fprintf(fp,"Error : Billing Payment for Account %s, Date %s, Sequence Number %d not authorised.\n", h_dl_client, h_pymt_dt, h_sequence_num);
+			fflush(fp);
+			*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+		}
+	}
+
+	EXEC SQL CLOSE blpymnt_cur;
+	int_is_blpymnt_cur_open = 0;
+
+	if(*int_p_retstat != IV_SUCCESS)
+	{
+		APL_GOBACK_FAIL;
+	}
+	else
+	{
+		APL_GOBACK_SUCCESS;
+	}
+
+	RETURN_SUCCESS:
+	if(int_is_blpymnt_cur_open == 1)
+	{
+		EXEC SQL CLOSE blpymnt_cur;
+	}
+	CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of IV_Chk_Pymt().\n", 
+				NULL, NULL);
+	return APL_SUCCESS;
+
+	RETURN_FAILURE:
+	if(int_is_blpymnt_cur_open == 1)
+	{
+		EXEC SQL CLOSE blpymnt_cur;
+	}
+	CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of IV_Chk_Pymt().\n", 
+				NULL, NULL);
+	return APL_FAILURE;
+}
+
+int IV_Chk_TxnAdmFeeCcy(int *int_p_retstat,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	int int_is_txnfee_cur_open = 0;
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+      char h_dl_client[APL_CLIENT_LENGTH], h_pymt_dt[APL_DATE_LEN];
+      short i_dl_client = 0;
+      EXEC SQL VAR h_dl_client IS STRING;
+      struct sqlca sqlca;
+
+   EXEC SQL END DECLARE SECTION;
+
+   sqlca.sqlcode = 0;
+   memset(h_dl_client, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+		
+	EXEC SQL DECLARE txnfee_cur_open CURSOR FOR
+	SELECT distinct(CLIENT) from IV_CLIENT_SERV_BASIS    /*Distinct keyword added by Monica for ISKB_1737*/
+		where SERVICE_CD = '4'  
+	   and DEALADM_FEECCY is null;
+
+	EXEC SQL OPEN txnfee_cur_open;
+
+	if(sqlca.sqlcode < 0)
+   {
+      fprintf(fp,"Error in accessing table. Please contact support\n");
+      fflush(fp);
+      *int_p_retstat = IV_CRITCAL_ERROR_IND;
+   }
+
+   IS_ANY_ORA_ERROR;
+
+	int_is_txnfee_cur_open = 1;
+
+	for( ; ; )
+   {
+		memset(h_dl_client, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+		EXEC SQL FETCH txnfee_cur_open 
+			INTO :h_dl_client INDICATOR :i_dl_client;
+
+		if ( sqlca.sqlcode < 0 )
+      {
+         *int_p_retstat = IV_CRITCAL_ERROR_IND;
+      }
+
+      IS_ANY_ORA_ERROR
+
+      if( APL_ZERO_RESULT_SET )
+         break;
+      else
+      {
+         fprintf(fp,"Error : TxnAdmFee currency cannot be null for Account %s.\n", h_dl_client);
+			fflush(fp);
+         *int_p_retstat = IV_NO_DATA_FOUND_ERR;
+      }
+   }
+
+   EXEC SQL CLOSE txnfee_cur_open;
+	int_is_txnfee_cur_open = 0;
+
+	if(*int_p_retstat != IV_SUCCESS)
+   {
+      APL_GOBACK_FAIL;
+   }
+   else
+   {
+      APL_GOBACK_SUCCESS;
+   }
+
+   RETURN_SUCCESS:
+ 	if(int_is_txnfee_cur_open == 1)
+   {
+      EXEC SQL CLOSE txnfee_cur_open;
+	}
+	CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of IV_Chk_TxnAdmFeeCcy().\n",NULL,NULL);
+	return APL_SUCCESS;
+
+   RETURN_FAILURE:
+   if(int_is_txnfee_cur_open == 1)
+	{
+		EXEC SQL CLOSE txnfee_cur_open;
+   }
+   CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of IV_Chk_TxnAdmFeeCcy().\n",NULL,NULL);
+   return APL_FAILURE;
+}
+
+
+
+
+int IV_Chk_Footnote(int *int_p_retstat,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+ {
+   char chr_l_client_a[APL_CLIENT_LENGTH];
+   int int_retstat = 0;
+
+   EXEC SQL BEGIN DECLARE SECTION;
+   EXEC SQL VAR chr_l_client_a IS STRING;
+   EXEC SQL END DECLARE SECTION;
+
+   memset(chr_l_client_a,'\0',APL_CLIENT_LENGTH);
+
+   *int_p_retstat = IV_SUCCESS;
+
+   EXEC SQL DECLARE Cur_Ftnt CURSOR FOR
+   SELECT IV_CLIENTSETUP.CLIENT
+   FROM MT_CLIENT,IV_CLIENTSETUP,MT_COMMON_SYS_PARAMS
+   WHERE MT_CLIENT.CLN_CODE = IV_CLIENTSETUP.CLIENT 
+   AND IV_CLIENTSETUP.CLIENT = DECODE(IV_CLIENTSETUP.b_gen_ind,'M',MT_CLIENT.cln_master,IV_CLIENTSETUP.client)
+   AND MT_CLIENT.CLN_BILLABLEIND = 'Y'
+   AND MT_CLIENT.COUNTRY  <> MT_COMMON_SYS_PARAMS.NATION_CODE   
+   AND IV_CLIENTSETUP.VAT_NOTE is null;
+
+   EXEC SQL OPEN Cur_Ftnt;
+
+
+   if(sqlca.sqlcode < 0)
+   {
+       fprintf(TechRep,"Error in accessing table MT_CLIENT,BCUSTSETUP,COMMON_SYS_PARAMS.\n");
+       fflush(TechRep);
+       *int_p_retstat = IV_CRITCAL_ERROR_IND;
+   }
+       IS_ANY_ORA_ERROR;
+
+   for(;;)
+   {
+         EXEC SQL FETCH Cur_Ftnt INTO :chr_l_client_a;
+
+         if (APL_ZERO_RESULT_SET)
+         {
+            break;
+         }
+         else
+         {
+            fprintf(fp,"\nError : Billable Non local client Footnote must be enter in : ");
+            fprintf(fp,"%s",chr_l_client_a);
+            fflush(fp);
+            CO_ProcMonitor(TechRep,"\nError : Billable Non local client Footnote must be enter in : ",NULL,NULL);
+            CO_ProcMonitor(TechRep,chr_l_client_a,NULL,NULL);
+            *int_p_retstat = IV_CRITCAL_ERROR_IND;
+         }
+   }
+
+       EXEC SQL CLOSE Cur_Ftnt;
+
+       if(*int_p_retstat != IV_SUCCESS)
+       {
+          APL_GOBACK_FAIL;
+       }
+       else
+       {
+          APL_GOBACK_SUCCESS;
+       }
+
+ RETURN_SUCCESS:
+      return APL_SUCCESS;
+
+ RETURN_FAILURE:
+      return APL_FAILURE;
+}
+
+
+

@@ -1,0 +1,853 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ 
+
+
+#include "IV_Control_A.h"
+#define APL_FILE_LENGTH 50
+EXEC SQL INCLUDE SQLCA.H;
+int int_g_eu_condexists = 0;
+
+int IV_Proc_PrnAccount(		char **argv,			
+					  		FILE *bill,
+							FILE *fl_techlog,
+							FILE *fl_userlog,
+							INTL_ENV_DATA_STRUCT_H	*p_intlenv_data_struct_h,
+		 		 	 		DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+
+{	
+	
+	int 		i					= 0;
+	int 		int_retstat			= 0;
+	int 		int_ctr 				= 0;
+	int 		int_p_diff 			= 0;
+	int		int_l_fetch_ctr		= 0;
+	int		int_l_commit_count	= 0;
+	char 		chr_bl_gen_date[APL_DATE_LEN];
+	char 		chr_h_acc[APL_CLIENT_LENGTH];
+	char 		h_mstclt[APL_CLIENT_LENGTH];
+	char 		chr_premast[APL_CLIENT_LENGTH];
+	char 		chr_h_restart_data[50];
+	char		chr_p_dismast[APL_CLIENT_LENGTH]; 
+
+	short 	i_restart		= 0;
+	char 		*y,*a;
+	char 		chr_p_billdt[APL_DATE_LEN];
+	char 		chr_l_sys_date[APL_DATE_LEN];
+	char		h_ora_rowid[APL_ROWID_LEN];
+	char		chr_l_stat_info[71];
+	char		chr_h_blable[2];
+	
+	char		chr_l_billprntpath[PATH_LENGTH], chr_l_printername[15];
+	char		chr_l_sesaminipath[PATH_LENGTH], chr_l_reportsdirpath[PATH_LENGTH];
+	char		chr_l_billprntfilename[PATH_LENGTH];
+	FILE		*l_SesamIniFlPtr = (FILE *)NULL;
+	short    int_cond_exists=0;
+
+	char chr_h_client1[APL_CLIENT_LENGTH]=APL_NULL_STRING;
+	char chr_h_client2[APL_CLIENT_LENGTH]=APL_NULL_STRING;
+	char chr_h_zero_mstacc[APL_CLIENT_LENGTH]=APL_NULL_STRING;
+	short i_account1 = 0;
+	int   int_h_count1 = 0;
+	
+	short l_rus_flg = 0;
+   short l_eu_condexists = 0;
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+	SYS_IVCONTROLPARAM_STRUCT l_sys_ivcntl_param_struct;
+
+	IV_CLIENTSETUP_STRUCT l_iv_clt_setup_struct;
+
+	
+	EXEC SQL VAR chr_h_acc 									IS STRING;
+	EXEC SQL VAR h_mstclt 								IS STRING;
+	EXEC SQL VAR chr_p_dismast 								IS STRING;
+	EXEC SQL VAR l_sys_ivcntl_param_struct.b_prev_date 	IS STRING;
+	EXEC SQL VAR l_sys_ivcntl_param_struct.b_upto_date	IS STRING;
+	EXEC SQL VAR chr_bl_gen_date 							IS STRING;
+	EXEC SQL VAR chr_premast 								IS STRING;
+	EXEC SQL VAR chr_h_restart_data 						IS STRING;
+	EXEC SQL VAR chr_l_sys_date 							IS STRING;
+	EXEC SQL VAR chr_p_billdt 								IS STRING;
+	EXEC SQL VAR h_ora_rowid 								IS STRING;
+	EXEC SQL VAR chr_l_stat_info							IS STRING;
+	EXEC SQL VAR chr_h_blable 								IS STRING;
+	EXEC SQL VAR chr_h_client1							   IS STRING;
+	EXEC SQL VAR chr_h_zero_mstacc                   IS STRING;
+	EXEC SQL VAR chr_h_client2							   IS STRING;
+
+	
+	short i_acc;
+	short i_mstclt; 
+	short	i_ora_rowid;
+	short i_blable	 = 0;
+	EXEC SQL END DECLARE SECTION;
+
+	memset(chr_h_acc,APL_NULL_CHAR,APL_CLIENT_LENGTH);
+	memset(chr_h_client1,APL_NULL_CHAR,APL_CLIENT_LENGTH);
+	memset(chr_h_client2,APL_NULL_CHAR,APL_CLIENT_LENGTH);
+	memset(h_mstclt,APL_NULL_CHAR,APL_CLIENT_LENGTH);
+	memset(chr_p_dismast,APL_NULL_CHAR,APL_CLIENT_LENGTH);
+	memset(chr_p_billdt,APL_NULL_CHAR,APL_DATE_LEN);
+	memset(chr_h_restart_data,APL_NULL_CHAR,50);
+	memset(chr_l_sys_date,APL_NULL_CHAR,APL_DATE_LEN);
+	memset(chr_bl_gen_date,APL_NULL_CHAR,APL_DATE_LEN);
+	memset(chr_l_billprntpath, APL_NULL_CHAR, PATH_LENGTH); 
+	memset(chr_l_billprntfilename, APL_NULL_CHAR, PATH_LENGTH); 
+
+	memset(&l_sys_ivcntl_param_struct, NULL , sizeof(SYS_IVCONTROLPARAM_STRUCT) );
+	memset(&l_iv_clt_setup_struct, NULL , sizeof(IV_CLIENTSETUP_STRUCT) );
+
+	
+
+	EXEC SQL SELECT PROCESSING_STATUS , ROWID 
+				INTO :chr_h_restart_data:i_restart, :h_ora_rowid:i_ora_rowid 
+				FROM SYS_BATCHPROC
+				WHERE ( PROCESS_NAME = :argv[0]
+				AND PROC_INIT = :argv[1]
+				AND STARTDATE = :argv[2]
+				AND STATUS = 'started' )
+				FOR UPDATE OF PROCESSING_STATUS,STATUS; 
+
+
+	if (sqlca.sqlcode <0)
+	{
+		fprintf(fl_userlog,"Batch In Proc Table cannot be locked");  
+		APL_GOBACK_FAIL
+	}
+
+	if (APL_ZERO_RESULT_SET)
+	{
+		fprintf(fl_userlog,"Record For Progname %s,Startdate %s Not In Batch Table \n",argv[0], argv[2]);
+		CO_InsertErr(l_debug_info_ptr,
+                     ERR_REC_NOTFND,
+                     ltoa(sqlca.sqlcode),
+                     APL_NULL_STRING,
+                     APL_NULL_STRING,
+                     __LINE__,
+                     __FILE__);
+		APL_GOBACK_FAIL
+	}
+
+	
+
+	memset(chr_l_sesaminipath, APL_NULL_CHAR, PATH_LENGTH);
+	memset(chr_l_reportsdirpath, APL_NULL_CHAR, PATH_LENGTH);
+	memset(chr_l_printername, APL_NULL_CHAR, 15);
+	strcpy(chr_l_sesaminipath, getenv("INTL_ROOT_PATH"));
+	strcat(chr_l_sesaminipath, "/intl_sun.cfg");
+
+	if ( (l_SesamIniFlPtr = fopen(chr_l_sesaminipath, "r")) == (FILE *)NULL )
+	{
+		fprintf(fl_techlog, "Could not open intl_sun.cfg\n");
+		APL_GOBACK_FAIL
+	}
+
+	if ( APL_FAILURE == CO_ReadToken(l_SesamIniFlPtr, "INTL_REP_PATH", 
+												chr_l_reportsdirpath, l_debug_info_ptr) )
+	{
+		fprintf(APL_OUT_FILE, "Token REPORTS_DIR not set.\n");
+
+		APL_GOBACK_FAIL
+	}
+
+	if ( APL_FAILURE == CO_ReadToken(l_SesamIniFlPtr, "INTL_PRINTER", 
+												chr_l_printername, l_debug_info_ptr) )
+	{
+		fprintf(APL_OUT_FILE, "Token SESAM_PRINTER not set.\n");
+
+		APL_GOBACK_FAIL
+	}
+ 
+
+
+	if ( APL_FAILURE == CO_Rtv_FileNm_From_Pointer(bill, chr_l_reportsdirpath, 
+															  chr_l_billprntfilename) )
+	{
+		fprintf(APL_OUT_FILE, "Could not obtain name of the h_file containing printed bills\n.");
+
+		APL_GOBACK_FAIL
+	}
+
+	strcat(chr_l_reportsdirpath, "/");
+	strcat(chr_l_reportsdirpath, chr_l_billprntfilename);
+	strcpy(chr_l_billprntfilename, chr_l_reportsdirpath); 
+	
+
+	l_rus_flg=0;
+  	 if (APL_FAILURE == CO_Chk_CntryEnabled(  "BILL_PRINTING",
+     		                                 "ALL_CUSTOMERS",
+           		                           &l_rus_flg,
+                 		                     l_debug_info_ptr ))
+  		{
+     		 APL_GOBACK_FAIL
+    	}
+
+   
+	l_eu_condexists=0;
+    if (APL_FAILURE == CO_Chk_CntryEnabled( "VAT_REGULATION",
+                                         "EU_AND_TR_REGULATION",
+                                          &l_eu_condexists,
+                                          l_debug_info_ptr ))
+      {
+          APL_GOBACK_FAIL
+      }
+          int_g_eu_condexists = l_eu_condexists;
+   
+
+	printf("arg 9 is |%s|\n",argv[9]);
+	y = strtok_r(argv[9],",",&a);
+	printf("\ny is |%s|\n",y);
+
+	if (!y)
+	{
+		fprintf(fl_userlog,"Mandatory Data :Bill Date Missing\n");
+		APL_DATA_MISSING("Bill Date",APL_NULL_STRING,APL_NULL_STRING);
+		APL_GOBACK_FAIL
+	}
+	else
+	{
+		
+		if (APL_FAILURE == IV_Rtv_IVCNTLPARAM (&l_sys_ivcntl_param_struct,
+														&int_retstat,
+														l_debug_info_ptr))
+		{
+			if (int_retstat == IV_CRITCAL_ERROR_IND)
+			{
+				fprintf(fl_userlog,"Fatal Error In Billing Control Parameters Table\n");
+				CO_InsertErr(	l_debug_info_ptr,
+										DB_ERR_NO,
+										"BCNTLPARM",
+										APL_NULL_STRING,
+										APL_NULL_STRING,
+										__LINE__,
+										__FILE__);
+				APL_GOBACK_FAIL
+			}
+			else if (int_retstat == IV_NO_DATA_FOUND_ERR)
+			{
+				fprintf(fl_userlog,"Bill Control Parameters Not Found");
+				CO_InsertErr(	l_debug_info_ptr,
+										ERR_BILLCNTRL_PARAM_NOTFND,
+										APL_NULL_STRING,
+										APL_NULL_STRING,
+										APL_NULL_STRING,
+										__LINE__,
+										__FILE__);
+				APL_GOBACK_FAIL
+			}
+		}
+			
+		
+
+		strcpy(chr_p_billdt,y);
+
+		strcpy(chr_l_sys_date,argv[2]);
+		
+		
+
+		if (APL_FAILURE == CO_Pro_DateComp(l_sys_ivcntl_param_struct.b_upto_date,
+													chr_p_billdt,
+													&int_p_diff,
+													l_debug_info_ptr))
+		{
+			fprintf(fl_userlog,"Failed To Compare Bill Upto Date And Input Date\n");
+			APL_GOBACK_FAIL
+		}
+			
+		if (int_p_diff>0)
+		{
+			CO_InsertErr(	l_debug_info_ptr,
+									ERR_REC_NOTFND,
+									APL_NULL_STRING,
+									APL_NULL_STRING,
+									APL_NULL_STRING,
+									__LINE__,
+									__FILE__);
+			APL_GOBACK_FAIL
+		}
+		
+		
+		
+		if (APL_FAILURE == CO_Pro_DateComp(chr_l_sys_date,
+													chr_p_billdt,
+													&int_p_diff,
+													l_debug_info_ptr))
+		{
+			fprintf(fl_userlog,"Failed To Compare System Date And Input Date\n");
+			APL_GOBACK_FAIL
+		}
+	
+
+		if (int_p_diff > 0 && l_sys_ivcntl_param_struct.generate_ind == 'N')
+		{	
+			fprintf(fl_userlog,"Date Cannot Be Future Date\n");
+			CO_InsertErr(l_debug_info_ptr,
+								ERR_DATE_CANT_GRT_TODAY,
+								APL_NULL_STRING,
+								APL_NULL_STRING,
+								APL_NULL_STRING,
+								__LINE__,
+								__FILE__);
+			APL_GOBACK_FAIL
+		}
+
+     	        
+                int_cond_exists = 0;
+                if (APL_FAILURE == CO_Chk_CntryEnabled(  "BILL_PRINTING",
+            		                                "NO_INVD_BILL_MST",
+                  		                        &int_cond_exists,
+                        		                l_debug_info_ptr ))
+    			 {
+        				 APL_GOBACK_FAIL
+    			 }
+
+		while (( (y = strtok_r(NULL,";",&a)) != NULL) && a != NULL )
+		{
+			printf("the client is |%s|\n",y);
+			int_ctr++;
+			
+
+	   	 if (APL_FAILURE == IV_Rtv_IVCUSTSETUP( y,
+															   &l_iv_clt_setup_struct,
+																&int_retstat,
+																l_debug_info_ptr))
+			 {
+				if ( int_retstat == IV_CRITCAL_ERROR_IND)
+				{
+					fprintf(fl_userlog,"Fatal Error In Billing Customer Setup Table\n");
+					CO_InsertErr(	l_debug_info_ptr,
+											DB_ERR_NO,
+											"BCUSTSETUP",
+											APL_NULL_STRING,
+											APL_NULL_STRING,
+											__LINE__,
+											__FILE__);
+					APL_GOBACK_FAIL
+				}
+			   else if (int_retstat == IV_NO_DATA_FOUND_ERR) 
+				{
+					fprintf(fl_userlog,"Billing Setup Not Found For Account:%s\n",y);
+					CO_InsertErr(	l_debug_info_ptr,
+											ERR_BILLCNTRL_PARAM_NOTFND,
+											APL_NULL_STRING,
+											APL_NULL_STRING,
+											APL_NULL_STRING,
+											__LINE__,
+											__FILE__);
+
+					APL_GOBACK_FAIL
+				}
+			}
+
+		
+		
+
+		if (APL_FAILURE == IV_Rtv_Dist_MastAcc(y,
+															chr_p_dismast,
+					
+					chr_p_billdt,
+															&int_retstat,
+															l_debug_info_ptr))
+		{
+			if (int_retstat == IV_CRITCAL_ERROR_IND)
+			{
+				fprintf(fl_userlog,"Fatal Error In Selecting Master Account\n");
+				CO_InsertErr(	l_debug_info_ptr,
+										DB_ERR_NO,
+										"BTRANSAC",
+										APL_NULL_STRING,
+										APL_NULL_STRING,
+										__LINE__,
+										__FILE__);
+				APL_GOBACK_FAIL
+			}
+			else if (int_retstat == IV_NO_DATA_FOUND_ERR)
+			{
+         
+
+				if (l_rus_flg)
+				{
+				
+
+				strcpy(chr_h_client2,y);
+
+				EXEC SQL SELECT CLN_MASTER INTO :chr_p_dismast 
+			   FROM MT_CLIENT WHERE CLN_CODE =:chr_h_client2;
+
+				IS_ANY_ORA_ERROR
+				if (sqlca.sqlcode == 1403)
+					{
+					fprintf(fl_userlog,"Master Account Cannot Be Empty For Account %s\n",y);
+					CO_InsertErr(	l_debug_info_ptr,
+										ERR_MASTACC_CANT_EMPTY,
+										APL_NULL_STRING,
+										APL_NULL_STRING,
+										APL_NULL_STRING,
+										__LINE__,
+										__FILE__);
+				APL_GOBACK_FAIL 
+
+					}
+				}
+		else
+				{
+            fprintf(fl_userlog,"Master Account Cannot Be Empty For Account %s\n",y);
+            CO_InsertErr(   l_debug_info_ptr,
+                              ERR_MASTACC_CANT_EMPTY,
+                              APL_NULL_STRING,
+                              APL_NULL_STRING,
+                              APL_NULL_STRING,
+                              __LINE__,
+                              __FILE__);
+
+            APL_GOBACK_FAIL
+				}
+		   }
+		}
+
+		
+		if (strcmp(y,chr_p_dismast) == 0)
+		{
+		 	if (APL_FAILURE ==  IV_Proc_Prnbills(bill,
+													 fl_techlog,
+													 fl_userlog,
+													 chr_p_billdt,
+													 y,
+													 l_sys_ivcntl_param_struct,
+													 l_iv_clt_setup_struct,
+													 'C',
+													 l_debug_info_ptr))
+			{
+				fprintf(fl_userlog,"Failed To Print Consolidated Bill For The Account :%s\n",y);	
+			 	APL_GOBACK_FAIL
+			}	
+		 	
+                        if (int_cond_exists == 0) {
+                        if (APL_FAILURE ==  IV_Proc_Prnbills(bill,
+													 fl_techlog,
+													 fl_userlog,
+													 chr_p_billdt,
+													 y,
+													 l_sys_ivcntl_param_struct,
+													 l_iv_clt_setup_struct,
+												    'I',
+													 l_debug_info_ptr))
+			{
+				fprintf(fl_userlog,"Failed To Print Individual Bill For The Account :%s\n",y);	
+			 	APL_GOBACK_FAIL
+
+			} } 
+		}
+
+		
+		else
+		{
+		 	if (APL_FAILURE ==  IV_Proc_Prnbills(bill,
+													 fl_techlog,
+													 fl_userlog,
+													 chr_p_billdt,
+												    y,
+													 l_sys_ivcntl_param_struct,
+													 l_iv_clt_setup_struct,
+													 'I',
+													 l_debug_info_ptr))
+			{
+				fprintf(fl_userlog,"Failed To Print Individual Bill For The Account :%s\n",y);	
+			 	APL_GOBACK_FAIL
+			}
+
+		}
+	}
+
+
+	
+
+	if (int_ctr == 0)
+	{
+		
+		
+
+		EXEC SQL DECLARE mstbill CURSOR FOR
+			SELECT DISTINCT(a.CLIENT),a.MASTER_CLT ,b.CLN_BILLABLEIND
+			FROM IV_SERVICE_CHRG a,MT_CLIENT b 
+			WHERE a.DATEOF_BILLING=:chr_p_billdt
+			AND a.MASTER_CLT = b.CLN_CODE 
+			GROUP BY a.CLIENT,a.MASTER_CLT,b.CLN_BILLABLEIND
+			ORDER BY a.MASTER_CLT,a.CLIENT;
+
+			EXEC SQL OPEN mstbill;
+			
+			if (sqlca.sqlcode < 0)
+			{
+				fprintf(fl_userlog,"Encountered DB Error: %d : %s\n",sqlca.sqlcode,sqlca.sqlerrm.sqlerrmc);
+				APL_GOBACK_FAIL
+			}
+			
+			IS_ANY_ORA_ERROR
+			
+			for(;;)
+			{
+				EXEC SQL FETCH mstbill INTO
+				:chr_h_acc:i_acc,:h_mstclt:i_mstclt,:chr_h_blable:i_blable;
+
+
+				if (sqlca.sqlcode == 1403)
+				{
+					if (int_l_fetch_ctr == 0)
+					{
+						fprintf(fl_userlog,"No Bills Can Be Printed.No Transactions Found For Any Account\n");
+						APL_GOBACK_FAIL	
+					}
+					break;
+				}
+				
+				int_l_fetch_ctr++;
+
+				 
+				
+
+        		if (strcmp(h_mstclt,chr_premast) != 0 && (!strcmp(chr_h_blable,"Y")) )
+				{	
+					
+					memset(&l_iv_clt_setup_struct, NULL , sizeof(IV_CLIENTSETUP_STRUCT) );
+			
+					if (APL_FAILURE == IV_Rtv_IVCUSTSETUP(h_mstclt,
+																	&l_iv_clt_setup_struct,
+																	&int_retstat,
+																	l_debug_info_ptr))	
+					{
+						if (int_retstat == IV_CRITCAL_ERROR_IND)
+						{	
+							fprintf(fl_userlog,"Fatal Error In Selecting Customer Billing Parameters\n"); 
+							APL_GOBACK_FAIL
+						}
+						if (int_retstat == IV_NO_DATA_FOUND_ERR)
+						{
+							fprintf(fl_userlog,"Billing Setup Parameters Not Found For Account %s\n",h_mstclt);
+							CO_InsertErr(l_debug_info_ptr,
+												ERR_BILLPARAM_NOTFND,
+												chr_h_acc,
+												APL_NULL_STRING,
+												APL_NULL_STRING,
+												__LINE__,
+												__FILE__);	
+							APL_GOBACK_FAIL
+						}
+					}
+					if (APL_FAILURE == IV_Proc_Prnbills(bill,
+															fl_techlog,
+															fl_userlog,
+															chr_p_billdt,
+															h_mstclt,
+															l_sys_ivcntl_param_struct,
+															l_iv_clt_setup_struct,
+															'C',
+															l_debug_info_ptr))
+					{
+						fprintf(fl_userlog,"Failed To Print Consolidated Bill For Account:%s\n",h_mstclt);	
+						APL_GOBACK_FAIL
+					}
+		                        
+                                        if (int_cond_exists == 0) {	
+					if (APL_FAILURE == IV_Proc_Prnbills(bill,
+															fl_techlog,
+															fl_userlog,
+															chr_p_billdt,
+															h_mstclt,
+															l_sys_ivcntl_param_struct,
+															l_iv_clt_setup_struct,
+															'I',
+															l_debug_info_ptr))
+					{
+						fprintf(fl_userlog,"Failed To Print Individual Bill For Account:%s\n",h_mstclt);	
+						APL_GOBACK_FAIL
+					} } 
+				}
+
+				
+
+				if (strcmp(h_mstclt,chr_h_acc) != 0)
+				{
+					
+					memset(&l_iv_clt_setup_struct, NULL , sizeof(IV_CLIENTSETUP_STRUCT) );
+			
+					if (APL_FAILURE == IV_Rtv_IVCUSTSETUP(chr_h_acc,
+																	&l_iv_clt_setup_struct,
+																	&int_retstat,
+																	l_debug_info_ptr))	
+					{
+						if (int_retstat == IV_CRITCAL_ERROR_IND)
+						{	
+							fprintf(fl_userlog,"Fatal Error In Selecting Customer Billing Parameters\n"); 
+							APL_GOBACK_FAIL
+						}
+						if (int_retstat == IV_NO_DATA_FOUND_ERR)
+						{
+							fprintf(fl_userlog,"Billing Setup Parameters Not Found For Account %s\n",chr_h_acc);
+							CO_InsertErr(l_debug_info_ptr,
+												ERR_BILLPARAM_NOTFND,
+												chr_h_acc,
+												APL_NULL_STRING,
+												APL_NULL_STRING,
+												__LINE__,
+												__FILE__);	
+							APL_GOBACK_FAIL
+						}
+					}
+					if (APL_FAILURE == IV_Proc_Prnbills(bill,
+															fl_techlog,
+															fl_userlog,
+															chr_p_billdt,
+															chr_h_acc,
+															l_sys_ivcntl_param_struct,
+															l_iv_clt_setup_struct,
+															'I',
+															l_debug_info_ptr))
+					{
+			
+						fprintf(fl_userlog,"Failed To Print Individual Bill For Account:%s\n",chr_h_acc);	
+						APL_GOBACK_FAIL
+					}	
+				}
+				strcpy(chr_premast,h_mstclt);
+			} 
+
+	
+
+	if (l_rus_flg)
+	{	
+	 CO_FreeErrLst(l_debug_info_ptr);	
+
+	EXEC SQL  DECLARE zerobill CURSOR FOR
+	SELECT  DISTINCT(A.CLIENT) FROM IV_CLIENTSETUP A WHERE 
+	  A.CLIENT <> :l_mt_core_sys_params_struct_h.custody_clt_cd  AND
+	(NOT EXISTS (SELECT B.CLIENT FROM IV_SERVICE_CHRG  B WHERE
+	B.DATEOF_BILLING=:chr_p_billdt AND B.CLIENT = A.CLIENT));
+
+
+	EXEC SQL OPEN zerobill;
+		
+	IS_ANY_ORA_ERROR
+
+	for(;;)
+	{
+		EXEC SQL FETCH zerobill INTO :chr_h_client1:i_account1;
+		if(sqlca.sqlcode == 1403)
+		{
+			break;
+		}
+		EXEC SQL SELECT CLN_MASTER INTO :chr_h_zero_mstacc 
+		FROM MT_CLIENT WHERE CLN_CODE=:chr_h_client1;
+
+		IS_ANY_ORA_ERROR
+		
+		if (sqlca.sqlcode == 1403)
+		{
+		 fprintf(fl_userlog,"Not getting the master account");
+		 continue;
+		}
+		if(!strcmp(chr_h_client1,chr_h_zero_mstacc))
+		{
+			EXEC SQL SELECT COUNT(*) INTO :int_h_count1 
+			FROM IV_SERVICE_CHRG WHERE CLIENT IN 
+			(SELECT distinct a.CLN_CODE FROM MT_CLIENT a , IV_CLIENTSETUP b
+			 WHERE a.CLN_MASTER = :chr_h_zero_mstacc AND a.CLN_BILLABLEIND ='Y'
+			 AND a.STATUS ='AA' AND a.CLN_CODE = b.CLIENT 
+			 AND b.B_GEN_IND ='M' )
+			AND DATEOF_BILLING=:chr_p_billdt;
+
+			if (int_h_count1 > 0)
+			{
+				continue;
+			}
+			fprintf(fl_userlog,"Account is %s\n",chr_h_client1);
+			fprintf(fl_userlog,"Master is %s\n",chr_h_zero_mstacc);
+			fprintf(fl_userlog,"Count is %d\n",int_h_count1);
+
+
+              memset(&l_iv_clt_setup_struct, NULL , sizeof(IV_CLIENTSETUP_STRUCT) );
+              if (APL_FAILURE == IV_Rtv_IVCUSTSETUP(chr_h_zero_mstacc,
+                                                   &l_iv_clt_setup_struct,
+                                                   &int_retstat,
+                                                   l_debug_info_ptr))
+               {
+							if (int_retstat == IV_CRITCAL_ERROR_IND)
+                     {
+                  		fprintf(fl_userlog,"Fatal Error In Selecting Customer Billing Parameters\n ");
+
+                       APL_GOBACK_FAIL
+                     }
+                     if (int_retstat == IV_NO_DATA_FOUND_ERR)
+                     {
+                   fprintf(fl_userlog,"Billing Setup Parameters Not Found For Account %s\n",chr_h_client1);
+                        CO_InsertErr(l_debug_info_ptr,
+                                       ERR_BILLPARAM_NOTFND,
+                                       chr_h_client1,
+                                          APL_NULL_STRING,
+                                       APL_NULL_STRING,
+                                      __LINE__,
+                                       __FILE__);
+                        APL_GOBACK_FAIL
+                     }
+	
+					}
+    			
+               if (APL_FAILURE == IV_Proc_Prnbills(bill,
+                                             fl_techlog,
+                                             fl_userlog,
+                                             chr_p_billdt,
+                                             chr_h_zero_mstacc,
+                                             l_sys_ivcntl_param_struct,
+                                             l_iv_clt_setup_struct,
+                                             'C',
+                                             l_debug_info_ptr))
+               {
+   	              fprintf(fl_userlog,"Failed To Print Consolidated Bill For Account:%s\n",chr_h_zero_mstacc); 
+		              APL_GOBACK_FAIL
+               }
+		
+						if (APL_FAILURE == IV_Proc_Prnbills(bill,
+                                            fl_techlog,
+                                                fl_userlog,
+                                                chr_p_billdt,
+                                                chr_h_client1,
+                                                l_sys_ivcntl_param_struct,
+                                                l_iv_clt_setup_struct,
+                                                'I',
+                                                l_debug_info_ptr))
+                     {
+                			fprintf(fl_userlog,"Failed To Print Individual Bill For Account:%s\n",h_mstclt);
+                        APL_GOBACK_FAIL
+                     }
+				
+					}
+					else
+					{
+						memset(&l_iv_clt_setup_struct, NULL , sizeof(IV_CLIENTSETUP_STRUCT) );
+
+        				fprintf(fl_userlog,"for client %s",chr_h_client1);
+						if (APL_FAILURE == IV_Rtv_IVCUSTSETUP(chr_h_client1,
+                                            &l_iv_clt_setup_struct,
+                                             &int_retstat,
+                                             l_debug_info_ptr))
+               	{
+							if (int_retstat == IV_CRITCAL_ERROR_IND)
+                  	{
+                     	fprintf(fl_userlog,"Fatal Error In Selecting Customer Billing Parameters\n");
+
+ 	                    APL_GOBACK_FAIL
+   	               }
+      	            if (int_retstat == IV_NO_DATA_FOUND_ERR)
+         	         {
+            	         fprintf(fl_userlog,"Billing Setup Parameters Not Found For Account %s\n",chr_h_client1);	
+      	               CO_InsertErr(l_debug_info_ptr,
+         	                           ERR_BILLPARAM_NOTFND,
+            	                        chr_h_client1,
+               		                     APL_NULL_STRING,
+                     	               APL_NULL_STRING,
+                   	                 __LINE__,
+                        	            __FILE__);
+                        APL_GOBACK_FAIL
+                  	}
+               	}	
+					   	if (APL_FAILURE == IV_Proc_Prnbills(bill,
+                              	           fl_techlog,
+                     	                        fl_userlog,
+                        	                     chr_p_billdt,
+                           	                  chr_h_client1,
+                                 	            l_sys_ivcntl_param_struct,
+                                    	         l_iv_clt_setup_struct,
+                                       	      'I',
+                                          	   l_debug_info_ptr))
+ 	              		{	
+   	               fprintf(fl_userlog,"Failed To Print Individual Bill For Account:%s\n",h_mstclt);
+	
+ 	  	               APL_GOBACK_FAIL
+   	   	         }
+
+	 CO_FreeErrLst(l_debug_info_ptr);	
+					}
+
+			} 
+			EXEC SQL CLOSE zerobill;
+
+			IS_ANY_ORA_ERROR
+		} 
+
+		} 
+	}		
+
+	sprintf(chr_l_stat_info, "Record Comitted");
+
+	
+	
+   
+	
+	
+   	
+	int_cond_exists=0;
+	if(CO_Chk_CntryEnabled("BILL_PRNT",
+                        "NO_AUTO_PRINT",
+                        &int_cond_exists,
+                        l_debug_info_ptr)==APL_FAILURE)
+      APL_GOBACK_FAIL
+   else
+   {
+      if(int_cond_exists==0)
+      {
+   		if ( APL_FAILURE == CO_Prnt(chr_l_billprntfilename, chr_l_printername, 
+										 (INTL_ENV_DATA_STRUCT_H *)NULL, l_debug_info_ptr) )
+			{
+				fprintf(APL_OUT_FILE, "Could not print the h_file %s on the chr_printer %s\n", chr_l_billprntfilename, chr_l_printername);
+
+				APL_GOBACK_FAIL
+			}
+		}
+	}
+	
+
+	EXEC SQL UPDATE SYS_BATCHPROC
+				SET STATUS		='completed',
+					 STAT_DET	= :chr_l_stat_info
+				WHERE	ROWID		= :h_ora_rowid; 
+
+	IS_ANY_ORA_ERROR
+	
+	if (sqlca.sqlcode == 1403)
+   {
+      fprintf(fl_userlog,"Failed to Update batch_in_proc because row_id could not be int_found \n");
+      APL_GOBACK_FAIL
+   }
+	
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Leaving PrintAccountFn successfully\n",l_debug_info_ptr,NULL);
+	}
+	fclose(l_SesamIniFlPtr);
+	return(APL_SUCCESS);
+
+	RETURN_FAILURE:
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Leaving PrintAccountFn unsuccessfully\n",l_debug_info_ptr,NULL);
+	}
+	fclose(l_SesamIniFlPtr);
+	return (APL_FAILURE);
+}

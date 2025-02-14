@@ -1,0 +1,753 @@
+
+
+
+
+
+
+
+
+#include "CO_HostStructdef.h"
+EXEC SQL INCLUDE SQLCA.H;
+
+#define	COMMIT_COUNT_G			5
+
+
+
+int DL_Mod_Cont_AENew(	PRO_ACCTENT_STRUCT_H *p_pro_acctent_struct_h_a,
+						char *chr_p_batchno,
+						FILE *p_logfile,
+						DEBUG_INFO_STRUCT_H **l_debug_info_ptr )
+{
+
+	struct sqlca sqlca;
+	static char chr_l_batchno[5] 			= APL_NULL_STRING;
+	char 	int_l_seq_num[5]					= APL_NULL_STRING;
+
+	static int int_l_runseq_a			= 0;
+
+	sqlca.sqlcode = 0;
+
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(p_logfile, "Entered processtion CDBInsCAEFn", NULL, NULL);
+	}
+
+	
+
+	if (!strlen(chr_l_batchno))
+	{
+		
+	
+		if (APL_FAILURE == CO_Rtv_NxtBatchSeq(	CAE_MODIDENT_IND,
+														chr_l_batchno,
+														int_l_seq_num,
+														l_debug_info_ptr ))
+		{
+			APL_GOBACK_FAIL
+		}
+	
+		if (strlen(chr_l_batchno))
+		{
+			sscanf(int_l_seq_num, "%d", &int_l_runseq_a);
+		}
+		else
+		{
+			if (APL_FAILURE == IV_Proc_GenBatchNoFn(	chr_l_batchno,
+															l_debug_info_ptr ))
+			{
+				APL_GOBACK_FAIL
+			}
+		}
+	}
+
+	memset(int_l_seq_num, NULL, 5);
+	sprintf(int_l_seq_num, "%d", ++int_l_runseq_a);
+
+	
+
+	strcpy(p_pro_acctent_struct_h_a->proc_num, chr_l_batchno);
+	strcpy(p_pro_acctent_struct_h_a->inden_num, int_l_seq_num);
+	
+	
+	
+	if (APL_FAILURE == IV_Mod_ActEntNew(	p_pro_acctent_struct_h_a,
+														l_debug_info_ptr ))
+	{
+		APL_GOBACK_FAIL
+	}
+
+	strcpy(chr_p_batchno, chr_l_batchno);
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS :
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(p_logfile, "Leaving DL_Mod_Cont_AENew with success\n", NULL, NULL);
+		}
+		return(APL_SUCCESS);
+
+	RETURN_FAILURE :
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(p_logfile, "Leaving DL_Mod_Cont_AENew with errors\n", NULL, NULL);
+		}
+		return(APL_FAILURE);
+
+}
+
+
+
+
+int DL_Rtv_Cont_AE(	char **argv,
+							FILE *p_repfile,
+							FILE *p_logfile,
+							DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	
+
+	struct sqlca sqlca;	
+	char chr_l_buf[BUFFER_LEN] 						= APL_NULL_STRING;
+	char chr_l_h_client_a[APL_CLIENT_LENGTH] 		= APL_NULL_STRING;
+	char chr_l_h_refno_A[APL_TXNREFNO_LEN] 		= APL_NULL_STRING;
+	char chr_l_today[APL_DATE_LEN] 				= APL_NULL_STRING;
+	char chr_l_cae_indicator[4] 					= APL_NULL_STRING;
+	char chr_l_h_instr_dt[SETL_DATE_LEN] 			= APL_NULL_STRING;
+	char chr_l_h_moneydt[SETL_DATE_LEN] 		= APL_NULL_STRING;
+	char chr_l_h_branchcode[BRANCH_CD_LEN]	= APL_NULL_STRING;
+	char chr_l_h_dracc[GL_ACCOUNT_LEN] 		= APL_NULL_STRING;
+	char chr_l_h_cracc[GL_ACCOUNT_LEN] 		= APL_NULL_STRING;
+	char chr_l_h_trcode_a[APL_FLAG_LENGTH] 			= APL_NULL_STRING;
+	char chr_l_h_typeofinstr[TYPEOF_INSTR_LEN] 			= APL_NULL_STRING;
+	char chr_l_h_acc_ccycode[APL_CCYCODE_LEN] 	= APL_NULL_STRING;
+	char chr_l_batchno[5] 							= APL_NULL_STRING;
+	char chr_l_mod_ident[APL_FLAG_LENGTH]			= APL_NULL_STRING;
+	char chr_l_oth_exarena 							= APL_NULL_CHAR;
+	char chr_l_rf 										= APL_NULL_CHAR;
+	char chr_l_df 										= APL_NULL_CHAR;
+	char chr_l_rvp 										= APL_NULL_CHAR;
+	char chr_l_dvp 										= APL_NULL_CHAR;
+
+	short		l_i_account		 	= 0;
+	short		l_i_refno		 	= 0;
+	short		l_i_instr_dt		 	= 0;
+	short		l_i_moneydt		 	= 0;
+	short		l_i_branchcode		= 0;
+	short		l_i_dracc		 	= 0;
+	short		l_i_cracc		 	= 0;
+	short		int_l_i_trcode		 	= 0;
+	short		l_i_typeofinstr		 	= 0;
+	short		int_l_i_qty		 		= 0;
+	short		l_i_nomval	 		= 0;
+	short		l_i_declen	 		= 0;
+
+	int		int_l_reccount			= 0;
+	int      int_period_flg 			= 0;
+
+	double	l_h_quantity_a				= 0.0;
+	double	l_h_nominal_value			= 0.0;
+	double	l_lcy					= 0.0;
+	double	l_round_lcy			= 0.0;
+	double	int_l_h_declen			= 0.0;
+	char                  chr_g_restart_data[APL_RESTARTDATA_LENGTH];
+	short                 g_restart_data_i;
+
+
+	PRO_ACCTENT_STRUCT_H *l_pro_acctent_struct_hb = NULL;
+
+	sqlca.sqlcode = 0;
+
+	
+
+	EXEC SQL VAR chr_l_h_client_a IS STRING;
+	EXEC SQL VAR chr_l_h_refno_A IS STRING;
+	EXEC SQL VAR chr_l_h_instr_dt IS STRING;
+	EXEC SQL VAR chr_l_h_moneydt IS STRING;
+	EXEC SQL VAR chr_l_h_branchcode IS STRING;
+	EXEC SQL VAR chr_l_h_dracc IS STRING;
+	EXEC SQL VAR chr_l_h_cracc IS STRING;
+	EXEC SQL VAR chr_l_h_trcode_a IS STRING;
+	EXEC SQL VAR chr_l_h_typeofinstr IS STRING;
+	EXEC SQL VAR chr_g_restart_data is string;
+
+	
+
+	l_pro_acctent_struct_hb = (PRO_ACCTENT_STRUCT_H *)calloc(1, sizeof(PRO_ACCTENT_STRUCT_H));
+	APL_MALLOC_FAIL(l_pro_acctent_struct_hb)
+
+	
+
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(	p_logfile, 
+						"Entered Function DL_Rtv_Cont_AE\n",
+						NULL,
+						NULL);
+	}
+
+	
+
+	
+
+	EXEC SQL SELECT PROCESSING_STATUS  INTO :chr_g_restart_data:g_restart_data_i
+	FROM SYS_BATCHPROC
+  	WHERE PROCESS_NAME=:argv[0]
+  	AND   PROC_INIT=:argv[1]
+  	AND   STARTDATE=:argv[2]
+  	AND   STATUS='started'
+  	FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+	IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_REC_NOTFND,
+														"Batch-In-Proc Rec.",
+														APL_NULL_STRING,
+														APL_NULL_STRING )
+
+	
+
+	if (APL_FAILURE == CO_RtvSysDt(chr_l_today, l_debug_info_ptr))
+	{
+		APL_GOBACK_FAIL
+	}
+
+	
+
+	strcpy(chr_l_h_acc_ccycode, AE_CCYCD);
+
+	EXEC SQL SELECT DEC_LEN
+	INTO :int_l_h_declen:l_i_declen
+	FROM DL_CURRENCY
+	WHERE GL_CD = :chr_l_h_acc_ccycode;
+
+	IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_CCY_NOTFND,
+														"Acc.Ent.Currency",
+														APL_NULL_STRING,
+														APL_NULL_STRING )
+
+	
+
+	chr_l_oth_exarena = OTH_EX_ARENA;
+	strcpy(chr_l_cae_indicator, CAE_IND);
+	chr_l_rf  = DEALCD_RF;
+	chr_l_df  = DEALCD_DF;
+	chr_l_rvp = DEALCD_RVP;
+	chr_l_dvp = DEALCD_DVP;
+
+	EXEC SQL DECLARE cae_cursor CURSOR FOR
+	SELECT 	a.CLIENT, a.IDENTIY_NO, b.CLN_BRNCHCODE, d.DR_ACC_IBBS, 
+				d.CR_ACC_IBBS, a.DEAL_CD, TO_CHAR(INSTRUMENT_DT, 'YYYYMMDD'),
+				TO_CHAR(MONEY_SETL_DT, 'YYYYMMDD'), a.QTY, c.NOMINAL_VALUE, c.INSTR_TYPE
+
+	FROM DL_DEAL a, MT_CLIENT b, MT_INSTRUMENT c, CSCAENT d
+	WHERE a.INSTRUMENT_DT IS NOT NULL
+	AND	a.DEAL_DATE <= (SELECT SYS_DATE FROM PRO_SYS_DATE)
+	AND	a.CLIENT <> :l_mt_core_sys_params_struct_h.custody_clt_cd
+	AND	a.EX_ARENA <> :chr_l_oth_exarena
+	AND	NOT EXISTS (	SELECT e.CLIENT
+								FROM DL_DEALDET e
+								WHERE	e.CLIENT = a.CLIENT
+								AND	e.IDENTIY_NO	 = a.IDENTIY_NO
+								AND	e.REPORTDT IS NOT NULL
+								AND	e.FLAG = :chr_l_cae_indicator )
+	AND	a.CLIENT = b.CLN_CODE
+	AND	a.INSTR_CODE  = c.INSTR_CODE
+	AND	d.TIPOSEC = c.INSTR_TYPE
+	AND	d.TXNTYPE = DECODE(a.DEAL_CD, 	:chr_l_rf,  'R',
+													:chr_l_df,  'D',
+													:chr_l_rvp, 'R',
+													:chr_l_dvp, 'D' )
+	AND	d.CURR_IND = DECODE(	a.CURRENCY_CD,
+										:g_mt_commonsys_params_struct_h.dom_ccy, 'L', 'F' )
+	AND	((d.CLSCODE IS NULL) OR (d.CLSCODE = c.CLASSCD))
+	AND	d.NARRATIVE = :chr_l_cae_indicator ;
+													
+
+	EXEC SQL OPEN cae_cursor;
+
+	IS_ANY_ORA_ERROR
+
+	for (int_l_reccount=1;;int_l_reccount++)
+	{
+		
+
+		memset(chr_l_h_client_a, NULL, APL_CLIENT_LENGTH);
+		memset(chr_l_h_refno_A, NULL, APL_TXNREFNO_LEN);
+		memset(chr_l_h_instr_dt, NULL, SETL_DATE_LEN);
+		memset(chr_l_h_moneydt, NULL, SETL_DATE_LEN);
+		memset(chr_l_h_branchcode, NULL, BRANCH_CD_LEN);
+		memset(chr_l_h_dracc, NULL, GL_ACCOUNT_LEN);
+		memset(chr_l_h_cracc, NULL, GL_ACCOUNT_LEN);
+		memset(chr_l_h_trcode_a, NULL, APL_FLAG_LENGTH);
+		memset(chr_l_h_typeofinstr, NULL, TYPEOF_INSTR_LEN);
+		l_h_nominal_value = 0.0;
+		l_h_quantity_a = 0.0;
+
+		l_i_account = 0;
+		l_i_refno = 0;
+		l_i_instr_dt = 0;
+		l_i_moneydt = 0;
+		l_i_branchcode = 0;
+		l_i_dracc = 0;
+		l_i_cracc = 0;
+		int_l_i_trcode = 0;
+		l_i_typeofinstr = 0;
+		l_i_nomval = 0;
+		int_l_i_qty = 0;
+
+		EXEC SQL FETCH cae_cursor INTO 	:chr_l_h_client_a:l_i_account,
+													:chr_l_h_refno_A:l_i_refno,
+													:chr_l_h_branchcode:l_i_branchcode,
+													:chr_l_h_dracc:l_i_dracc,
+													:chr_l_h_cracc:l_i_cracc,
+													:chr_l_h_trcode_a:int_l_i_trcode,
+													:chr_l_h_instr_dt:l_i_instr_dt,
+													:chr_l_h_moneydt:l_i_moneydt,
+													:l_h_quantity_a:int_l_i_qty,
+													:l_h_nominal_value:l_i_nomval,
+													:chr_l_h_typeofinstr:l_i_typeofinstr;
+
+		IS_ANY_ORA_ERROR
+
+		if (APL_ZERO_RESULT_SET) break;
+
+		
+
+		memset(chr_l_buf, NULL, BUFFER_LEN);
+		sprintf(chr_l_buf, "\nPicked Up New Trade : %s, %s", chr_l_h_client_a, chr_l_h_refno_A);
+		CO_ProcMonitor(p_logfile, chr_l_buf, NULL, NULL);
+
+		
+	
+		if ( CO_Chk_CcyConvDt("",&int_period_flg,l_debug_info_ptr) == APL_FAILURE )
+		{
+			APL_GOBACK_FAIL
+		}
+		
+		if ((int_period_flg ==1) && (strcmp(g_mt_commonsys_params_struct_h.nation_code,"TR")==0 ))
+		{
+			if ((!strcmp(chr_l_h_typeofinstr, "SHS")) ||
+				 (!strcmp(chr_l_h_typeofinstr, "RTS")))
+			{
+				l_lcy = l_h_quantity_a*l_h_nominal_value;
+			}
+			else
+			{
+				l_lcy = l_h_quantity_a;
+			}
+        EXEC SQL SELECT TRUNC(:l_lcy,:int_l_h_declen) INTO :l_round_lcy FROM DUAL ;
+			IS_ANY_ORA_ERROR
+		}
+		else
+		{
+			if ((!strcmp(chr_l_h_typeofinstr, "SHS")) ||
+          	 (!strcmp(chr_l_h_typeofinstr, "RTS")))
+      	{
+         	l_lcy = l_h_quantity_a*l_h_nominal_value/1000;
+      	}
+      	else
+      	{
+         	l_lcy = l_h_quantity_a/1000;
+      	}
+		
+
+		    CO_Round(l_lcy, int_l_h_declen, &l_round_lcy);
+
+      }
+ 
+		
+   
+		if (l_round_lcy == 0)
+		{
+			EXEC SQL INSERT INTO DL_DEALDET
+			VALUES (:chr_l_h_client_a, :chr_l_h_refno_A, :chr_l_today, :chr_l_cae_indicator, 'Not passed since lcy = 0') ;
+
+			IS_ANY_ORA_ERROR
+
+			CO_ProcMonitor(	p_logfile, 
+							"Not passed Accounting Entries for this trade", 
+							NULL, 
+							NULL );
+			CO_ProcMonitor(	p_logfile, 
+							"since lcy is zero after rounding off.",
+							NULL,
+							NULL );
+
+			continue;
+		}
+
+		
+
+		
+
+		memset(l_pro_acctent_struct_hb, NULL, sizeof(PRO_ACCTENT_STRUCT_H));
+		l_pro_acctent_struct_hb->module_ind = CAE_MODIDENT_IND;
+		strcpy(l_pro_acctent_struct_hb->brnch_cd, chr_l_h_branchcode);
+		strcpy(l_pro_acctent_struct_hb->client, chr_l_h_dracc);
+		strcpy(l_pro_acctent_struct_hb->curr_cd, AE_CCYCD);
+		l_pro_acctent_struct_hb->lcl_amount = l_round_lcy;
+		if (VAL_RECDEAL(chr_l_h_trcode_a[0]))
+		{
+			strcpy(l_pro_acctent_struct_hb->deal_cd, AE_DEBIT_DLCD);
+		}
+		else
+		{
+			strcpy(l_pro_acctent_struct_hb->deal_cd, AE_CREDIT_DLCD);
+		}
+		l_pro_acctent_struct_hb->db_cr_ind = AE_DEBIT_IND;
+		if (VAL_FREE_DEAL(chr_l_h_trcode_a[0]))
+		{
+			strcpy(l_pro_acctent_struct_hb->val_date, chr_l_h_instr_dt);
+		}
+		else
+		{
+			if (l_i_moneydt == 0)
+			{
+				strcpy(l_pro_acctent_struct_hb->val_date, chr_l_h_moneydt);
+			}
+			else
+			{
+				strcpy(l_pro_acctent_struct_hb->val_date, chr_l_h_instr_dt);
+			}
+		}
+		strcpy(l_pro_acctent_struct_hb->description, chr_l_h_refno_A);
+		l_pro_acctent_struct_hb->rec_refer = AE_NORMAL_IND;
+		strcpy(l_pro_acctent_struct_hb->proc_dt, chr_l_today);
+		l_pro_acctent_struct_hb->status_ind = AE_GEN_IND_CHAR;
+
+		
+
+		if (APL_FAILURE == DL_Mod_Cont_AENew(	l_pro_acctent_struct_hb,
+													chr_l_batchno,
+													p_logfile,
+													l_debug_info_ptr ))
+		{
+			APL_GOBACK_FAIL
+		}
+
+		
+
+		
+
+		memset(l_pro_acctent_struct_hb, NULL, sizeof(PRO_ACCTENT_STRUCT_H));
+		l_pro_acctent_struct_hb->module_ind = CAE_MODIDENT_IND;
+		strcpy(l_pro_acctent_struct_hb->brnch_cd, chr_l_h_branchcode);
+		strcpy(l_pro_acctent_struct_hb->client, chr_l_h_cracc);
+		strcpy(l_pro_acctent_struct_hb->curr_cd, AE_CCYCD);
+		l_pro_acctent_struct_hb->lcl_amount = l_round_lcy;
+		if (VAL_RECDEAL(chr_l_h_trcode_a[0]))
+		{
+			strcpy(l_pro_acctent_struct_hb->deal_cd, AE_CREDIT_DLCD);
+		}
+		else
+		{
+			strcpy(l_pro_acctent_struct_hb->deal_cd, AE_DEBIT_DLCD);
+		}
+		l_pro_acctent_struct_hb->db_cr_ind = AE_CREDIT_IND;
+		if (VAL_FREE_DEAL(chr_l_h_trcode_a[0]))
+		{
+			strcpy(l_pro_acctent_struct_hb->val_date, chr_l_h_instr_dt);
+		}
+		else
+		{
+			if (l_i_moneydt == 0)
+			{
+				strcpy(l_pro_acctent_struct_hb->val_date, chr_l_h_moneydt);
+			}
+			else
+			{
+				strcpy(l_pro_acctent_struct_hb->val_date, chr_l_h_instr_dt);
+			}
+		}
+		strcpy(l_pro_acctent_struct_hb->description, chr_l_h_refno_A);
+		l_pro_acctent_struct_hb->rec_refer = AE_NORMAL_IND;
+		strcpy(l_pro_acctent_struct_hb->proc_dt, chr_l_today);
+		l_pro_acctent_struct_hb->status_ind = AE_GEN_IND_CHAR;
+
+		
+
+		if (APL_FAILURE == DL_Mod_Cont_AENew(	l_pro_acctent_struct_hb,
+													chr_l_batchno,
+													p_logfile,
+													l_debug_info_ptr ))
+		{
+			APL_GOBACK_FAIL
+		}
+
+		
+
+		EXEC SQL INSERT INTO DL_DEALDET
+		VALUES (:chr_l_h_client_a, :chr_l_h_refno_A, :chr_l_today, :chr_l_cae_indicator, :chr_l_batchno) ;
+
+		IS_ANY_ORA_ERROR
+
+		
+
+		if (int_l_reccount%COMMITSIZE == 0)
+		{
+			memset(chr_l_buf, NULL, BUFFER_LEN);
+			sprintf(chr_l_buf, "Processed %d Records", int_l_reccount);
+
+			EXEC SQL UPDATE SYS_BATCHPROC
+			SET STAT_DET = :chr_l_buf
+  		 	WHERE PROCESS_NAME=:argv[0]
+   		AND   PROC_INIT=:argv[1]
+   		AND   STARTDATE=:argv[2]
+   		AND   STATUS='started';
+
+			IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_REC_NOTFND,
+																"Batch_in_proc Rec.",
+																APL_NULL_STRING,
+																APL_NULL_STRING )
+
+			EXEC SQL COMMIT WORK;
+			IS_ANY_ORA_ERROR
+
+			
+
+			CO_ProcMonitor(p_logfile, "Record Committed", NULL, NULL);
+
+			
+
+   		EXEC SQL SELECT PROCESSING_STATUS INTO :chr_g_restart_data:g_restart_data_i
+			FROM SYS_BATCHPROC
+  		 	WHERE PROCESS_NAME=:argv[0]
+   		AND   PROC_INIT=:argv[1]
+   		AND   STARTDATE=:argv[2]
+   		AND   STATUS='started'
+   		FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+			IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_REC_NOTFND,
+																"Batch-In-Proc Rec.",
+																APL_NULL_STRING,
+																APL_NULL_STRING )
+		}
+	}
+
+	EXEC SQL CLOSE cae_cursor;
+
+	IS_ANY_ORA_ERROR
+	
+
+	
+	
+	APL_GOBACK_SUCCESS
+
+   RETURN_SUCCESS :
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(	p_logfile, 
+							"Leaving Function DL_Rtv_Cont_AE with success\n",
+							NULL,
+							NULL);
+		}
+
+		APL_FREE(l_pro_acctent_struct_hb);
+
+		
+
+		if (int_l_reccount > 1)
+		{
+			chr_l_mod_ident[0] = CAE_MODIDENT_IND;
+			chr_l_mod_ident[1] = '\0';
+
+			if (APL_FAILURE == EL_PassAccEnt(	chr_l_mod_ident,
+															chr_l_batchno,
+															chr_l_today,
+															argv,
+															"R",
+															p_repfile,
+															p_logfile,
+															l_debug_info_ptr ))
+			{
+				CO_ProcMonitor(p_logfile, "Error In Generating Report", l_debug_info_ptr, NULL);
+				CO_FreeErrLst(l_debug_info_ptr);
+				return(APL_FAILURE);
+			}
+		}
+
+      return(APL_SUCCESS);
+
+   RETURN_FAILURE :
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(	p_logfile, 
+							"Leaving Function DL_Rtv_Cont_AE with errors\n",
+							NULL,
+							NULL);
+		}
+
+		CO_ProcMonitor(p_logfile, APL_NULL_STRING, l_debug_info_ptr, NULL);
+		CO_FreeErrLst(l_debug_info_ptr);
+		APL_FREE(l_pro_acctent_struct_hb);
+
+		
+
+		if (int_l_reccount > 1)
+		{
+			chr_l_mod_ident[0] = CAE_MODIDENT_IND;
+			chr_l_mod_ident[1] = '\0';
+
+			if (APL_FAILURE == EL_PassAccEnt(	chr_l_mod_ident,
+															chr_l_batchno,
+															chr_l_today,
+															argv,
+															"R",
+															p_repfile,
+															p_logfile,
+															l_debug_info_ptr ))
+			{
+				CO_ProcMonitor(p_logfile, "Error In Generating Report", l_debug_info_ptr, NULL);
+				CO_FreeErrLst(l_debug_info_ptr);
+				return(APL_FAILURE);
+			}
+		}
+
+      return(APL_FAILURE);
+
+}
+
+
+
+
+//main(int argc,char **argv)
+int main(int argc,char **argv)//Changes done for AIX Migration
+{
+	struct sqlca sqlca;
+   DEBUG_INFO_STRUCT_H *l_debug_info_ptr ;
+	FILE *l_finifile;
+
+   int int_l_retval=0;
+	int int_num = 0;
+
+   char chr_uname[APL_USERID_LEN] 	= APL_NULL_STRING;
+   char chr_custody_id_b[APL_USERID_LEN] 	= APL_NULL_STRING;
+   char chr_passwd[APL_PASSWD_LEN] 	= APL_NULL_STRING;
+	char chr_l_logdir[PATH_LENGTH] 	= APL_NULL_STRING;
+	char chr_l_logname[PATH_LENGTH] 	= APL_NULL_STRING;
+	char chr_l_inifile[PATH_LENGTH] 	= APL_NULL_STRING;
+
+	FILE *l_flogfile = NULL;
+	FILE *l_frepfile = NULL;
+
+   EXEC SQL VAR chr_uname IS STRING;
+   EXEC SQL VAR chr_custody_id_b IS STRING;
+   EXEC SQL VAR chr_passwd IS STRING;
+
+	sqlca.sqlcode = 0;
+	l_debug_info_ptr = (DEBUG_INFO_STRUCT_H *) calloc(1,sizeof(DEBUG_INFO_STRUCT_H));	
+
+	strcpy(chr_l_inifile,getenv("INTL_ROOT_PATH"));
+	strcat(chr_l_inifile,"intl_sun.cfg");
+
+	if ( ( l_finifile=fopen(chr_l_inifile,"r") ) == NULL)
+	{
+		exit(-1);
+	}
+
+	
+
+	APL_FETCH_DB_LOGIN_DETAILS(l_finifile, chr_custody_id_b, chr_uname, chr_passwd, APL_OUT_FILE, &l_debug_info_ptr)
+
+	
+
+	if (fclose(l_finifile)) 
+	{
+		exit(-1);
+	}
+
+   EXEC SQL CONNECT :chr_uname IDENTIFIED BY :chr_passwd;
+
+   if (sqlca.sqlcode)
+   {
+      APL_GOBACK_FAIL
+   }
+   else
+   {
+		
+
+		if (APL_FAILURE == CO_Rtv_RptFileName(	"3c",
+														APL_LOGFILE_DESC,
+														100,
+														argv[5],
+														argv,
+														&l_flogfile,
+														&l_debug_info_ptr ) )
+		{
+			APL_GOBACK_FAIL
+		}
+
+		
+
+		if (APL_FAILURE == CO_Rtv_RptFileName(	"CREDIT_IND",
+														"Contingent Accounting Entries",
+														100,
+														argv[5],
+														argv,
+														&l_frepfile,
+														&l_debug_info_ptr ) )
+		{
+			APL_GOBACK_FAIL
+		}
+
+		
+
+		EXEC SQL COMMIT WORK;
+
+		if (sqlca.sqlcode)
+		{
+			CO_ProcMonitor(l_flogfile, "Could not commit after opening chr_log file", NULL, NULL);
+			CO_Proc_RptClose(l_flogfile, &l_debug_info_ptr);
+			APL_GOBACK_FAIL
+		}
+
+		
+
+		if (APL_FAILURE == CO_RtvSysParams(&l_debug_info_ptr))
+		{
+			CO_ProcMonitor(l_flogfile, "Could not get system params", &l_debug_info_ptr, NULL);
+			CO_Proc_RptClose(l_flogfile, &l_debug_info_ptr);
+			APL_GOBACK_FAIL
+		}
+
+      int_l_retval = DL_Rtv_Cont_AE( argv, l_frepfile, l_flogfile, &l_debug_info_ptr);
+
+      if ( int_l_retval == APL_FAILURE )
+      {
+			CO_ProcMonitor(l_flogfile, "CDBGenTRCAEFn returned failure", NULL, NULL);
+			CO_Proc_RptClose(l_flogfile, &l_debug_info_ptr);
+			EXEC SQL ROLLBACK WORK RELEASE;
+         APL_GOBACK_FAIL
+      }
+      else
+      {
+         EXEC SQL UPDATE SYS_BATCHPROC
+         SET  status = 'completed'
+         WHERE PROCESS_NAME=:argv[0]
+         AND   PROC_INIT=:argv[1]
+         AND   STARTDATE=:argv[2]
+         AND   STATUS='started';
+
+			if (sqlca.sqlcode)
+			{
+				CO_ProcMonitor(l_flogfile, "Could not update batch_in_proc", NULL, NULL);
+				CO_Proc_RptClose(l_flogfile, &l_debug_info_ptr);
+				APL_GOBACK_FAIL
+			}
+
+         EXEC SQL COMMIT WORK RELEASE;
+			if (sqlca.sqlcode)
+			{
+				CO_ProcMonitor(l_flogfile, "Could not do final commit", NULL, NULL);
+				CO_Proc_RptClose(l_flogfile, &l_debug_info_ptr);
+				APL_GOBACK_FAIL
+			}
+
+			CO_Proc_RptClose(l_flogfile, &l_debug_info_ptr);
+         APL_GOBACK_SUCCESS
+      }
+   }
+
+	RETURN_SUCCESS : exit(0);
+	RETURN_FAILURE : exit(-1);
+
+}

@@ -1,0 +1,2856 @@
+/*
+ *    COPYRIGHT NOTICE
+ *
+ *   Copyright 2005 Polaris Software Lab Limited. All rights reserved.
+ *
+ *   These materials are confidential and proprietary to
+ *    Polaris Software Lab Limited and no part of these materials should
+ *    be reproduced, published, transmitted or distributed in any form or
+ *    by any means, electronic, mechanical, photocopying, recording or
+ *    otherwise, or stored in any information storage or retrieval system
+ *    of any nature nor should the materials be disclosed to third parties
+ *    or used in any other manner for which this is not authorized, without
+ *    the prior express written authorization of Polaris Software Lab Limited.
+ */
+/*************************************************************************
+ *
+ * Module Name         : Utility
+ *
+ * File Name           : GF_Upload.pc
+ *
+ * Description         : Main file for Generic File Upload processing.
+ *
+ *
+ *
+ *            Version Control Block
+ *
+ * Date        Version          Author               Description
+ * ---------   --------  ---------------  ---------------------------
+ * 07/12/2005  1.0		 Biju George		Generic File Upload Main 
+ *											          Functions
+ * 29/03/2006  1.1       Amol Kulkarni    Functions Added
+ * 24/03/2022  1.2       kotubabu N       Linux Migration
+ *********************************************************************/
+ 
+
+#include "stdio_64.h"
+#include <unistd.h>
+#include <stdlib.h> 
+/*** AIX Migration Changes -START*/
+#if !defined(_AIXVERSION_430) || !defined(_AIXVERSION_431) || !defined(_AIXVERSION_434) || !defined(_AIXVERSION_510) || !defined(_AIXVERSION_520) || !defined(_AIXVERSION_530) || !defined(_AIXVERSION_610)
+     #ifdef OS_LINUX   /* Added by kotubabu for Linux Migration*/
+       #include <bits/signum.h>
+     #else
+       #include <sys/iso/signal_iso.h>
+     #endif
+//#include <sys/iso/signal_iso.h>
+#endif
+/*** AIX Migration Changes -END*/
+#include <sys/wait.h>
+#include <ctype.h>
+#include <GF_Common.h>
+#include <BT_Common.h>
+EXEC SQL INCLUDE SQLCA.H;
+#define MAIN_ARG \
+{\
+	int i =0;\
+	for(i = 0;i<argc;i++)\
+	{\
+		printf("Arguement\t[%d]\t=\t[%s]\n",i,argv[i]);\
+	}\
+}
+#define MICRO_SECONDS 110000
+/* Gouse: Changes for Avoiding calls to Stored Proc if DP_Trans Number is not present Start*/
+char dp_trans_no[20];
+int null_flag=0;
+char l_reason[200];
+char chr_g_soh_custody_clnt;
+/* Gouse: Changes for Avoiding calls to Stored Proc if DP_Trans Number is not present End*/
+
+
+ /* Added by kotubabu  for Linux Migration-Start*/
+#ifdef OS_LINUX
+FILE *l_logfile;
+FILE *l_skipped_file;
+FILE *l_userfile;
+FILE *l_format_file;
+FILE *l_bk_file;
+#else
+FILE *l_logfile = APL_OUT_FILE;
+FILE *l_skipped_file= APL_OUT_FILE;
+FILE *l_userfile= APL_OUT_FILE;
+FILE *l_format_file = APL_OUT_FILE;
+FILE *l_bk_file = APL_OUT_FILE;
+#endif
+
+#ifdef OS_LINUX
+FILE *l_faillog;
+#else
+FILE *l_faillog = APL_OUT_FILE;
+#endif
+ /* Added by kotubabu  for Linux Migration-End*/
+
+char g_file_name[GFU_FILE_NAME_LEN];
+char g_param_data[2000];
+char g_sys_date[APL_DATE_LEN];
+char g_sys_date_time[APL_DATE_LEN]=APL_NULL_STRING; /*to populate system date with 12:00:00 in date fields for upload process changes done by shrinath ends 25_Apr_2020*/
+char g_line[GFU_LINE_LEN] = APL_NULL_STRING;
+GFU_FILE_MAP_STRUCT_H *g_gfu_file_map_h = (GFU_FILE_MAP_STRUCT_H *)NULL;
+char g_uplod_file_name[GFU_FILE_NAME_LEN];   // Added by Prateek on 04-FEB-2013 - UT fix
+
+/* Retro By Sana for Audit Trail changes start */
+/* PEG - Auto Upload Changes - 27-Jul-2009 - NAREN - Start - Retro for ISHB - 5207 */
+char g_env_user[16] = APL_NULL_STRING;
+/* PEG - Auto Upload Changes - 27-Jul-2009 - NAREN - End - Retro for ISHB - 5207 */
+/* Retro By Sana for Audit Trail changes end */
+
+int Rtv_C_E_T(char *p_file_type,
+					char *p_refno,
+					C_E_T_STRUCT_H **p_c_e_t_struct_h,
+					DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	struct sqlca sqlca;
+	char l_label[500];
+	char l_seq[500];
+	short i_label,i_seq;
+	int l_start_pos = 0, l_end_pos = 0;
+	C_E_T_STRUCT_H **l_temp_ptr = p_c_e_t_struct_h;
+
+	APL_FUNCTION_ENTER(l_logfile)
+		sqlca.sqlcode=0;
+	if(!strcmp(p_file_type,CSV))
+	{
+		/**printf(" p_refno is %s\n",p_refno);**/
+		EXEC SQL DECLARE l_rtv_csv_cur CURSOR
+				FOR
+				SELECT CSV_FIELD_NAME, CSV_REFERENCE_VALUE
+				FROM MT_GFU_CSV_SETUP
+				WHERE	REF_NO = :p_refno
+				AND STATUS = 'AA';
+		/**printf("\n\nError Code%d",sqlca.sqlcode);**/
+		IS_ANY_ORA_ERROR
+		EXEC SQL OPEN l_rtv_csv_cur;
+		IS_ANY_ORA_ERROR
+
+	}
+	else if(!strcmp(p_file_type,EXCEL))
+	{
+		EXEC SQL DECLARE l_rtv_exl_cur CURSOR
+				FOR
+				SELECT EXCEL_FIELD_NAME,
+						EXCEL_REFERENCE_VALUE
+				FROM mt_gfu_excel_setup
+				WHERE REF_NO = :p_refno
+				AND STATUS = 'AA';
+		IS_ANY_ORA_ERROR
+		EXEC SQL OPEN l_rtv_exl_cur;
+		IS_ANY_ORA_ERROR
+		
+
+	}
+	else if(!strcmp(p_file_type,TEXT))
+	{
+		EXEC SQL DECLARE l_rtv_txt_cur CURSOR
+				FOR
+				SELECT TXT_FIELD_NAME,
+						NVL(START_POS,0),
+						NVL(END_POS,0)
+				FROM mt_gfu_txt_setup
+				WHERE REF_NO = :p_refno
+				AND STATUS = 'AA';
+		IS_ANY_ORA_ERROR
+		EXEC SQL OPEN l_rtv_txt_cur;
+		IS_ANY_ORA_ERROR
+
+	}
+
+	for(;;)
+	{
+		memset(l_label,APL_NULL_CHAR,sizeof(l_label));
+		memset(l_seq,APL_NULL_CHAR,sizeof(l_seq));
+		i_label = 0; i_seq = 0; l_start_pos = 0; l_end_pos = 0;
+		if(!strcmp(p_file_type,CSV))
+		{
+			EXEC SQL FETCH l_rtv_csv_cur
+						INTO :l_label:i_label,
+							  :l_seq:i_seq;
+			IS_ANY_ORA_ERROR
+		}	
+		else if(!strcmp(p_file_type,EXCEL))
+		{
+			EXEC SQL FETCH l_rtv_exl_cur
+						INTO :l_label:i_label,
+							  :l_seq:i_seq;
+			IS_ANY_ORA_ERROR
+		}
+		else if(!strcmp(p_file_type,TEXT))
+		{
+			EXEC SQL FETCH l_rtv_txt_cur
+						INTO :l_label:i_label,
+							  :l_start_pos,
+							  :l_end_pos;
+			IS_ANY_ORA_ERROR
+		}
+		/**printf("sqlca.sqlcode |%d|\n",sqlca.sqlcode);**/
+		if(sqlca.sqlcode == 1403)break;
+
+		while((*l_temp_ptr) != (C_E_T_STRUCT_H *)NULL)
+		{
+			l_temp_ptr = &((*l_temp_ptr)->h_next);
+		}
+		if(((*l_temp_ptr) = (C_E_T_STRUCT_H *)calloc(1,sizeof(C_E_T_STRUCT_H))) == NULL)
+		{
+			APL_GOBACK_FAIL
+		}
+		strcpy((*l_temp_ptr) -> h_label,l_label);
+		strcpy((*l_temp_ptr) -> h_seq,l_seq);
+		(*l_temp_ptr) -> h_start_pos	=	l_start_pos;
+		(*l_temp_ptr) -> h_end_pos	=	l_end_pos;
+		(*l_temp_ptr) -> h_next = NULL;
+
+	}
+		if(!strcmp(p_file_type,CSV))
+		{
+			EXEC SQL CLOSE l_rtv_csv_cur;
+
+		}	
+		else if(!strcmp(p_file_type,EXCEL))
+		{
+			EXEC SQL CLOSE l_rtv_exl_cur;
+			IS_ANY_ORA_ERROR
+		}
+		else if(!strcmp(p_file_type,TEXT))
+		{
+			EXEC SQL CLOSE l_rtv_txt_cur;
+			IS_ANY_ORA_ERROR
+		}
+
+APL_GOBACK_SUCCESS
+RETURN_FAILURE:
+	 APL_FUNCTION_RET_FAILURE(l_logfile)
+
+RETURN_SUCCESS:
+	APL_FUNCTION_RET_SUCCESS(l_logfile)
+}
+
+
+int Add_Rpl_Format_Lst(char *p_file_type,
+							 	GFU_FORMAT_MAP_STRUCT_LST **p_gfu_format_map_lst,
+							 C_E_T_STRUCT_H **p_c_e_t_struct_h,
+							 DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	C_E_T_STRUCT_H **l_temp_cet = p_c_e_t_struct_h ;
+	GFU_FORMAT_MAP_STRUCT_LST **l_temp_format;
+
+	APL_FUNCTION_ENTER(l_logfile)
+	while(*l_temp_cet)
+	{
+		l_temp_format = p_gfu_format_map_lst;
+		while(*l_temp_format)
+		{
+			if(!strcmp((*l_temp_format) -> h_label , (*l_temp_cet)->h_label))
+			{
+				strcpy((*l_temp_format) -> h_seq,(*l_temp_cet)->h_seq);
+				strcpy((*l_temp_format) -> h_start,ltoa((*l_temp_cet)->h_start_pos));
+				strcpy((*l_temp_format) -> h_end,ltoa((*l_temp_cet)->h_end_pos));
+			}
+			l_temp_format = &((*l_temp_format)->h_next);
+		}
+		l_temp_cet = &((*l_temp_cet)->h_next);
+	}
+
+APL_GOBACK_SUCCESS
+RETURN_FAILURE:
+	 APL_FUNCTION_RET_FAILURE(l_logfile)
+
+RETURN_SUCCESS:
+	APL_FUNCTION_RET_SUCCESS(l_logfile)
+
+
+}
+int Process_C_E_T(	GFU_FORMAT_MAP_STRUCT_LST **p_gfu_format_map_lst,
+							char *p_refno,
+							char *p_module,
+							char *p_vendor,
+							DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	struct sqlca sqlca;
+	C_E_T_STRUCT_H **l_c_e_t_struct_h = (C_E_T_STRUCT_H **)NULL;
+	C_E_T_STRUCT_H *l_c_e_t_struct_free = (C_E_T_STRUCT_H *)NULL;
+	char l_file_type[4] = APL_NULL_STRING;
+
+	l_c_e_t_struct_h = (C_E_T_STRUCT_H **) calloc(1,sizeof(C_E_T_STRUCT_H *));
+
+	APL_FUNCTION_ENTER(l_logfile)
+	/*Changes done by AMOL*/
+/*
+	EXEC SQL SELECT FILE_TYPE
+				INTO :l_file_type
+				FROM MT_GFU_FORMAT_SETUP
+				WHERE	VENDOR_ID = :p_vendor
+				AND  FUNCTION_ID	= :p_module
+				AND STATUS = 'AA';
+*/
+/*	printf("\nBefore retriving file type ref_no=|%s|",p_refno);*/
+	
+	EXEC SQL SELECT FILE_TYPE INTO :l_file_type FROM  MT_GFU_FORMAT_SETUP WHERE REF_NO=:p_refno AND STATUS='AA';
+	/**printf("\nSQL Code for File Type=%d",sqlca.sqlcode);**/
+	IS_ANY_ORA_ERROR
+
+	if(sqlca.sqlcode == 1403) APL_GOBACK_SUCCESS
+
+	if(Rtv_C_E_T(	l_file_type,
+					p_refno,
+					l_c_e_t_struct_h,
+					l_debug_info_ptr) == APL_FAILURE)
+			{
+				printf("\n\nError during Rtv_C_E_T function");
+			APL_GOBACK_FAIL
+			}
+/*	printf("After Rtv_C_E_T function");*/
+	if(Add_Rpl_Format_Lst(l_file_type,
+							 p_gfu_format_map_lst,
+							 l_c_e_t_struct_h,
+							 l_debug_info_ptr) == APL_FAILURE)
+	{
+				printf("\n\nError during Add_Rpl_Format_Lst function");
+	APL_GOBACK_FAIL
+	}
+							
+							
+APL_GOBACK_SUCCESS
+RETURN_FAILURE:
+	while(*l_c_e_t_struct_h)
+	{
+		l_c_e_t_struct_free = (*l_c_e_t_struct_h) -> h_next;
+		APL_FREE((*l_c_e_t_struct_h))
+		*l_c_e_t_struct_h = l_c_e_t_struct_free;
+	}
+	 APL_FUNCTION_RET_FAILURE(l_logfile)
+
+RETURN_SUCCESS:
+	while(*l_c_e_t_struct_h)
+	{
+		l_c_e_t_struct_free = (*l_c_e_t_struct_h) -> h_next;
+		APL_FREE((*l_c_e_t_struct_h))
+		*l_c_e_t_struct_h = l_c_e_t_struct_free;
+	}
+	APL_FUNCTION_RET_SUCCESS(l_logfile)
+
+
+}
+							
+
+
+/*********************************************************************************************************
+ *                                                                                                       *
+ * Function Name         : Call_Stored_Proc																 *
+ *                                                                                                       *
+ * Description           : This Function is used for calling stored procedure for specific module.       *
+ *                                                                                                       *
+ * Parameter                           Type                             Mode   Description               *
+ * ------------                        --------                         -----  ---------------           *
+ * p_gfu_req_map_h                     GFU_REQ_MAP_STRUCT_H *           I      Containing Wrapper/SP name*
+ *                                                                                                       *
+ * p_env_data                          char *                           I      Environment String		 *
+ *                                                                                                       *
+ * p_param_data                        char *                           I      Parameter String			 *
+ *                                                                                                       *
+ * p_line_no                           int                              I      Line number of the record *
+ *                                                                                                       *
+ * l_debug_info_ptr                    DEBUG_INFO_STRUCT_H **           I      Debug Info Structure      *
+ *                                                                                                       *
+ * Return Values        :                                                                                *
+ *                                                                                                       *
+ *  APL_SUCCESS  - SUCCESS                                                                               *
+ *  APL_FAILURE  - FAILURE                                                                               *
+ *                                                                                                       *
+ ********************************************************************************************************/
+
+int Call_Stored_Proc(	GFU_REQ_MAP_STRUCT_H *p_gfu_req_map_h,
+			char *p_env_data, 
+			char *p_param_data,
+			int p_line_no,
+			DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	struct sqlca sqlca;
+	char l_error[GFU_ERR_DATA_LEN] = APL_NULL_STRING;
+	char l_reason[GFU_ERR_DATA_LEN] = APL_NULL_STRING;
+	char l_mis_info[4000] = APL_NULL_STRING;
+/* Added by vishal for ISKB_1737 Billing Enhancement Start*/
+	char p_param_data_a[100] = APL_NULL_STRING;
+	char p_param_data_b[100] = APL_NULL_STRING;
+	short i_error = 0;
+/* Added by vishal for ISKB_1737 Billing Enhancement End*/
+BT_IF_DEBUG
+	fprintf(l_logfile,"Environ Data\n|%s|\n",p_env_data);
+
+BT_IF_DEBUG
+	fprintf(l_logfile,"Param Data\n|%s|\n",p_param_data);
+	
+	APL_FUNCTION_ENTER(l_logfile)
+	printf("Store Procedure Name |%s|\n",p_gfu_req_map_h -> h_sp_name);
+	if(!strcmp(p_gfu_req_map_h -> h_sp_name,"SP_INTL_MT_DM"))
+	{
+		EXEC SQL CALL SP_INTL_MT_DM(:p_gfu_req_map_h -> h_wrapper,:p_env_data,:p_param_data,:p_gfu_req_map_h -> h_user,:l_error);
+	}
+	else if(!strcmp(p_gfu_req_map_h -> h_sp_name,"SP_INTL_MT"))
+	{
+		EXEC SQL CALL SP_INTL_MT(:p_gfu_req_map_h -> h_wrapper,:p_env_data,:p_param_data,:p_gfu_req_map_h -> h_user,:l_error);
+	}
+	else if(!strcmp(p_gfu_req_map_h -> h_sp_name,"SP_INTL_CA"))
+	{
+		EXEC SQL CALL SP_INTL_CA(:p_gfu_req_map_h -> h_wrapper,:p_env_data,:p_param_data,:p_gfu_req_map_h -> h_user,:l_error);
+	}
+	else if(!strcmp(p_gfu_req_map_h -> h_sp_name,"SP_INTL_DEAL"))
+	{
+		printf(" Entering sp_intl_deal:\n\t|%s|\n\t|%s|\n\t|%s|\n\t|%s|\n\t|%s|\n\t|%s|",p_gfu_req_map_h -> h_wrapper,p_env_data,p_param_data,p_gfu_req_map_h -> h_user,l_mis_info,l_error);
+                /* Commented by Gouse for for Avoiding calls to Stored Proc if DP_Trans Number is not present	EXEC SQL CALL SP_INTL_DEAL(:p_gfu_req_map_h -> h_wrapper,:p_env_data,:p_param_data,:p_gfu_req_map_h -> h_user,:l_mis_info,:l_error);
+                  */
+                /* Gouse: Changes for Avoiding calls to Stored Proc if DP_Trans Number is not present Start*/
+		printf("Gouse:: 377 dp_trans_no is %s\n",dp_trans_no);
+  if(((strcmp(p_gfu_req_map_h -> h_wrapper,"wrp_DLInstCODFn") == 0) && (strcmp(dp_trans_no ,"\0") == 0)) ||
+     (!strcmp(p_gfu_req_map_h -> h_wrapper,"DL_UPL_SOH") && (chr_g_soh_custody_clnt == 'N')))
+  {
+	   printf("IN Error Block\n");
+       strcpy(l_error,"Record does not belong to Custody. Skipping...");
+  }
+  else
+  {
+	  printf("Caling SP_INTL_DEAL\n");
+		EXEC SQL CALL SP_INTL_DEAL(:p_gfu_req_map_h -> h_wrapper,:p_env_data,:p_param_data,:p_gfu_req_map_h -> h_user,:l_mis_info,:l_error);
+	}
+	}
+/* Subu: Changes for Avoiding calls to Stored Proc if DP_Trans Number is not present End*/
+        /* Added By Kalyan for WIM , DAEMON_WEB */
+        else if(!strcmp(p_gfu_req_map_h -> h_sp_name,"SP_WEB_MN"))
+        {
+         	EXEC SQL CALL SP_WEB_MN(:p_gfu_req_map_h -> h_wrapper,:p_env_data,:p_param_data,:p_gfu_req_map_h -> h_user,:l_error);
+        }
+        /* Kalyan -- Till here */
+/* Added by vishal for ISKB_1737 Billing Enhancemnet Start*/
+		else if(!strcmp(p_gfu_req_map_h -> h_sp_name,"SP_INTL_INVOICE"))
+        {
+		printf(" Entering sp_intl_invoice:\n\t|%s|\n\t|%s|\n\t|%s|\n\t|%s|\n\t|%s|\n\t|%s|\n\t|%s|",p_gfu_req_map_h -> h_wrapper,p_env_data,p_param_data,p_param_data_a,p_param_data_b,p_gfu_req_map_h -> h_user,l_error);
+         	EXEC SQL CALL SP_INTL_INVOICE(:p_gfu_req_map_h -> h_wrapper,:p_env_data,:p_param_data,:p_param_data_a,:p_param_data_b,:p_gfu_req_map_h -> h_user,:l_error:i_error);
+        }
+/* Added by vishal for ISKB_1737 Billing Enhancemnet End*/
+
+	IS_ANY_ORA_ERROR
+BT_IF_DEBUG
+		fprintf(l_logfile,"Return From Daemon : %s \n",l_error);
+		/** It can be added in the same way for other stored procedures **/
+	/** there May be cases where the daemon outputs some value along with SUCCESS, So changed strcmp to strstr **/
+	if(!strstr(l_error,"SUCCESS"))
+	{
+	/*	Comment for UAT */
+		/*
+		if(APL_FAILURE ==	GFU_Rtv_DelStr(	l_error, 
+						"|", 
+						10,
+						l_reason,
+						l_debug_info_ptr))
+			APL_GOBACK_FAIL
+		*/
+		/*if(APL_FAILURE == GFU_UpdErrorDet(	p_line_no,
+							"N",
+							"FAILURE",
+							APL_NULL_STRING,
+							APL_NULL_STRING,
+							l_reason,
+							l_debug_info_ptr))
+		APL_GOBACK_FAIL
+		*/
+
+		if(APL_FAILURE == GFU_UpdErrorDet(   p_line_no,
+					"N",
+					"FAILURE",
+					APL_NULL_STRING,
+					APL_NULL_STRING,
+					l_error,
+					l_debug_info_ptr))
+			APL_GOBACK_FAIL
+
+		if(APL_FAILURE == GFU_Write_Skipped(	p_line_no,
+							l_debug_info_ptr))
+		APL_GOBACK_FAIL
+
+
+
+	}
+	else
+	{
+		if(APL_FAILURE == GFU_UpdErrorDet(	p_line_no,
+							"N",
+							"SUCCESS",
+							APL_NULL_STRING,
+							APL_NULL_STRING,
+							APL_NULL_STRING,
+							l_debug_info_ptr))
+		APL_GOBACK_FAIL
+	}
+
+
+	APL_GOBACK_SUCCESS
+RETURN_FAILURE:
+	 APL_FUNCTION_RET_FAILURE(l_logfile)
+
+RETURN_SUCCESS:
+	APL_FUNCTION_RET_SUCCESS(l_logfile)
+}
+
+
+
+
+/*********************************************************************************************************
+ *                                                                                                       *
+ * Function Name         : GFU_Lst_To_Data																 *
+ *                                                                                                       *
+ * Description           : This Function is used for making string from linked list						 *
+ *                                                                                                       *
+ * Parameter                           Type                             Mode   Description               *
+ * ------------                        --------                         -----  ---------------           *
+ * p_token_value_lst                   GFU_TOKEN_VAL_STRUCT_LST **      I      Linked list Token/Value   *
+ *                                                                                                       *
+ * p_data							   char *                           O      Converted String		     *
+ *                                                                                                       *
+ * l_debug_info_ptr                    DEBUG_INFO_STRUCT_H **           I      Debug Info Structure      *
+ *                                                                                                       *
+ * Return Values        :                                                                                *
+ *                                                                                                       *
+ *  APL_SUCCESS  - SUCCESS                                                                               *
+ *  APL_FAILURE  - FAILURE                                                                               *
+ *                                                                                                       *
+ ********************************************************************************************************/
+
+
+int GFU_Lst_To_Data(GFU_TOKEN_VAL_STRUCT_LST **p_token_value_lst, char *p_data,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	
+	char l_line[GFU_LINE_LEN] = APL_NULL_STRING;
+	GFU_TOKEN_VAL_STRUCT_LST **l_temp_ptr = p_token_value_lst;
+	APL_FUNCTION_ENTER(l_logfile)
+	memset(p_data,APL_NULL_CHAR,sizeof(p_data));
+
+	while((*l_temp_ptr)!=NULL)
+	{
+		memset(l_line,APL_NULL_CHAR,sizeof(l_line));
+		sprintf(l_line,"%c%s%c%s",DATA_FIELD_SEPRTR,(*l_temp_ptr) -> h_token,DATA_VALUE_SEPRTR,(*l_temp_ptr) -> h_value);
+BT_IF_DEBUG
+		fprintf(l_logfile,"\t|%s|\t\t=\t\t|%s|\n",(*l_temp_ptr) -> h_token,(*l_temp_ptr) -> h_value);
+		strcat(p_data,l_line);
+		l_temp_ptr = &((*l_temp_ptr) -> h_next);
+	}
+
+APL_GOBACK_SUCCESS
+RETURN_FAILURE:
+	 APL_FUNCTION_RET_FAILURE(l_logfile)
+
+RETURN_SUCCESS:
+	APL_FUNCTION_RET_SUCCESS(l_logfile)
+
+
+}
+
+
+/*********************************************************************************************************
+ *                                                                                                       *
+ * Function Name         : GFU_Process_Rec																 *
+ *                                                                                                       *
+ * Description           : This Function is used to process single record								 *
+ *                                                                                                       *
+ * Parameter                           Type                             Mode   Description               *
+ * ------------                        --------                         -----  ---------------           *
+ * p_gfu_env_map_lst                   GFU_TOKEN_VAL_STRUCT_LST **      I      Environment list			 *
+ *                                                                                                       *
+ * p_gfu_val_map_lst				   GFU_VAL_MAP_STRUCT_LST **        I      Validation List		     *
+ *																										 *
+ * p_gfu_req_map_h					   GFU_REQ_MAP_STRUCT_H *			I	   Request Map Structure     *
+ *																										 *
+ * p_gfu_param_data_lst				   GFU_TOKEN_VAL_STRUCT_LST **		I	   Parameter Data List		 *
+ *																										 *
+ * p_line_no						   int								I	   Line number of record	 *
+ *                                                                                                       *
+ * l_debug_info_ptr                    DEBUG_INFO_STRUCT_H **           I      Debug Info Structure      *
+ *                                                                                                       *
+ * Return Values        :                                                                                *
+ *                                                                                                       *
+ *  APL_SUCCESS  - SUCCESS                                                                               *
+ *  APL_FAILURE  - FAILURE                                                                               *
+ *                                                                                                       *
+ ********************************************************************************************************/
+
+
+
+int GFU_Process_Rec(	GFU_TOKEN_VAL_STRUCT_LST **p_gfu_env_map_lst,
+						GFU_VAL_MAP_STRUCT_LST **p_gfu_val_map_lst,
+						GFU_REQ_MAP_STRUCT_H *p_gfu_req_map_h,
+						GFU_TOKEN_VAL_STRUCT_LST **p_gfu_param_data_lst,
+						int p_line_no,
+						DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+
+
+{
+	char l_param_data[GFU_PARAM_DATA_LEN];
+	char l_env_data[GFU_ENV_DATA_LEN];
+
+	APL_FUNCTION_ENTER(l_logfile)
+	memset(l_param_data,APL_NULL_CHAR,sizeof(l_param_data));
+	memset(l_env_data,APL_NULL_CHAR,sizeof(l_env_data));
+
+	if(GF_FnlProc(p_gfu_param_data_lst,p_gfu_env_map_lst,p_line_no,p_gfu_req_map_h -> h_module,l_debug_info_ptr) == APL_FAILURE)
+		APL_GOBACK_FAIL
+
+	if(APL_FAILURE == GFU_Lst_To_Data(p_gfu_param_data_lst,l_param_data,l_debug_info_ptr))
+		APL_GOBACK_FAIL
+
+	if(APL_FAILURE == GFU_Lst_To_Data(p_gfu_env_map_lst,l_env_data,l_debug_info_ptr))
+		APL_GOBACK_FAIL
+
+	if(APL_FAILURE == Call_Stored_Proc(p_gfu_req_map_h,l_env_data,l_param_data,p_line_no,l_debug_info_ptr))
+		APL_GOBACK_FAIL
+
+
+APL_GOBACK_SUCCESS
+RETURN_FAILURE:
+	 APL_FUNCTION_RET_FAILURE(l_logfile)
+
+RETURN_SUCCESS:
+	APL_FUNCTION_RET_SUCCESS(l_logfile)
+
+}
+
+/*********************************************************************************************************
+ *                                                                                                       *
+ * Function Name         : GFU_Process_Lst																 *
+ *                                                                                                       *
+ * Description           : This Function is used to process whole file converted as list				 *
+ *                                                                                                       *
+ * Parameter                           Type                             Mode   Description               *
+ * ------------                        --------                         -----  ---------------           *
+ *																										 *
+ * p_file_lst						   GFU_FILE_LST						I	   Full List				 *
+ *																										 *
+ * p_process_name					   char *							I      Name of the process		 *
+ *																									     *
+ * p_process_key					   char *							I      Key of the Process		 *
+ *																										 *
+ * p_start_date						   char *							I	   Started Date				 *
+ *																										 *
+ * p_gfu_val_map_lst				   GFU_VAL_MAP_STRUCT_LST **        I      Validation List		     *
+ *																										 *
+ * p_gfu_req_map_h					   GFU_REQ_MAP_STRUCT_H *			I	   Request Map Structure     *
+ *																										 *
+ * p_gfu_env_map_lst                   GFU_TOKEN_VAL_STRUCT_LST **      I      Environment list			 *
+ *                                                                                                       *
+ * l_debug_info_ptr                    DEBUG_INFO_STRUCT_H **           I      Debug Info Structure      *
+ *                                                                                                       *
+ * Return Values        :                                                                                *
+ *                                                                                                       *
+ *  APL_SUCCESS  - SUCCESS                                                                               *
+ *  APL_FAILURE  - FAILURE                                                                               *
+ *                                                                                                       *
+ ********************************************************************************************************/
+
+int GFU_Process_Lst(GFU_FILE_LST **p_file_lst,
+					char *p_process_name,
+					char *p_process_key,
+					char *p_start_date,
+					GFU_VAL_MAP_STRUCT_LST **p_gfu_val_map_lst,
+					GFU_REQ_MAP_STRUCT_H *p_gfu_req_map_h,
+					GFU_TOKEN_VAL_STRUCT_LST **p_gfu_env_map_lst,
+					DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	GFU_FILE_LST **l_temp_ptr = p_file_lst;
+	char l_status_info[100];
+
+	APL_FUNCTION_ENTER(l_logfile)
+	while((*l_temp_ptr)!=NULL)
+	{
+	        fputs("\n",stdin);
+                fflush(stdin);
+			
+		if(APL_FAILURE == CO_FreeErrLst(l_debug_info_ptr))
+			APL_GOBACK_FAIL
+
+		if(!(((*l_temp_ptr) -> h_line_no)%GFU_COMMIT_COUNT))
+		{
+			memset(l_status_info,APL_NULL_CHAR,sizeof(l_status_info));
+			sprintf(l_status_info," Processed Till Line |%d| Record |%d|\n",(*l_temp_ptr) -> h_line_no,(*l_temp_ptr) -> h_rec_no);
+
+			if(APL_FAILURE == BT_Status_Update(	p_process_name,
+											p_process_key,
+											p_start_date,
+											l_status_info,
+											l_debug_info_ptr))
+			APL_GOBACK_FAIL
+		}
+
+		if(APL_FAILURE == GFU_Process_Rec(	p_gfu_env_map_lst,
+							p_gfu_val_map_lst,
+							p_gfu_req_map_h,
+							(*l_temp_ptr)-> h_token_val,
+							(*l_temp_ptr)-> h_line_no,
+							l_debug_info_ptr))
+		{
+			if(APL_FAILURE == GFU_UpdErrorDet(	(*l_temp_ptr) -> h_line_no,
+							"N",
+							"FAILURE",
+							APL_NULL_STRING,
+							APL_NULL_STRING,
+							APL_NULL_STRING,
+							l_debug_info_ptr))
+			APL_GOBACK_FAIL
+
+			if(APL_FAILURE == GFU_Write_Skipped(	(*l_temp_ptr) -> h_line_no,
+								l_debug_info_ptr))
+			APL_GOBACK_FAIL 
+
+		}
+			
+		l_temp_ptr = &((*l_temp_ptr)->h_next);
+		/** Reporting Will be done here */
+	}
+APL_GOBACK_SUCCESS
+RETURN_FAILURE:
+	 APL_FUNCTION_RET_FAILURE(l_logfile)
+
+RETURN_SUCCESS:
+	APL_FUNCTION_RET_SUCCESS(l_logfile)
+}
+
+
+
+/*********************************************************************************************************
+ *                                                                                                       *
+ * Function Name         : Read_Ascii																	 *
+ *                                                                                                       *
+ * Description           : This Function is used to One Ascii line to list								 *
+ *                                                                                                       *
+ * Parameter                           Type                             Mode   Description               *
+ * ------------                        --------                         -----  ---------------           *
+ *																										 *
+ * p_line							   char *							I	   line						 *
+ *																										 *
+ * p_line_no						   int								I	   line number				 *
+ *																										 *
+ * p_gfu_file_map_h					   GFU_FILE_MAP_STRUCT_H *			I	   Conatins Details about the file *
+ *																										 *
+ * p_gfu_format_map_lst				   GFU_FORMAT_MAP_STRUCT_LST **		I      Format List				 *
+ *																									     *
+ * p_token_value					   GFU_TOKEN_VAL_STRUCT_LST			O      The Output List			 *
+ *                                                                                                       *
+ * l_debug_info_ptr                    DEBUG_INFO_STRUCT_H **           I      Debug Info Structure      *
+ *                                                                                                       *
+ * Return Values        :                                                                                *
+ *                                                                                                       *
+ *  APL_SUCCESS  - SUCCESS                                                                               *
+ *  APL_FAILURE  - FAILURE                                                                               *
+ *                                                                                                       *
+ ********************************************************************************************************/
+
+int Read_Ascii(	char *p_line,
+		int p_line_no,
+					GFU_FILE_MAP_STRUCT_H *p_gfu_file_map_h,
+				GFU_FORMAT_MAP_STRUCT_LST **p_gfu_format_map_lst,
+				GFU_TOKEN_VAL_STRUCT_LST **p_token_value,
+				DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	GFU_FORMAT_MAP_STRUCT_LST **l_temp_ptr = p_gfu_format_map_lst;
+	GFU_TOKEN_VAL_STRUCT_LST **l_token_value = p_token_value;
+
+	GFU_FORMAT_MAP_STRUCT_LST *l_curr_format_node = (GFU_FORMAT_MAP_STRUCT_LST *)NULL;
+	
+	char l_value[GFU_VALUE_LEN];
+	
+	char chr_dt_frm_file_name[20] = APL_NULL_STRING;  // Added by Prateek on 04-FEB-2013 - UT fix
+	int l_date_start_pos = 0;  // Added by Prateek on 04-FEB-2013 - UT fix
+	int l_date_end_pos = 0;  // Added by Prateek on 04-FEB-2013 - UT fix
+    short i_dt_frm_file_name = 0;  // Added by Prateek on 04-FEB-2013 - UT fix
+
+        char l_mcs_mkt_type[3]= APL_NULL_STRING;        //Jeevan ISHB5879
+	char chr_dt_frm_mcs[20] = APL_NULL_STRING;      //Jeevan ISHB5879
+	char l_mcs_scrip_grp[3]= APL_NULL_STRING;       //Jeevan ISHB5879
+	char l_mcs_settl_no[20]= APL_NULL_STRING;        //Jeevan ISHB5879
+	char chr_dt_frm_otr[20] = APL_NULL_STRING;      //Jeevan ISHB5879
+	memset(l_mcs_mkt_type,APL_NULL_CHAR,sizeof(l_mcs_mkt_type));
+	APL_FUNCTION_ENTER(l_logfile)	
+
+	while((*l_temp_ptr)!=NULL)
+	{
+		/** Here we have to add Read from file name if Test is F this is for Belav files**/
+		memset(l_value,APL_NULL_CHAR,sizeof(l_value));
+		BT_IF_DEBUG
+			fprintf(l_logfile,"Read From File Name Or Text (F/T) : %s\n",(*l_temp_ptr) -> h_header_text);
+		l_curr_format_node = (GFU_FORMAT_MAP_STRUCT_LST *)calloc(1,sizeof(GFU_FORMAT_MAP_STRUCT_LST));
+		memset(l_curr_format_node,APL_NULL_CHAR,sizeof(GFU_FORMAT_MAP_STRUCT_LST));  //AIX - Warnings Removal
+		strcpy(l_curr_format_node -> h_refno,(*l_temp_ptr) -> h_refno);
+		strcpy(l_curr_format_node -> h_valid,(*l_temp_ptr) ->h_valid);
+		strcpy(l_curr_format_node -> h_header_text,(*l_temp_ptr) ->h_header_text);
+		strcpy(l_curr_format_node -> h_field_type,(*l_temp_ptr) ->h_field_type);
+		strcpy(l_curr_format_node -> h_label,(*l_temp_ptr) ->h_label);
+		strcpy(l_curr_format_node -> h_seq,(*l_temp_ptr) ->h_seq);
+		strcpy(l_curr_format_node -> h_start,(*l_temp_ptr) ->h_start);
+		strcpy(l_curr_format_node -> h_end,(*l_temp_ptr) ->h_end);
+		strcpy(l_curr_format_node -> h_remove_char,(*l_temp_ptr) ->h_remove_char);
+		strcpy(l_curr_format_node -> h_remove_last_char,(*l_temp_ptr) ->h_remove_last_char);
+		strcpy(l_curr_format_node -> h_static_val,(*l_temp_ptr) ->h_static_val);
+		strcpy(l_curr_format_node -> h_val_type,(*l_temp_ptr) ->h_val_type);
+		strcpy(l_curr_format_node -> h_date_format,(*l_temp_ptr) ->h_date_format);
+		strcpy(l_curr_format_node -> h_header,(*l_temp_ptr) ->h_header);
+		l_curr_format_node -> h_srl_no = (*l_temp_ptr) ->h_srl_no;
+		strcpy(l_curr_format_node -> h_repeat,(*l_temp_ptr) ->h_repeat);
+		strcpy(l_curr_format_node -> h_query,(*l_temp_ptr) ->h_query);
+		l_curr_format_node -> h_next = (GFU_FORMAT_MAP_STRUCT_LST *)NULL;
+		
+		switch (l_curr_format_node -> h_header_text[0])
+		{
+
+			case 'T':
+				if(APL_FAILURE == Rtv_Data_Value(	p_line,
+							p_line_no,
+							p_gfu_file_map_h -> h_file_type,
+							l_curr_format_node -> h_label,
+							l_curr_format_node -> h_refno,
+							l_curr_format_node -> h_field_type,
+							l_curr_format_node -> h_seq,
+							l_curr_format_node -> h_start,
+							l_curr_format_node -> h_end,
+							p_gfu_file_map_h -> h_delimiter,					
+							l_curr_format_node -> h_remove_char,
+							l_curr_format_node -> h_remove_last_char,
+							l_curr_format_node -> h_static_val,
+							l_curr_format_node -> h_val_type,
+							l_curr_format_node -> h_date_format,
+							l_curr_format_node -> h_srl_no,
+							l_curr_format_node -> h_repeat,
+							l_curr_format_node -> h_query,
+							l_value,
+							l_debug_info_ptr))
+					APL_GOBACK_FAIL
+				if((strcmp(l_curr_format_node -> h_refno,"DL_EXCHGORD_UPLD_MCS") == 0) && (strcmp(l_curr_format_node -> h_label,"MKT_TYPE") == 0) )
+				{
+					 Alert("\n Lable is |%s| and Value is |%s| \n",l_curr_format_node -> h_label,l_value);
+					 strcpy(l_mcs_mkt_type,l_value);
+				}
+						break;
+			case 'F':
+				if(APL_FAILURE == Rtv_Data_Value(p_gfu_file_map_h -> h_file_name,
+							p_line_no,
+							p_gfu_file_map_h -> h_file_type,
+							l_curr_format_node -> h_label,
+							l_curr_format_node -> h_refno,
+							l_curr_format_node -> h_field_type,
+							l_curr_format_node -> h_seq,
+							l_curr_format_node -> h_start,
+							l_curr_format_node -> h_end,
+							p_gfu_file_map_h -> h_delimiter,	
+							l_curr_format_node -> h_remove_char,
+							l_curr_format_node -> h_remove_last_char,
+							l_curr_format_node -> h_static_val,
+							l_curr_format_node -> h_val_type,
+							l_curr_format_node -> h_date_format,
+							l_curr_format_node -> h_srl_no,
+							l_curr_format_node -> h_repeat,
+							l_curr_format_node -> h_query,
+							l_value,
+							l_debug_info_ptr))
+					APL_GOBACK_FAIL
+						break;
+		}
+                /* Gouse: Changes for Avoiding calls to Stored Proc if DP_Trans Number is not present Start*/
+		null_flag=0;
+		if(((strcmp(l_curr_format_node -> h_refno,"DL_COD") == 0) && (strcmp(l_curr_format_node -> h_label,"DPM_TRANSACTION_NO_PRESENT") == 0)) || (strcmp(l_curr_format_node -> h_refno,"NSDL_COD_UPL") == 0))
+		{
+		 memset(dp_trans_no,'\0',sizeof(dp_trans_no));
+     strcpy(dp_trans_no,l_value);
+     printf("DP Trans No <%s>\n",dp_trans_no);
+      if (strcmp(dp_trans_no ,"\0") == 0)
+      {
+         printf("DPM Trans No Null\n"); 
+         null_flag=-1;
+					  APL_GOBACK_FAIL;
+      }
+    }
+/* Gouse: Changes for Avoiding calls to Stored Proc if DP_Trans Number is not present End*/
+
+           /* Jeevan --ISHB5879 ---MCS DL_EXCHGORD_UPLD_MCS --Start*/
+		if((strcmp(l_curr_format_node -> h_refno,"DL_EXCHGORD_UPLD_MCS") == 0) && (strcmp(l_curr_format_node -> h_label,"DEAL_DATE") == 0))
+		{
+				memset(chr_dt_frm_mcs,APL_NULL_CHAR,sizeof(chr_dt_frm_mcs));
+				 Alert("\n  IN Read Ascii Func  DEAL_DATE \n");
+     			 l_date_start_pos = 0;
+				 l_date_end_pos = 0;
+                 i_dt_frm_file_name = 0;
+				 Alert("\n  IN Read Ascii Func  DEAL_DATE l_date_start_pos |%d| \n",l_date_start_pos);
+				 Alert("\n  IN Read Ascii Func  DEAL_DATE l_date_end_pos |%d| \n",l_date_end_pos);
+		    	// strcpy(chr_dt_frm_file_name,APL_NULL_STRING);
+				 Alert("\n  IN Read Ascii Func  got the file name |%s| \n",g_uplod_file_name);
+
+			     EXEC SQL SELECT TO_NUMBER(START_POS),TO_NUMBER(END_POS)
+				          INTO :l_date_start_pos,:l_date_end_pos
+				          FROM GFFORMATMAP 
+				          WHERE REFNO='DL_EXCHGORD_UPLD_MCS'
+				          AND LABEL='DEAL_DATE';
+			              Alert("\n sqlca.sqlcode = |%d| \n",sqlca.sqlcode);
+			     IS_ANY_ORA_ERROR
+
+			 
+				 Alert("\n  IN Read Ascii Func  DEAL_DATE l_date_start_pos |%d| \n",l_date_start_pos);
+				 Alert("\n  IN Read Ascii Func  DEAL_DATE l_date_end_pos |%d| \n",l_date_end_pos);
+                 if((l_date_start_pos > 0) && (l_date_end_pos > 0) && (strcmp(g_uplod_file_name,APL_NULL_STRING) != 0))
+				 {
+					
+
+					   EXEC SQL SELECT TO_DATE(SUBSTR(:g_uplod_file_name,:l_date_start_pos,(:l_date_end_pos - :l_date_start_pos )),'DD/MM/YYYY')+1/2
+								INTO :chr_dt_frm_mcs:i_dt_frm_file_name 
+								FROM DUAL;
+					  Alert("\n Sqlcode = |%d| \n",sqlca.sqlcode);
+			          IS_ANY_ORA_ERROR
+					  strcpy(l_value,chr_dt_frm_mcs);
+			          Alert("\n Date of MCS file = l_value=|%s|\n",l_value);
+					  
+					 
+				 }
+
+				 else
+				 {
+					  Alert("\n MCS Upload date not found in Filename.\n");
+					  APL_GOBACK_FAIL;
+				 }
+	    }
+
+		
+
+
+		if((strcmp(l_curr_format_node -> h_refno,"DL_EXCHGORD_UPLD_MCS") == 0) && (strcmp(l_curr_format_node -> h_label,"SETTL_NO") == 0))
+		{
+				 Alert("\n  IN Read Ascii Func  SETTL_NO \n");
+				 memset(l_mcs_settl_no,APL_NULL_CHAR,sizeof(l_mcs_settl_no));
+
+				  Alert("\n l_mcs_mkt_type of MCS file = l_value=|%s|\n",l_mcs_mkt_type);
+				  Alert("\n Date of MCS file = l_value=|%s|\n",chr_dt_frm_mcs);
+			 EXEC SQL select settl_no INTO : l_mcs_settl_no 
+									  from mt_settl_cal where 
+									  exch_code='MCS' and 
+				                      settl_type=:l_mcs_mkt_type and 
+									  status='AA' and 
+				                      start_date=:chr_dt_frm_mcs ;
+
+					  Alert("\n Sqlcode = |%d| \n",sqlca.sqlcode);
+			          IS_ANY_ORA_ERROR
+
+						  strcpy(l_value,l_mcs_settl_no);
+
+		}
+
+
+			if((strcmp(l_curr_format_node -> h_refno,"DL_EXCHGORD_MCS_OTR") == 0) && (strcmp(l_curr_format_node -> h_label,"DEAL_DATE") == 0))
+		{
+				memset(chr_dt_frm_mcs,APL_NULL_CHAR,sizeof(chr_dt_frm_otr));
+				 Alert("\n  IN Read Ascii Func  DEAL_DATE \n");
+     			 l_date_start_pos = 0;
+				 l_date_end_pos = 0;
+                 i_dt_frm_file_name = 0;
+				 Alert("\n  IN Read Ascii Func  DEAL_DATE l_date_start_pos |%d| \n",l_date_start_pos);
+				 Alert("\n  IN Read Ascii Func  DEAL_DATE l_date_end_pos |%d| \n",l_date_end_pos);
+		    	// strcpy(chr_dt_frm_file_name,APL_NULL_STRING);
+				 Alert("\n  IN Read Ascii Func  got the file name |%s| \n",g_uplod_file_name);
+
+			     EXEC SQL SELECT TO_NUMBER(START_POS),TO_NUMBER(END_POS)
+				          INTO :l_date_start_pos,:l_date_end_pos
+				          FROM GFFORMATMAP 
+				          WHERE REFNO='DL_EXCHGORD_MCS_OTR'
+				          AND LABEL='DEAL_DATE';
+			              Alert("\n sqlca.sqlcode = |%d| \n",sqlca.sqlcode);
+			     IS_ANY_ORA_ERROR
+
+			 
+				 Alert("\n  IN Read Ascii Func  DEAL_DATE l_date_start_pos |%d| \n",l_date_start_pos);
+				 Alert("\n  IN Read Ascii Func  DEAL_DATE l_date_end_pos |%d| \n",l_date_end_pos);
+                 if((l_date_start_pos > 0) && (l_date_end_pos > 0) && (strcmp(g_uplod_file_name,APL_NULL_STRING) != 0))
+				 {
+					
+
+					   EXEC SQL SELECT TO_DATE(SUBSTR(:g_uplod_file_name,:l_date_start_pos,(:l_date_end_pos - :l_date_start_pos )),'DD/MM/YYYY')+1/2
+								INTO :chr_dt_frm_otr:i_dt_frm_file_name 
+								FROM DUAL;
+					  Alert("\n Sqlcode = |%d| \n",sqlca.sqlcode);
+			          IS_ANY_ORA_ERROR
+					  strcpy(l_value,chr_dt_frm_otr);
+			          Alert("\n Date of MCS OTR file = l_value=|%s|\n",l_value);
+					  
+					 
+				 }
+
+				 else
+				 {
+					  Alert("\n MCS Upload date not found in Filename.\n");
+					  APL_GOBACK_FAIL;
+				 }
+	    }
+             /*  Jeevan --ISHB5879 ---MCS DL_EXCHGORD_UPLD_MCS --Ends*/
+						
+		while((*l_token_value) != NULL)
+		{
+			l_token_value = &((*l_token_value)->h_next);
+		}
+		if(((*l_token_value) = (GFU_TOKEN_VAL_STRUCT_LST *)calloc(1,sizeof(GFU_TOKEN_VAL_STRUCT_LST))) == NULL)
+		{
+BT_IF_DEBUG
+			fprintf(l_logfile,"failed in New Allocation\n");
+			APL_GOBACK_FAIL
+		}
+		strcpy((*l_token_value) -> h_token, l_curr_format_node -> h_label);
+		strcpy((*l_token_value) -> h_value, l_value);
+		(*l_token_value) -> h_next = NULL;
+		l_temp_ptr = &((*l_temp_ptr)->h_next);
+		APL_FREE(l_curr_format_node);
+
+	}
+APL_GOBACK_SUCCESS
+RETURN_FAILURE:
+	 APL_FUNCTION_RET_FAILURE(l_logfile)
+
+RETURN_SUCCESS:
+	APL_FUNCTION_RET_SUCCESS(l_logfile)
+}
+
+
+/*********************************************************************************************************
+ *                                                                                                       *
+ * Function Name         : GFU_Conv_Lnk_Lst																 *
+ *                                                                                                       *
+ * Description           : This Function is used to Convert file to linked list							 *
+ *                                                                                                       *
+ * Parameter                           Type                             Mode   Description               *
+ * ------------                        --------                         -----  ---------------           *
+ *																										 *
+ * p_file							   FILE *							I	   file pointer				 *
+ *																										 *
+ * p_process_name					   char *							I      Name of the process		 *
+ *																									     *
+ * p_process_key					   char *							I      Key of the Process		 *
+ *																										 *
+ * p_start_date						   char *							I	   Started Date				 *
+ *																										 *
+ * p_gfu_file_map					   GFU_FILE_MAP_STRUCT_H *			I	   Conatins Details about the file *
+ *																										 *
+ * p_gfu_format_map_lst				   GFU_FORMAT_MAP_STRUCT_LST **		I      Format List				 *
+ *																									     *
+ * p_file_lst						   GFU_FILE_LST **					O      The Output List			 *
+ *                                                                                                       *
+ * l_debug_info_ptr                    DEBUG_INFO_STRUCT_H **           I      Debug Info Structure      *
+ *                                                                                                       *
+ * Return Values        :                                                                                *
+ *                                                                                                       *
+ *  APL_SUCCESS  - SUCCESS                                                                               *
+ *  APL_FAILURE  - FAILURE                                                                               *
+ *                                                                                                       *
+ ********************************************************************************************************/
+
+int Prnt_Format(GFU_FORMAT_MAP_STRUCT_LST **p_gfu_format_map_lst)
+{
+	GFU_FORMAT_MAP_STRUCT_LST **l_temp_ptr = p_gfu_format_map_lst;
+	while(*l_temp_ptr)
+	{
+		printf("%s\n %s\n %s\n %s\n %s\n %s\n %s\n %s\n %s\n %s\n %s\n %s\n %s\n %s\n %d\n %s\n %s",
+				(*l_temp_ptr) ->  h_refno,
+				(*l_temp_ptr) ->  h_valid,
+				(*l_temp_ptr) ->  h_header_text,
+				(*l_temp_ptr) ->  h_field_type,
+				(*l_temp_ptr) ->  h_label,
+				(*l_temp_ptr) ->  h_seq,
+				(*l_temp_ptr) ->  h_start,
+				(*l_temp_ptr) ->  h_end,
+				(*l_temp_ptr) ->  h_remove_char,
+				(*l_temp_ptr) ->  h_remove_last_char,
+				(*l_temp_ptr) ->  h_static_val,
+				(*l_temp_ptr) ->  h_val_type,
+				(*l_temp_ptr) ->  h_date_format,
+				(*l_temp_ptr) ->  h_header,
+				(*l_temp_ptr) ->      h_srl_no,
+				(*l_temp_ptr) ->  h_repeat,
+				(*l_temp_ptr) ->  h_query);
+	l_temp_ptr = &((*l_temp_ptr)->h_next);
+	}
+ return(APL_SUCCESS);//AIX Warning Removal
+}
+int GFU_Conv_Lnk_Lst(	FILE *p_file,
+						char *p_process_name,
+						char *p_process_key,
+						char *p_start_date,
+						GFU_FILE_MAP_STRUCT_H *p_gfu_file_map,
+	/**					GFU_FILE_LST **p_file_lst,**/
+						GFU_TOKEN_VAL_STRUCT_LST **p_gfu_env_map_lst,
+						GFU_VAL_MAP_STRUCT_LST **p_gfu_val_map_lst,
+						GFU_REQ_MAP_STRUCT_H *p_gfu_req_map_h,
+						DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	/**GFU_FILE_LST **l_temp_ptr = p_file_lst;**/
+	GFU_FORMAT_MAP_STRUCT_LST **l_gfu_format_map_lst = (GFU_FORMAT_MAP_STRUCT_LST **)NULL;
+	GFU_FORMAT_MAP_STRUCT_LST *l_gfu_format_map_free = (GFU_FORMAT_MAP_STRUCT_LST *)NULL;
+	GFU_FORMAT_MAP_STRUCT_LST **l_gfu_header_map_lst = (GFU_FORMAT_MAP_STRUCT_LST **)NULL;
+	GFU_FORMAT_MAP_STRUCT_LST *l_gfu_header_map_free = (GFU_FORMAT_MAP_STRUCT_LST *)NULL;
+
+	GFU_TOKEN_VAL_STRUCT_LST **l_token_value = (GFU_TOKEN_VAL_STRUCT_LST **)NULL;
+	GFU_TOKEN_VAL_STRUCT_LST	*l_token_value_free = (GFU_TOKEN_VAL_STRUCT_LST *)NULL;
+	int l_count = 1;
+	int l_line_no = 0;
+	char l_skip_line[GFU_SKIP_LINE_LEN];
+	char l_line[GFU_LINE_LEN];
+	char l_refno[GFU_REFNO_LEN];
+/*added by Gaurang for ISSB_9550 start*/
+        char p_refno[GFU_REFNO_LEN]; 
+        char p_file_name[100];
+/*added by Gaurang for ISSB_9550 end*/
+	char l_status_info[100];
+	char l_temp_module[100];
+	
+	APL_FUNCTION_ENTER(l_logfile)
+
+
+
+	
+	l_gfu_header_map_lst = (GFU_FORMAT_MAP_STRUCT_LST **)calloc(1,sizeof(GFU_FORMAT_MAP_STRUCT_LST *));
+	l_token_value = (GFU_TOKEN_VAL_STRUCT_LST **)calloc(1,sizeof(GFU_TOKEN_VAL_STRUCT_LST *));
+	l_gfu_format_map_lst = (GFU_FORMAT_MAP_STRUCT_LST **)calloc(1,sizeof(GFU_FORMAT_MAP_STRUCT_LST *));
+	
+	if(!strcmp(p_gfu_file_map -> h_check_header,"Y"))
+	{
+	if(APL_FAILURE == Rtv_Format_Frm_Header(	p_gfu_file_map -> h_refno,
+												p_gfu_file_map -> h_header,
+												p_gfu_file_map -> h_format_no,
+												l_gfu_header_map_lst,
+												l_debug_info_ptr))
+
+	{	
+		printf("Failed in Rtv_Format_Frm_Header\n");
+		APL_GOBACK_FAIL
+	}
+	}
+	IF_COND_NOT_EXISTS("GFU_PROCESS","LINE_FORMATS")
+	{
+		if(APL_FAILURE == GFU_Rtv_Format(	p_gfu_file_map -> h_refno,
+					p_gfu_file_map,
+					l_gfu_format_map_lst,
+					l_debug_info_ptr))
+		{	
+			printf("Failed in GFU_Rtv_Format\n");
+			APL_GOBACK_FAIL
+		}
+	}
+	else
+	{
+		printf("Condition Doent Exists\n");
+	}
+
+	while(!feof(p_file))
+	{	
+		/**usleep(MICRO_SECONDS);**/
+		IF_COND_EXISTS("GFU_PROCESS","LINE_FORMATS")
+		{
+        while(*l_gfu_format_map_lst)
+        {
+                l_gfu_format_map_free = (*l_gfu_format_map_lst) -> h_next;
+                APL_FREE((*l_gfu_format_map_lst));
+                (*l_gfu_format_map_lst) = l_gfu_format_map_free;
+        }
+		}
+		else
+		{
+			printf("Condition Doent Exists\n");
+		}
+       while(*l_token_value)
+       {
+                l_token_value_free = (*l_token_value) -> h_next;
+                APL_FREE((*l_token_value));
+                (*l_token_value) = l_token_value_free;
+        }
+		if(APL_FAILURE == CO_FreeErrLst(l_debug_info_ptr))
+			APL_GOBACK_FAIL
+
+		
+
+		l_token_value = (GFU_TOKEN_VAL_STRUCT_LST **)calloc(1,sizeof(GFU_TOKEN_VAL_STRUCT_LST *));
+		printf("Line No |%d|\n",l_line_no);
+		if(!(l_line_no%GFU_COMMIT_COUNT))
+		{
+			memset(l_status_info,APL_NULL_CHAR,sizeof(l_status_info));
+			/**sprintf(l_status_info," Parsed Till Line |%d| Record |%d|\n",l_line_no,l_count - 1);**/
+			sprintf(l_status_info," Processed Till Line |%d| Record |%d|\n",l_line_no,l_count - 1);
+
+			if(APL_FAILURE == BT_Status_Update(	p_process_name,
+												p_process_key,
+												p_start_date,
+												l_status_info,
+												l_debug_info_ptr))
+				APL_GOBACK_FAIL
+		}
+											
+
+		l_line_no ++;
+
+/**
+		l_gfu_format_map_lst = (GFU_FORMAT_MAP_STRUCT_LST **)calloc(1,sizeof(GFU_FORMAT_MAP_STRUCT_LST *));
+		**/
+
+
+		switch(p_gfu_file_map -> h_file_type[0])
+		{
+			case GFU_ASCII:
+			case GFU_POSITION:
+					memset(l_refno,APL_NULL_CHAR,sizeof(l_refno));
+					/**if(feof(p_file))APL_GOBACK_FAIL -- Biju **/
+					memset(l_line,APL_NULL_CHAR,sizeof(l_line));	
+					fgets(l_line,GFU_LINE_LEN,p_file);
+							Alert("Hi");
+					if(strrchr(l_line,'\n'))*(strrchr(l_line,'\n')) = APL_NULL_CHAR;
+					memset(l_skip_line,APL_NULL_CHAR,sizeof(l_skip_line));
+					sprintf(l_skip_line,"%s%d%s",GFU_SKIP_LINE_DEL,l_line_no,GFU_SKIP_LINE_DEL);
+					/**fprintf(l_logfile,"Line|%d|%s|\n",l_line_no,l_line);**/
+					memset(g_line,APL_NULL_CHAR,sizeof(g_line));
+					strcpy(g_line,l_line);
+					if(strstr(p_gfu_file_map -> h_skip_line,l_skip_line))
+					{
+						BT_IF_DEBUG
+							fprintf(l_logfile,"Skipping Specified Line |%d| \n",l_line_no);
+
+						if(APL_FAILURE == GFU_UpdErrorDet(	l_line_no,
+											"Y",
+											APL_NULL_STRING,
+											APL_NULL_STRING,
+											APL_NULL_STRING,
+											"Line Should Not Be Processed, Skipped",
+											l_debug_info_ptr))
+							APL_GOBACK_FAIL
+						if(APL_FAILURE == GFU_Write_Skipped(	l_line_no,
+											l_debug_info_ptr))
+						APL_GOBACK_FAIL
+
+
+						continue;
+
+					}
+					if(l_line_no == p_gfu_file_map -> h_header)
+					{
+						BT_IF_DEBUG
+							fprintf(l_logfile,"Skipping Header Line |%d| \n",l_line_no);
+
+						if(APL_FAILURE == GFU_UpdErrorDet(	l_line_no,
+											"Y",
+											APL_NULL_STRING,
+											APL_NULL_STRING,
+											APL_NULL_STRING,
+											"Line Is Header, Skipped",
+											l_debug_info_ptr))
+							APL_GOBACK_FAIL
+						if(APL_FAILURE == GFU_Write_Skipped(	l_line_no,
+											l_debug_info_ptr))
+						APL_GOBACK_FAIL
+
+						continue;
+					}
+					Alert("l_refno : |%s|",l_refno);
+					if(!strlen(l_line))continue;
+							Alert("Hi");
+
+					IF_COND_EXISTS("GFU_PROCESS","LINE_FORMATS")
+					{
+					if(APL_FAILURE == Rtv_Format_Refno(	l_line,
+														l_line_no,
+														l_refno,
+									p_gfu_req_map_h,
+														l_debug_info_ptr))
+					{	
+							fprintf(l_logfile,"Failed in Rtv_Format_Refno\n");
+							if(APL_FAILURE == GFU_UpdErrorDet(  l_line_no,"N",
+										"FAILURE",
+									APL_NULL_STRING,
+									APL_NULL_STRING,
+									APL_NULL_STRING,
+									l_debug_info_ptr))
+							APL_GOBACK_FAIL
+						if(APL_FAILURE == GFU_Write_Skipped(   l_line_no,
+											l_debug_info_ptr))
+									APL_GOBACK_FAIL
+
+						continue;
+					}
+			
+			BT_IF_DEBUG
+					fprintf(l_logfile,"Refno |%s|\n",l_refno);
+
+					strcpy(p_refno,l_refno); //Gaurang :: ISSB_9550    
+
+                                                /* Bageshri HDFC EMERFIX Retro : START */
+						strcpy(l_temp_module,p_gfu_file_map -> h_module);
+						printf("HERE BEFORE COPY p_gfu_file_map -> h_module |%s|",p_gfu_file_map -> h_module);
+						strcpy(p_gfu_file_map -> h_module,l_refno);	
+						printf("HERE AFTER COPY p_gfu_file_map -> h_module |%s|",p_gfu_file_map -> h_module);
+						printf("HERE AFTER COPY l_refno |%s| ",l_refno);
+						printf("HERE BEFORE p_gfu_file_map -> h_refno |%s|",p_gfu_file_map -> h_refno);
+						l_gfu_format_map_lst = (GFU_FORMAT_MAP_STRUCT_LST **)calloc(1,sizeof(GFU_FORMAT_MAP_STRUCT_LST *));
+						
+						
+					if(APL_FAILURE == GFU_Rtv_Format(	l_refno,
+										p_gfu_file_map,
+										l_gfu_format_map_lst,
+										l_debug_info_ptr))
+					{	
+							fprintf(l_logfile,"Failed in GFU_Rtv_Format\n");
+							if(APL_FAILURE == GFU_UpdErrorDet(  l_line_no,
+										"N",
+										"FAILURE",
+										APL_NULL_STRING,
+										APL_NULL_STRING,
+										"Failed To Retrieve Format",
+										l_debug_info_ptr))
+						APL_GOBACK_FAIL
+
+									if(APL_FAILURE == GFU_Write_Skipped(   l_line_no,
+												l_debug_info_ptr))
+										APL_GOBACK_FAIL
+							Alert("Hi");
+							strcpy(p_gfu_file_map -> h_module,l_temp_module);
+											continue;
+
+
+						}
+							strcpy(p_gfu_file_map -> h_module,l_temp_module);
+					}
+					else
+					{
+						printf("Condition Doent Exists\n");
+					}
+
+					/*Prnt_Format(l_gfu_format_map_lst);*/
+					/** After Retrieving the format lets Proceeding For CSV/EXCEL/TEXT Setup **/
+					if(APL_FAILURE == Process_C_E_T(	l_gfu_format_map_lst,
+																l_refno,
+																p_gfu_file_map -> h_module,
+																p_gfu_file_map -> h_vendor,
+																l_debug_info_ptr))
+					{
+						CO_ProcMonitor(APL_OUT_FILE,"Failed in PCT ",l_debug_info_ptr,NULL);
+						APL_GOBACK_FAIL
+					}
+					/*Prnt_Format(l_gfu_format_map_lst);*/
+																	
+					if(!strcmp(p_gfu_file_map -> h_check_header,"Y"))
+					{
+					if(APL_FAILURE == GF_Chk_Header_Format(	p_gfu_file_map,
+															l_gfu_format_map_lst,
+															l_gfu_header_map_lst,
+															l_debug_info_ptr))
+
+					{	
+						printf("Failed in Rtv_Format_Frm_Header\n");
+						APL_GOBACK_FAIL
+					}
+					}
+
+					/**if(!strlen(l_line))continue; Already Done Aboive -- Biju **/
+					Alert("Before Read Ascii");
+
+			
+					if(APL_FAILURE == Read_Ascii(	l_line,
+															l_line_no,
+															p_gfu_file_map,
+															l_gfu_format_map_lst,
+															l_token_value,
+															l_debug_info_ptr))
+					{
+						if(APL_FAILURE == GFU_UpdErrorDet(	l_line_no,"N",
+											"FAILURE",
+											APL_NULL_STRING,
+											APL_NULL_STRING,
+											APL_NULL_STRING,
+											l_debug_info_ptr))
+							APL_GOBACK_FAIL
+						if(APL_FAILURE == GFU_Write_Skipped(	l_line_no,
+											l_debug_info_ptr))
+						APL_GOBACK_FAIL
+
+						continue;
+					}
+					Alert("Before Read Ascii");
+					break;
+				
+			case GFU_BINARY:
+							/*Read_Binary(p_file,p_gfu_file_map,l_gfu_format_map_lst,l_token_value);*/
+							break;
+		}	
+		/** l_token_value  Cotains Token And values We need **/
+		/**usleep(MICRO_SECONDS);**/
+		Alert("Before Specific Fn");
+		if(GF_SpecificRecFun( 	l_token_value,
+									p_gfu_file_map,
+									p_start_date,
+									l_debug_info_ptr) == APL_FAILURE)
+		{
+			APL_GOBACK_FAIL
+		}
+		Alert("After Specific Fn");
+
+		Alert("Before Process Rec");
+		if(APL_FAILURE == GFU_Process_Rec(  p_gfu_env_map_lst,
+					p_gfu_val_map_lst,
+					p_gfu_req_map_h,
+					l_token_value,
+					l_line_no,
+					l_debug_info_ptr))
+		{
+			if(APL_FAILURE == GFU_UpdErrorDet(  l_line_no,
+						"N",
+						"FAILURE",
+						APL_NULL_STRING,
+						APL_NULL_STRING,
+						APL_NULL_STRING,
+						l_debug_info_ptr))
+				APL_GOBACK_FAIL
+
+			if(APL_FAILURE == GFU_Write_Skipped(   l_line_no,
+								l_debug_info_ptr))
+				APL_GOBACK_FAIL
+
+		}
+		Alert("After Process Rec");
+		l_count ++;
+		/**
+			
+		while((*l_temp_ptr) != NULL)
+		{
+			l_temp_ptr = &((*l_temp_ptr)->h_next);
+		}
+		if(((*l_temp_ptr) = (GFU_FILE_LST *)calloc(1,sizeof(GFU_FILE_LST))) == NULL)
+		{
+			APL_GOBACK_FAIL
+		}
+		(*l_temp_ptr)->h_rec_no = l_count ++;
+		(*l_temp_ptr)->h_line_no = l_line_no;
+		(*l_temp_ptr)->h_token_val = l_token_value;
+
+		if(GF_SpecificRecFun( 	(*l_temp_ptr),
+									p_gfu_file_map,
+									p_start_date,
+									l_debug_info_ptr) == APL_FAILURE)
+		{
+			APL_GOBACK_FAIL
+		}
+
+
+
+		
+		(*l_temp_ptr)->h_next = (GFU_FILE_LST *)NULL;
+		**/
+		
+		/**
+		IF_COND_EXISTS("GFU_PROCESS","LINE_FORMATS")
+		{
+        while(*l_gfu_format_map_lst)
+        {
+                l_gfu_format_map_free = (*l_gfu_format_map_lst) -> h_next;
+                APL_FREE((*l_gfu_format_map_lst));
+                (*l_gfu_format_map_lst) = l_gfu_format_map_free;
+        }
+		}
+		**/
+		
+	}
+	/*(ISKB_9558): Displaying Uploaded File and Reference selected in Batch table. Changes By Mrinal - Starts*/
+	Alert("p_gfu_file_map->h_refno |%s|",p_gfu_file_map->h_refno);
+	/*added by Gaurang for ISSB_9550 start*/
+	memset(l_status_info,APL_NULL_CHAR,sizeof(l_status_info));
+	char l_file_name[16] = APL_NULL_STRING;	
+	strncpy(l_file_name,g_file_name,15);
+	sprintf(l_status_info,"%s : %s : Processed Till Line %d Record %d\n",p_gfu_file_map->h_refno,l_file_name,l_line_no,l_count - 1);
+	//sprintf(l_status_info,"%s : %s : Processed Till Line |%d| Record |%d|\n",p_gfu_file_map->h_refno,l_file_name,l_line_no,l_count - 1); //Commented by Gaurang
+	/*added by Gaurang for ISSB_9550 end*/
+	/*(ISKB_9558): Displaying Uploaded File and Reference selected in Batch table. Changes By Mrinal - Ends*/
+
+	if(APL_FAILURE == BT_Status_Update(	p_process_name,
+												p_process_key,
+												p_start_date,
+												l_status_info,
+												l_debug_info_ptr))
+		APL_GOBACK_FAIL
+
+APL_GOBACK_SUCCESS
+RETURN_FAILURE:
+		IF_COND_NOT_EXISTS("GFU_PROCESS","LINE_FORMATS")
+		{
+        while(*l_gfu_format_map_lst)
+        {
+                l_gfu_format_map_free = (*l_gfu_format_map_lst) -> h_next;
+                APL_FREE((*l_gfu_format_map_lst));
+                (*l_gfu_format_map_lst) = l_gfu_format_map_free;
+        }
+		}
+        while(*l_gfu_header_map_lst)
+        {
+                l_gfu_format_map_free = (*l_gfu_header_map_lst) -> h_next;
+                APL_FREE((*l_gfu_header_map_lst));
+                (*l_gfu_header_map_lst) = l_gfu_format_map_free;
+        }
+
+	 APL_FUNCTION_RET_FAILURE(l_logfile)
+
+RETURN_SUCCESS:
+		IF_COND_NOT_EXISTS("GFU_PROCESS","LINE_FORMATS")
+		{
+        while(*l_gfu_format_map_lst)
+        {
+                l_gfu_format_map_free = (*l_gfu_format_map_lst) -> h_next;
+                APL_FREE((*l_gfu_format_map_lst));
+                (*l_gfu_format_map_lst) = l_gfu_format_map_free;
+        }
+		}
+        while(*l_gfu_header_map_lst)
+        {
+                l_gfu_format_map_free = (*l_gfu_header_map_lst) -> h_next;
+                APL_FREE((*l_gfu_header_map_lst));
+                (*l_gfu_header_map_lst) = l_gfu_format_map_free;
+        }
+
+	APL_FUNCTION_RET_SUCCESS(l_logfile)
+}
+
+
+
+
+
+
+
+
+/*********************************************************************************************************
+ *                                                                                                       *
+ * Function Name         : GFU_Rtv_Format																 *
+ *                                                                                                       *
+ * Description           : This Function is used to Convert file to linked list							 *
+ *                                                                                                       *
+ * Parameter                           Type                             Mode   Description               *
+ * ------------                        --------                         -----  ---------------           *
+ *																										 *
+ * p_format_refno					   char *							I	   gets format specified according to the refno*
+ *																										 *
+ * p_gfu_file_map_h					   GFU_FILE_MAP_STRUCT_H *			I	   Conatins Details about the file *
+ *																										 *
+ * p_gfu_format_map_lst				   GFU_FORMAT_MAP_STRUCT_LST **		I      Format List				 *
+ *																									     *
+ * l_debug_info_ptr                    DEBUG_INFO_STRUCT_H **           I      Debug Info Structure      *
+ *                                                                                                       *
+ * Return Values        :                                                                                *
+ *                                                                                                       *
+ *  APL_SUCCESS  - SUCCESS                                                                               *
+ *  APL_FAILURE  - FAILURE                                                                               *
+ *                                                                                                       *
+ ********************************************************************************************************/
+
+
+
+
+
+
+int GFU_Rtv_Format(	char *p_format_refno,
+					GFU_FILE_MAP_STRUCT_H *p_gfu_file_map_h,
+					GFU_FORMAT_MAP_STRUCT_LST **p_gfu_format_map_lst,
+					DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	struct sqlca sqlca;
+	GFU_FORMAT_MAP_STRUCT_LST **l_temp_ptr = p_gfu_format_map_lst;
+	GFU_FORMAT_MAP_STRUCT_I		*l_gfu_format_map_i;
+	GFU_FORMAT_MAP_STRUCT_H		*l_gfu_format_map_h;
+	int l_cnt = 0;
+	sqlca.sqlcode = 0;
+
+	/** Added by Sana for GFU Setup when refno and function id are not same then we need to fetch gfformatamp details based on the refno else module name will be us ed **/
+        /** START **/
+        char l_formatmap_refno[50] = APL_NULL_STRING;
+		int  cnt_gfuformat_ref = 0; 
+        memset(l_formatmap_refno,APL_NULL_CHAR,sizeof(l_formatmap_refno));
+
+	short i_formatmap_refno = 0;
+
+
+        Alert("Reference Number We Got is = |%s|",p_gfu_file_map_h->h_refno);
+        Alert("Function ID We Got is = |%s|",p_format_refno);
+        Alert("Module We Got is = |%s|",p_gfu_file_map_h->h_module);
+        fflush(stdout);
+        /** END **/
+
+	APL_FUNCTION_ENTER(l_logfile)
+
+		/*
+	EXEC SQL DECLARE l_cur_format_map CURSOR FOR 
+			SELECT *
+			FROM GFFORMATMAP
+			WHERE REFNO = :p_format_refno
+		**	AND HEADER_TEXT_IND = 'T' **
+			ORDER BY SERIAL_NO;
+*/
+
+			EXEC SQL SELECT count(*) INTO :cnt_gfuformat_ref FROM GFU_FORMAT_REF_MAP
+			WHERE REFNO_MAP = :p_gfu_file_map_h->h_refno; 
+			
+	/** IF condition added by Sana for check **/
+	if((strcmp(p_gfu_file_map_h->h_refno,p_gfu_file_map_h->h_module) == 0) || (cnt_gfuformat_ref > 0) )
+	{
+		strcpy(l_formatmap_refno,p_gfu_file_map_h->h_module);
+	}
+	else
+	{
+		strcpy(l_formatmap_refno,p_gfu_file_map_h->h_refno);
+	} 
+	
+	Alert("New Reference Number we got is = |%s|",p_gfu_file_map_h->h_module);
+	fflush(stdout);
+	//Commented and redefined by Sana for GFU Setup
+/*****		EXEC SQL DECLARE l_cur_format_map CURSOR FOR
+			SELECT * FROM GFFORMATMAP 
+			WHERE REFNO = :p_gfu_file_map_h->h_module
+			ORDER BY SERIAL_NO;   ****/
+
+
+			EXEC SQL DECLARE l_cur_format_map CURSOR FOR
+                        SELECT * FROM GFFORMATMAP
+                        WHERE REFNO = :l_formatmap_refno:i_formatmap_refno
+                        ORDER BY SERIAL_NO; 
+
+	printf("Error During format Retrival SQLCA sqlcode=%d",sqlca.sqlcode);
+	IS_ANY_ORA_ERROR
+
+	EXEC SQL OPEN l_cur_format_map;
+
+	IS_ANY_ORA_ERROR
+
+	l_gfu_format_map_h = (GFU_FORMAT_MAP_STRUCT_H *)calloc(1,sizeof(GFU_FORMAT_MAP_STRUCT_H));
+	l_gfu_format_map_i = (GFU_FORMAT_MAP_STRUCT_I *)calloc(1,sizeof(GFU_FORMAT_MAP_STRUCT_I));	
+	
+	Alert("Before Fetch of cursor");
+	fflush(stdout);
+	for(;;)
+	{
+		
+		memset(l_gfu_format_map_h,NULL,sizeof(GFU_FORMAT_MAP_STRUCT_H));
+		memset(l_gfu_format_map_i,NULL,sizeof(GFU_FORMAT_MAP_STRUCT_I));
+		EXEC SQL FETCH l_cur_format_map
+				INTO :l_gfu_format_map_h:l_gfu_format_map_i;
+		
+		Alert("SQLCA code |%d|",sqlca.sqlcode);	
+
+		if(sqlca.sqlcode == 1403)break;
+		IS_ANY_ORA_ERROR
+
+		while((*l_temp_ptr) != (GFU_FORMAT_MAP_STRUCT_LST *)NULL)
+		{
+			l_temp_ptr = &((*l_temp_ptr)->h_next);
+		}
+		if(((*l_temp_ptr) = (GFU_FORMAT_MAP_STRUCT_LST *)calloc(1,sizeof(GFU_FORMAT_MAP_STRUCT_LST))) == NULL)
+		{
+			APL_GOBACK_FAIL
+		}
+		strcpy((*l_temp_ptr)->h_refno,l_gfu_format_map_h -> h_refno);
+		strcpy((*l_temp_ptr)->h_valid,l_gfu_format_map_h -> h_valid);
+		strcpy((*l_temp_ptr) -> h_header_text,l_gfu_format_map_h -> h_header_text);
+		strcpy((*l_temp_ptr) -> h_field_type,l_gfu_format_map_h -> h_field_type);
+		strcpy((*l_temp_ptr) -> h_label,l_gfu_format_map_h -> h_label);
+		strcpy((*l_temp_ptr) -> h_seq,l_gfu_format_map_h -> h_seq);
+		strcpy((*l_temp_ptr) -> h_start,l_gfu_format_map_h -> h_start);
+		strcpy((*l_temp_ptr) -> h_end,l_gfu_format_map_h -> h_end);
+		strcpy((*l_temp_ptr) -> h_remove_char,l_gfu_format_map_h -> h_remove_char);
+		strcpy((*l_temp_ptr) -> h_remove_last_char,l_gfu_format_map_h -> h_remove_last_char);
+		/* Retro By Sana [start] */
+		/* Bageshri - for Scotia - to send actual user as maker and checker - maintain USER as static value in GFFORMATMAP - Retro for ISHB - 5207 */
+		if(((!strcmp(l_gfu_format_map_h -> h_label,"MAKER")) || (!strcmp(l_gfu_format_map_h -> h_label,"CHECKER"))) && 
+		(!strcmp(l_gfu_format_map_h -> h_static_val,"USER")))
+               		strcpy((*l_temp_ptr) -> h_static_val,g_env_user);
+		else
+		strcpy((*l_temp_ptr) -> h_static_val,l_gfu_format_map_h -> h_static_val);
+		/* Retro By Sana [end] */
+		strcpy((*l_temp_ptr) -> h_val_type,l_gfu_format_map_h -> h_val_type);
+		strcpy((*l_temp_ptr) -> h_date_format,l_gfu_format_map_h -> h_date_format);
+		strcpy((*l_temp_ptr) -> h_header,l_gfu_format_map_h -> h_header);
+		(*l_temp_ptr) -> h_srl_no = l_gfu_format_map_h -> h_srl_no;
+		strcpy((*l_temp_ptr) -> h_repeat,l_gfu_format_map_h -> h_repeat);
+		strcpy((*l_temp_ptr) -> h_query,l_gfu_format_map_h -> h_query);
+		/** Added By Sana for GFU Setup [START] **/
+		strcpy((*l_temp_ptr) -> h_maker,l_gfu_format_map_h -> h_maker);
+		strcpy((*l_temp_ptr) -> h_maker_dt,l_gfu_format_map_h -> h_maker_dt);
+		strcpy((*l_temp_ptr) -> h_checker,l_gfu_format_map_h -> h_checker);
+		strcpy((*l_temp_ptr) -> h_checker_dt,l_gfu_format_map_h -> h_checker_dt);
+		strcpy((*l_temp_ptr) -> h_status,l_gfu_format_map_h -> h_status);
+		strcpy((*l_temp_ptr) -> h_ref_no,l_gfu_format_map_h -> h_ref_no);
+		strcpy((*l_temp_ptr) -> h_function_id,l_gfu_format_map_h -> h_function_id);
+		/** Added By Sana for GFU Setup [END] **/
+		
+		(*l_temp_ptr) -> h_next = (GFU_FORMAT_MAP_STRUCT_LST *)NULL;
+		l_cnt++;
+
+
+	}
+	Alert("After Fetch of cursor");
+	fflush(stdout);
+	EXEC SQL CLOSE l_cur_format_map;
+	IS_ANY_ORA_ERROR
+	if(!l_cnt)APL_GOBACK_FAIL
+	APL_GOBACK_SUCCESS
+RETURN_FAILURE:
+	
+	APL_FREE(l_gfu_format_map_h);
+	APL_FREE(l_gfu_format_map_i);
+	 APL_FUNCTION_RET_FAILURE(l_logfile)
+
+RETURN_SUCCESS:
+
+	APL_FREE(l_gfu_format_map_h);
+	APL_FREE(l_gfu_format_map_i);
+	APL_FUNCTION_RET_SUCCESS(l_logfile)
+}
+
+
+
+/*********************************************************************************************************
+ *                                                                                                       *
+ * Function Name         : GF_Chk_Header_Format															 *
+ *                                                                                                       *
+ * Description           : This Function is used to Validate Against header							     *
+ *                                                                                                       *
+ * Parameter                           Type                             Mode   Description               *
+ * ------------                        --------                         -----  ---------------           *
+ *																										 *
+ * p_gfu_file_map_h					   GFU_FILE_MAP_STRUCT_H *			I	   Conatins Details about the file *
+ *																										 *
+ * p_gfu_format_map_lst				   GFU_FORMAT_MAP_STRUCT_LST **		I      Format List				 *
+ *																										 *
+ * p_gfu_header_map_lst				   GFU_FORMAT_MAP_STRUCT_LST **		I      Header List				 *
+ *																									     *
+ * l_debug_info_ptr                    DEBUG_INFO_STRUCT_H **           I      Debug Info Structure      *
+ *                                                                                                       *
+ * Return Values        :                                                                                *
+ *                                                                                                       *
+ *  APL_SUCCESS  - SUCCESS                                                                               *
+ *  APL_FAILURE  - FAILURE                                                                               *
+ *                                                                                                       *
+ ********************************************************************************************************/
+
+int GF_Chk_Header_Format(	GFU_FILE_MAP_STRUCT_H *p_gfu_file_map_h,
+							GFU_FORMAT_MAP_STRUCT_LST **p_gfu_format_map_lst,
+							GFU_FORMAT_MAP_STRUCT_LST **p_gfu_header_map_lst,
+							DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	GFU_FORMAT_MAP_STRUCT_LST **l_format = p_gfu_format_map_lst;
+	GFU_FORMAT_MAP_STRUCT_LST **l_header;
+APL_FUNCTION_ENTER(l_logfile)
+
+
+	if(!strcmp(p_gfu_file_map_h -> h_check_header,"N"))APL_GOBACK_SUCCESS
+	while((*l_format))
+	{
+		l_header = p_gfu_header_map_lst;
+		while((*l_header))
+		{
+			if(!strcmp((*l_header) -> h_header,(*l_format) -> h_header) && strcmp((*l_format) -> h_field_type,"STATIC") && (*((*l_format) -> h_field_type) != GF_DELIM_CHAR_HASH))
+			{
+				if(strcmp((*l_header) -> h_start,(*l_format) -> h_start))
+				{
+BT_IF_DEBUG
+					fprintf(l_logfile,"Header Format Not Matching |%s| |%s| On Start\n",(*l_header) -> h_start,(*l_format) -> h_start);
+					APL_GOBACK_FAIL
+				}
+				if(strcmp((*l_header) -> h_end,(*l_format) -> h_end))
+				{
+BT_IF_DEBUG
+					fprintf(l_logfile,"Header Format Not Matching |%s| |%s| On End\n",(*l_header) -> h_end,(*l_format) -> h_end);
+					APL_GOBACK_FAIL
+				}
+			}
+			printf("Matching |%s| |%s|\n",(*l_header) -> h_header,(*l_format) -> h_header);
+			l_header = &((*l_header)->h_next);
+			
+		}
+		l_format = &((*l_format)->h_next);
+	}
+APL_GOBACK_SUCCESS
+RETURN_FAILURE:
+	
+	 APL_FUNCTION_RET_FAILURE(l_logfile)
+
+RETURN_SUCCESS:
+	APL_FUNCTION_RET_SUCCESS(l_logfile)
+}
+
+
+
+/*********************************************************************************************************
+ *                                                                                                       *
+ * Function Name         : GFU_Rtv_File																     *
+ *                                                                                                       *
+ * Description           : This Function is used parse parametr string, get file pointer				 *
+ *                                                                                                       *
+ * Parameter                           Type                             Mode   Description               *
+ * ------------                        --------                         -----  ---------------           *
+ *																										 *
+ * p_gfu_file_map_h					   GFU_FILE_MAP_STRUCT_H *			I	   Conatins Details about the file *
+ *																										 *
+ * p_file							   FILE	**							O      File pointer returned	 *
+ *																									     *
+ * l_debug_info_ptr                    DEBUG_INFO_STRUCT_H **           I      Debug Info Structure      *
+ *                                                                                                       *
+ * Return Values        :                                                                                *
+ *                                                                                                       *
+ *  APL_SUCCESS  - SUCCESS                                                                               *
+ *  APL_FAILURE  - FAILURE                                                                               *
+ *                                                                                                       *
+ ********************************************************************************************************/
+
+int GFU_Rtv_File(	GFU_FILE_MAP_STRUCT_H *p_gfu_file_map_h,
+			FILE **p_file,
+			DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	struct sqlca sqlca;
+	char l_skip_line[GFU_SKIP_LINE_LEN];
+	char l_cfg_filename[GFU_PATH_LEN];
+	char l_param_data[GFU_LINE_LEN];
+	char l_upl_dir[GFU_PATH_LEN];
+	FILE *fp_cfg = (FILE *)NULL;
+	/** Added By Sana for removing NewLine chars start **/
+	char p_remove_junk[1000] = APL_NULL_STRING; 
+	char l_intl_root_path[200] = APL_NULL_STRING; 
+	int sys_retval = 0;
+	memset(p_remove_junk,APL_NULL_CHAR,sizeof(p_remove_junk));
+	memset(l_intl_root_path,APL_NULL_CHAR,sizeof(l_intl_root_path));
+	/** Added By Sana for removing NewLine chars end **/
+
+	memset(l_param_data,APL_NULL_CHAR,sizeof(l_param_data));
+	strcpy(l_param_data,g_param_data);
+
+	strcpy(l_cfg_filename,getenv("INTL_ROOT_PATH"));
+	strcat(l_cfg_filename,"/intl_sun.cfg");
+	APL_FUNCTION_ENTER(l_logfile)
+	fp_cfg = fopen(l_cfg_filename,"r");
+	
+	if(fp_cfg == (FILE *)NULL)
+	{
+BT_IF_DEBUG
+		fprintf(l_logfile, "Config File |%s|\n",l_cfg_filename);
+BT_IF_DEBUG
+		CO_ProcMonitor(l_logfile,"Failed To Open Config File",NULL,NULL);
+		
+		APL_GOBACK_FAIL
+	}
+	
+	CO_Rtv_DataString(l_param_data,"FILE_NAME",p_gfu_file_map_h -> h_file_name);
+	memset(g_file_name,APL_NULL_CHAR,sizeof(g_file_name));
+	strcpy(g_file_name,p_gfu_file_map_h -> h_file_name);
+
+	//Added By Prateek For MCS --START
+        memset(g_uplod_file_name,APL_NULL_CHAR,sizeof(g_uplod_file_name));
+	strcpy(g_uplod_file_name,p_gfu_file_map_h -> h_file_name);
+        //Added By Prateek For MCS --END
+	memset(p_gfu_file_map_h -> h_skip_line,APL_NULL_CHAR,sizeof(p_gfu_file_map_h -> h_skip_line));
+	strcpy(p_gfu_file_map_h -> h_skip_line,GFU_SKIP_LINE_DEL);
+	CO_Rtv_DataString(l_param_data,"SKIP_LINE",l_skip_line);
+	strcat(p_gfu_file_map_h -> h_skip_line,l_skip_line);
+	strcat(p_gfu_file_map_h -> h_skip_line,GFU_SKIP_LINE_DEL);
+	CO_Rtv_DataString(l_param_data,"REFNO",p_gfu_file_map_h -> h_refno);
+	CO_Rtv_DataString(l_param_data,"FILE_TYPE",p_gfu_file_map_h -> h_file_type);
+	CO_Rtv_DataString(l_param_data,"MODULE",p_gfu_file_map_h -> h_module);
+	CO_Rtv_DataString(l_param_data,"DELIM",p_gfu_file_map_h -> h_delimiter);
+	CO_Rtv_DataInt(l_param_data,"HEADER",&(p_gfu_file_map_h -> h_header));
+	
+	CO_Rtv_DataInt(l_param_data,"FORMAT_LINE",&(p_gfu_file_map_h -> h_format_no));
+	CO_Rtv_DataString(l_param_data,"MAKER",p_gfu_file_map_h -> h_maker);
+	CO_Rtv_DataString(l_param_data,"CHECKHEADER",p_gfu_file_map_h -> h_check_header);
+	CO_Rtv_DataString(l_param_data,"MAKERDT",p_gfu_file_map_h -> h_maker_dt);
+	CO_Rtv_DataString(l_param_data,"ACCESS_STAMP",p_gfu_file_map_h -> h_access_stamp);
+	CO_Rtv_DataString(l_param_data,"VENDOR",p_gfu_file_map_h -> h_vendor);
+	/*if ( CO_ReadToken(fp_cfg,"INTL_UPL_PATH",l_upl_dir,l_debug_info_ptr) == APL_FAILURE) */ /*Commneted By Pavan For File Open Issue_CS0181192*/
+	if ( CO_ReadToken(fp_cfg,"INTL_UPLOAD_PATH",l_upl_dir,l_debug_info_ptr) == APL_FAILURE)
+		APL_GOBACK_FAIL
+
+	strcat(l_upl_dir,p_gfu_file_map_h -> h_file_name);
+	BT_IF_DEBUG
+	fprintf(l_logfile, "File |%s||%s|\n",l_upl_dir,p_gfu_file_map_h -> h_file_type);
+
+	/*** Added By Sana for Removing Newline Chars  START ***/
+	strcpy(l_intl_root_path,getenv("INTL_ROOT_PATH"));
+
+	printf("INTL_ROOT_PATH : |%s|\n",l_intl_root_path);
+	printf("File Name : |%s| \n",l_upl_dir);
+
+	sprintf(p_remove_junk,"%sRemoveNewLineChars.ksh %s",l_intl_root_path,l_upl_dir);
+
+	printf("p_remove_junk :|%s|\n",p_remove_junk);
+
+	fflush(stdout);
+
+	sys_retval=system(p_remove_junk);
+
+	if(sys_retval == 0)
+		printf("RemoveNewLineChars.ksh Executed Successfully ");
+	else
+		printf("RemoveNewLineChars.ksh Executed UnSuccessfully ");
+
+	fflush(stdout);
+	/*** Added By Sana for Removing Newline Chars END ***/
+
+	if(p_file == (FILE **)NULL)APL_GOBACK_SUCCESS;
+
+	if(!strcmp(p_gfu_file_map_h -> h_file_type,GFU_BINARY_FILE) )
+	{
+		*p_file = fopen(l_upl_dir,"rb");
+		l_bk_file = fopen(l_upl_dir,"rb");
+	}
+	else if(!strcmp(p_gfu_file_map_h -> h_file_type,GFU_ASCII_FILE) || !strcmp(p_gfu_file_map_h -> h_file_type,"P"))
+	{
+		*p_file = fopen(l_upl_dir,"r");
+		l_bk_file = fopen(l_upl_dir,"r");
+	}
+
+	if (*p_file == (FILE *)NULL || l_bk_file == (FILE *)NULL)
+	{
+		
+		printf("Failed To Open file|%s|\n",p_gfu_file_map_h -> h_file_name);
+		APL_GOBACK_FAIL
+	}
+	APL_GOBACK_SUCCESS
+
+RETURN_FAILURE:
+	if(fp_cfg != (FILE *)NULL)fclose(fp_cfg);
+	APL_FUNCTION_RET_FAILURE(l_logfile)
+
+RETURN_SUCCESS:
+	if(fp_cfg != (FILE *)NULL)fclose(fp_cfg);
+	APL_FUNCTION_RET_SUCCESS(l_logfile)
+
+}
+
+
+
+/*********************************************************************************************************
+ *                                                                                                       *
+ * Function Name         : GFU_Rtv_ReqMap																 *
+ *                                                                                                       *
+ * Description           : This Function is used to retrive request details, wrapper,sp name etc.		 *
+ *                                                                                                       *
+ * Parameter                           Type                             Mode   Description               *
+ * ------------                        --------                         -----  ---------------           *
+ *																										 *
+ * p_module							   char *							I	   Module name				 *
+ *																										 *
+ * p_gfu_file_map_h					   GFU_REQ_MAP_STRUCT_H *			O	   Request Details			 *
+ *																										 *
+ * l_debug_info_ptr                    DEBUG_INFO_STRUCT_H **           I      Debug Info Structure      *
+ *                                                                                                       *
+ * Return Values        :                                                                                *
+ *                                                                                                       *
+ *  APL_SUCCESS  - SUCCESS                                                                               *
+ *  APL_FAILURE  - FAILURE                                                                               *
+ *                                                                                                       *
+ ********************************************************************************************************/
+
+
+int GFU_Rtv_ReqMap(	char *p_module, 
+					GFU_REQ_MAP_STRUCT_H *p_gfu_req_map_h,
+					DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	struct sqlca sqlca;
+
+	APL_FUNCTION_ENTER(l_logfile)
+	GFU_REQ_MAP_STRUCT_I *l_gfu_req_map_i = (GFU_REQ_MAP_STRUCT_I *)NULL;
+	l_gfu_req_map_i = (GFU_REQ_MAP_STRUCT_I *)calloc(1,sizeof(GFU_REQ_MAP_STRUCT_I));
+	printf(" Module is |%s|\n",p_module);/*added by mrinal for UAT upload issue*/
+	fflush(stdout);
+        printf("Sqlcode Before:- |%d|\n",sqlca.sqlcode);
+	fflush(stdout);
+	EXEC SQL SELECT GFREQMAP.*
+				INTO :p_gfu_req_map_h:l_gfu_req_map_i
+				FROM GFREQMAP
+				WHERE MODULE = :p_module;
+	printf(" Sqlcode After:- |%d|\n",sqlca.sqlcode);/*added by mrinal for UAT upload issue*/
+	fflush(stdout);
+	IS_ANY_ORA_ERROR
+
+APL_GOBACK_SUCCESS
+RETURN_FAILURE:
+	APL_FREE(l_gfu_req_map_i);
+	 APL_FUNCTION_RET_FAILURE(l_logfile)
+
+RETURN_SUCCESS:
+	APL_FREE(l_gfu_req_map_i);
+	APL_FUNCTION_RET_SUCCESS(l_logfile)
+
+}
+
+
+/*********************************************************************************************************
+ *                                                                                                       *
+ * Function Name         : GFU_Rtv_Env																 *
+ *                                                                                                       *
+ * Description           : This Function is used to get details for environment string					 *
+ *                                                                                                       *
+ * Parameter                           Type                             Mode   Description               *
+ * ------------                        --------                         -----  ---------------           *
+ *																										 *
+ * p_module							   char *							I	   Module Name				 *
+ *																										 *
+ * p_gfu_val_map_lst				   GFU_TOKEN_VAL_STRUCT_LST **		O	   list with details		 *
+ *																									     *
+ * l_debug_info_ptr                    DEBUG_INFO_STRUCT_H **           I      Debug Info Structure      *
+ *                                                                                                       *
+ * Return Values        :                                                                                *
+ *                                                                                                       *
+ *  APL_SUCCESS  - SUCCESS                                                                               *
+ *  APL_FAILURE  - FAILURE                                                                               *
+ *                                                                                                       *
+ ********************************************************************************************************/
+
+
+
+
+int GFU_Rtv_Env(	char *p_module,
+					GFU_TOKEN_VAL_STRUCT_LST **p_gfu_val_map_lst,
+					DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	struct sqlca sqlca;
+	GFU_TOKEN_VAL_STRUCT_LST **l_temp_ptr = p_gfu_val_map_lst;
+	GFU_ENV_MAP_STRUCT_I		*l_gfu_env_map_i = (GFU_ENV_MAP_STRUCT_I *)NULL;
+	GFU_ENV_MAP_STRUCT_H		*l_gfu_env_map_h =(GFU_ENV_MAP_STRUCT_H *)NULL;
+
+	APL_FUNCTION_ENTER(l_logfile)
+         printf("Sqlcode1 Before:- |%d|\n",sqlca.sqlcode);
+	fflush(stdout);
+	sqlca.sqlcode=0;/*added by mrinal for UAT upload issue*/
+	EXEC SQL DECLARE l_cur_env_map CURSOR FOR
+			SELECT GFENVMAP.*
+			FROM GFENVMAP
+			WHERE MODULE = :p_module;
+	printf(" Sqlcode After :- |%d|\n",sqlca.sqlcode);/*added by mrinal for UAT upload issue*/
+	fflush(stdout);
+	IS_ANY_ORA_ERROR
+
+	EXEC SQL OPEN l_cur_env_map;
+	IS_ANY_ORA_ERROR
+
+	l_gfu_env_map_h = (GFU_ENV_MAP_STRUCT_H *)calloc(1,sizeof(GFU_ENV_MAP_STRUCT_H));
+	l_gfu_env_map_i = (GFU_ENV_MAP_STRUCT_I *)calloc(1,sizeof(GFU_ENV_MAP_STRUCT_I));	
+
+	for(;;)
+	{
+		memset(l_gfu_env_map_h,NULL,sizeof(l_gfu_env_map_h));
+		memset(l_gfu_env_map_i,NULL,sizeof(l_gfu_env_map_i));
+		
+		EXEC SQL FETCH l_cur_env_map
+					INTO :l_gfu_env_map_h:l_gfu_env_map_i;
+
+
+		if(sqlca.sqlcode == 1403)break;
+		IS_ANY_ORA_ERROR
+
+		while((*l_temp_ptr) != (GFU_TOKEN_VAL_STRUCT_LST *)NULL)
+		{
+			l_temp_ptr = &((*l_temp_ptr)->h_next);
+		}
+		if(((*l_temp_ptr) = (GFU_TOKEN_VAL_STRUCT_LST *)calloc(1,sizeof(GFU_TOKEN_VAL_STRUCT_LST))) == NULL)
+		{
+			APL_GOBACK_FAIL
+		}
+		strcpy((*l_temp_ptr) -> h_token, l_gfu_env_map_h -> h_token);
+		Remove_Last_Char(l_gfu_env_map_h -> h_value,GF_DELIM_STR_SPACE,l_debug_info_ptr);
+                /* Retro done by Sana for SIT Issue FIX */
+	        /*Changed done by Bageshri - SIT Defects -  AB_002_2.5_COD - 22022012*/
+                if((!strcmp(l_gfu_env_map_h -> h_token,"USER")) && (!strcmp(l_gfu_env_map_h -> h_value,"USER")))
+			strcpy((*l_temp_ptr) -> h_value, g_env_user);
+		else
+		strcpy((*l_temp_ptr) -> h_value, l_gfu_env_map_h -> h_value);
+	}
+	EXEC SQL CLOSE l_cur_env_map;
+APL_GOBACK_SUCCESS
+RETURN_FAILURE:
+	APL_FREE(l_gfu_env_map_h);
+	APL_FREE(l_gfu_env_map_i);
+	 APL_FUNCTION_RET_FAILURE(l_logfile)
+
+RETURN_SUCCESS:
+	APL_FREE(l_gfu_env_map_h);
+	APL_FREE(l_gfu_env_map_i);
+	APL_FUNCTION_RET_SUCCESS(l_logfile)
+}
+
+
+/*********************************************************************************************************
+ *                                                                                                       *
+ * Function Name         : GFU_Process_File																 *
+ *                                                                                                       *
+ * Description           : This Function is used to Process The file									 *
+ *                                                                                                       *
+ * Parameter                           Type                             Mode   Description               *
+ * ------------                        --------                         -----  ---------------           *
+ *																										 *
+ * p_process_name					   char *							I      Name of the process		 *
+ *																									     *
+ * p_process_key					   char *							I      Key of the Process		 *
+ *																										 *
+ * p_start_date						   char *							I	   Started Date				 *
+ *																										 *
+ * l_debug_info_ptr                    DEBUG_INFO_STRUCT_H **           I      Debug Info Structure      *
+ *                                                                                                       *
+ * Return Values        :                                                                                *
+ *                                                                                                       *
+ *  APL_SUCCESS  - SUCCESS                                                                               *
+ *  APL_FAILURE  - FAILURE                                                                               *
+ *                                                                                                       *
+ ********************************************************************************************************/
+
+
+
+
+int GFU_Process_File(	char *p_process_name,
+			char *p_process_key,
+			char *p_start_date,
+			char *p_user,
+			FILE *p_file,
+			DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	/**FILE *l_file = p_file;**/
+	/**GFU_FILE_MAP_STRUCT_H *g_gfu_file_map_h = (GFU_FILE_MAP_STRUCT_H *)NULL;**/
+	/**GFU_FILE_LST **l_file_lst = (GFU_FILE_LST **)NULL;**/
+	GFU_VAL_MAP_STRUCT_LST **l_gfu_val_map_lst = (GFU_VAL_MAP_STRUCT_LST **)NULL;
+	GFU_REQ_MAP_STRUCT_H *l_gfu_req_map_h = (GFU_REQ_MAP_STRUCT_H *)NULL;
+	GFU_TOKEN_VAL_STRUCT_LST **l_gfu_env_map_lst = (GFU_TOKEN_VAL_STRUCT_LST **)NULL;
+
+		
+	/** Free............... **/
+	GFU_VAL_MAP_STRUCT_LST *l_gfu_val_map_free = (GFU_VAL_MAP_STRUCT_LST *)NULL;
+	GFU_TOKEN_VAL_STRUCT_LST *l_gfu_env_map_free = (GFU_TOKEN_VAL_STRUCT_LST *)NULL;
+	GFU_FILE_LST *l_file_free = (GFU_FILE_LST *)NULL;
+	GFU_TOKEN_VAL_STRUCT_LST *l_token_val_free = (GFU_TOKEN_VAL_STRUCT_LST *)NULL;
+
+	/** Free............... **/
+
+	/**g_gfu_file_map_h = (GFU_FILE_MAP_STRUCT_H *)calloc(1,sizeof(GFU_FILE_MAP_STRUCT_H));**/
+	/**l_file_lst = (GFU_FILE_LST **)calloc(1,sizeof(GFU_FILE_LST *));	**/
+	l_gfu_val_map_lst = (GFU_VAL_MAP_STRUCT_LST **)calloc(1,sizeof(GFU_VAL_MAP_STRUCT_LST *));
+	l_gfu_env_map_lst = (GFU_TOKEN_VAL_STRUCT_LST **)calloc(1,sizeof(GFU_TOKEN_VAL_STRUCT_LST *));
+	l_gfu_req_map_h = (GFU_REQ_MAP_STRUCT_H *)calloc(1,sizeof(GFU_REQ_MAP_STRUCT_H));
+
+	APL_FUNCTION_ENTER(l_logfile)
+
+	/**if(APL_FAILURE == GFU_Rtv_File(	g_gfu_file_map_h,
+					&l_file,
+					l_debug_info_ptr))
+	{
+		printf("Failed in GFU_Rtv_File\n");
+		APL_GOBACK_FAIL
+	}*/
+	if(APL_FAILURE == GFU_Rtv_ReqMap(	g_gfu_file_map_h -> h_module,
+						l_gfu_req_map_h,
+						l_debug_info_ptr))
+	{
+		printf("Failed in GFU_Rtv_ReqMap\n");
+		APL_GOBACK_FAIL
+	}
+	if(APL_FAILURE == GFU_Rtv_Env(	g_gfu_file_map_h -> h_module,
+					l_gfu_env_map_lst,
+						l_debug_info_ptr))
+	{
+		printf("Failed in GFU_Rtv_Env\n");
+		APL_GOBACK_FAIL
+	}
+	if(APL_FAILURE == GFU_Conv_Lnk_Lst(	p_file,
+						p_process_name,
+						p_process_key,
+						p_start_date,
+						g_gfu_file_map_h,
+					l_gfu_env_map_lst,
+						l_gfu_val_map_lst,
+						l_gfu_req_map_h,
+					l_debug_info_ptr))
+	{
+		printf("Failed in GFU_Conv_Lnk_Lst\n");
+		APL_GOBACK_FAIL
+	}
+
+
+
+
+	/**if(APL_FAILURE ==  GFU_Process_Lst(l_file_lst,
+					p_process_name,
+					p_process_key,
+					p_start_date,
+					l_gfu_val_map_lst,
+					l_gfu_req_map_h,
+					l_gfu_env_map_lst,
+					l_debug_info_ptr))
+	{
+		printf("Failed in GFU_Process_Lst\n");
+		APL_GOBACK_FAIL
+	}
+	**/
+
+	if( GFU_Summ_Rpt( p_start_date,
+							p_process_name,
+							p_user,
+							l_userfile,
+							l_logfile,
+							l_skipped_file,
+							l_format_file,
+							g_gfu_file_map_h -> h_module,
+							l_debug_info_ptr) == APL_FAILURE)
+	{
+		CO_ProcMonitor(l_logfile,"Failed in GFU_Summ_Rpt",NULL,NULL);
+		APL_GOBACK_FAIL
+	}	
+
+APL_GOBACK_SUCCESS
+RETURN_FAILURE:
+	/**if(l_file != (FILE *)NULL)fclose(l_file);**/
+	
+	
+	/**APL_FREE(g_gfu_file_map_h)**/
+	APL_FREE(l_gfu_req_map_h)
+
+        while(*l_gfu_val_map_lst)
+        {
+                l_gfu_val_map_free = (*l_gfu_val_map_lst) -> h_next;
+                APL_FREE((*l_gfu_val_map_lst));
+                (*l_gfu_val_map_lst) = l_gfu_val_map_free;
+        }
+
+        while(*l_gfu_env_map_lst)
+        {
+                l_gfu_env_map_free = (*l_gfu_env_map_lst) -> h_next;
+                APL_FREE((*l_gfu_env_map_lst));
+                (*l_gfu_env_map_lst) = l_gfu_env_map_free;
+        }
+/**
+		while(*l_file_lst)
+        {
+                l_file_free = (*l_file_lst) -> h_next;
+				
+				while((*((*l_file_lst) -> h_token_val)))
+				{
+					l_token_val_free = (*((*l_file_lst) -> h_token_val)) -> h_next;
+					APL_FREE((*((*l_file_lst) -> h_token_val)))
+					(*((*l_file_lst) -> h_token_val)) =  l_token_val_free;
+				}
+                APL_FREE((*l_file_lst));
+                (*l_file_lst) = l_file_free;
+        }
+	
+**/
+
+	 APL_FUNCTION_RET_FAILURE(l_logfile)
+
+RETURN_SUCCESS:
+	/**if(l_file != (FILE *)NULL)fclose(l_file);**/
+
+/**	APL_FREE(l_gfu_file_map_h)**/
+  	APL_FREE(l_gfu_req_map_h)
+        while(*l_gfu_val_map_lst)
+        {
+                l_gfu_val_map_free = (*l_gfu_val_map_lst) -> h_next;
+                APL_FREE((*l_gfu_val_map_lst));
+                (*l_gfu_val_map_lst) = l_gfu_val_map_free;
+        }
+
+        while(*l_gfu_env_map_lst)
+        {
+                l_gfu_env_map_free = (*l_gfu_env_map_lst) -> h_next;
+                APL_FREE((*l_gfu_env_map_lst));
+                (*l_gfu_env_map_lst) = l_gfu_env_map_free;
+        }
+/**
+		while(*l_file_lst)
+        {
+                l_file_free = (*l_file_lst) -> h_next;
+				
+				while((*((*l_file_lst) -> h_token_val)))
+				{
+					l_token_val_free = (*((*l_file_lst) -> h_token_val)) -> h_next;
+					APL_FREE((*((*l_file_lst) -> h_token_val)))
+					(*((*l_file_lst) -> h_token_val)) =  l_token_val_free;
+				}
+                APL_FREE((*l_file_lst));
+                (*l_file_lst) = l_file_free;
+        }
+**/
+	APL_FUNCTION_RET_SUCCESS(l_logfile)
+}
+
+
+
+
+int main(int argc,char **argv)
+{
+	struct sqlca sqlca;
+	int i = 0;
+
+         /* Added by kotubabu  for Linux Migration-Start*/
+        #ifdef OS_LINUX
+        l_logfile = APL_OUT_FILE;
+        l_skipped_file= APL_OUT_FILE;
+        l_userfile= APL_OUT_FILE;
+        l_format_file = APL_OUT_FILE;
+        l_bk_file = APL_OUT_FILE;
+        l_faillog = APL_OUT_FILE;
+         
+        #endif
+		/* Added by kotubabu  for Linux Migration-End*/
+		
+	FILE    *l_init_file            = (FILE *)NULL;
+	char l_report_path[300] = APL_NULL_STRING;
+	char l_zip_path[5000]				= APL_NULL_STRING;
+	char l_zip_name[100]= APL_NULL_STRING;
+	char l_sys_date[APL_DATE_LEN]= APL_NULL_STRING;
+	int l_retval=0;
+
+	FILE *chr_finifile;
+	/**GFU_FILE_MAP_STRUCT_H l_gfu_file_map_h;**/
+	char chr_inifile[150],chr_l_uname[APL_USERID_LEN],chr_l_passwd[APL_PASSWD_LEN],chr_custody_id_b[APL_USERID_LEN],chr_buffer[KEY_LENGTH];
+	DEBUG_INFO_STRUCT_H	**l_debug_info_ptr = (DEBUG_INFO_STRUCT_H **)NULL;
+	INTL_ENV_DATA_STRUCT_H  l_intl_envdatastruct_h;
+	char l_rep_name[14]  = APL_NULL_STRING;
+	FILE *l_file = (FILE *)NULL;
+	char l_userfile_name[GFU_PATH_LEN]=APL_NULL_STRING;
+	char g_upload_date[APL_DATE_LEN]= APL_NULL_STRING;
+	char g_upload_exch[4]= APL_NULL_STRING;
+
+        /* ADDED BY AMISH -- 15/05/2007 - START */
+		int l_filelinkinfo = 0;
+		char l_fcode[5] = APL_NULL_STRING;
+		char l_upload_date[APL_DATE_LEN] = APL_NULL_STRING;
+		int l_new_filelink = 0;
+		char l_new_filename[101] = APL_NULL_STRING;
+		/* ADDED BY AMISH -- 15/05/2007 - END */
+	APL_FUNCTION_ENTER(APL_OUT_FILE)
+	l_debug_info_ptr = (DEBUG_INFO_STRUCT_H	**)calloc(1,sizeof(DEBUG_INFO_STRUCT_H	*));
+
+	fprintf(APL_OUT_FILE,"\n\n\n**********************Enters the Great GFU************************\n");
+	MAIN_ARG
+
+
+
+	memset(g_param_data,APL_NULL_CHAR,sizeof(g_param_data));
+	strcpy(g_param_data,argv[9]);
+
+	/* Retro By Sana for Audit Trail start */
+	/* PEG - Auto Upload Changes - 27-Jul-2009 - NAREN - Start  - Retro for ISHB - 5207 */
+    memset(g_env_user, APL_NULL_CHAR, 16);
+    strcpy(g_env_user, argv[3]);
+    /* PEG - Auto Upload Changes - 27-Jul-2009 - NAREN - End - Retro for ISHB - 5207  */
+	/* Retro By Sana for Audit Trail end */
+
+	   memset(chr_inifile,APL_NULL_CHAR,150);
+   memset(chr_buffer,APL_NULL_CHAR,KEY_LENGTH);
+   memset(chr_l_uname,APL_NULL_CHAR,40);
+   memset(chr_l_passwd,APL_NULL_CHAR,40);
+   memset(l_report_path,APL_NULL_CHAR,300);
+   memset(l_zip_path,APL_NULL_CHAR,sizeof(l_zip_path));
+
+   strcpy(chr_inifile,getenv("INTL_ROOT_PATH"));
+   strcat(chr_inifile,"/intl_sun.cfg");
+     fflush(stdout);
+   if ( (chr_finifile = fopen(chr_inifile,"r") ) == NULL)
+          APL_GOBACK_FAIL;
+    fflush(stdout);
+	strcpy(g_sys_date,argv[2]);
+
+/*
+	 *    if(APL_FAILURE == CO_Get_DBConnect(l_debug_info_ptr))
+	 *       {
+	 *             CO_ProcMonitor(APL_OUT_FILE,"Failed in CO_Get_DBConnect",NULL,NULL);
+	 *                   APL_GOBACK_FAIL
+	 *                      }
+	 *                      */
+
+	   APL_FETCH_DB_LOGIN_DETAILS(chr_finifile, chr_custody_id_b, chr_l_uname, chr_l_passwd , APL_OUT_FILE , l_debug_info_ptr)
+			   EXEC SQL CONNECT :chr_l_uname IDENTIFIED BY :chr_l_passwd;
+
+	g_gfu_file_map_h = (GFU_FILE_MAP_STRUCT_H *)calloc(1,sizeof(GFU_FILE_MAP_STRUCT_H));
+
+	if( GFU_Rtv_File( g_gfu_file_map_h,
+				&l_file,
+				l_debug_info_ptr) == APL_FAILURE)
+	{
+		APL_GOBACK_FAIL
+	}
+
+	strcpy(l_rep_name,"GF_");
+	strncat(l_rep_name,g_gfu_file_map_h -> h_refno,10);
+	strcat(l_rep_name,APL_NULL_STRING);
+	l_rep_name[14] = APL_NULL_CHAR;
+	if ( CO_Rtv_RptFileName(l_rep_name,
+                                "Technical Log",
+                                100,
+                                argv[5],
+                                argv,
+                                &l_logfile,
+                                l_debug_info_ptr) == APL_FAILURE)
+       {
+               CO_ProcMonitor(l_logfile,"Failed in CO_Rtv_RptFileName",NULL,NULL);
+	       APL_GOBACK_FAIL
+       }
+
+	sleep(1);
+	if ( CO_Rtv_RptFileName(l_rep_name,
+                                "Skipped/Error Lines",
+                                500,
+                                argv[5],
+                                argv,
+                                &l_skipped_file,
+                                l_debug_info_ptr) == APL_FAILURE)
+       {
+               CO_ProcMonitor(l_logfile,"Failed in CO_Rtv_RptFileName",NULL,NULL);
+	       APL_GOBACK_FAIL
+       }
+	sleep(1);
+	if ( CO_Rtv_RptFileName(l_rep_name,
+                                "User Log",
+                                500,
+                                argv[5],
+                                argv,
+                                &l_userfile,
+                                l_debug_info_ptr) == APL_FAILURE)
+       {
+               CO_ProcMonitor(l_logfile,"Failed in CO_Rtv_RptFileName",NULL,NULL);
+	       APL_GOBACK_FAIL
+       }
+BT_IF_DEBUG
+	CO_ProcMonitor(l_userfile,"Processing Started",NULL,NULL);
+BT_IF_DEBUG
+       fprintf(l_userfile,"%s\t%s\t%8s\t%s\n","LINE","SKIPPED","STATUS","REASON");
+	/*	fprintf(l_userfile,"%s\t%s\t%s\t%s\t%s\t%s\n","LINE","SKIPPED","TOKEN","VALUE","STATUS","REASON");*/
+	sleep(1);
+
+	
+	if ( CO_Rtv_RptFileName(l_rep_name,
+                                "Format File",
+                                100,
+                                argv[5],
+                                argv,
+                                &l_format_file,
+                                l_debug_info_ptr) == APL_FAILURE)
+       {
+               CO_ProcMonitor(l_logfile,"Failed in CO_Rtv_RptFileName",NULL,NULL);
+	       APL_GOBACK_FAIL
+       }
+BT_IF_DEBUG
+	fprintf(l_format_file,"\t%s\t%s\t%s\t%s\n","HEADER","SEQ","START","END");
+BT_IF_DEBUG
+	CO_ProcMonitor(l_logfile,"Got the Report",NULL,NULL);
+
+BT_IF_DEBUG
+	CO_ProcMonitor(APL_OUT_FILE,"Got The Connection !!!",NULL,NULL);
+	if(APL_FAILURE == BT_Status_Lock(	argv[0],
+			argv[1],
+			argv[2],
+			l_debug_info_ptr))
+	{
+		
+		APL_GOBACK_FAIL
+	}
+
+
+	for( i = 0; i<argc ; i++)
+	{
+		fprintf(APL_OUT_FILE,"Arguement %d |%s|\n",i,argv[i]);
+	}
+   if ( CO_RtvSysParams(l_debug_info_ptr) == APL_FAILURE)
+	      APL_GOBACK_FAIL
+        /* AmitB KOTAK_UAT I-SolveID:351 */
+   	if (APL_FAILURE == CO_ReadToken(chr_finifile,"INTL_REP_PATH",l_report_path,l_debug_info_ptr))
+                {
+						CO_ProcMonitor(l_logfile,"Error :\'INTL_REP_PATH \' not set in intl_sun.cfg File \n",NULL,NULL);
+                        APL_GOBACK_FAIL
+                }
+	fprintf(APL_OUT_FILE,"\n l_report_path=|%s| \n",l_report_path);
+	if(CO_Rtv_FileNm_From_Pointer(	l_logfile,
+												l_report_path,
+												l_userfile_name) == APL_FAILURE)
+	{
+		 APL_GOBACK_FAIL
+	}	
+	printf("Name |%s| \n",l_userfile_name);
+
+	strcpy(l_zip_path,"gzip -f ");
+	strcat(l_zip_path,l_report_path);
+	strcat(l_zip_path,l_userfile_name);
+	strcpy(l_zip_name,l_userfile_name);
+	strcat(l_zip_name,".gz");
+	strcpy(l_sys_date,argv[2]);
+	/*to populate system date with 12:00:00 in date fields for upload process changes done by shrinath start 17_Apr_2020*/
+	EXEC SQL SELECT sys_date INTO
+	:g_sys_date_time
+	FROM PRO_SYS_DATE;
+	IS_ANY_ORA_ERROR
+	/*to populate system date with 12:00:00 in date fields for upload process changes done by shrinath ends 17_Apr_2020*/
+
+printf("REFNO |%s|\n\n",g_gfu_file_map_h->h_refno);
+	/*	Margin Status Update by Rohit	*/
+	if((!strcmp(g_gfu_file_map_h->h_refno,"VARELM_UPLOAD_NSE"))||(!strcmp(g_gfu_file_map_h->h_refno,"VARELM_UPLOAD_BSE")))
+	{
+		printf("Margin Upload Status Update\n");
+
+		EXEC SQL SELECT to_char(sys_date,'dd/mm/yyyy')||' '||to_char(sysdate,'hh24')||':00:00' INTO
+		:g_upload_date	
+		FROM PRO_SYS_DATE;
+		IS_ANY_ORA_ERROR
+	
+		if (!strcmp(g_gfu_file_map_h->h_refno,"VARELM_UPLOAD_NSE"))
+			strcpy(g_upload_exch,"NSE");
+		else
+			strcpy(g_upload_exch,"BSE");
+	
+		printf("SYS DATE |%s| MAKER |%s| File Name |%s|\n\n",g_upload_date,argv[3],g_gfu_file_map_h -> h_file_name);
+
+		EXEC SQL INSERT INTO MARGIN_STATUS VALUES (:g_upload_exch,:g_gfu_file_map_h -> h_file_name,:g_upload_date,:argv[3],'P','P');
+	
+		printf("VARELM_NSE Sqlcode |%d|\n\n",sqlca.sqlcode);
+		IS_ANY_ORA_ERROR
+	}
+
+	  
+	if(APL_FAILURE == GFU_Process_File( argv[0],argv[1],argv[2],argv[5] ,l_file,l_debug_info_ptr))
+	{
+               CO_ProcMonitor(l_logfile,"Failed in GFU_Process_File",NULL,NULL);
+	       APL_GOBACK_FAIL
+	}
+/* Retro by Sana from HDFC for Exch Pool Dump Upload -- Start */
+/* added by amish -- 15/05/2007 start */
+
+	printf("\n reference number is |%s| \n",g_gfu_file_map_h->h_refno);
+	printf("\n file name is |%s| \n",g_gfu_file_map_h -> h_file_name);
+    /* Charuta: HB_5879 Added MCS condition to  IF */ /*PMS ref no added by swathi V for Kotak Offmarket Deal upload 20042015*/				
+	if(!strcmp(g_gfu_file_map_h->h_refno,"POOL_ACC_NSE") || !strcmp(g_gfu_file_map_h->h_refno,"POOL_ACC_BSE_NORMAL") || !strcmp(g_gfu_file_map_h->h_refno,"POOL_ACC_BSE_AUCTION") || !strcmp(g_gfu_file_map_h->h_refno,"POOL_ACC_MCS") || !strcmp(g_gfu_file_map_h->h_refno,"DL_PMS_ALLOC"))
+	{
+		//strcpy(l_new_filename,g_gfu_file_map_h->h_file_name);
+                 Alert("Inside file name checkk");
+                    //To skip this check for PMS Offmarket deal upload
+                     if(strcmp(g_gfu_file_map_h->h_refno,"DL_PMS_ALLOC")) 	
+                      { 
+		EXEC SQL SELECT FILELINKINFO,F_CODE,UPLD_DATE 
+			INTO :l_filelinkinfo,:l_fcode,:l_upload_date
+			FROM DL_ORD_SUMM
+			WHERE 
+			FILE_NAME = :g_gfu_file_map_h->h_file_name;
+
+			IS_ANY_ORA_ERROR
+
+		printf("\n before insering new record in dl_ord_summ\n");
+		printf("\n filelink info - |%d| , fcode- |%s| , upload date - |%s|\n",l_filelinkinfo,l_fcode,l_upload_date);
+		
+		
+	//	EXEC SQL SELECT MAX(FILELINKINFO) + 1 INTO :l_new_filelink from DL_ORD_SUMM;
+	/* Commented above SELECT and added below SELECT to retrive new Sequence number -- for issue log 848 done by uday*/
+		
+		EXEC SQL SELECT exch_ord_seq.nextval INTO :l_new_filelink FROM DUAL;		
+	
+		IS_ANY_ORA_ERROR
+			
+		strcpy(l_new_filename,g_gfu_file_map_h->h_file_name);
+		strcat(l_new_filename,"_C");
+                }
+               
+                // to assign value to fcode for PMS deal offmarket upload 20042015 - start
+                if(!strcmp(g_gfu_file_map_h->h_refno,"DL_PMS_ALLOC"))         
+                {
+                     Alert("inside PMS reff");  
+                      int hvCount = 0;
+                      EXEC SQL SELECT count(*) into :hvCount from DL_ORD_SUMM
+                      WHERE FILE_NAME = :g_gfu_file_map_h->h_file_name;
+                      IS_ANY_ORA_ERROR
+   
+                     Alert("hvcount value:|%d|",hvCount);
+                     if(hvCount > 0)
+                     {
+                       CO_ProcMonitor(l_logfile,"File Name With The Same Name Already Exist",NULL,NULL);
+                       APL_GOBACK_FAIL
+                     }
+                     Alert("g_gfu_file_map_h->h_file_name:[%s]",g_gfu_file_map_h->h_file_name);
+                     Alert("g_gfu_file_map_h->h_seq_num:[%d]",g_gfu_file_map_h->h_seq_num);
+
+                      strcpy(l_new_filename,g_gfu_file_map_h->h_file_name);
+                      l_new_filelink = g_gfu_file_map_h->h_seq_num;
+
+                 Alert("assign val to fcode and upload date for PMS ref");
+                 strcpy(l_fcode,"PMS");
+
+                EXEC SQL SELECT to_char(sys_date,'dd/mm/yyyy')||' '||to_char(sysdate,'hh24')||':00:00' INTO
+                :l_upload_date
+                FROM PRO_SYS_DATE;
+                IS_ANY_ORA_ERROR 
+
+                }
+                 // to assign value to fcode for PMS deal offmarket upload 20042015 - ends
+		printf("\n new file name is |%s|\n",l_new_filename);
+		printf("\n new file link is |%d|\n",l_new_filelink);
+		EXEC SQL INSERT INTO DL_ORD_SUMM
+						VALUES( 	:l_new_filename,
+									:l_upload_date,
+									NULL,
+									:l_fcode,
+									:l_new_filelink);
+
+		IS_ANY_ORA_ERROR
+
+                 //To skip this check for PMS Offmarket deal upload
+                if(strcmp(g_gfu_file_map_h->h_refno,"DL_PMS_ALLOC"))
+                      {	
+		EXEC SQL UPDATE DL_POOLACCDMP SET FILEBATCH_NO = :l_new_filelink
+			WHERE FILEBATCH_NO = :l_filelinkinfo
+			AND DEPO_CODE = 'CDSL';
+			
+			IS_ANY_ORA_ERROR
+                        }
+			/*		EXEC SQL SELECT exch_ord_seq.nextval
+						INTO :l_nouse_seq
+						FROM DUAL;
+			
+				IS_ANY_ORA_ERROR
+                         */
+                      /* Comment above SELECT stmt -- for issue log 848 done by uday */
+	}
+/* added by amish -- 15/05/2007 end */
+/* Retro by Sana from HDFC for Exch Pool Dump Upload -- End */
+
+	/*Added by Anjaneyulu for ISKB_1737 - Starts*/
+	if(!strcmp(g_gfu_file_map_h->h_refno,"OT_BILL_ADHC"))
+	{
+		printf("\n Anjaneyulu OT_BILL_ADHC\n");
+		strcpy(l_fcode,"BILL");
+		EXEC SQL SELECT to_char(sys_date,'dd/mm/yyyy')||' '||to_char(sysdate,'hh24')||':00:00' INTO
+                :l_upload_date
+                FROM PRO_SYS_DATE;
+         IS_ANY_ORA_ERROR 
+				
+		EXEC SQL INSERT INTO DL_ORD_SUMM
+						VALUES( 	:g_gfu_file_map_h -> h_file_name,
+									:l_upload_date,
+									NULL,
+									:l_fcode,
+									:g_gfu_file_map_h->h_seq_num);
+			IS_ANY_ORA_ERROR
+		
+	}
+	/*Added by Anjaneyulu for ISKB_1737 - Ends*/
+	
+	/*	Margin Status Update by Rohit	*/
+	if((!strcmp(g_gfu_file_map_h->h_refno,"VARELM_UPLOAD_NSE"))||(!strcmp(g_gfu_file_map_h->h_refno,"VARELM_UPLOAD_BSE")))
+	{
+		printf("VARELM_NSE UPDATE\n");
+
+		EXEC SQL UPDATE MARGIN_STATUS SET MARGIN_STATUS = 'C'
+		WHERE  UPLD_FILENAME = :g_gfu_file_map_h -> h_file_name
+		AND UPLDMARGIN_DATETIME = :g_upload_date;
+
+		printf("Update sqlcode |%d|\n",sqlca.sqlcode);
+		IS_ANY_ORA_ERROR
+	}	
+	/* Added By Sana to Update GN_AUDIT_LOG */
+	IF_COND_EXISTS("GFU","AUDIT_LOG")
+	{
+		if(APL_FAILURE == GFU_UpdAuditLog(argv[0],
+						  argv[3],
+						  g_gfu_file_map_h->h_refno,
+						  g_gfu_file_map_h->h_file_name,
+						  argv[1],
+						  argv[2],
+						  l_debug_info_ptr))
+		{
+			printf("\nFailed To Update Audit Log for GFU\n");
+			fflush(stdout);
+			APL_GOBACK_FAIL
+		}
+	}
+APL_GOBACK_SUCCESS
+RETURN_SUCCESS  :
+
+BT_IF_DEBUG
+	CO_ProcMonitor(l_userfile,"Processing Ended Success",NULL,NULL);
+	APL_CLOSE_FILE(l_logfile);
+	APL_CLOSE_FILE(l_skipped_file);
+	APL_CLOSE_FILE(l_userfile);
+	APL_CLOSE_FILE(l_format_file);
+	APL_CLOSE_FILE(chr_finifile);
+	APL_CLOSE_FILE(l_file);
+	if(l_bk_file!= (FILE *)NULL)fclose(l_bk_file);
+
+       /* AmitB KOTAK_UAT I-SolveID:351 */	
+	EXEC SQL UPDATE PRO_COMMON_REPORT SET REPORT_NAME=:l_zip_name ,
+		LINKTO_FILE=replace(LINKTO_FILE,REPORT_NAME,:l_zip_name)
+		WHERE REPORT_NAME=:l_userfile_name 
+		AND REPORT_DATE=TO_DATE(:l_sys_date,'DD/MM/YYYY HH24:MI:SS');
+	IS_ANY_ORA_ERROR
+	fprintf(APL_OUT_FILE,"Error Updating PRO_COMMON_REPORT=|%d|\n",sqlca.sqlcode);
+	printf("Before zipping file Return Val |%d| Zip Path : |%s|",l_retval, l_zip_path);
+	fflush(stdout);
+	l_retval=system(l_zip_path);
+	Alert("After zipping file ... ");
+	fflush(stdout);
+	fprintf(APL_OUT_FILE,"Error Zipping file=|%d|\n",l_retval);
+
+	fprintf(APL_OUT_FILE,"\n**********************Yep! AS Your Wish!!!************************");
+	
+	if(APL_FAILURE == BT_Status_Completed(	argv[0], 
+						argv[1],
+						argv[2],
+						l_debug_info_ptr))
+		APL_GOBACK_FAIL
+
+	EXEC SQL COMMIT;
+	IS_ANY_ORA_ERROR
+        return(0);
+    
+RETURN_FAILURE  :
+BT_IF_DEBUG
+	CO_ProcMonitor(l_userfile,"Processing Ended Failure",NULL,NULL);
+	APL_CLOSE_FILE(l_logfile);
+	APL_CLOSE_FILE(l_skipped_file);
+	APL_CLOSE_FILE(l_userfile);
+	APL_CLOSE_FILE(l_format_file);
+	APL_CLOSE_FILE(l_bk_file);
+	APL_CLOSE_FILE(chr_finifile);
+	APL_CLOSE_FILE(l_file);
+	CO_ProcMonitor(APL_OUT_FILE,"\nOoops! Its Failure!!!\n",l_debug_info_ptr,NULL);
+        /* AmitB KOTAK_UAT I-SolveID:351 */  
+	EXEC SQL UPDATE PRO_COMMON_REPORT SET REPORT_NAME=:l_zip_name ,
+		LINKTO_FILE=replace(LINKTO_FILE,REPORT_NAME,:l_zip_name)
+		WHERE REPORT_NAME=:l_userfile_name 
+		AND REPORT_DATE=TO_DATE(:l_sys_date,'DD/MM/YYYY HH24:MI:SS');
+	IS_ANY_ORA_ERROR
+	fprintf(APL_OUT_FILE,"Error Updating PRO_COMMON_REPORT=|%d|\n",sqlca.sqlcode);
+/*Priyanka - to mark process complete on duplicate order file upload*/
+      if(APL_FAILURE == BT_Status_Completed(  argv[0],
+                                                argv[1],
+                                                argv[2],
+                                                l_debug_info_ptr))
+                APL_GOBACK_FAIL
+
+	l_retval=system(l_zip_path);
+	fprintf(APL_OUT_FILE,"Error Zipping file=|%d|\n",l_retval);
+
+       system("date");
+       EXEC SQL COMMIT;
+       return(-1);
+}
+
+int GFU_UpdAuditLog(char *p_entity_name, char *p_userid, char *p_refno, char *p_file_name, char *p_processkey, char *p_startdate, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	printf("\nInside Audit Log for GFU");
+	fflush(stdout);
+	
+	char l_chr_sysdate_time[APL_DATE_LEN] = APL_NULL_STRING;
+	memset(l_chr_sysdate_time,APL_NULL_CHAR,sizeof(l_chr_sysdate_time));
+
+	char l_param_data[100] = APL_NULL_STRING;
+	memset(l_param_data,APL_NULL_CHAR,sizeof(l_param_data));
+
+	char chr_l_entity_name[20] = APL_NULL_STRING;
+	memset(chr_l_entity_name,APL_NULL_CHAR,sizeof(chr_l_entity_name));
+
+	char chr_l_audit_data[100] = APL_NULL_STRING;
+	memset(chr_l_audit_data,APL_NULL_CHAR,sizeof(chr_l_audit_data));
+
+	char chr_l_data_key[100] = APL_NULL_STRING;
+	memset(chr_l_data_key,APL_NULL_CHAR,sizeof(chr_l_data_key));
+
+	char l_audit_data[100] = APL_NULL_STRING;
+	memset(l_audit_data, APL_NULL_CHAR,sizeof(l_audit_data));
+
+	char l_comments[50] = APL_NULL_STRING;
+	memset(l_comments, APL_NULL_CHAR,sizeof(l_comments));
+
+	char l_line[100] = APL_NULL_STRING;
+	memset(l_line,APL_NULL_CHAR,sizeof(l_line));
+
+	char *l_chr_mode = APL_NULL_STRING;
+	l_chr_mode = (char *) calloc (5,sizeof(char));
+
+	char l_chr_proc_id[10] = APL_NULL_STRING;
+	memset(l_chr_proc_id,APL_NULL_CHAR,sizeof(l_chr_proc_id));
+	short i_proc_id = 0;
+
+	short i_userid = 0;
+	short i_mode = 0;
+	short i_entity_name = 0;
+	short i_key_value = 0;
+	short i_audit_data = 0;
+	short i_log_time = 0;
+	short i_comments = 0;
+	
+	strcpy(chr_l_entity_name,"GF_UPLOAD");
+	strcpy(l_chr_mode,"UPL");
+
+	printf("\n Chk : sana : entity_name = |%s| proc_init = |%s| startdate = |%s|",p_entity_name,p_processkey,p_startdate);
+
+	EXEC SQL SELECT PROC_ID into :l_chr_proc_id:i_proc_id
+			FROM SYS_BATCHPROC
+			WHERE PROCESS_NAME = :p_entity_name
+			AND PROC_INIT = :p_processkey
+			AND STARTDATE = :p_startdate
+			AND STATUS = 'started';
+
+	IS_ANY_ORA_ERROR
+
+	printf("\n Process Id inside GFU is : |%s|",l_chr_proc_id);
+	strcpy(l_comments,l_chr_proc_id);
+
+
+	sprintf(l_line,"%c%s%c%s",DATA_FIELD_SEPRTR,"REFNO",DATA_VALUE_SEPRTR,p_refno);
+	strcat(l_param_data,l_line);
+	memset(l_line,APL_NULL_CHAR,50);
+	sprintf(l_line,"%c%s%c%s%c",DATA_FIELD_SEPRTR,"FILE_NAME",DATA_VALUE_SEPRTR,p_file_name,DATA_FIELD_SEPRTR);
+	strcat(l_param_data,l_line);
+
+	printf("\nParam Data Formed : Chk : Sana : |%s|",l_param_data);
+	fflush(stdout);
+
+	if(APL_FAILURE == CO_PopulateAuditString(chr_l_entity_name,l_param_data,chr_l_audit_data,chr_l_data_key))
+			APL_GOBACK_FAIL
+
+	if(APL_FAILURE == CO_RtvSysDtTime(l_chr_sysdate_time,l_debug_info_ptr))
+		APL_GOBACK_FAIL
+
+
+	printf("\n p_userid = |%s|",p_userid);
+	printf("\n l_chr_mode = |%s|",l_chr_mode);
+	printf("\n chr_l_entity_name = |%s|",chr_l_entity_name);
+	printf("\n Audit Date Formed is : |%s|",chr_l_audit_data);
+	printf("\n Date Key Formed is : |%s|",chr_l_data_key);
+	printf("\n Sysdate time we got is |%s|",l_chr_sysdate_time);
+	fflush(stdout);
+
+	EXEC SQL INSERT INTO GN_AUDIT_LOG VALUES
+				( :p_userid:i_userid,
+				  :l_chr_mode:i_mode, 
+				  :chr_l_entity_name:i_entity_name,
+				  :chr_l_data_key:i_key_value,
+				  :chr_l_audit_data:i_audit_data,
+				  :l_chr_sysdate_time:i_log_time,
+				  :l_comments:i_comments
+				);	
+
+	printf("\nSQLCA code : |%d|",sqlca.sqlcode);
+	fflush(stdout);
+
+	IS_ANY_ORA_ERROR
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+	{
+		printf("\nExiting from GFU_UpdAuditLog() with success");
+                fflush(stdout);
+		return (APL_SUCCESS);
+	}
+
+	RETURN_FAILURE:
+	{
+		printf("\nExiting from GFU_UpdAuditLog() with failure");
+                fflush(stdout);
+		return (APL_FAILURE);
+	}
+}

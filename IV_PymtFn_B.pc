@@ -1,0 +1,444 @@
+
+
+
+
+
+#include "stdio_64.h"
+#include <string.h>
+#include <stdlib.h>
+
+#include "IV_Control_A.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+
+
+int IV_Mod_AuthTotPymt(const char *p_client, const double p_pymntamt, 
+		    const char *p_pymntccycode, const int p_ledgseqnum, 
+		    int *int_p_retstat, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	
+
+	extern int IV_Rtv_IVLEDGERSrvOSAmt(const char *chr_l_client, 
+					  const long l_servcode, 
+					  double *l_srvamt, int *int_l_retstat, 
+					  DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+	extern int IV_Proc_ServPymt(const char *chr_l_client, 
+				      const long l_servcode, 
+				      const double l_pymntamt, 
+				      const int l_pymntseqnum, 
+				      const char *l_pymntccycode, 
+				      int *int_l_retstat, 
+				      DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+	
+
+	char chr_l_isopenpymntservcursor = 'N';
+	int int_l_status = 0;
+	double l_totpymntamount = p_pymntamt, l_servpymntamount = 0.0;
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+		long h_ServiceCode = 0L;
+		short int int_i_servicecode = 0;
+		struct sqlca sqlca;
+
+	EXEC SQL END DECLARE SECTION;
+
+	#ifdef APL_THREADS
+		APL_SET_CONTEXT
+		EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	EXEC SQL LOCK TABLE IV_LEDGER IN EXCLUSIVE MODE NOWAIT;
+
+	if ( sqlca.sqlcode < 0 )
+	{
+		char chr_l_buffer[KEY_LENGTH];
+
+		memset(chr_l_buffer, APL_NULL_CHAR, KEY_LENGTH);
+
+		ltoa_r(sqlca.sqlcode, chr_l_buffer, KEY_LENGTH - 1);
+
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+		CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, chr_l_buffer, 
+			       APL_NULL_STRING, APL_NULL_STRING, 
+			       __LINE__, __FILE__);
+
+		APL_GOBACK_FAIL
+	}
+
+	EXEC SQL DECLARE PymntServCursor CURSOR FOR
+		 SELECT DISTINCT SERVICE_CD
+		 FROM IV_LEDGER
+		 WHERE ((CLIENT = :p_client) AND
+			(CLASS_IND = 'B') AND
+			(OUT_STAND_AMT > 0.0));
+
+	EXEC SQL OPEN PymntServCursor;
+
+	chr_l_isopenpymntservcursor = 'Y';
+
+	for ( ; l_totpymntamount > 0.0; )
+	{
+		EXEC SQL FETCH PymntServCursor
+			 INTO :h_ServiceCode INDICATOR :int_i_servicecode;
+
+		if ( sqlca.sqlcode < 0 )
+		{
+			char chr_l_buffer[KEY_LENGTH];
+
+			memset(chr_l_buffer, APL_NULL_CHAR, KEY_LENGTH);
+
+			ltoa_r(sqlca.sqlcode, chr_l_buffer, KEY_LENGTH - 1);
+
+			*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+			CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, chr_l_buffer, 
+				       APL_NULL_STRING, APL_NULL_STRING, 
+				       __LINE__, __FILE__);
+
+			APL_GOBACK_FAIL
+		}
+		else if ( sqlca.sqlcode == 1403 )
+		{
+			break;
+		}
+
+		l_servpymntamount = 0.0;
+
+		int_l_status = 0;
+
+		if ( APL_FAILURE == IV_Rtv_IVLEDGERSrvOSAmt(p_client, 
+							   h_ServiceCode, 
+							   &l_servpymntamount, 
+							   &int_l_status, 
+							   l_debug_info_ptr) )
+		{
+			if ( int_l_status == IV_CRITCAL_ERROR_IND )
+			{
+				*int_p_retstat = int_l_status;
+
+				APL_GOBACK_FAIL
+			}
+		}
+
+		l_servpymntamount = MIN(l_servpymntamount, l_totpymntamount);
+
+		int_l_status = 0;
+
+		if (APL_FAILURE == IV_Proc_ServPymt(p_client, h_ServiceCode,
+						      l_servpymntamount, 
+						      p_ledgseqnum, 
+						      p_pymntccycode, 
+						      &int_l_status, l_debug_info_ptr))
+		{
+			*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+			APL_GOBACK_FAIL
+		}
+
+		l_totpymntamount -= l_servpymntamount;
+
+	} 
+
+	EXEC SQL CLOSE PymntServCursor;
+
+	chr_l_isopenpymntservcursor = 'N';
+
+	*int_p_retstat = IV_SUCCESS;
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of \
+IV_Mod_AuthTotPymt().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_SUCCESS;
+
+	RETURN_FAILURE:
+
+		if ( chr_l_isopenpymntservcursor == 'Y' )
+		{
+			EXEC SQL CLOSE PymntServCursor;
+		}
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of\
+IV_Mod_AuthTotPymt().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_FAILURE;
+}
+
+
+
+int IV_Mod_AuthServPymt(const IV_CHEQUE_STRUCT *p_iv_cheque_struct_a, const int p_ledgseqnum, 
+		     int *int_p_retstat, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	
+
+	extern int IV_Rtv_IVLEDGERSrvOSAmt(const char *chr_l_client, 
+					  const long l_servcode, 
+					  double *l_srvamt, int *int_l_retstat, 
+					  DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+	extern int IV_Proc_ServPymt(const char *chr_l_client, 
+				      const long l_servcode, 
+				      const double l_pymntamt, 
+				      const int l_pymntseqnum, 
+				      const char *l_pymntccycode, 
+				      int *int_l_retstat, 
+				      DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+	
+
+	char chr_l_isopenservdetcursor = 'N', chr_l_isopenremservcursor = 'N';
+	int int_l_status = 0;
+	double l_totpymntamount = 0.0, l_servpymntamount = 0.0;
+	double l_effservpymntamount = 0.0;
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+		long h_ServiceCode = 0L;
+		short int int_i_servicecode = 0;
+		struct sqlca sqlca;
+
+	EXEC SQL END DECLARE SECTION;
+
+	#ifdef APL_THREADS
+		APL_SET_CONTEXT
+		EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	l_totpymntamount = p_iv_cheque_struct_a->conf_amt;
+
+	EXEC SQL DECLARE ServDetCursor CURSOR FOR
+		 SELECT SERVICE_CD
+		 FROM IV_CHEQUE_DET
+		 WHERE ((DATEOF_PAYMENT = :p_iv_cheque_struct_a->dateof_payment) AND
+			(CLIENT = :p_iv_cheque_struct_a->client) AND
+			(INDEN_NUM = :p_iv_cheque_struct_a->inden_num));
+
+	EXEC SQL OPEN ServDetCursor;
+
+	chr_l_isopenservdetcursor = 'Y';
+
+	for ( ; l_totpymntamount > 0.0; )
+	{
+		EXEC SQL FETCH ServDetCursor
+			 INTO :h_ServiceCode INDICATOR :int_i_servicecode;
+
+		if ( sqlca.sqlcode < 0 )
+		{
+			char chr_l_buffer[KEY_LENGTH];
+
+			memset(chr_l_buffer, APL_NULL_CHAR, KEY_LENGTH);
+
+			ltoa_r(sqlca.sqlcode, chr_l_buffer, KEY_LENGTH - 1);
+
+			*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+			CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, chr_l_buffer, 
+				       APL_NULL_STRING, APL_NULL_STRING, 
+				       __LINE__, __FILE__);
+	
+			APL_GOBACK_FAIL
+		}
+		else if ( sqlca.sqlcode == 1403 )
+		{
+			break;
+		}
+
+		EXEC SQL LOCK TABLE IV_LEDGER IN EXCLUSIVE MODE NOWAIT;
+
+		if ( sqlca.sqlcode < 0 )
+		{
+			char chr_l_buffer[KEY_LENGTH];
+
+			memset(chr_l_buffer, APL_NULL_CHAR, KEY_LENGTH);
+
+			ltoa_r(sqlca.sqlcode, chr_l_buffer, KEY_LENGTH - 1);
+
+			*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+			CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, chr_l_buffer, 
+				       APL_NULL_STRING, APL_NULL_STRING, 
+				       __LINE__, __FILE__);
+
+			APL_GOBACK_FAIL
+		}
+
+		int_l_status = 0;
+		l_servpymntamount = 0.0;
+
+		if ( APL_FAILURE == IV_Rtv_IVLEDGERSrvOSAmt(p_iv_cheque_struct_a->client, 
+							   h_ServiceCode, 
+							   &l_servpymntamount, 
+							   &int_l_status, 
+							   l_debug_info_ptr) )
+		{
+			if ( int_l_status == IV_CRITCAL_ERROR_IND )
+			{
+				*int_p_retstat = int_l_status;
+
+				APL_GOBACK_FAIL
+			}
+			else if ( int_l_status == IV_NO_DATA_FOUND_ERR )
+			{
+				l_servpymntamount = 0.0;
+			}
+		}
+
+		if ( !l_servpymntamount )
+		{
+			continue;
+		}
+
+		l_effservpymntamount = MIN(l_servpymntamount, l_totpymntamount);
+
+		int_l_status = 0;
+
+		if (APL_FAILURE == IV_Proc_ServPymt(p_iv_cheque_struct_a->client, 
+						      h_ServiceCode, 
+						      l_effservpymntamount, 
+						      p_ledgseqnum, 
+						      p_iv_cheque_struct_a->b_ccycd, 
+						      &int_l_status, l_debug_info_ptr))
+		{
+			*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+			APL_GOBACK_FAIL
+		}
+
+		l_totpymntamount -= l_effservpymntamount;
+
+	} 
+
+	EXEC SQL CLOSE ServDetCursor;
+
+	chr_l_isopenservdetcursor = 'N';
+
+	if ( l_totpymntamount > 0.0 )
+	{
+		EXEC SQL DECLARE RemServCursor CURSOR FOR
+			 SELECT DISTINCT SERVICE_CD
+			 FROM IV_LEDGER
+			 WHERE ((CLIENT = :p_iv_cheque_struct_a->client) AND
+				(CLASS_IND = 'B') AND
+				(OUT_STAND_AMT > 0.0));
+
+		EXEC SQL OPEN RemServCursor;
+
+		chr_l_isopenremservcursor = 'Y';
+
+		for ( ; l_totpymntamount > 0.0; )
+		{
+			EXEC SQL FETCH RemServCursor
+				 INTO :h_ServiceCode INDICATOR :int_i_servicecode;
+
+			if ( sqlca.sqlcode < 0 )
+			{
+				char chr_l_buffer[KEY_LENGTH];
+
+				memset(chr_l_buffer, APL_NULL_CHAR, KEY_LENGTH);
+
+				ltoa_r(sqlca.sqlcode, chr_l_buffer, KEY_LENGTH - 1);
+
+				*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+				CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, chr_l_buffer,
+					       APL_NULL_STRING, APL_NULL_STRING,
+					       __LINE__, __FILE__);
+
+				APL_GOBACK_FAIL
+			}
+			else if ( sqlca.sqlcode == 1403 )
+			{
+				break;
+			}
+
+			int_l_status = 0;
+			l_servpymntamount = 0.0;
+
+			if (APL_FAILURE == 
+				IV_Rtv_IVLEDGERSrvOSAmt(p_iv_cheque_struct_a->client, 
+						       h_ServiceCode, 
+						       &l_servpymntamount, 
+						       &int_l_status, l_debug_info_ptr))
+			{
+				if ( int_l_status == IV_CRITCAL_ERROR_IND )
+				{
+					*int_p_retstat = int_l_status;
+
+					APL_GOBACK_FAIL
+				}
+			}
+
+			l_effservpymntamount = MIN(l_servpymntamount, l_totpymntamount);
+
+			int_l_status = 0;
+
+			if ( APL_FAILURE == 
+				IV_Proc_ServPymt(p_iv_cheque_struct_a->client, 
+						   h_ServiceCode, 
+						   l_effservpymntamount, 
+						   p_ledgseqnum, 
+						   p_iv_cheque_struct_a->b_ccycd, 
+						   &int_l_status, l_debug_info_ptr) )
+			{
+				*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+				APL_GOBACK_FAIL
+			}
+
+			l_totpymntamount -= l_effservpymntamount;
+
+		} 
+
+		EXEC SQL CLOSE RemServCursor;
+
+		chr_l_isopenremservcursor = 'N';
+	}
+
+	*int_p_retstat = IV_SUCCESS;
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of \
+IV_Mod_AuthServPymt().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_SUCCESS;
+
+	RETURN_FAILURE:
+
+		if ( chr_l_isopenservdetcursor == 'Y' )
+		{
+			EXEC SQL CLOSE ServDetCursor;
+		}
+
+		if ( chr_l_isopenremservcursor == 'Y' )
+		{
+			EXEC SQL CLOSE RemServCursor;
+		}
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of\
+IV_Mod_AuthServPymt().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_FAILURE;
+}

@@ -1,0 +1,297 @@
+
+
+
+
+
+#include "stdio_64.h"
+#include <string.h>
+#include <stdlib.h>
+
+#include "IV_Control_A.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+
+
+int IV_Proc_MakeDirectDebitPymt(const IV_CHEQUE_STRUCT *p_iv_cheque_struct_a, 
+			 int *int_p_retstat, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	
+
+	extern int IV_Rtv_IVPymtMaxSeqNum(const char *l_pymntdate, 
+					    const char *chr_l_client, 
+					    int *int_l_maxseqnum, int *int_l_retstat, 
+					    DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+	extern int IV_Mod_IVPymtNew(const IV_CHEQUE_STRUCT *l_iv_cheque_struct, 
+				   int *int_l_retstat, DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+	extern int IV_Rtv_IVLEDGERMaxPymtSeqNum(const char *chr_l_client, 
+						const char *chr_l_sys_date, 
+						int *int_l_maxpymntseqnum, 
+						int *int_l_retstat, 
+						DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+	extern int IV_Proc_CurrPrdPymnt(const char *chr_l_client, 
+				   const char *chr_l_sys_date, 
+				   const char *l_ledg_date, 
+				   const double l_totpymntamount, 
+				   const char *l_blccycode, 
+				   const char *l_pymntseqnum, 
+				   int *int_l_retstat, DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+	extern int IV_Mod_IVPymtRowLock(const IV_CHEQUE_STRUCT *l_iv_cheque_struct, 
+				       int *int_l_retstat, 
+				       DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+	extern int IV_Mod_IVPymt(const IV_CHEQUE_STRUCT *l_iv_cheque_struct, 
+				   const INTL_ENV_DATA_STRUCT_H *l_intl_env_datastruct_h, 
+				   int *int_l_retstat, DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+
+
+	char chr_l_buffer1[BUFFER_LEN];
+	int int_l_status = 0, int_l_maxpymntseqnum = 0;
+	int int_l_pymntmntseqnum = 0, int_l_pymntledgseqnum = 0;
+	IV_CHEQUE_STRUCT l_iv_cheque_struct, l_iv_cheque_struct_new;
+	INTL_ENV_DATA_STRUCT_H l_intl_env_datastruct_h;
+	int l_int_payseq = 0;  //changes below are for ISKB_430_07
+
+
+	IV_CHEQUE_A_STRUCT l_iv_cheque_a_struct;
+	EXEC SQL BEGIN DECLARE SECTION;
+
+		struct sqlca sqlca;
+
+	EXEC SQL END DECLARE SECTION;
+
+	#ifdef APL_THREADS
+		APL_SET_CONTEXT
+		EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	l_iv_cheque_struct = *p_iv_cheque_struct_a;
+
+	if ( !strlen(l_iv_cheque_struct.client) )
+	{
+		APL_DATA_MISSING("Account", APL_NULL_STRING, APL_NULL_STRING)
+	}
+
+	if ( !strlen(l_iv_cheque_struct.dateof_payment) )
+	{
+		APL_DATA_MISSING("Payment Date", APL_NULL_STRING, 
+				  APL_NULL_STRING)
+	}
+
+	memset(chr_l_buffer1, APL_NULL_CHAR, BUFFER_LEN);
+	sprintf(chr_l_buffer1, "%lf", l_iv_cheque_struct.conf_amt);
+
+	if ( !strlen(chr_l_buffer1) )
+	{
+		APL_DATA_MISSING("Payment Amt", APL_NULL_STRING,APL_NULL_STRING)
+	}
+
+	if ( !strlen(l_iv_cheque_struct.b_ccycd) )
+	{
+		APL_DATA_MISSING("Payment Ccy Code", APL_NULL_STRING, 
+				  APL_NULL_STRING)
+	}
+
+	if ( !strlen(l_iv_cheque_struct.maker) )
+	{
+		APL_DATA_MISSING("Maker", APL_NULL_STRING, APL_NULL_STRING)
+	}
+
+	if ( !strlen(l_iv_cheque_struct.maker_dt) )
+	{
+		APL_DATA_MISSING("Maker Date", APL_NULL_STRING, APL_NULL_STRING)
+	}
+
+	if ( !strlen(l_iv_cheque_struct.pymt_clt) )
+	{
+		APL_DATA_MISSING("Payment Account", APL_NULL_STRING, 
+				  APL_NULL_STRING)
+	}
+
+	
+
+	int_l_status = 0;
+	int_l_maxpymntseqnum = 0;
+
+	
+	int_l_pymntmntseqnum = int_l_maxpymntseqnum + 1;
+
+     
+
+	memset(l_iv_cheque_struct_new.client, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+	memset(l_iv_cheque_struct_new.dateof_payment, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(l_iv_cheque_struct_new.b_ccycd, APL_NULL_CHAR, APL_CCYCODE_LEN);
+	memset(l_iv_cheque_struct_new.maker, APL_NULL_CHAR, APL_USERID_LEN);
+	memset(l_iv_cheque_struct_new.maker_dt, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(l_iv_cheque_struct_new.access_stamp, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(l_iv_cheque_struct_new.checker, APL_NULL_CHAR, APL_USERID_LEN);
+	memset(l_iv_cheque_struct_new.checker_dt, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(l_iv_cheque_struct_new.pymt_clt, APL_NULL_CHAR, APL_CLIENT_LENGTH_GL); /* Bageshri */
+	memset(l_iv_cheque_struct_new.ae_dt, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(l_iv_cheque_struct_new.adjust_entry, APL_NULL_CHAR, 2); /* Bageshri */
+	memset(l_iv_cheque_struct_new.cheque_det, APL_NULL_CHAR, 100);
+	memset(l_iv_cheque_struct_new.tds_amt, APL_NULL_CHAR, 21);   /************/
+
+	strcpy(l_iv_cheque_struct_new.client, l_iv_cheque_struct.client);
+	strcpy(l_iv_cheque_struct_new.dateof_payment, l_iv_cheque_struct.dateof_payment);
+	strcpy(l_iv_cheque_struct_new.b_ccycd, l_iv_cheque_struct.b_ccycd);
+	strcpy(l_iv_cheque_struct_new.maker, l_iv_cheque_struct.maker);
+	strcpy(l_iv_cheque_struct_new.maker_dt, l_iv_cheque_struct.maker_dt);
+	strcpy(l_iv_cheque_struct_new.pymt_clt, l_iv_cheque_struct.pymt_clt);
+
+	strcpy(l_iv_cheque_struct_new.ae_dt, l_iv_cheque_struct.ae_dt);
+
+     
+
+	l_iv_cheque_struct_new.proc_num = 0;
+	l_iv_cheque_struct_new.pay_seq = 0;
+	l_iv_cheque_struct_new.status_pymt = 'U';
+	l_iv_cheque_struct_new.conf_amt = l_iv_cheque_struct.conf_amt;
+	l_iv_cheque_struct_new.inden_num = int_l_pymntmntseqnum;
+	strcpy(l_iv_cheque_struct_new.adjust_entry, l_iv_cheque_struct.adjust_entry);
+
+	strcpy(l_iv_cheque_struct_new.cheque_det, l_iv_cheque_struct.cheque_det); 
+	strcpy(l_iv_cheque_struct_new.tds_amt, l_iv_cheque_struct.tds_amt); 
+	
+	//ISKB_430_07 Chgs - ISKB_430_02 Chgs
+	strcpy(l_iv_cheque_struct_new.bill_date, l_iv_cheque_struct.bill_date);
+	l_iv_cheque_struct_new.pymt_ind = l_iv_cheque_struct.pymt_ind;
+	l_iv_cheque_struct_new.conf_amt = l_iv_cheque_struct.conf_amt;
+	l_iv_cheque_struct_new.inden_num = l_iv_cheque_struct.inden_num;
+	l_iv_cheque_struct_new.bill_amt = l_iv_cheque_struct.bill_amt;
+	l_iv_cheque_struct_new.conf_amt = l_iv_cheque_struct.conf_amt; //bill amt and conf amt would be equal since total mode payment
+	l_iv_cheque_struct_new.service_cd = l_iv_cheque_struct.service_cd;
+		
+
+	int_l_status = 0;
+
+	if ( APL_FAILURE == IV_Mod_IVPymtNew(&l_iv_cheque_struct_new, &int_l_status, 
+					    l_debug_info_ptr) )
+	{
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+		APL_GOBACK_FAIL
+	}
+
+
+
+     if('U' != l_iv_cheque_struct.status_pymt)
+	{
+		int_l_status = 0;
+	
+		if ( APL_FAILURE == IV_Mod_IVPymtRowLock(&l_iv_cheque_struct, &int_l_status, 
+						l_debug_info_ptr) )
+		{
+			if ( int_l_status == IV_CRITCAL_ERROR_IND )
+			{
+				*int_p_retstat = int_l_status;
+
+				APL_GOBACK_FAIL
+			}
+			else if ( int_l_status == IV_NO_DATA_FOUND_ERR )
+			{
+				*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+				CO_InsertErr(l_debug_info_ptr, ERR_PAYMNT_NOTFND, APL_NULL_STRING, 
+				       APL_NULL_STRING, APL_NULL_STRING, 
+				       __LINE__, __FILE__);
+
+				APL_GOBACK_FAIL
+			}
+		}
+
+
+			if (APL_FAILURE == IV_GetPaySeq(l_iv_cheque_struct.client,
+											&l_int_payseq,
+											&int_l_status,l_debug_info_ptr))
+			{
+			Alert("\n FILE :: IV_BillDeln_C.pc cannot calculate payseq ");
+			APL_GOBACK_FAIL
+			}
+		     Alert("\n ---FILE :: IV_BillDeln_C.pc-----l_int_payseq  = [%d]",l_int_payseq);
+			l_iv_cheque_struct.pay_seq = l_int_payseq-1;//since in this case the payment record is added just above before the if condition
+				
+		if(APL_FAILURE == IV_Auth_T_IVPymt(&l_iv_cheque_struct,
+											&l_intl_env_datastruct_h,
+										    &int_l_status, l_debug_info_ptr))
+		{
+			Alert("\n  FILE :: IV_BillDeln_C.pc Failed  in IV_Auth_T_IVPymt()");
+			APL_GOBACK_FAIL
+		}
+
+	} //end of IF for status-check 
+
+        //ISKB_430_07 Chgs - ISKB_430_02 Chgs
+	//FINALLY UPDATING   THE  IV_CHEQUE_A TABLE
+	memset(l_iv_cheque_a_struct.client, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+	memset(l_iv_cheque_a_struct.bill_date, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+
+	strcpy(l_iv_cheque_a_struct.client,l_iv_cheque_struct.client);
+	strcpy(l_iv_cheque_a_struct.bill_date,l_iv_cheque_struct.bill_date); 
+	l_iv_cheque_a_struct.bill_amt = l_iv_cheque_struct_new.bill_amt;
+
+	if (APL_FAILURE == IV_Mod_IVCHEQUE_A(l_iv_cheque_a_struct,&int_l_status,l_debug_info_ptr))
+		{
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+      
+		APL_GOBACK_FAIL
+		}
+	Alert("\n FILE :: IV_BillDeln_C.pc After IV_Mod_IVCHEQUE_A");
+		if ( APL_FAILURE == IV_CLTSETUP_update(l_iv_cheque_struct.client,
+										   l_iv_cheque_struct.dateof_payment,
+										   l_iv_cheque_struct.conf_amt,
+										   l_iv_cheque_struct.b_ccycd,									
+						                   &int_l_status, 
+									      l_debug_info_ptr) )
+		{
+
+			Alert("\n  FILE :: IV_BillDeln_C.pc  failed in updating IV_CLIENTSETUP");
+			if ( int_l_status == IV_CRITCAL_ERROR_IND )
+			{
+				*int_p_retstat = int_l_status;
+
+				APL_GOBACK_FAIL
+			}
+			else if ( int_l_status == IV_NO_DATA_FOUND_ERR )
+			{
+				*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+				CO_InsertErr(l_debug_info_ptr,ERR_CANNOTUPDATECLIENTSETUP, 
+					       APL_NULL_STRING, APL_NULL_STRING,
+					       APL_NULL_STRING, __LINE__, 
+					       __FILE__);
+
+				APL_GOBACK_FAIL
+			}
+		}
+
+	*int_p_retstat = IV_SUCCESS;
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of \
+IV_Proc_MakeDirectDebitPymt().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_SUCCESS;
+
+	RETURN_FAILURE:
+		  EXEC SQL ROLLBACK ;	
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of\
+IV_Proc_MakeDirectDebitPymt().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_FAILURE;
+}

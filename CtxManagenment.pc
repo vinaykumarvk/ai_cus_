@@ -1,0 +1,138 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ 
+#undef ORA_PROC
+#ifndef ORA_PROC
+#include	<pthread.h>
+#endif
+#define ORA_PROC
+#define APL_THREADS
+#define CONTEXT_MANAGE
+#include "CR_Common.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+#define	S_MAX_CTX		10
+#define	S_CTX_IN_USE	1
+#define	S_CTX_FREE		0
+#define	S_FALSE			0
+#define	S_TRUE			1
+
+
+SYS_ORA_CTX			l_sys_ora_ctx[S_MAX_CTX];
+extern const int	int_no_context_used;
+pthread_mutex_t	mx_g_ctx_pool;
+
+int	CO_Int_CtxMgmt(char *p_db_user, char *p_db_passwd)
+{
+	int			i;
+	struct	sqlca	sqlca;
+
+	EXEC SQL BEGIN DECLARE SECTION;
+		sql_context	l_ctx[S_MAX_CTX];
+		char			*chr_l_db_user 		= p_db_user;
+		char			*chr_l_db_passwd	= p_db_passwd;
+	EXEC SQL END DECLARE SECTION;
+
+	EXEC SQL VAR chr_l_db_user IS STRING;
+	EXEC SQL VAR chr_l_db_passwd IS STRING;
+
+	EXEC SQL ENABLE THREADS;
+
+	if (int_no_context_used > S_MAX_CTX)
+	{
+		fprintf(APL_OUT_FILE,"Cannot get more than maximum[%d] connections\n",S_MAX_CTX);
+		return APL_FAILURE;
+	}
+
+	if ( pthread_mutex_init(&mx_g_ctx_pool, NULL) )
+		return APL_FAILURE;
+	if ( pthread_mutex_lock(&mx_g_ctx_pool) )
+		return APL_FAILURE;
+
+	for (i=0;i<int_no_context_used;i++)
+	{
+		EXEC SQL CONTEXT ALLOCATE :l_ctx[i];
+		EXEC SQL CONTEXT USE :l_ctx[i];
+		EXEC SQL CONNECT :chr_l_db_user IDENTIFIED BY :chr_l_db_passwd;
+		if ( sqlca.sqlcode < 0 )
+			return APL_FAILURE;
+		l_sys_ora_ctx[i].ctx		=	l_ctx[i];
+		l_sys_ora_ctx[i].status_ind	=	S_CTX_FREE;
+	}
+	fprintf(APL_OUT_FILE,"\nGot %d connections to Oracle",i);
+	if ( pthread_mutex_unlock(&mx_g_ctx_pool) )
+		return APL_FAILURE;
+
+	return APL_SUCCESS;
+}
+
+int	CO_Rtv_Ctx(sql_context * p_ctx, int *p_ctx_num)
+{
+	int	int_retval,
+			i,
+			int_flg_found = S_FALSE;
+
+	int_retval = pthread_mutex_trylock(&mx_g_ctx_pool);
+
+	if ( int_retval == 0) 
+	{
+		for(i=0;i<int_no_context_used;i++)
+		{
+			if ( l_sys_ora_ctx[i].status_ind == S_CTX_FREE )
+			{
+				l_sys_ora_ctx[i].status_ind	=	S_CTX_IN_USE;
+				*p_ctx					=	l_sys_ora_ctx[i].ctx;
+				*p_ctx_num				=	i;
+				int_flg_found				=	S_TRUE;
+				break;
+			}
+		}
+		pthread_mutex_unlock(&mx_g_ctx_pool);
+		if ( int_flg_found == S_TRUE )
+		{
+			fprintf(APL_OUT_FILE,"\nSuccessfully got context handle %d.",i);
+			return APL_SUCCESS;
+		}
+		else
+		{
+			fprintf(APL_OUT_FILE,"\nAll contexts are currently busy",i);
+			return APL_FAILURE;
+		}
+	}
+	else 
+	{
+		fprintf(APL_OUT_FILE,"\nMutex already locked by another thread.");
+		return APL_FAILURE;
+	}
+}
+
+int	CM_Rls_Ctx(int p_ctx_no)
+{
+	int	int_retval;
+
+	int_retval = pthread_mutex_trylock(&mx_g_ctx_pool);
+
+	if ( int_retval == 0) 
+	{
+		l_sys_ora_ctx[p_ctx_no].status_ind	=	S_CTX_FREE;
+		pthread_mutex_unlock(&mx_g_ctx_pool);
+	}
+	else
+	{
+		fprintf(APL_OUT_FILE,"\nMutex already locked by another thread.");
+		return APL_FAILURE;
+	}
+}

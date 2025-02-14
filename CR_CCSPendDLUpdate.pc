@@ -1,0 +1,451 @@
+
+
+
+
+
+#include "CO_HostStructdef.h"
+EXEC SQL INCLUDE SQLCA.H;
+ 
+int  DL_Mod_CCSPendDL(char *p_client,char *p_ident,char *p_ccstype, 
+								char *p_failcode, char *p_subfailcode, char *p_failnote,
+								DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+ struct sqlca sqlca;
+ 
+ char chr_l_buf[BUFFER_LEN]                = APL_NULL_STRING;
+ char chr_l_tlc_trd_type[APL_FLAG_LENGTH]	  = APL_NULL_STRING;
+ int  int_h_ccseligibility_flg				  = 0; 
+ char  chr_h_system_date[APL_DATE_LEN];
+
+   #ifdef APL_THREADS
+      APL_SET_CONTEXT
+      EXEC SQL CONTEXT USE :my_ctx_local;
+   #endif
+ 
+
+ sqlca.sqlcode=0;
+
+ EXEC SQL VAR p_client                      IS STRING;
+ EXEC SQL VAR p_ident                        IS STRING;
+ EXEC SQL VAR p_ccstype                      IS STRING;
+
+ APL_IF_DEBUG
+ {
+    CO_ProcMonitor(	APL_OUT_FILE,
+					"Entering Function DL_Mod_CCSPendDL\n",
+					NULL,
+					NULL);
+  	 memset(chr_l_buf,NULL,BUFFER_LEN);
+    sprintf(  chr_l_buf,
+				  "The Account is : %s\n",
+               p_client);
+    CO_ProcMonitor(   APL_OUT_FILE,
+                  chr_l_buf,
+                  NULL,
+                  NULL );
+    memset( chr_l_buf, NULL, BUFFER_LEN );
+    sprintf(    chr_l_buf,
+                "The Reference Number is : %s\n",
+                p_ident);
+
+    CO_ProcMonitor(   APL_OUT_FILE,
+                chr_l_buf,
+                NULL,
+                NULL );
+    memset( chr_l_buf, NULL, BUFFER_LEN );
+    sprintf(    chr_l_buf,
+                "The CCS Msg Type is : %s\n",
+                p_ccstype);
+
+     CO_ProcMonitor(   APL_OUT_FILE,
+                  chr_l_buf,
+                  NULL,
+                  NULL ); 
+   }
+
+
+
+
+   if ( !strlen(p_ccstype) )
+   {
+      APL_DATA_MISSING( "CCS Msg Type",
+                        APL_NULL_STRING,
+                        APL_NULL_STRING );
+   }
+
+
+	if (strcmp(p_ccstype, MS_CCS_II ))
+	{
+
+   	if ( !strlen(p_client) )
+   	{
+      	APL_DATA_MISSING( "Account",
+                        APL_NULL_STRING,
+                        APL_NULL_STRING );
+   	}
+
+
+   	if ( !strlen(p_ident) )
+   	{
+      	APL_DATA_MISSING( "RefNo",
+                        APL_NULL_STRING,
+                        APL_NULL_STRING );
+   	}
+		if (strlen(p_failcode) && !strlen(p_subfailcode))
+   	{ 
+   	}
+
+		if (APL_FAILURE == DL_Chk_CCSEligible(p_client, p_ident, &int_h_ccseligibility_flg, p_ccstype, l_debug_info_ptr))
+		{
+			CO_ProcMonitor(APL_OUT_FILE,
+               "Error from DL_Chk_CCSEligible\n",
+               NULL,
+               NULL);
+     		APL_GOBACK_FAIL
+		}
+
+		if (!int_h_ccseligibility_flg)
+		{
+			CO_ProcMonitor(APL_OUT_FILE,
+				"Trade not CCS Eligible\n",
+               NULL,
+               NULL);
+			APL_GOBACK_SUCCESS
+		}
+	}
+	
+	memset(chr_h_system_date,APL_NULL_CHAR,APL_DATE_LEN);
+printf("\n getting sys chr_date ..\n");
+   if (APL_FAILURE == CO_RtvSysDtTime(chr_h_system_date,
+                                           l_debug_info_ptr) )
+   {
+      fprintf(APL_OUT_FILE,"failed To get System Date\n");
+      APL_GOBACK_FAIL
+   }
+printf("\n 1 if...\n");
+if(!strcmp(p_ccstype,MS_CCS_T1) || !strcmp(p_ccstype,MS_CCS_T2) || !strcmp(p_ccstype,MS_CCS_T4) || !strcmp(p_ccstype,MS_CCS_IP) || !strcmp(p_ccstype,MS_CCS_IC) || !strcmp(p_ccstype,MS_CCS_IS) || !strcmp(p_ccstype,MS_CCS_IX) || !strcmp(p_ccstype,MS_CCS_XD)|| !strcmp(p_ccstype,MS_CCS_XS) )
+	{
+	 EXEC SQL INSERT INTO DL_CCSPENDTXN (msg_class, identity, client, tlc_deal_type, deal_code, master_clt, 
+				clnt_ident, brk, NARRATIVE, instr_code, QTY, currency_cd, AMT, signature, gl_clt, deal_date, setl_date, 
+				exp_setldate, location_cd, mkrt_dl_class, cp_clt, iden_no, status, access_stamp) 
+				SELECT :p_ccstype, b.UNIQ_IDENT_NO, :p_client, 
+				decode(a.domestic_cpclt,:l_mt_core_sys_params_struct_h.custody_clt_cd,'S','C'), a.deal_cd, MT_CLIENT.CLN_MASTER, 
+				a.IDENTIY_NO, a.domestic_cpclt, substr(a.INFO1,1,210), a.instr_code, 
+				decode(:p_ccstype,'IP',a.ORIG_QTY,'IC',a.ORIG_QTY,a.QTY), a.currency_cd, a.AMOUNT, 
+				decode(a.deal_cd,'3','A','4','D',' '), CLN_GL_ACCOUNT, a.deal_date, a.setl_date, 
+				nvl(a.exp_setldate,a.setl_date), a.location_cd, a.dl_class, decode(a.cp_clt,NULL,a.CLIENTOF_CD,a.cp_clt), 
+				CCSMSGSEQ.NEXTVAL, 'P', :chr_h_system_date 
+				from DL_DEAL a,MT_CLIENT, DL_DEAL b 
+				where MT_CLIENT.cln_code = a.CLIENT and a.client = :p_client AND a.IDENTIY_NO = :p_ident 
+						AND a.ORIG_REFNO = b.IDENTIY_NO and a.client = b.client; 
+	 IS_ANY_ORA_ERROR
+   }
+
+printf("\n 2 if...\n");
+	if(!strcmp(p_ccstype,MS_CCS_IF) )
+	{
+		printf("failcode is %s\n", p_failcode);
+		printf("subfailcode is %s\n", p_subfailcode);
+		printf("note is %s\n", p_failnote);
+	 EXEC SQL INSERT INTO DL_CCSPENDTXN  (msg_class, identity, client, tlc_deal_type, deal_code,  
+				master_clt, clnt_ident, brk, NARRATIVE, instr_code, QTY, currency_cd, AMT, signature, gl_clt, deal_date, setl_date, 
+				exp_setldate, location_cd, mkrt_dl_class, cp_clt, failreason_cd, sub_fail_cd, fail_det, failreason_index, 
+				iden_no, status, access_stamp) 
+				SELECT :p_ccstype , b.UNIQ_IDENT_NO, :p_client, 
+				decode(a.domestic_cpclt,:l_mt_core_sys_params_struct_h.custody_clt_cd,'S','C'), a.deal_cd,  
+				MT_CLIENT.CLN_MASTER, a.IDENTIY_NO, a.domestic_cpclt, substr(a.INFO1,1,210), a.instr_code, 
+				a.ORIG_QTY, a.currency_cd, a.AMOUNT, 
+				decode(a.deal_cd,'3','A','4','D',' '), CLN_GL_ACCOUNT, a.deal_date, a.setl_date, nvl(a.exp_setldate,a.setl_date), 
+				a.location_cd, a.dl_class, decode(a.cp_clt,NULL,a.CLIENTOF_CD,a.cp_clt), :p_failcode, 
+				:p_subfailcode, substr(:p_failnote,1,70), a.cnt_548, CCSMSGSEQ.NEXTVAL, 'P', :chr_h_system_date  
+				from DL_DEAL a,MT_CLIENT, DL_DEAL b 
+				where MT_CLIENT.cln_code = a.CLIENT and a.client = :p_client AND 
+						a.IDENTIY_NO = :p_ident AND a.ORIG_REFNO = b.IDENTIY_NO and a.client = b.client; 
+	 IS_ANY_ORA_ERROR
+   }
+
+printf("\n 3 if...\n");
+	if(!strcmp(p_ccstype,MS_CCS_II) )
+	{
+	 EXEC SQL INSERT INTO DL_CCSPENDTXN (msg_class, identity, tlc_deal_type, processdt, iden_no, status, access_stamp) 
+				SELECT :p_ccstype, :p_ident, ' ', SYS_DATE, CCSMSGSEQ.NEXTVAL, 'P', :chr_h_system_date 
+				from PRO_SYS_DATE;
+	 IS_ANY_ORA_ERROR
+   }
+
+printf("\n 4 if...\n");
+	if(!strcmp(p_ccstype,MS_CCS_T3) || !strcmp(p_ccstype,MS_CCS_RL) || !strcmp(p_ccstype,MS_CCS_X3))
+	{
+	 EXEC SQL INSERT INTO DL_CCSPENDTXN (msg_class, identity, client, clnt_ident, tlc_deal_type, 
+				iden_no, status, access_stamp,QTY) 
+				SELECT :p_ccstype , b.UNIQ_IDENT_NO, :p_client, a.IDENTIY_NO, decode(a.domestic_cpclt,:l_mt_core_sys_params_struct_h.custody_clt_cd,'S','C'), 
+				CCSMSGSEQ.NEXTVAL, decode(:p_ccstype,'X3','X','P'), :chr_h_system_date  ,a.QTY
+				from DL_DEAL a, DL_DEAL b where a.client = :p_client AND 
+					a.IDENTIY_NO = :p_ident  and a.ORIG_REFNO = b.IDENTIY_NO  and a.client = b.client;
+	 IS_ANY_ORA_ERROR
+   }
+
+printf("\n 5 if...\n");
+	if(!strcmp(p_ccstype,MS_CCS_FC) )
+	{
+	 EXEC SQL INSERT INTO DL_CCSPENDTXN (msg_class, identity, tlc_deal_type, client, clnt_ident, setl_date,
+				failreason_cd, sub_fail_cd, failreason_index, fail_det, iden_no, status, access_stamp ) 
+				SELECT :p_ccstype , b.UNIQ_IDENT_NO, decode(a.domestic_cpclt,:l_mt_core_sys_params_struct_h.custody_clt_cd,'S','C'), 
+				:p_client, a.IDENTIY_NO, a.setl_date, :p_failcode, :p_subfailcode, a.cnt_548, substr(:p_failnote,1,70), 
+				CCSMSGSEQ.NEXTVAL, 'P', :chr_h_system_date 
+				from DL_DEAL a, DL_DEAL b 
+				where a.client = :p_client AND a.IDENTIY_NO = :p_ident AND a.ORIG_REFNO = b.IDENTIY_NO and a.client = b.client
+						AND (a.DEAL_STAT != 'UU' or instr(a.MSG_STAT,'O') > 0);
+	 IS_ANY_ORA_ERROR
+	}
+
+printf("\n 6 if...\n");
+	if(!strcmp(p_ccstype,MS_CCS_SC) || !strcmp(p_ccstype,MS_CCS_SR) || !strcmp(p_ccstype,"XP"))
+	{
+	 EXEC SQL INSERT INTO DL_CCSPENDTXN (msg_class, identity, tlc_deal_type, client, clnt_ident, QTY, currency_cd , 
+				AMT , signature , actual_setldt, iden_no, status, access_stamp) 
+				SELECT :p_ccstype , b.UNIQ_IDENT_NO, decode(a.domestic_cpclt,:l_mt_core_sys_params_struct_h.custody_clt_cd,'S','C'), 
+				:p_client, a.IDENTIY_NO, a.QTY, a.currency_cd, a.AMOUNT, decode(a.deal_cd,'3','A','4','D',' '), a.setl_date, 
+				CCSMSGSEQ.NEXTVAL, decode(:p_ccstype,'XS','X','XP','X','P'), :chr_h_system_date  
+				from DL_DEAL a, DL_DEAL b where a.client = :p_client AND a.IDENTIY_NO = :p_ident AND 
+						a.ORIG_REFNO = b.IDENTIY_NO and a.client = b.client;
+	 IS_ANY_ORA_ERROR
+	}
+
+printf("\n 7 if...\n");
+	if(!strcmp(p_ccstype,MS_CCS_CN) )
+	{
+	 EXEC SQL INSERT INTO DL_CCSPENDTXN (msg_class, identity, tlc_deal_type, client, clnt_ident, processdt, 
+				iden_no, status, access_stamp) 
+				SELECT :p_ccstype, b.UNIQ_IDENT_NO, decode(a.domestic_cpclt,:l_mt_core_sys_params_struct_h.custody_clt_cd,'S','C'), 
+				:p_client, a.IDENTIY_NO, a.DEL_REC_DATE, CCSMSGSEQ.NEXTVAL, decode(:p_ccstype,'XD','X','P'), :chr_h_system_date  
+				from DL_DEAL a, DL_DEAL b where a.client = :p_client AND a.IDENTIY_NO = :p_ident AND 
+						a.ORIG_REFNO = b.IDENTIY_NO and a.client = b.client;
+	 IS_ANY_ORA_ERROR
+	}
+
+ APL_GOBACK_SUCCESS
+
+   RETURN_SUCCESS :
+      APL_IF_DEBUG
+      {
+         CO_ProcMonitor(   APL_OUT_FILE,
+                     "Leaving Function DL_Mod_CCSPendDL with success\n",
+                     NULL,
+                     NULL );
+      }
+      return(APL_SUCCESS);
+
+   RETURN_FAILURE :
+      APL_IF_DEBUG
+      {
+         CO_ProcMonitor(   APL_OUT_FILE,
+                     "Leaving Function DL_Mod_CCSPendDL with errors\n",
+                     NULL,
+                     NULL );
+      }
+      return(APL_FAILURE);
+}
+
+int DL_Chk_CCSEligible(char *p_client,char *p_ident,
+									 int *int_p_ccseligibility_flg,
+									 char *p_ccstype,
+    	                      DEBUG_INFO_STRUCT_H **l_debug_info_ptr
+									 )
+{
+		
+		char  chr_h_typoftrd[3] = APL_NULL_STRING;
+		char  chr_h_creditchk[2] = APL_NULL_STRING;
+		char  l_chr_temp[41] = APL_NULL_STRING;
+		short i_typOfTrd = 0;
+		short i_creditChk = 0;
+		
+		struct sqlca sqlca;
+
+		EXEC SQL VAR chr_h_typoftrd IS STRING;
+		EXEC SQL VAR chr_h_creditchk IS STRING;
+
+		APL_IF_DEBUG
+		{
+		CO_ProcMonitor(APL_OUT_FILE, 
+               "Entered Function DL_Chk_CCSEligible\n",
+                NULL,
+                NULL);
+		}
+
+		
+		
+		if ((g_mt_commonsys_params_struct_h.ccs_ind[0] != 'Y') && (g_mt_commonsys_params_struct_h.ccs_ind[0] != 'R')
+					&& (strncmp(p_ccstype,"X",1)!=0) && (strncmp(p_ccstype,"I",1)!=0) )		
+		{
+			*int_p_ccseligibility_flg = 0;
+			CO_ProcMonitor(APL_OUT_FILE,
+                  "CCS is not Installed \n",
+                  NULL,
+                  NULL);
+			APL_GOBACK_SUCCESS
+		} 
+
+		
+		EXEC SQL SELECT dl_class
+               INTO   :chr_h_typoftrd:i_typOfTrd
+               FROM DL_DEAL
+               WHERE client=:p_client AND
+							IDENTIY_NO = :p_ident;
+
+		IS_ANY_ORA_ERROR
+
+  		EXEC SQL SELECT map_desc
+               INTO   :l_chr_temp
+           from PRO_SGENSTAT
+           where map_type = 'CCS_EXEMPT_TYPTRD' and
+                 map_val = :chr_h_typoftrd
+                 and nation_code = :g_mt_commonsys_params_struct_h.nation_code;
+  		IS_ANY_ORA_ERROR
+  		if(sqlca.sqlcode == 1403)
+  		{
+    		EXEC SQL SELECT map_desc
+               INTO   :l_chr_temp
+             from PRO_SGENSTAT
+             where map_type = 'CCS_EXEMPT_TYPTRD' and
+                   map_val = :chr_h_typoftrd
+                   and nation_code = 'XX';
+  			IS_ANY_ORA_ERROR
+
+  		}
+		if (sqlca.sqlcode != 1403)
+		{
+			CO_ProcMonitor(APL_OUT_FILE,
+                 "TYPE OF TRADE IS EXEMPT FROM CCS\n",
+                  NULL,
+                  NULL);
+			*int_p_ccseligibility_flg = 0;
+        	APL_GOBACK_SUCCESS
+		} 
+
+		if(strncmp(p_ident,"LOCCHG",6)== 0)
+		{
+			CO_ProcMonitor(APL_OUT_FILE,
+                 "LOCCHG TYPE OF TRADE IS EXEMPT FROM CCS\n",
+                  NULL,
+                  NULL);
+			*int_p_ccseligibility_flg = 0;
+        	APL_GOBACK_SUCCESS
+		}
+
+		
+
+			EXEC SQL SELECT CLN_VALCREDIT
+						INTO	 :chr_h_creditchk:i_creditChk
+						FROM MT_CLIENT
+						WHERE cln_code=:p_client;
+
+			IS_ANY_ORA_ERROR
+
+			if (strcmp(chr_h_creditchk,"Y")!=0)
+			{
+				CO_ProcMonitor(APL_OUT_FILE,
+					"ACCOUNT NOT MARKED FOR CREDIT_IND CHECK\n",
+					NULL,
+					NULL);
+				*int_p_ccseligibility_flg = 0;
+				APL_GOBACK_SUCCESS
+			}
+
+	*int_p_ccseligibility_flg = 1;
+	APL_GOBACK_SUCCESS
+
+RETURN_SUCCESS:
+	CO_ProcMonitor(APL_OUT_FILE, "Exiting Function DL_Chk_CCSEligible with success", NULL, NULL);
+	return (APL_SUCCESS);
+
+RETURN_FAILURE:
+   *int_p_ccseligibility_flg = 0;
+	CO_ProcMonitor(APL_OUT_FILE, "Exiting Function DL_Chk_CCSEligible with failure", NULL, NULL);
+	return (APL_FAILURE);
+}
+
+int DL_Rtv_DLFailCd(char *p_status_qual,char *p_status_code,
+							 char *p_reas_qual,char *p_reas_code,
+                      char *p_failcode, char *p_subfailcode, 
+                      DEBUG_INFO_STRUCT_H **l_debug_info_ptr
+                      )
+{
+
+	char int_l_h_failcode[FAILREAS_CD_LEN]	= APL_NULL_STRING;
+	char int_l_h_subfailcode[FAILREAS_CD_LEN]	= APL_NULL_STRING;
+	int int_l_ccseligfail_flg	= 0;
+	short l_i_failcode	= 0;
+	short l_i_subfailcode	= 0;
+
+	EXEC SQL VAR int_l_h_failcode IS STRING;
+	EXEC SQL VAR int_l_h_subfailcode IS STRING;
+
+	EXEC SQL SELECT FAILREASON_CD,SUB_FAIL_CD INTO
+				:int_l_h_failcode:l_i_failcode, :int_l_h_subfailcode:l_i_subfailcode 
+			FROM PRO_FAILCODES 
+			WHERE status_qual_ind = :p_status_qual AND
+					status_cd = :p_status_code AND
+					reason_ql = :p_reas_qual AND
+					reason_cd = :p_reas_code AND
+					failreason_cd in (select map_val from PRO_SGENSTAT where map_type = 'CCS_FAILCODES' 
+											and nation_code in (:g_mt_commonsys_params_struct_h.nation_code,'XX'))
+					and rownum < 2;
+
+	IS_ANY_ORA_ERROR
+
+	if (sqlca.sqlcode == 0)
+	{
+		strcpy(p_failcode,int_l_h_failcode);
+		strcpy(p_subfailcode,int_l_h_subfailcode);
+	}
+	else
+	{
+		strcpy(p_failcode,APL_NULL_STRING);
+		strcpy(p_subfailcode,APL_NULL_STRING);
+	}
+	
+
+   APL_GOBACK_SUCCESS
+
+   RETURN_SUCCESS:
+		printf("Leaving processtion DL_Rtv_DLFailCd with success\n");
+      return (APL_SUCCESS);
+
+   RETURN_FAILURE:
+		printf("Leaving processtion DL_Rtv_DLFailCd with failure\n");
+      strcpy(p_failcode,APL_NULL_STRING);
+      strcpy(p_subfailcode,APL_NULL_STRING);
+      return (APL_FAILURE);
+}
+
+int DL_Chk_DLFailCd(char *p_failcode, int *p_ccseligfailcode_flg, DEBUG_INFO_STRUCT_H **l_debug_info_ptr )
+{
+
+      *p_ccseligfailcode_flg = 1;
+		sqlca.sqlcode = 0;
+		char  l_chr_temp[41] = APL_NULL_STRING;
+
+      EXEC SQL SELECT map_desc
+				into :l_chr_temp
+           from PRO_SGENSTAT
+           where map_type = 'CCS_FAILCODES' and
+                 map_val = :p_failcode
+                 and nation_code in (:g_mt_commonsys_params_struct_h.nation_code,'XX');
+      IS_ANY_ORA_ERROR
+      if (sqlca.sqlcode == 1403)
+      {
+         *p_ccseligfailcode_flg = 0;
+      }
+
+   APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+		CO_ProcMonitor(APL_OUT_FILE,"Return from DL_Chk_DLFailCd success \n",NULL,NULL);
+   	return (APL_SUCCESS);
+
+	RETURN_FAILURE:
+      *p_ccseligfailcode_flg = 0;
+		CO_ProcMonitor(APL_OUT_FILE,"Return from DL_Chk_DLFailCd Failure \n",NULL,NULL);
+   	return (APL_FAILURE);
+}

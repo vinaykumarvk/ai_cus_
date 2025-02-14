@@ -1,0 +1,938 @@
+
+
+
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+
+
+#include "CR_Common.h"
+#include "MT_Interface.h"
+#include "CO_IndStructdef.h"
+EXEC SQL INCLUDE SQLCA.H;
+
+#define  RTV_SYSTEM_DATA
+
+
+#define  APL_BATCHSTATUS_LEN  16
+#define  APL_STATUS_BATCH_COMPLETED "completed"
+#define  APL_STATUS_BATCH_STARTED "started"
+#define  CLS_LOG_ARRAY  memset(chr_log_buff,NULL,sizeof(chr_log_buff));
+#define  APL_STATINFO_LEN  71
+#define  COMMIT_COUNT_G 50
+
+
+char  chr_g_progname        [APL_BATCH_PROGNAME_LEN]=APL_NULL_STRING;
+char  chr_g_key             [APL_BATCH_KEY_LEN] = APL_NULL_STRING;
+char  chr_g_start_date      [APL_DATE_LEN] = APL_NULL_STRING;
+char  chr_g_sys_date[APL_DATE_LEN] = APL_NULL_STRING;
+char  chr_g_sys_date_time[APL_DATE_LEN] = APL_NULL_STRING;
+char  chr_g_status_started [APL_BATCHSTATUS_LEN] = {APL_STATUS_BATCH_STARTED};
+char  chr_g_status_completed [APL_BATCHSTATUS_LEN] = {APL_STATUS_BATCH_COMPLETED};
+char  chr_g_func_code [APL_FUNC_NAME_LENGTH] = APL_NULL_STRING ;
+
+
+
+int  C_Msg_Conv (   FILE               *p_flogfile,
+                     INTL_ENV_DATA_STRUCT_H *p_intlenv_data_struct_h,
+                     DEBUG_INFO_STRUCT_H       **l_debug_info_ptr
+                      )
+{
+   struct sqlca sqlca;
+   char chr_batch_in_proc_rowid[APL_ROWID_LEN] = APL_NULL_STRING;
+   char stat_det[APL_STATINFO_LEN] = APL_NULL_STRING;
+   char chr_h_stat_info[APL_STATINFO_LEN] = APL_NULL_STRING;
+   char chr_h_system_date[APL_DATE_LEN]          = APL_NULL_STRING;
+   char chr_h_default_date[APL_DATE_LEN]          = APL_NULL_STRING;
+   MS_MSGCONV_STRUCT_H      l_ms_msgconv_struct_h;
+   MS_MSGCONV_STRUCT_I      l_ms_msgconv_struct_i;
+   char chr_dt_grp[6] = APL_NULL_STRING;   
+   char chr_l_info[100] = APL_NULL_STRING;
+   char chr_l_sclient[APL_CLIENT_LENGTH] = APL_NULL_STRING;
+   int  int_l_scount = 0;
+   int  int_l_mcount = 0;
+   int  int_l_ms_count = 0;
+   int  int_l_df_count = 0;   
+
+   EXEC SQL VAR l_ms_msgconv_struct_h.h_dl_client is STRING;
+   EXEC SQL VAR l_ms_msgconv_struct_h.h_setl_eff_date is STRING;
+   EXEC SQL VAR l_ms_msgconv_struct_h.h_stat_eff_date is STRING;
+   EXEC SQL VAR l_ms_msgconv_struct_h.h_ca_eff_date is STRING;
+   EXEC SQL VAR l_ms_msgconv_struct_h.h_stmsg_eff_date is STRING;
+   EXEC SQL VAR l_ms_msgconv_struct_h.h_access_stamp is STRING;
+   EXEC SQL VAR chr_l_sclient is STRING;
+   EXEC SQL VAR chr_h_default_date is STRING; 
+
+   l_ms_msgconv_struct_i.i_dl_client = 0 ;
+   l_ms_msgconv_struct_i.i_setl_eff_date = 0 ;
+   l_ms_msgconv_struct_i.i_stat_eff_date = 0 ;
+   l_ms_msgconv_struct_i.i_ca_eff_date = 0 ;
+   l_ms_msgconv_struct_i.i_stmsg_eff_date = 0;
+   l_ms_msgconv_struct_i.i_access_stamp = 0;
+ 
+   printf("Entered Function C_Msg_Conv \n"); 
+ 
+     
+   EXEC SQL SELECT ROWID
+   INTO :chr_batch_in_proc_rowid
+   FROM SYS_BATCHPROC
+   WHERE
+   PROCESS_NAME =:chr_g_progname
+   and PROC_INIT = :chr_g_key
+   and STARTDATE =:chr_g_start_date
+   and STATUS =:chr_g_status_started
+   FOR UPDATE;
+
+   IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"BATCH_IN_PROC",chr_g_progname,chr_g_key)
+
+
+  if (APL_FAILURE == CO_RtvSysDt(chr_h_system_date,
+                                       l_debug_info_ptr) )
+   {
+      APL_GOBACK_FAIL
+   }
+    EXEC SQL SELECT SETL_EFFECTIVE_DATE INTO :chr_h_default_date
+             FROM PRO_MSGCONV
+             WHERE CLIENT='ORBISMAC';
+
+   if (strcmp(chr_h_default_date,chr_h_system_date) == 0 )
+   {
+   EXEC SQL UPDATE PRO_MSGCONV SET SETL_EFFECTIVE_DATE = :chr_h_system_date WHERE SETL_EFFECTIVE_DATE IS NULL;
+   IS_ANY_ORA_ERROR
+   EXEC SQL UPDATE PRO_MSGCONV SET STAT_EFF_DATE = :chr_h_system_date WHERE STAT_EFF_DATE IS NULL;
+   IS_ANY_ORA_ERROR
+   EXEC SQL UPDATE PRO_MSGCONV SET CA_EFFECTIVE_DT = :chr_h_system_date WHERE CA_EFFECTIVE_DT IS NULL;
+   IS_ANY_ORA_ERROR
+   EXEC SQL UPDATE PRO_MSGCONV SET STMSG_EFFECT_DATE = :chr_h_system_date WHERE STMSG_EFFECT_DATE IS NULL;
+   IS_ANY_ORA_ERROR
+   }
+
+
+  EXEC SQL DECLARE conv_subaccount CURSOR FOR
+  SELECT a.*
+  FROM PRO_MSGCONV a
+  WHERE a.CLIENT IN (SELECT CLN_CODE FROM MT_CLIENT WHERE CLN_CODE <> CLN_MASTER ) AND
+  (SETL_EFFECTIVE_DATE = :chr_h_system_date OR
+   STAT_EFF_DATE = :chr_h_system_date OR
+   CA_EFFECTIVE_DT = :chr_h_system_date OR
+   STMSG_EFFECT_DATE = :chr_h_system_date)
+  ORDER BY a.CLIENT;
+
+  EXEC SQL OPEN conv_subaccount;
+  IS_ANY_ORA_ERROR
+   
+  printf(" Started Processing Sub accounts for which conversion chr_date is defined \n");
+  for(;;)
+	{
+    EXEC SQL FETCH conv_subaccount
+			  INTO :l_ms_msgconv_struct_h:l_ms_msgconv_struct_i ;
+    IS_ANY_ORA_ERROR
+   
+    if (APL_ZERO_RESULT_SET) 
+      {
+         break;
+      }
+   
+     sprintf(chr_l_info,"-----------Starting Conversion of  Sub-Account :%s----------",l_ms_msgconv_struct_h.h_dl_client);
+     CO_WrLog_WODtTime(p_flogfile,chr_l_info,NULL,NULL);
+ 
+    if(strcmp(l_ms_msgconv_struct_h.h_setl_eff_date,chr_h_system_date) == 0 )
+      {
+
+         printf("Calling C_UpdMsgISO for SETLM \n");  
+         strcpy(chr_dt_grp,"SETLM");
+         if ( C_UpdMsgISO(p_flogfile,l_ms_msgconv_struct_h.h_dl_client,chr_dt_grp,
+                          p_intlenv_data_struct_h,
+                          l_debug_info_ptr) == APL_FAILURE )
+
+         APL_GOBACK_FAIL
+      }
+    
+    if(strcmp(l_ms_msgconv_struct_h.h_stat_eff_date,chr_h_system_date) == 0 )
+      {
+         printf("Calling C_UpdMsgISO for STATM \n");
+         strcpy(chr_dt_grp,"STATM");
+         if ( C_UpdMsgISO(p_flogfile,l_ms_msgconv_struct_h.h_dl_client,chr_dt_grp,
+                          p_intlenv_data_struct_h,
+                          l_debug_info_ptr) == APL_FAILURE )
+
+         APL_GOBACK_FAIL
+      }
+  
+     if(strcmp(l_ms_msgconv_struct_h.h_ca_eff_date,chr_h_system_date) == 0 )
+      {
+          printf("Calling C_UpdMsgISO for CAMSG \n");
+          strcpy(chr_dt_grp,"CAMSG");
+         if ( C_UpdMsgISO(p_flogfile,l_ms_msgconv_struct_h.h_dl_client,chr_dt_grp,
+                          p_intlenv_data_struct_h,
+                          l_debug_info_ptr) == APL_FAILURE )
+
+         APL_GOBACK_FAIL
+      }
+    
+     if(strcmp(l_ms_msgconv_struct_h.h_stmsg_eff_date,chr_h_system_date) == 0 )
+      {
+         printf("Calling C_UpdMsgISO for STMSG  \n");
+         strcpy(chr_dt_grp,"STMSG");
+         if ( C_UpdMsgISO(p_flogfile,l_ms_msgconv_struct_h.h_dl_client,chr_dt_grp,
+                          p_intlenv_data_struct_h,
+                          l_debug_info_ptr) == APL_FAILURE )
+
+         APL_GOBACK_FAIL
+      }
+         
+          int_l_scount = int_l_scount + 1;
+ 
+         if( (int_l_scount%COMMITSIZE) == 0 )
+ 		     {
+      			   sprintf(chr_h_stat_info,"Processed %d Accounts",int_l_scount);
+
+			         EXEC SQL UPDATE SYS_BATCHPROC
+         			SET STAT_DET =:chr_h_stat_info
+         			WHERE PROCESS_NAME=:chr_g_progname
+         			AND   PROC_INIT=:chr_g_key
+         			AND   STARTDATE=:chr_g_start_date
+         			AND   STATUS=:chr_g_status_started;
+
+         			EXEC SQL COMMIT WORK;
+         			IS_ANY_ORA_ERROR
+         
+                  sprintf(chr_l_info," %d RECORDS COMMITED- FOR SUB ACCOUNTS EXPLICITLY STATED ",int_l_scount);
+                  CO_ProcMonitor(p_flogfile,chr_l_info,NULL,NULL); 
+      	  	
+            	   printf("Processed %d Sub Accounts\n",int_l_scount); 
+
+ 	  		         EXEC SQL SELECT ROWID INTO :chr_batch_in_proc_rowid
+         			FROM SYS_BATCHPROC
+         			WHERE PROCESS_NAME  = :chr_g_progname
+         			AND   PROC_INIT       =:chr_g_key
+         			AND   STARTDATE = :chr_g_start_date
+         			AND   STATUS    = :chr_g_status_started
+         			FOR UPDATE OF STATUS;
+	
+ 		        IS_ANY_ORA_ERROR
+
+      		}    
+          continue;
+   }  
+
+   EXEC SQL CLOSE conv_subaccount;
+   IS_ANY_ORA_ERROR
+   
+   if (int_l_scount == 0)
+      {
+          sprintf(chr_l_info,"----------No Sub Accounts  For Conversion on :[%s]----------",chr_h_system_date);
+          CO_WrLog_WODtTime(p_flogfile,chr_l_info,NULL,NULL);
+
+      }
+   else
+      {
+                  sprintf(chr_h_stat_info,"Processed %d Sub Accounts",int_l_scount);
+
+                  EXEC SQL UPDATE SYS_BATCHPROC
+                  SET STAT_DET =:chr_h_stat_info
+                  WHERE PROCESS_NAME=:chr_g_progname
+                  AND   PROC_INIT=:chr_g_key
+                  AND   STARTDATE=:chr_g_start_date
+                  AND   STATUS=:chr_g_status_started;
+
+                  EXEC SQL COMMIT WORK;
+                  IS_ANY_ORA_ERROR
+                  
+                  sprintf(chr_l_info,"----------[%d] Sub-Accounts Processed & Commited----------",int_l_scount);
+                  CO_ProcMonitor(p_flogfile,chr_l_info,NULL,NULL);
+
+                  EXEC SQL SELECT ROWID INTO :chr_batch_in_proc_rowid
+                  FROM SYS_BATCHPROC
+                  WHERE PROCESS_NAME  = :chr_g_progname
+                  AND   PROC_INIT       =:chr_g_key
+                  AND   STARTDATE = :chr_g_start_date
+                  AND   STATUS    = :chr_g_status_started
+                  FOR UPDATE OF STATUS;
+
+              IS_ANY_ORA_ERROR
+   
+      } 
+
+   printf("***** Finished Sub Accounts for which conversion chr_date is defined *****\n");
+
+
+  
+  EXEC SQL DECLARE conv_mastaccount CURSOR FOR
+  SELECT a.*
+  FROM PRO_MSGCONV a
+  WHERE a.CLIENT IN (SELECT CLIENT FROM MT_CLIENT WHERE CLN_CODE = CLN_MASTER ) AND
+  (SETL_EFFECTIVE_DATE = :chr_h_system_date OR
+   STAT_EFF_DATE = :chr_h_system_date OR
+   CA_EFFECTIVE_DT = :chr_h_system_date OR
+   STMSG_EFFECT_DATE = :chr_h_system_date)
+   ORDER BY a.CLIENT;
+
+  EXEC SQL OPEN conv_mastaccount;
+  IS_ANY_ORA_ERROR
+  int_l_mcount = 0;
+
+  printf("***** Started Master Accounts for which conversion chr_date is defined *****\n");
+  for(;;)
+   {
+    EXEC SQL FETCH conv_mastaccount
+           INTO :l_ms_msgconv_struct_h:l_ms_msgconv_struct_i ;
+    IS_ANY_ORA_ERROR
+
+    if (APL_ZERO_RESULT_SET)
+      {
+         break;
+      }
+
+     sprintf(chr_l_info,"-----------Starting Conversion of  Master-Account :%s----------",l_ms_msgconv_struct_h.h_dl_client);
+     CO_WrLog_WODtTime(p_flogfile,chr_l_info,NULL,NULL);
+
+    if(strcmp(l_ms_msgconv_struct_h.h_setl_eff_date,chr_h_system_date) == 0 )
+      {
+
+         printf("Calling C_UpdMsgISO for SETLM \n");
+         strcpy(chr_dt_grp,"SETLM");
+         if ( C_UpdMsgISO(p_flogfile,l_ms_msgconv_struct_h.h_dl_client,chr_dt_grp,
+                          p_intlenv_data_struct_h,
+                          l_debug_info_ptr) == APL_FAILURE )
+
+         APL_GOBACK_FAIL
+      }
+
+    if(strcmp(l_ms_msgconv_struct_h.h_stat_eff_date,chr_h_system_date) == 0 )
+      {
+         printf("Calling C_UpdMsgISO for STATM \n");
+         strcpy(chr_dt_grp,"STATM");
+         if ( C_UpdMsgISO(p_flogfile,l_ms_msgconv_struct_h.h_dl_client,chr_dt_grp,
+                          p_intlenv_data_struct_h,
+                          l_debug_info_ptr) == APL_FAILURE )
+
+         APL_GOBACK_FAIL
+      }
+
+     if(strcmp(l_ms_msgconv_struct_h.h_ca_eff_date,chr_h_system_date) == 0 )
+      {
+          printf("Calling C_UpdMsgISO for CAMSG \n");
+          strcpy(chr_dt_grp,"CAMSG");
+         if ( C_UpdMsgISO(p_flogfile,l_ms_msgconv_struct_h.h_dl_client,chr_dt_grp,
+                          p_intlenv_data_struct_h,
+                          l_debug_info_ptr) == APL_FAILURE )
+
+         APL_GOBACK_FAIL
+      }
+
+     if(strcmp(l_ms_msgconv_struct_h.h_stmsg_eff_date,chr_h_system_date) == 0 )
+      {
+         printf("Calling C_UpdMsgISO for STMSG  \n");
+         strcpy(chr_dt_grp,"STMSG");
+         if ( C_UpdMsgISO(p_flogfile,l_ms_msgconv_struct_h.h_dl_client,chr_dt_grp,
+                          p_intlenv_data_struct_h,
+                          l_debug_info_ptr) == APL_FAILURE )
+
+         APL_GOBACK_FAIL
+      }
+
+
+       EXEC SQL DECLARE conv_remsubaccount CURSOR FOR
+       SELECT a.CLN_CODE
+       FROM MT_CLIENT a
+       WHERE a.CLN_MASTER = :l_ms_msgconv_struct_h.h_dl_client AND
+       a.CLN_CODE NOT IN (SELECT CLIENT FROM PRO_MSGCONV)
+       ORDER BY a.CLN_CODE;
+
+       EXEC SQL OPEN conv_remsubaccount;
+       IS_ANY_ORA_ERROR
+       int_l_ms_count = 0;
+
+       printf("***** Started Sub Accounts for which conversion chr_date is not defined *****\n"); 
+       for(;;)
+       {
+            EXEC SQL FETCH conv_remsubaccount
+            INTO :chr_l_sclient;
+            IS_ANY_ORA_ERROR
+
+        if (APL_ZERO_RESULT_SET)
+           {
+             break;
+           }
+ 
+        if(strcmp(l_ms_msgconv_struct_h.h_setl_eff_date,chr_h_system_date) == 0 )
+          {
+
+           printf("Calling C_UpdMsgISO for SETLM \n");
+           strcpy(chr_dt_grp,"SETLM");
+           if ( C_UpdMsgISO(p_flogfile,chr_l_sclient,chr_dt_grp,
+                            p_intlenv_data_struct_h,
+                            l_debug_info_ptr) == APL_FAILURE )
+ 
+                      APL_GOBACK_FAIL
+         }
+
+       if(strcmp(l_ms_msgconv_struct_h.h_stat_eff_date,chr_h_system_date) == 0 )
+         {
+           printf("Calling C_UpdMsgISO for STATM \n");
+           strcpy(chr_dt_grp,"STATM");
+           if ( C_UpdMsgISO(p_flogfile,chr_l_sclient,chr_dt_grp,
+                            p_intlenv_data_struct_h,
+                            l_debug_info_ptr) == APL_FAILURE )
+
+                      APL_GOBACK_FAIL
+         }
+
+       if(strcmp(l_ms_msgconv_struct_h.h_ca_eff_date,chr_h_system_date) == 0 )
+         {
+           printf("Calling C_UpdMsgISO for CAMSG \n");
+           strcpy(chr_dt_grp,"CAMSG");
+           if ( C_UpdMsgISO(p_flogfile,chr_l_sclient,chr_dt_grp,
+                            p_intlenv_data_struct_h,
+                            l_debug_info_ptr) == APL_FAILURE )
+
+                      APL_GOBACK_FAIL
+         }
+ 
+      if(strcmp(l_ms_msgconv_struct_h.h_stmsg_eff_date,chr_h_system_date) == 0 )
+        {
+          printf("Calling C_UpdMsgISO for STMSG  \n");
+          strcpy(chr_dt_grp,"STMSG");
+          if ( C_UpdMsgISO(p_flogfile,chr_l_sclient,chr_dt_grp,
+                           p_intlenv_data_struct_h,
+                           l_debug_info_ptr) == APL_FAILURE )
+
+                      APL_GOBACK_FAIL
+        }
+
+         int_l_ms_count = int_l_ms_count + 1;
+
+         if( (int_l_ms_count%COMMITSIZE) == 0 )
+           {
+                  sprintf(chr_h_stat_info,"Processed %d SubAccounts %s",int_l_ms_count,l_ms_msgconv_struct_h.h_dl_client);
+
+                  EXEC SQL UPDATE SYS_BATCHPROC
+                  SET STAT_DET =:chr_h_stat_info
+                  WHERE PROCESS_NAME=:chr_g_progname
+                  AND   PROC_INIT=:chr_g_key
+                  AND   STARTDATE=:chr_g_start_date
+                  AND   STATUS=:chr_g_status_started;
+
+                  EXEC SQL COMMIT WORK;
+                  IS_ANY_ORA_ERROR
+
+                  printf("Processed %d Sub Accounts\n",int_l_ms_count);
+                  sprintf(chr_l_info," %d RECORDS COMMITED - IMPLICIT SUBACCOUNTS ",int_l_ms_count);
+                  CO_ProcMonitor(p_flogfile,chr_l_info,NULL,NULL);                 
+ 
+                  EXEC SQL SELECT ROWID INTO :chr_batch_in_proc_rowid
+                  FROM SYS_BATCHPROC
+                  WHERE PROCESS_NAME  = :chr_g_progname
+                  AND   PROC_INIT       =:chr_g_key
+                  AND   STARTDATE = :chr_g_start_date
+                  AND   STATUS    = :chr_g_status_started
+                  FOR UPDATE OF STATUS;
+
+              IS_ANY_ORA_ERROR
+
+            }
+
+         continue;
+  
+       }
+       EXEC SQL CLOSE conv_remsubaccount;
+       IS_ANY_ORA_ERROR
+   
+       if (int_l_ms_count == 0)
+          {
+              sprintf(chr_l_info,"----------No Sub-Accounts of Master Account %s For Conversion on :[%s]----------",l_ms_msgconv_struct_h.h_dl_client,chr_h_system_date);
+              CO_WrLog_WODtTime(p_flogfile,chr_l_info,NULL,NULL);
+          }
+       else
+          {
+                  sprintf(chr_h_stat_info,"Processed %d SubAccounts of Master %s",int_l_ms_count,l_ms_msgconv_struct_h.h_dl_client);
+
+                  EXEC SQL UPDATE SYS_BATCHPROC
+                  SET STAT_DET =:chr_h_stat_info
+                  WHERE PROCESS_NAME=:chr_g_progname
+                  AND   PROC_INIT=:chr_g_key
+                  AND   STARTDATE=:chr_g_start_date
+                  AND   STATUS=:chr_g_status_started;
+
+                  EXEC SQL COMMIT WORK;
+                  IS_ANY_ORA_ERROR
+
+                  sprintf(chr_l_info,"----------[%d] Sub-Accounts of Master-Account %s Processed----------",int_l_ms_count,l_ms_msgconv_struct_h.h_dl_client);
+                  CO_ProcMonitor(p_flogfile,chr_l_info,NULL,NULL);
+
+                  EXEC SQL SELECT ROWID INTO :chr_batch_in_proc_rowid
+                  FROM SYS_BATCHPROC
+                  WHERE PROCESS_NAME  = :chr_g_progname
+                  AND   PROC_INIT       =:chr_g_key
+                  AND   STARTDATE = :chr_g_start_date
+                  AND   STATUS    = :chr_g_status_started
+                  FOR UPDATE OF STATUS;
+
+                  IS_ANY_ORA_ERROR
+ 
+
+          }         
+
+          printf("Finished Subaccounts of %s for which Date Not Defined\n",l_ms_msgconv_struct_h.h_dl_client);
+         
+
+     int_l_mcount = int_l_mcount + 1;
+    continue;
+   }
+
+   EXEC SQL CLOSE conv_mastaccount;
+   IS_ANY_ORA_ERROR
+      
+   if (int_l_mcount == 0)
+      {
+          sprintf(chr_l_info,"----------No Master Accounts  For Conversion on :[%s]----------",chr_h_system_date);
+          CO_WrLog_WODtTime(p_flogfile,chr_l_info,NULL,NULL);
+      }
+   else
+      {
+          sprintf(chr_h_stat_info,"Processed %d Master Accounts",int_l_mcount);
+
+                  EXEC SQL UPDATE SYS_BATCHPROC
+                  SET STAT_DET =:chr_h_stat_info
+                  WHERE PROCESS_NAME=:chr_g_progname
+                  AND   PROC_INIT=:chr_g_key
+                  AND   STARTDATE=:chr_g_start_date
+                  AND   STATUS=:chr_g_status_started;
+
+                  EXEC SQL COMMIT WORK;
+                  IS_ANY_ORA_ERROR
+
+                  sprintf(chr_l_info,"----------[%d] Master-Accounts Processed----------",int_l_mcount);
+                  CO_ProcMonitor(p_flogfile,chr_l_info,NULL,NULL);
+                  
+                  EXEC SQL SELECT ROWID INTO :chr_batch_in_proc_rowid
+                  FROM SYS_BATCHPROC
+                  WHERE PROCESS_NAME  = :chr_g_progname
+                  AND   PROC_INIT       =:chr_g_key
+                  AND   STARTDATE = :chr_g_start_date
+                  AND   STATUS    = :chr_g_status_started
+                  FOR UPDATE OF STATUS;
+
+                  IS_ANY_ORA_ERROR
+
+      }
+
+  
+     printf("***** Finished Master Accounts for which Conversion chr_date is defined *****\n");  
+
+ 
+    
+    EXEC SQL SELECT SETL_EFFECTIVE_DATE INTO :chr_h_default_date 
+            FROM PRO_MSGCONV 
+				WHERE CLIENT='ORBISMAC';
+ 
+    if (strcmp(chr_h_default_date,chr_h_system_date) == 0 )
+       {
+          printf("*****Default Date conversion of Accounts Started ****** \n");
+          sprintf(chr_l_info,"\n**********TODAY IS DEFAULT DATE OF CONVERSION TO ISO15022[%s]**********\n",chr_h_default_date);
+          CO_WrLog_WODtTime(p_flogfile,chr_l_info,NULL,NULL);
+
+          EXEC SQL DECLARE conv_defaccount CURSOR FOR
+          SELECT a.CLN_CODE
+          FROM MT_CLIENT a
+          WHERE a.CLN_CODE NOT IN (SELECT CLIENT FROM PRO_MSGCONV )
+          AND a.CLN_MASTER NOT IN (SELECT CLIENT FROM PRO_MSGCONV )
+          ORDER BY a.CLN_CODE;
+
+          EXEC SQL OPEN conv_defaccount;
+          IS_ANY_ORA_ERROR
+
+          int_l_df_count = 0;
+
+         for(;;)
+         {
+            EXEC SQL FETCH conv_defaccount
+                 INTO chr_l_sclient ;
+            IS_ANY_ORA_ERROR
+
+            if (APL_ZERO_RESULT_SET)
+               {
+                  break;
+               }
+
+            printf("Calling C_UpdMsgISO for SETLM \n");
+            strcpy(chr_dt_grp,"SETLM");
+            if ( C_UpdMsgISO(p_flogfile,chr_l_sclient,chr_dt_grp,
+                             p_intlenv_data_struct_h,
+                             l_debug_info_ptr) == APL_FAILURE )
+
+            APL_GOBACK_FAIL
+
+            printf("Calling C_UpdMsgISO for STATM \n");
+            strcpy(chr_dt_grp,"STATM");
+            if ( C_UpdMsgISO(p_flogfile,chr_l_sclient,chr_dt_grp,
+                             p_intlenv_data_struct_h,
+                             l_debug_info_ptr) == APL_FAILURE )
+
+            APL_GOBACK_FAIL
+
+            printf("Calling C_UpdMsgISO for CAMSG \n");
+            strcpy(chr_dt_grp,"CAMSG");
+            if ( C_UpdMsgISO(p_flogfile,chr_l_sclient,chr_dt_grp,
+                             p_intlenv_data_struct_h,
+                             l_debug_info_ptr) == APL_FAILURE )
+
+            APL_GOBACK_FAIL
+
+            printf("Calling C_UpdMsgISO for STMSG  \n");
+            strcpy(chr_dt_grp,"STMSG");
+            if ( C_UpdMsgISO(p_flogfile,chr_l_sclient,chr_dt_grp,
+                             p_intlenv_data_struct_h,
+                             l_debug_info_ptr) == APL_FAILURE )
+
+            APL_GOBACK_FAIL
+
+           int_l_df_count = int_l_df_count + 1;
+ 
+           if( (int_l_df_count%COMMITSIZE) == 0 )
+           {
+                  sprintf(chr_h_stat_info,"Processed %d Accounts",int_l_df_count);
+
+                  EXEC SQL UPDATE SYS_BATCHPROC
+                  SET STAT_DET =:chr_h_stat_info
+                  WHERE PROCESS_NAME=:chr_g_progname
+                  AND   PROC_INIT=:chr_g_key
+                  AND   STARTDATE=:chr_g_start_date
+                  AND   STATUS=:chr_g_status_started;
+
+                  EXEC SQL COMMIT WORK;
+                  IS_ANY_ORA_ERROR
+
+                  printf("Processed %d Accounts\n",int_l_df_count);
+                  sprintf(chr_l_info," %d RECORDS COMMITED",int_l_df_count);
+                  CO_ProcMonitor(p_flogfile,chr_l_info,NULL,NULL);
+
+                  EXEC SQL SELECT ROWID INTO :chr_batch_in_proc_rowid
+                  FROM SYS_BATCHPROC
+                  WHERE PROCESS_NAME  = :chr_g_progname
+                  AND   PROC_INIT       =:chr_g_key
+                  AND   STARTDATE = :chr_g_start_date
+                  AND   STATUS    = :chr_g_status_started
+                  FOR UPDATE OF STATUS;
+
+              IS_ANY_ORA_ERROR
+
+            }      
+   
+            continue;
+         }
+
+   		EXEC SQL CLOSE conv_defaccount;
+ 		   IS_ANY_ORA_ERROR
+
+         printf("Finished Processing All Accounts on Default Date \n");
+
+       }
+   else
+       {
+        printf("Today is Not Default Date \n");
+        sprintf(chr_l_info,"\n**********DEFAULT DATE OF CONVERSION TO ISO15022 IS :[%s]**********\n",chr_h_default_date);
+        CO_WrLog_WODtTime(p_flogfile,chr_l_info,NULL,NULL);    
+       }
+ 
+
+   sprintf(stat_det,"Accounts Converted to ISO15022 Format\n");
+   CO_ProcMonitor(p_flogfile,stat_det,NULL,NULL);
+
+   printf("Accounts Converted to ISO15022 Format\n");
+
+   
+   EXEC SQL UPDATE SYS_BATCHPROC
+   SET STATUS =:chr_g_status_completed,
+   STAT_DET =:stat_det
+   WHERE ROWID=:chr_batch_in_proc_rowid;
+
+   IS_ANY_ORA_ERROR
+
+   
+   APL_GOBACK_SUCCESS
+
+   RETURN_SUCCESS:
+   {
+      return(APL_SUCCESS);
+   }
+   RETURN_FAILURE:
+   {
+      CO_ProcMonitor(p_flogfile,NULL,l_debug_info_ptr,NULL);
+      CO_FreeErrLst(l_debug_info_ptr);
+      return(APL_FAILURE);
+   }
+}
+
+
+
+int C_UpdMsgISO(FILE *l_flogfile,char *chr_p_client,char *p_dategrp,
+                INTL_ENV_DATA_STRUCT_H *p_intlenv_data_struct_h,
+                DEBUG_INFO_STRUCT_H       **l_debug_info_ptr )
+{
+struct sqlca sqlca;
+char chr_l_info[100];
+
+memset(chr_l_info,APL_NULL_CHAR,100);
+
+
+if (strcmp(p_dategrp,"SETLM") == 0)
+{
+  EXEC SQL UPDATE MT_MSGADDRESS
+           SET ISO_MSG_FORMAT='Y' 
+           WHERE CLN_CODE=:chr_p_client AND
+           MSG_IDENT_NO IN ('1','2','20','35') AND
+           ISO_MSG_FORMAT='N' AND
+           SWIFT_TLX_GCN ='S';
+
+  IS_ANY_ORA_ERROR
+
+  if (sqlca.sqlerrd[2] == 0)
+  	 	{
+        sprintf(chr_l_info,"No Settlement Group of Address Setup for Account %s",chr_p_client);
+        CO_WrLog_WODtTime(l_flogfile,chr_l_info,NULL,NULL);
+ 	   }
+  else
+      {
+        sprintf(chr_l_info,"Settlement Group of Address Converted To ISO15022 Format for Account %s",chr_p_client);
+        CO_WrLog_WODtTime(l_flogfile,chr_l_info,NULL,NULL);
+      }
+}
+
+
+if (strcmp(p_dategrp,"STATM") == 0)
+{
+  EXEC SQL UPDATE MT_MSGADDRESS
+           SET ISO_MSG_FORMAT='Y'
+           WHERE CLN_CODE=:chr_p_client AND
+           MSG_IDENT_NO IN ('4','5','6') AND
+           ISO_MSG_FORMAT='N' AND
+           SWIFT_TLX_GCN = 'S';
+
+
+  IS_ANY_ORA_ERROR
+
+  if (sqlca.sqlerrd[2] == 0)
+      {
+        sprintf(chr_l_info,"No Statement Group of Address Setup for Account %s",chr_p_client);
+        CO_WrLog_WODtTime(l_flogfile,chr_l_info,NULL,NULL);
+      }
+  else
+      {
+       sprintf(chr_l_info,"Statement Group of Address Converted To ISO15022 Format for Account %s",chr_p_client);
+       CO_WrLog_WODtTime(l_flogfile,chr_l_info,NULL,NULL);
+      }
+}
+
+
+if (strcmp(p_dategrp,"CAMSG") == 0)
+{
+  EXEC SQL UPDATE MT_MSGADDRESS
+           SET ISO_MSG_FORMAT='Y'
+           WHERE CLN_CODE=:chr_p_client AND
+           MSG_IDENT_NO IN ('3','31') AND
+           ISO_MSG_FORMAT='N' AND
+           SWIFT_TLX_GCN = 'S';
+
+  IS_ANY_ORA_ERROR
+
+  if (sqlca.sqlerrd[2] == 0)
+      {
+        sprintf(chr_l_info,"No Corporate Action Group of Address Setup for Account %s",chr_p_client);
+        CO_WrLog_WODtTime(l_flogfile,chr_l_info,NULL,NULL);
+      }
+  else
+      {
+       sprintf(chr_l_info,"Corporate Action Group of Address Converted To ISO15022 Format for Account %s",chr_p_client);
+       CO_WrLog_WODtTime(l_flogfile,chr_l_info,NULL,NULL);
+      }
+}
+
+
+if (strcmp(p_dategrp,"STMSG") == 0)
+{
+  EXEC SQL UPDATE MT_MSGADDRESS
+           SET ISO_MSG_FORMAT='Y'
+           WHERE CLN_CODE=:chr_p_client AND
+           MSG_IDENT_NO IN ('21') AND
+           ISO_MSG_FORMAT='N' AND
+           SWIFT_TLX_GCN = 'S';
+
+  IS_ANY_ORA_ERROR
+
+  if (sqlca.sqlerrd[2] == 0)
+      {
+        sprintf(chr_l_info,"No Transaction Status Group of Address Setup for Account %s",chr_p_client);
+        CO_WrLog_WODtTime(l_flogfile,chr_l_info,NULL,NULL);
+    }
+  else
+      {
+       sprintf(chr_l_info,"Transaction Status Group of Address Converted To ISO15022 Format for Account %s",chr_p_client);
+       CO_WrLog_WODtTime(l_flogfile,chr_l_info,NULL,NULL);
+      }
+}
+
+
+
+APL_GOBACK_SUCCESS
+
+RETURN_SUCCESS:
+  {
+    return(APL_SUCCESS);
+  }
+RETURN_FAILURE:
+  {
+    CO_ProcMonitor(l_flogfile,NULL,l_debug_info_ptr,NULL);
+    CO_FreeErrLst(l_debug_info_ptr);
+    return(APL_FAILURE);
+  }
+
+}
+
+
+main(int argc , char ** argv)
+{
+   DEBUG_INFO_STRUCT_H   **l_debug_info_ptr=NULL,
+                  *l_debug_info_struct = NULL;
+   FILE           *chr_finifile=NULL;
+   FILE           *flogfile=NULL;
+   char           chr_inifile[PATH_LENGTH] =  APL_NULL_STRING;
+   char           chr_logfile[PATH_LENGTH] =  APL_NULL_STRING;
+   char           chr_uname[APL_USERID_LEN] = APL_NULL_STRING;
+   char           chr_passwd[APL_PASSWD_LEN]= APL_NULL_STRING;
+   char           chr_log_buff[MSG_LENGTH] =  APL_NULL_STRING;
+   struct         sqlca sqlca;
+   INTL_ENV_DATA_STRUCT_H   *l_intlenv_datastruct_h =  NULL;
+   char                 chr_custody_id_b[APL_USERID_LEN];
+   char           *int_pos;
+
+   
+   EXEC SQL VAR chr_uname IS STRING;
+   EXEC SQL VAR chr_passwd IS STRING;
+
+   l_debug_info_ptr = &l_debug_info_struct;
+   
+   
+   strcpy(chr_inifile,getenv("INTL_ROOT_PATH"));
+   strcat(chr_inifile,"/intl_sun.cfg");
+
+   if ( ( chr_finifile=fopen(chr_inifile,"r") ) == NULL)
+   {
+     exit(-1);
+   }
+
+   APL_FETCH_DB_LOGIN_DETAILS(chr_finifile,chr_custody_id_b,chr_uname,chr_passwd,APL_OUT_FILE,l_debug_info_ptr)
+   EXEC SQL CONNECT :chr_uname IDENTIFIED BY :chr_passwd;
+   IS_ANY_ORA_ERROR
+
+   if ( CO_Rtv_RptFileName("5E",
+                        APL_LOGFILE_DESC,
+                        100,
+                        argv[5],
+                        argv,
+                        &flogfile,
+                        l_debug_info_ptr) == APL_FAILURE )
+   {
+      exit(-1);
+   }
+EXEC SQL COMMIT;
+   IS_ANY_ORA_ERROR
+
+   
+   if ( CO_RtvSysDtTime(chr_g_sys_date_time,l_debug_info_ptr) == APL_FAILURE )
+         APL_GOBACK_FAIL
+   CLS_LOG_ARRAY
+   printf("ACCOUNT CONVERSION TO ISO15022 started on :[%s]\n",chr_g_sys_date_time);
+   sprintf(chr_log_buff,"ACCOUNT CONVERSION TO ISO15022 started on :[%s]\n",chr_g_sys_date_time);
+   CO_ProcMonitor(flogfile,chr_log_buff,NULL,NULL);
+
+   strcpy(chr_g_sys_date,chr_g_sys_date_time);
+   strcpy(chr_g_sys_date,strtok_r(chr_g_sys_date," ",&int_pos));
+   strcat(chr_g_sys_date,APL_NULL_TIME);
+
+   if ( CO_RtvSysParams(l_debug_info_ptr) == APL_FAILURE)
+      APL_GOBACK_FAIL
+
+   
+   l_intlenv_datastruct_h   =  (INTL_ENV_DATA_STRUCT_H*)calloc(1,sizeof(INTL_ENV_DATA_STRUCT_H));
+   APL_MALLOC_FAIL(l_intlenv_datastruct_h);
+
+   
+   if ( argc < 6 )
+   {
+      CO_ProcMonitor(flogfile,"All Arguments expected by  program not passed \n",NULL
+,NULL);
+      APL_GOBACK_FAIL
+   }
+
+   strcpy(chr_g_progname,   argv[0]);
+   strcpy(chr_g_key,        argv[1]);
+   strcpy(chr_g_start_date, argv[2]);
+   strcpy(l_intlenv_datastruct_h->usr, argv[3]);
+   strcpy(chr_g_func_code,argv[5]);
+   printf("Now Calling C_Msg_Conv \n");
+
+   
+
+if ( C_Msg_Conv (   flogfile,
+                        l_intlenv_datastruct_h,
+                        l_debug_info_ptr
+                      )  == APL_FAILURE
+      )
+      {
+         EXEC SQL ROLLBACK;
+         IS_ANY_ORA_ERROR
+         CO_ProcMonitor(flogfile,"ROLLING BACK \n",NULL,NULL);
+         APL_GOBACK_FAIL
+      }
+      else
+      {
+         EXEC SQL COMMIT;
+         CO_ProcMonitor(flogfile,"RECORDS COMMITTED \n",NULL,NULL);
+         IS_ANY_ORA_ERROR
+         APL_GOBACK_SUCCESS
+      }
+
+   
+   APL_GOBACK_SUCCESS
+
+   RETURN_SUCCESS:
+   {
+      CLS_LOG_ARRAY
+      sprintf(chr_log_buff,"ACCOUNT CONVERSION TO ISO15022 exiting successfully\n");
+      CO_ProcMonitor(flogfile,chr_log_buff,l_debug_info_ptr,NULL);
+      CO_FreeErrLst(l_debug_info_ptr);
+
+      APL_FREE(l_intlenv_datastruct_h);
+
+      fclose(chr_finifile);
+      fclose(flogfile);
+
+      exit(0);
+   }
+   RETURN_FAILURE:
+   {
+      CLS_LOG_ARRAY
+      sprintf(chr_log_buff,"ACCOUNT CONVERSION TO ISO15022 exiting unsuccessfully\n");
+      CO_ProcMonitor(flogfile,chr_log_buff,l_debug_info_ptr,NULL);
+      CO_FreeErrLst(l_debug_info_ptr);
+
+      APL_FREE(l_intlenv_datastruct_h);
+     
+      fclose(chr_finifile);
+      fclose(flogfile);
+
+      exit(-1);
+   }
+}
+

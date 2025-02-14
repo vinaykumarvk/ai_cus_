@@ -1,0 +1,648 @@
+/*
+ *    COPYRIGHT NOTICE
+ *
+ *   Copyright 2005 Polaris Software Lab Limited. All rights reserved.
+ *
+ *   These materials are confidential and proprietary to
+ *    Polaris Software Lab Limited and no part of these materials should
+ *    be reproduced, published, transmitted or distributed in any form or
+ *    by any means, electronic, mechanical, photocopying, recording or
+ *    otherwise, or stored in any information storage or retrieval system
+ *    of any nature nor should the materials be disclosed to third parties
+ *    or used in any other manner for which this is not authorized, without
+ *    the prior express written authorization of Polaris Software Lab Limited.
+*/
+/*********************************************************************
+ *
+ * Module Name         :      	Master Maintenance
+ *
+ * File Name           :      	DL_UpdDecimalAdj.pc
+ *
+ * Description         :	This file contains functions for updating records in 
+ *				table DL_DEAL_DECI_ADJ
+ *
+ *
+ *            Version Control Block
+ *
+ * Date		Version     Author	Description	RFS No.
+ * ---------	--------  ------------  -------------   ------------
+ * 17/10/2007   1.0	    Jiger	New file	ISKB_487
+ *
+ *********************************************************************/
+
+
+#include "CO_HostStructdef.h"
+
+EXEC SQL INCLUDE SQLCA.H;
+
+
+int DL_UpdDecimalAdj(DL_DEAL_DECI_ADJ_STRUCT_H *p_dl_deal_deci_adj_struct_h, 
+							INTL_ENV_DATA_STRUCT_H *p_intl_envdatastruct_h, 
+							DEBUG_INFO_STRUCT_H **l_debug_info_ptr) 
+{
+	/* Variable Declarations */
+	DL_DEAL_DECI_ADJ_STRUCT_I *l_dl_deal_deci_adj_struct_i;
+
+	struct sqlca sqlca;
+
+	char chr_acc_stamp_compare[APL_DATE_LEN] = APL_NULL_STRING;
+	char chr_status_compare[APL_STATUS_LEN] = APL_NULL_STRING;
+	char chr_sys_access_stamp[APL_DATE_LEN] = APL_NULL_STRING;
+	short p_i_maker, p_i_makerdt, p_i_checker, p_i_checkerdt, p_i_access_stamp;
+	short p_i_access_stamp_compare;
+	short p_i_status = 0;
+	int int_error_flag = APL_SUCCESS;
+	int int_l_rowexists = 0;
+	char  *l_key_codes[15];
+	char  *l_key_values[15];
+	char  chr_l_table_name[50] = APL_NULL_STRING;
+	char  chr_l_field_val[40] = APL_NULL_STRING;
+	double l_safekeep_pos = 0;
+	char l_instr_code[DL_INSTR_CD_LEN] = APL_NULL_STRING;
+	char l_deal_cd[DL_DEAL_CD_LEN] = APL_NULL_STRING;
+	char l_contract_cd[DL_CONTRACT_CD_LEN] = APL_NULL_STRING;
+	/* JC - ISKB - 552, 553, 554 -- Start */ 
+	char l_location_cd[DL_LOCATION_CD_LEN] = APL_NULL_STRING;
+	char l_block_type[5] = APL_NULL_STRING;
+	/* JC - ISKB - 552, 553, 554 -- End */ 
+	char l_deal_type[3] = APL_NULL_STRING;
+	int l_count = 0;
+	double l_decimal_val = 0;
+	double l_final_pos = 0;
+	short i_contract_cd = 0;
+	short i_location_cd = 0;
+
+	int	int_retval = APL_SUCCESS;
+	#ifdef APL_THREADS
+	APL_SET_CONTEXT
+	EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	APL_FUNCTION_ENTER(APL_OUT_FILE)
+
+	l_dl_deal_deci_adj_struct_i=(DL_DEAL_DECI_ADJ_STRUCT_I*)calloc(1,sizeof(DL_DEAL_DECI_ADJ_STRUCT_I));
+
+	APL_MALLOC_FAIL(l_dl_deal_deci_adj_struct_i);
+
+	memset(l_dl_deal_deci_adj_struct_i,NULL,sizeof(l_dl_deal_deci_adj_struct_i));
+
+	p_i_maker = 0;
+	p_i_makerdt = 0;
+	p_i_checker = 0;
+	p_i_checkerdt = 0;
+	p_i_access_stamp = 0;
+	p_i_access_stamp_compare = 0;
+
+	if (!strlen(p_dl_deal_deci_adj_struct_h->h_dl_client)) 
+		l_dl_deal_deci_adj_struct_i->i_dl_client = -1;
+	else 
+		l_dl_deal_deci_adj_struct_i->i_dl_client = 0;
+
+	if (!strlen(p_dl_deal_deci_adj_struct_h->h_identiy_no)) 
+		l_dl_deal_deci_adj_struct_i->i_identiy_no = -1;
+	else 
+		l_dl_deal_deci_adj_struct_i->i_identiy_no = 0;
+
+
+	if(CO_RtvSysDtTime(chr_sys_access_stamp,l_debug_info_ptr) != APL_SUCCESS)
+	{
+		APL_GOBACK_FAIL
+	}
+
+	/* JC - ISKB - 552, 553, 554 -- Selecting the location code and deal class/type also */
+	EXEC SQL
+	SELECT INSTR_CODE, DEAL_CD, CONTRACT_CD, LOCATION_CD, DL_CLASS 
+	INTO :l_instr_code, :l_deal_cd, :l_contract_cd:i_contract_cd, :l_location_cd:i_location_cd, :l_deal_type 
+	FROM DL_DEAL
+	WHERE
+	CLIENT =:p_dl_deal_deci_adj_struct_h->h_dl_client AND 
+	IDENTIY_NO =:p_dl_deal_deci_adj_struct_h->h_identiy_no;
+
+	IS_ANY_ORA_ERROR
+
+	printf("JC::::: ORA for Select query from DL_DEAL -- [%d]\n", sqlca.sqlcode);
+	printf("JC::::: Instr Code -- [%s]\n", l_instr_code);
+	printf("JC::::: Deal Code -- [%s]\n", l_deal_cd);
+	printf("JC::::: Contract Code -- [%s]\n", l_contract_cd);
+	printf("JC::::: Location Code -- [%s]\n", l_location_cd);
+	printf("JC::::: Deal Type -- [%s]\n", l_deal_type);
+
+	/* JC - ISKB - 552, 553, 554 -- Start  -- Rtv the block type for the deal */
+	if(CA_Rtv_Block_Type(	p_dl_deal_deci_adj_struct_h->h_identiy_no,
+				l_deal_type,
+				l_deal_cd,
+				l_block_type,
+				l_debug_info_ptr) == APL_FAILURE)
+	{
+		APL_GOBACK_FAIL
+	}
+
+	printf("JC::::: Block Type -- [%s]\n", l_block_type);
+	/* JC - ISKB - 552, 553, 554 -- End */
+
+	/* JC - ISKB - 552, 553, 554 -- Added location code and block type in the where clause */
+	EXEC SQL 
+	SELECT SAFEKEEP_POS INTO :l_safekeep_pos 
+	FROM DL_SAFEK 
+	WHERE 
+	CLIENT = :p_dl_deal_deci_adj_struct_h -> h_dl_client AND 
+	INSTR_CODE = :l_instr_code AND 
+	LOCATION_CD = :l_location_cd AND 
+	BLOCK_TYPE = :l_block_type;
+
+	IS_ANY_ORA_ERROR
+
+	printf("JC::::: ORA for Select query from DL_SAFEK -- [%d]\n", sqlca.sqlcode);
+	printf("JC::::: Safekeep Pos -- [%f]\n", l_safekeep_pos);
+
+
+	EXEC SQL 
+	SELECT TO_NUMBER(SUBSTR(:p_dl_deal_deci_adj_struct_h->h_qty, INSTR(:p_dl_deal_deci_adj_struct_h->h_qty, '.'))) 
+		INTO :l_decimal_val 
+	FROM DUAL;
+	printf("JC::::: ORA for decimal part query -- [%d]\n", sqlca.sqlcode);
+	printf("JC::::: Decimal part -- [%f]\n", l_decimal_val);
+
+
+	if (!strcmp(p_intl_envdatastruct_h->h_mode, APL_FUNC_INPUT))
+	{
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Entered Input of Function DL_UpdDecimalAdj\n",
+								NULL,p_intl_envdatastruct_h);
+		}
+
+		/***** JC - Checking if the safekeep positions are zero or will become zero if deal is DF or DVP 
+		If yes, then error message is poped up.
+		******************************START***********************************/
+		if(l_safekeep_pos <= 0 && ((strcmp(l_deal_cd, "1") == 0) || (strcmp(l_deal_cd, "3") == 0)))
+		{
+			if (CO_InsertErr(l_debug_info_ptr,
+								ERR_DEAL_NENUFPOSN, 
+								APL_NULL_STRING,
+								APL_NULL_STRING,
+								APL_NULL_STRING,
+								__LINE__,
+								__FILE__
+								) != APL_SUCCESS)
+				APL_GOBACK_FAIL
+
+			printf("JC::::: Deal is sell and safekeep positions are zero !!! Hence leaving with failure\n");
+			APL_GOBACK_FAIL
+		}
+
+		if(((strcmp(l_deal_cd, "1") == 0) || (strcmp(l_deal_cd, "3") == 0)) && l_safekeep_pos > 0)
+		{
+			l_final_pos = l_safekeep_pos - l_decimal_val;
+			printf("JC::::: Final positions after deducting the decimal value -- [%f]\n", l_final_pos);
+
+			if(l_final_pos < 0)
+			{
+				if (CO_InsertErr(l_debug_info_ptr,
+								ERR_ZERO_POS, 
+								APL_NULL_STRING,
+								APL_NULL_STRING,
+								APL_NULL_STRING,
+								__LINE__,
+								__FILE__
+								) != APL_SUCCESS)
+					APL_GOBACK_FAIL
+				printf("Cannot update Safekeep Positions as the final positions become less than zero");
+				APL_GOBACK_FAIL
+			}
+		}
+		/***** JC - Checking if the safekeep positions are zero or will become zero if deal is DF or DVP 
+		If yes, then error message is poped up.
+		*******************************END************************************/
+
+		
+		strcpy(p_dl_deal_deci_adj_struct_h->h_status,STATUS_UAUTH);
+		l_dl_deal_deci_adj_struct_i->i_status =0;
+		strcpy(p_dl_deal_deci_adj_struct_h->h_maker,p_intl_envdatastruct_h->usr);
+		l_dl_deal_deci_adj_struct_i->i_maker=0;
+		strcpy(p_dl_deal_deci_adj_struct_h->h_maker_dt,chr_sys_access_stamp);
+		l_dl_deal_deci_adj_struct_i->i_maker_dt=0;
+		strcpy(p_dl_deal_deci_adj_struct_h->h_access_stamp,chr_sys_access_stamp);
+		l_dl_deal_deci_adj_struct_i->i_access_stamp =0;
+
+
+		printf("JC::::: Status of the record is being UPDATED to [%s]\n", p_dl_deal_deci_adj_struct_h->h_status);
+
+		EXEC SQL INSERT INTO DL_DEAL_DECI_ADJ VALUES (:p_dl_deal_deci_adj_struct_h:l_dl_deal_deci_adj_struct_i);
+
+		IS_ANY_ORA_ERROR_AND_DUPLICATE(MAP_DET_EXIST,APL_NULL_STRING,APL_NULL_STRING,APL_NULL_STRING)
+	}
+	else
+	{
+
+		l_key_codes[0] = "CLIENT";
+		l_key_codes[1] = "IDENTIY_NO";
+		l_key_codes[2] = APL_NULL_STRING;
+
+		l_key_values[0] = p_dl_deal_deci_adj_struct_h -> h_dl_client;
+		l_key_values[1] = p_dl_deal_deci_adj_struct_h -> h_identiy_no;
+		l_key_values[2] = APL_NULL_STRING;
+
+
+		strcpy(chr_l_table_name,"DL_DEAL_DECI_ADJ");
+
+		int_retval = CR_Rtv_MastChldChrVal( l_key_codes,
+														l_key_values,
+														chr_l_table_name,
+														"ACCESS_STAMP",
+														chr_l_field_val,
+														l_debug_info_ptr);
+
+		if (int_retval != APL_SUCCESS)
+			APL_GOBACK_FAIL
+
+		strcpy(chr_acc_stamp_compare,chr_l_field_val);
+
+		int_retval = CR_Rtv_MastChldChrVal( l_key_codes,
+														l_key_values,
+														chr_l_table_name,
+														"STATUS",
+														chr_l_field_val,
+														l_debug_info_ptr);
+
+		if (int_retval != APL_SUCCESS)
+			APL_GOBACK_FAIL
+
+		strcpy(chr_status_compare,chr_l_field_val);
+	}
+
+	/* JC - ISKB 487 -- Commented because Modify mode is not required
+	if (!strcmp(p_intl_envdatastruct_h->h_mode,APL_FUNC_MODIFY))
+	{
+		p_i_checker = -1;
+		p_i_checkerdt = -1;
+		strcpy(p_dl_deal_deci_adj_struct_h->h_checker, APL_NULL_STRING);
+		strcpy(p_dl_deal_deci_adj_struct_h->h_checker_dt, APL_NULL_STRING);
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Entered modify of Function DL_UpdDecimalAdj\n",
+								NULL,p_intl_envdatastruct_h);
+		}
+
+		if (!strcmp(p_dl_deal_deci_adj_struct_h->h_access_stamp,chr_acc_stamp_compare))
+		{
+			strcpy(p_dl_deal_deci_adj_struct_h->h_access_stamp,chr_sys_access_stamp);
+			l_dl_deal_deci_adj_struct_i->i_access_stamp =0;
+			strcpy(p_dl_deal_deci_adj_struct_h->h_status,STATUS_UAUTH);
+			l_dl_deal_deci_adj_struct_i->i_status =0;
+
+			EXEC SQL UPDATE DL_DEAL_DECI_ADJ  SET 
+			MAKER =:p_intl_envdatastruct_h->usr:p_i_maker,
+			MAKER_DT =:chr_sys_access_stamp:p_i_makerdt,
+			CHECKER =:p_dl_deal_deci_adj_struct_h->h_checker:p_i_checker,
+			CHECKER_DT =:p_dl_deal_deci_adj_struct_h->h_checker:p_i_checkerdt,
+			STATUS =:p_dl_deal_deci_adj_struct_h->h_status:l_dl_deal_deci_adj_struct_i->i_status,
+			FLD3 =:p_dl_deal_deci_adj_struct_h->h_fld3 :l_dl_deal_deci_adj_struct_i-> i_fld3,
+			WHERE 
+			FLD1 =:p_dl_deal_deci_adj_struct_h->h_fld1 AND 
+			FLD2 =:p_dl_deal_deci_adj_struct_h->h_fld2 
+			:
+			:
+			:; 
+
+			IS_ANY_ORA_ERROR;
+		}
+		else 
+		{
+			if (CO_InsertErr(l_debug_info_ptr,
+								ERR_ACCESSSTAMP_CHGD, 
+								APL_NULL_STRING,
+								APL_NULL_STRING,
+								APL_NULL_STRING,
+								__LINE__,
+								__FILE__
+								) != APL_SUCCESS)
+				APL_GOBACK_FAIL
+
+			APL_GOBACK_FAIL
+		} 
+	}
+	*/
+
+	if (!strcmp(p_intl_envdatastruct_h->h_mode,APL_FUNC_AUTHORISE))
+	{
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Entered authorize of Function DL_UpdDecimalAdj\n",
+								NULL,p_intl_envdatastruct_h);
+		}
+
+		if (!strcmp(p_dl_deal_deci_adj_struct_h->h_access_stamp,chr_acc_stamp_compare))
+		{
+			if(strcmp(p_dl_deal_deci_adj_struct_h->h_status,STATUS_DEL_UAUTH))
+			{
+				strcpy(p_dl_deal_deci_adj_struct_h->h_access_stamp,chr_sys_access_stamp);
+				l_dl_deal_deci_adj_struct_i->i_access_stamp =0;
+				strcpy(p_dl_deal_deci_adj_struct_h->h_checker,p_intl_envdatastruct_h->usr);
+				l_dl_deal_deci_adj_struct_i->i_checker=0;
+				strcpy(p_dl_deal_deci_adj_struct_h->h_checker_dt,chr_sys_access_stamp);
+				l_dl_deal_deci_adj_struct_i->i_checker_dt=0;
+				strcpy(p_dl_deal_deci_adj_struct_h->h_status,STATUS_AUTH);
+				l_dl_deal_deci_adj_struct_i->i_status =0;
+
+
+				/***** JC - Checking if the safekeep positions are zero or will become zero if deal is DF or DVP 
+				If yes, then error message is poped up.
+				If no, then safekeep positions are updated.
+				******************************START***********************************/
+				if(l_safekeep_pos <= 0 && ((strcmp(l_deal_cd, "1") == 0) || (strcmp(l_deal_cd, "3") == 0)))
+				{
+					if (CO_InsertErr(l_debug_info_ptr,
+										ERR_DEAL_NENUFPOSN, 
+										APL_NULL_STRING,
+										APL_NULL_STRING,
+										APL_NULL_STRING,
+										__LINE__,
+										__FILE__
+										) != APL_SUCCESS)
+						APL_GOBACK_FAIL
+					
+					printf("JC::::: Deal is sell and safekeep positions are zero !!! Hence leaving with failure\n");
+					APL_GOBACK_FAIL
+				}
+
+				if(((strcmp(l_deal_cd, "1") == 0) || (strcmp(l_deal_cd, "3") == 0)) && l_safekeep_pos > 0)
+				{
+					l_final_pos = l_safekeep_pos - l_decimal_val;
+					printf("JC::::: Final positions to be updated in DL_SAFEK -- [%f]\n", l_final_pos);
+
+					if(l_final_pos < 0)
+					{
+						if (CO_InsertErr(l_debug_info_ptr,
+										ERR_ZERO_POS, 
+										APL_NULL_STRING,
+										APL_NULL_STRING,
+										APL_NULL_STRING,
+										__LINE__,
+										__FILE__
+										) != APL_SUCCESS)
+							APL_GOBACK_FAIL
+						printf("Cannot update Safekeep Positions as the final positions become less than zero");
+						APL_GOBACK_FAIL
+					}
+					else
+					{
+						EXEC SQL
+						UPDATE DL_SAFEK SET SAFEKEEP_POS = :l_final_pos 
+						WHERE	CLIENT = :p_dl_deal_deci_adj_struct_h->h_dl_client AND 
+							INSTR_CODE = :l_instr_code AND
+        						LOCATION_CD = :l_location_cd AND
+        						BLOCK_TYPE = :l_block_type;
+						IS_ANY_ORA_ERROR
+
+						printf("ORA for updating DL_SAFEK -- [%d]\n", sqlca.sqlcode);
+					}
+				}
+				if((strcmp(l_deal_cd, "2") == 0) || (strcmp(l_deal_cd, "4") == 0))
+				{
+					l_final_pos = l_safekeep_pos + l_decimal_val;
+					printf("JC::::: Final positions to be updated in DL_SAFEK -- [%f]\n", l_final_pos);
+					
+					EXEC SQL
+					UPDATE 	DL_SAFEK SET SAFEKEEP_POS = :l_final_pos 
+					WHERE	CLIENT = :p_dl_deal_deci_adj_struct_h->h_dl_client AND 
+						INSTR_CODE = :l_instr_code AND
+                                                LOCATION_CD = :l_location_cd AND
+                                                BLOCK_TYPE = :l_block_type;;
+					IS_ANY_ORA_ERROR
+
+					printf("ORA for updating DL_SAFEK -- [%d]\n", sqlca.sqlcode);
+				}
+				/***** JC - Checking if the safekeep positions are zero or will become zero if deal is DF or DVP 
+				If yes, then error message is poped up.
+				If no, then safekeep positions are updated.
+				*******************************END************************************/
+
+
+				/***** JC - Updating the Quantity, Price, Gross Amount and Net Amount in table DL_DEAL
+				******************************START***********************************/
+				printf("JC::::: Updating the record in DL_DEAL\n");
+				EXEC SQL 
+				UPDATE DL_DEAL SET 
+					QTY = :p_dl_deal_deci_adj_struct_h->h_qty, 
+					ORIG_QTY = :p_dl_deal_deci_adj_struct_h->h_qty, /* JC - ISKB - 576 */
+					COST = :p_dl_deal_deci_adj_struct_h->h_price, 
+					AMOUNT = :p_dl_deal_deci_adj_struct_h->h_amt, 
+					NET_AMT = :p_dl_deal_deci_adj_struct_h->h_net_amt
+				WHERE 
+				CLIENT =:p_dl_deal_deci_adj_struct_h->h_dl_client AND 
+				IDENTIY_NO =:p_dl_deal_deci_adj_struct_h->h_identiy_no;
+				IS_ANY_ORA_ERROR
+				printf("JC::::: ORA for updating the record in DL_DEAL -- [%d]\n", sqlca.sqlcode);
+				/***** JC - Updating the Quantity, Price, Gross Amount and Net Amount in table DL_DEAL
+				*******************************END************************************/
+
+
+				/***** JC - Updating the Quantity, Price, Gross Amount and Net Amount in table DL_BCN if the 
+				Broker Contract Note exists
+				******************************START***********************************/
+				EXEC SQL
+				SELECT COUNT(*) INTO l_count 
+				FROM DL_BCN 
+				WHERE 
+					CONTRACT_CD = :l_contract_cd AND 
+					CLIENT_CD = :p_dl_deal_deci_adj_struct_h->h_dl_client AND 
+					INSTR_CD = :l_instr_code;
+
+				IS_ANY_ORA_ERROR
+
+				printf("JC::::: Number of records in DL_BCN for the given values -- [%d]\n", l_count);
+
+				if(l_count == 0)
+				{
+					printf("JC:::: No Broker Contract Note exists, hence not updating DL_BCN\n");
+				}
+				else
+				{
+					printf("JC::::: Updating the record in DL_BCN\n");
+					EXEC SQL 
+					UPDATE DL_BCN SET 
+						QTY = :p_dl_deal_deci_adj_struct_h->h_qty, 
+						DL_PRICE = :p_dl_deal_deci_adj_struct_h->h_price, 
+						DL_AMT = :p_dl_deal_deci_adj_struct_h->h_amt, 
+						SETTLMENT_AMT = :p_dl_deal_deci_adj_struct_h->h_net_amt 
+					WHERE 
+					CONTRACT_CD = :l_contract_cd AND 
+					CLIENT_CD = :p_dl_deal_deci_adj_struct_h->h_dl_client AND 
+					INSTR_CD = :l_instr_code;
+					IS_ANY_ORA_ERROR
+					printf("JC::::: ORA for updating the record in DL_BCN -- [%d]\n", sqlca.sqlcode);
+				}
+				/***** JC - Updating the Quantity, Price, Gross Amount and Net Amount in table DL_BCN if the 
+				Broker Contract Note exists
+				*******************************END************************************/
+
+
+				printf("JC::::: Status of the record is being UPDATED in DL_DEAL_DECI_ADJ [%s]\n", p_dl_deal_deci_adj_struct_h->h_status);
+				EXEC SQL UPDATE DL_DEAL_DECI_ADJ 
+				SET 
+				CHECKER =:p_intl_envdatastruct_h->usr:p_i_checker,
+				CHECKER_DT =:chr_sys_access_stamp:p_i_access_stamp,
+				ACCESS_STAMP =:chr_sys_access_stamp:p_i_access_stamp,
+				STATUS =:p_dl_deal_deci_adj_struct_h->h_status:l_dl_deal_deci_adj_struct_i->i_status
+				WHERE 
+				CLIENT =:p_dl_deal_deci_adj_struct_h->h_dl_client AND 
+				IDENTIY_NO =:p_dl_deal_deci_adj_struct_h->h_identiy_no;
+				IS_ANY_ORA_ERROR
+				printf("ORA for updating status as AA in DL_DEAL_DECI_ADJ -- [%d]\n", sqlca.sqlcode);
+			}
+			else  
+			{
+				printf("Deleting record from DL_DEAL_DECI_ADJ\n");
+				EXEC SQL DELETE DL_DEAL_DECI_ADJ 
+				WHERE 
+				CLIENT =:p_dl_deal_deci_adj_struct_h->h_dl_client AND 
+				IDENTIY_NO =:p_dl_deal_deci_adj_struct_h->h_identiy_no;
+				IS_ANY_ORA_ERROR
+				printf("ORA for deleting record from DL_DEAL_DECI_ADJ -- [%d]\n", sqlca.sqlcode);
+			}
+		}
+		else 
+		{
+			if (CO_InsertErr(l_debug_info_ptr,
+								ERR_ACCESSSTAMP_CHGD, 
+								APL_NULL_STRING,
+								APL_NULL_STRING,
+								APL_NULL_STRING,
+								__LINE__,
+								__FILE__
+								) != APL_SUCCESS)
+				APL_GOBACK_FAIL
+
+			APL_GOBACK_FAIL
+		} 
+	}
+
+	/* JC - ISKB 487 -- Commented because not required 
+	if (!strcmp(p_intl_envdatastruct_h->h_mode,APL_FUNC_RESET))
+	{
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Entered reset of Function DL_UpdDecimalAdj\n",
+								NULL,p_intl_envdatastruct_h);
+		}
+
+		if (!strcmp(p_dl_deal_deci_adj_struct_h->h_access_stamp,chr_acc_stamp_compare))
+		{
+			if(!strcmp(p_dl_deal_deci_adj_struct_h->h_status,STATUS_DEL_UAUTH))
+			{
+				strcpy(p_dl_deal_deci_adj_struct_h->h_access_stamp,chr_sys_access_stamp);
+				l_dl_deal_deci_adj_struct_i->i_access_stamp =0;
+				strcpy(p_dl_deal_deci_adj_struct_h->h_checker,p_intl_envdatastruct_h->usr);
+				l_dl_deal_deci_adj_struct_i->i_checker=0;
+				strcpy(p_dl_deal_deci_adj_struct_h->h_checker_dt,chr_sys_access_stamp);
+				l_dl_deal_deci_adj_struct_i->i_checker_dt=0;
+				strcpy(p_dl_deal_deci_adj_struct_h->h_status,STATUS_AUTH);
+				l_dl_deal_deci_adj_struct_i->i_status =0;
+
+				EXEC SQL UPDATE DL_DEAL_DECI_ADJ SET 
+				CHECKER =:p_intl_envdatastruct_h->usr:p_i_checker,
+				CHECKER_DT =:chr_sys_access_stamp:p_i_access_stamp,
+				ACCESS_STAMP =:chr_sys_access_stamp:p_i_access_stamp,
+				STATUS =:p_dl_deal_deci_adj_struct_h->h_status:l_dl_deal_deci_adj_struct_i->i_status
+				WHERE 
+				FLD1 =:p_dl_deal_deci_adj_struct_h->h_fld1 AND 
+				FLD2 =:p_dl_deal_deci_adj_struct_h->h_fld2 
+				:
+				:
+				:; 
+
+				IS_ANY_ORA_ERROR;
+			}
+		}
+		else 
+		{
+			if (CO_InsertErr(l_debug_info_ptr,
+								ERR_ACCESSSTAMP_CHGD, 
+								APL_NULL_STRING,
+								APL_NULL_STRING,
+								APL_NULL_STRING,
+								__LINE__,
+								__FILE__
+								) != APL_SUCCESS)
+				APL_GOBACK_FAIL
+
+			APL_GOBACK_FAIL
+		} 
+	}
+	*/
+
+	if (!strcmp(p_intl_envdatastruct_h->h_mode,APL_FUNC_DELETE))
+	{
+		p_i_checker =-1;
+		p_i_checkerdt =-1;
+		strcpy(p_dl_deal_deci_adj_struct_h->h_checker,APL_NULL_STRING);
+		strcpy(p_dl_deal_deci_adj_struct_h->h_checker_dt,APL_NULL_STRING);
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Entered delete of Function DL_UpdDecimalAdj\n",
+								NULL,p_intl_envdatastruct_h);
+		}
+
+		if (!strcmp(p_dl_deal_deci_adj_struct_h->h_access_stamp,chr_acc_stamp_compare))
+		{
+			strcpy(p_dl_deal_deci_adj_struct_h->h_access_stamp,chr_sys_access_stamp);
+			l_dl_deal_deci_adj_struct_i->i_access_stamp =0;
+			strcpy(p_dl_deal_deci_adj_struct_h->h_status,STATUS_DEL_UAUTH);
+			l_dl_deal_deci_adj_struct_i->i_status =0;
+
+
+			printf("JC::::: Status of the record is being UPDATED to [%s]\n", p_dl_deal_deci_adj_struct_h->h_status);
+			EXEC SQL UPDATE DL_DEAL_DECI_ADJ SET 
+			MAKER =:p_intl_envdatastruct_h->usr:p_i_maker,
+			MAKER_DT =:chr_sys_access_stamp:p_i_makerdt,
+			STATUS =:p_dl_deal_deci_adj_struct_h->h_status:l_dl_deal_deci_adj_struct_i->i_status,
+			ACCESS_STAMP =:chr_sys_access_stamp:p_i_access_stamp
+			WHERE 
+			CLIENT =:p_dl_deal_deci_adj_struct_h->h_dl_client AND 
+			IDENTIY_NO =:p_dl_deal_deci_adj_struct_h->h_identiy_no;
+			IS_ANY_ORA_ERROR
+			printf("ORA for updating status as DU in DL_DEAL_DECI_ADJ -- [%d]\n", sqlca.sqlcode);
+		}
+		else 
+		{
+			if (CO_InsertErr(l_debug_info_ptr,
+								ERR_ACCESSSTAMP_CHGD, 
+								APL_NULL_STRING,
+								APL_NULL_STRING,
+								APL_NULL_STRING,
+								__LINE__,
+								__FILE__
+								) != APL_SUCCESS)
+				APL_GOBACK_FAIL
+			APL_GOBACK_FAIL
+		} 
+	}
+
+
+	if (int_error_flag == APL_FAILURE)
+	{
+	APL_GOBACK_FAIL
+	}
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS :
+	{
+	APL_FUNCTION_RET_SUCCESS(APL_OUT_FILE)
+	free(l_dl_deal_deci_adj_struct_i);
+	return(APL_SUCCESS);
+	}
+	RETURN_FAILURE :
+	{
+	APL_FUNCTION_RET_FAILURE(APL_OUT_FILE)
+	free(l_dl_deal_deci_adj_struct_i);
+	return(APL_FAILURE);
+	}
+
+}
+

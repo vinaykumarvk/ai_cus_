@@ -1,0 +1,873 @@
+
+
+	
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+
+
+#include "CR_Common.h"
+#include "CA_Common.h"
+#include "CO_HostStructdef.h"
+#include "CO_Externdef.h"
+
+EXEC SQL INCLUDE SQLCA.H;
+
+#define  RTV_SYSTEM_DATA
+
+
+#define	APL_BATCHSTATUS_LEN	16
+#define	APL_STATUS_BATCH_COMPLETED "completed"
+#define	APL_STATUS_BATCH_STARTED "started"
+#define  CLS_LOG_ARRAY  memset(chr_log_buff,NULL,sizeof(chr_log_buff));
+#define  APL_STATINFO_LEN  300
+
+
+#define  GP_PARAM_SEP1 '|'
+#define  GP_PARAM_SEP2 ';'
+
+
+
+int  CA_Proc_RedonimationEvent  (    	FILE  *p_flogfile,
+										char	**argv,
+										char  **p_param_list,
+										char	*chr_p_sys_date,				
+										char	*p_sys_date_time,
+										INTL_ENV_DATA_STRUCT_H *p_intlenv_data_struct_h,
+										DEBUG_INFO_STRUCT_H		 **l_debug_info_ptr
+                 		 ) 
+{
+	struct sqlca sqlca;
+
+	
+	
+
+	char **chr_p_instr_list=NULL;
+	int int_no_elm=0;
+	int int_counter=0;
+	int int_instr_counter=0;
+   char chr_flog_buff[APL_STATINFO_LEN]=APL_NULL_STRING;
+   int int_no_of_rec=0;
+
+	
+	
+	char chr_batch_in_proc_rowid[APL_ROWID_LEN] 	= APL_NULL_STRING;
+	char chr_status_started [APL_BATCHSTATUS_LEN] = {APL_STATUS_BATCH_STARTED};
+	
+   char h_corp_id[CORP_ID_LEN] 						=  APL_NULL_STRING;	
+   char h_ca_currency[APL_CCYCODE_LEN] 				= APL_NULL_STRING;
+	char h_typeofinstr[TYPEOF_INSTR_LEN]					= APL_NULL_STRING;
+	char chr_h_ce_type[EVT_CLASS_] 				=  {EVT_REDOM};
+	int  h_evt_nbr;
+	char h_preliminary_flag[APL_FLAG_LENGTH] 				= APL_NULL_STRING;	
+
+	char h_rec_date[APL_DATE_LEN]					=	APL_NULL_STRING;
+	char chr_h_pay_date[APL_DATE_LEN]					=	APL_NULL_STRING;
+	
+	char h_disp_of_fract[APL_FLAG_LENGTH] 				= APL_NULL_STRING;
+	
+   char h_evt_stat[APL_STATUS_LEN] 			= APL_NULL_STRING ;
+	char h_maker[APL_USERID_LEN] 					= APL_NULL_STRING ;
+
+	char h_status[APL_STATUS_LEN] 			= APL_NULL_STRING;
+   char chr_h_statusus_auth[APL_STATUS_LEN] 	= {APL_STS_AUTH};
+
+	char chr_selected_records[APL_INSTRUMENTCODE_LEN]     = APL_NULL_STRING;
+	char chr_gen_instr_name[INSTR_NAME_LEN_D]          = APL_NULL_STRING;
+ 
+   char h_evt_send_msg_ind[APL_FLAG_LENGTH]			   = {APL_YES_IND};
+   char h_entl_send_msg_ind[APL_FLAG_LENGTH]				= {APL_NO_IND};
+   char h_pymt_send_msg_ind[APL_FLAG_LENGTH]			   = {APL_YES_IND};
+
+
+ 
+
+	EXEC SQL VAR h_corp_id 		is string;
+	EXEC SQL VAR h_ca_currency 		is string;
+	EXEC SQL VAR h_typeofinstr 		is string;
+	EXEC SQL VAR chr_h_ce_type 		is string;
+	EXEC SQL VAR h_preliminary_flag 	is string;
+	EXEC SQL VAR h_rec_date 	is string;
+	EXEC SQL VAR chr_h_pay_date 	is string;
+	EXEC SQL VAR h_disp_of_fract 	is string;
+	EXEC SQL VAR h_evt_stat	is string;
+   EXEC SQL VAR h_maker 		is string;
+  
+ 
+	strcpy(chr_h_ce_type , EVT_REDOM );
+	h_evt_nbr=1;
+   strcpy(h_preliminary_flag,APL_NO_IND);
+   strcpy(h_rec_date,p_param_list[3]);
+	
+   
+   strcpy(chr_h_pay_date,p_param_list[4]);
+   strcpy(h_disp_of_fract,FRACT_DISP_REDOM);
+   strcpy(h_evt_stat, APL_STATUS_UNAUTH);
+	strcpy(h_maker,argv[3]);
+   
+
+	
+
+	EXEC SQL SELECT ROWID
+	INTO :chr_batch_in_proc_rowid
+	FROM SYS_BATCHPROC
+	WHERE
+				PROCESS_NAME =:argv[0]
+		and	PROC_INIT =:argv[1]
+		and	STARTDATE =:argv[2]
+		and 	STATUS =:chr_status_started
+	FOR UPDATE;
+
+	IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"BATCH_IN_PROC",argv[0],argv[1])
+
+
+	if(  !strcmp(p_param_list[1],"A"))
+	{
+  
+	CO_ProcMonitor(p_flogfile,"Inserting a chr_new record for Redenom Event\nSelected criteria :FOR ALL INSTRUMENT",NULL,NULL);
+   
+	
+		EXEC SQL INSERT INTO CAEVENT  
+	
+			(   
+			  corp_id , instr_code , CA_EVENT , declare_dt , evnt_indnt ,
+			  PRELIMINARY_FLAG , CA_CURRENCY , REC_DATE , dateof_payment , 
+			  amount_bal , RECEIVED_AMT , quantity_bal , quantity_received ,
+			  EVT_MSG_COUNT , entl_msg_cnt , EVT_CLT_CNT ,ENTL_CLT_CNT , COUNT_ACS_PEND ,		
+		     EVT_SEND_MSG_IND , ENTL_SEND_MSG_IND , PYMT_SEND_MSG_IND ,
+			  DISP_OF_FRACT , status , PROCESSED_DATE , maker , MAKER_DT ,	access_stamp
+			)
+	
+			SELECT 
+
+		    instr_code||:chr_h_ce_type||replace(substr(:chr_p_sys_date,1,10),'/',NULL)||:h_evt_nbr ,	
+			 instr_code , :chr_h_ce_type , :chr_p_sys_date , :h_evt_nbr,
+			:h_preliminary_flag , currency_cd , :h_rec_date , :chr_h_pay_date ,
+				0 , 0 , 0 , 0 ,
+				0 , 0 , 0 , 0 , 0 ,
+         :h_evt_send_msg_ind , :h_entl_send_msg_ind , :h_pymt_send_msg_ind , 
+			:h_disp_of_fract ,  :h_evt_stat, :chr_p_sys_date ,:h_maker , :chr_p_sys_date , :p_sys_date_time 
+			
+			FROM
+				MT_INSTRUMENT
+			WHERE
+					INSTR_TYPE IN ( 'FMT' )
+			AND 	NOT EXISTS ( SELECT instr_code FROM CAEVENT WHERE CA_EVENT = :chr_h_ce_type AND instr_code=MT_INSTRUMENT.instr_code)
+			AND	STATUS = :chr_h_statusus_auth; 
+
+		IS_ANY_ORA_ERROR
+
+         EXEC SQL UPDATE SYS_BATCHPROC
+            SET   status = 'completed'
+            WHERE  rowid = :chr_batch_in_proc_rowid;
+ 
+         IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,APL_NULL_STRING,APL_NULL_STRING,APL_NULL_STRING)
+
+      EXEC SQL COMMIT;
+		IS_ANY_ORA_ERROR
+
+
+ 
+     EXEC SQL SELECT count(*) INTO :int_no_of_rec FROM CAEVENT WHERE access_stamp=:p_sys_date_time;
+
+     if( int_no_of_rec == 0)
+		{
+		sprintf(chr_flog_buff,"\n*********************** NO RECORD IS GENERATED ********************\n");
+		CO_ProcMonitor(p_flogfile,chr_flog_buff,NULL,NULL);
+		}
+	  else
+		{	
+      EXEC SQL DECLARE Gen_Rec_Cur CURSOR 
+		FOR
+			SELECT
+					CAEVENT.instr_code,
+					MT_INSTRUMENT.instr_name
+			FROM
+					CAEVENT,
+					MT_INSTRUMENT
+			WHERE CAEVENT.access_stamp=:p_sys_date_time
+			AND 	CAEVENT.CA_EVENT=:chr_h_ce_type	
+			AND	CAEVENT.instr_code=MT_INSTRUMENT.instr_code;
+
+		EXEC SQL OPEN Gen_Rec_Cur;
+		IS_ANY_ORA_ERROR
+
+		sprintf(chr_flog_buff,"\n********** Generated Redenomination Evnet For Following Instrurities *****\n");
+	   CO_ProcMonitor(p_flogfile,chr_flog_buff,NULL,NULL);
+ 
+     int_instr_counter=1;
+
+		for(;;)
+		{
+			strcpy(chr_selected_records,APL_NULL_STRING);
+			strcpy(chr_gen_instr_name,APL_NULL_STRING);
+
+			EXEC SQL FETCH Gen_Rec_Cur
+			INTO
+				:chr_selected_records,
+				:chr_gen_instr_name;
+		
+			IS_ANY_ORA_ERROR_CURSOR
+	
+			CO_NewLine(chr_gen_instr_name);
+			sprintf(chr_flog_buff,"%d: %s %s",int_instr_counter,chr_selected_records,chr_gen_instr_name);
+			CO_ProcMonitor(p_flogfile,chr_flog_buff,NULL,NULL);
+			++int_instr_counter;
+		}
+		sprintf(chr_flog_buff,"\n****************************************************************\n");
+	   CO_ProcMonitor(p_flogfile,chr_flog_buff,NULL,NULL);
+
+	 }
+
+	}
+
+
+	else if(  !strcmp(p_param_list[1],"S"))
+		  {
+ 	
+	  
+		
+			CO_ProcMonitor(p_flogfile,"Inserting a chr_new record for Redenom Event\nSelected criteria :FOR SELECTED INSTRUMENT",NULL,NULL);
+			
+		  CO_SplitStr( p_param_list[2] , GP_PARAM_SEP2 , &int_no_elm , &chr_p_instr_list );
+
+
+
+		  for( int_counter=0 ; int_counter<int_no_elm ; ++int_counter )
+				{
+	
+	
+				if( CA_GenCARefNo ( h_corp_id ,chr_p_instr_list[int_counter],chr_h_ce_type,chr_p_sys_date,&h_evt_nbr,l_debug_info_ptr ) != APL_SUCCESS)	
+					{
+						CO_ProcMonitor(p_flogfile,"Function CA_GenCARefNo failed.Could not generate corp_id ",NULL,NULL);
+						APL_GOBACK_FAIL				
+					}
+				else
+					{
+
+						EXEC SQL SELECT currency_cd,INSTR_TYPE,STATUS
+							INTO :h_ca_currency,
+							     :h_typeofinstr,
+								  :h_status	
+							FROM MT_INSTRUMENT
+							WHERE instr_code = :chr_p_instr_list[int_counter];
+
+						IS_ANY_ORA_ERROR
+
+						if(APL_ZERO_RESULT_SET)
+						 {
+	
+	
+   						sprintf(chr_flog_buff,"Instrurity %s was not int_found , Could not generate a Redenomination event ",chr_p_instr_list[int_counter]);
+							CO_ProcMonitor(p_flogfile,chr_flog_buff,NULL,NULL);
+	
+   						continue;
+						 }
+
+
+					 if(strcmp(h_status,chr_h_statusus_auth))
+						{
+							
+	
+   						sprintf(chr_flog_buff,"Instrurity %s is not authorised  , Could not generate a Redenomination event  ",chr_p_instr_list[int_counter]);
+							CO_ProcMonitor(p_flogfile,chr_flog_buff,NULL,NULL);
+
+
+   						continue;
+						 }
+
+
+
+
+
+                 if(strcmp(h_typeofinstr,"FMT") )                  
+						{  
+
+                    sprintf(chr_flog_buff,"Type of instrument is not FMT for %s , Could not Generate a Redenom Event ",chr_p_instr_list[int_counter]);
+						  CO_ProcMonitor(p_flogfile,chr_flog_buff,NULL,NULL);
+
+						  continue;
+						}
+
+
+
+						EXEC SQL INSERT INTO CAEVENT
+							( 
+							  corp_id , instr_code , CA_EVENT , declare_dt , evnt_indnt ,
+							  PRELIMINARY_FLAG , CA_CURRENCY , REC_DATE , dateof_payment , 
+							  amount_bal , RECEIVED_AMT , quantity_bal , quantity_received ,
+							  EVT_MSG_COUNT , entl_msg_cnt , EVT_CLT_CNT ,ENTL_CLT_CNT , COUNT_ACS_PEND ,		
+							  EVT_SEND_MSG_IND , ENTL_SEND_MSG_IND , PYMT_SEND_MSG_IND ,
+							  DISP_OF_FRACT , status , PROCESSED_DATE , maker , MAKER_DT ,	access_stamp	
+							)
+						VALUES
+							(
+								:h_corp_id , :chr_p_instr_list[int_counter] , :chr_h_ce_type , :chr_p_sys_date , :h_evt_nbr,
+								:h_preliminary_flag , :h_ca_currency , :h_rec_date , :chr_h_pay_date ,
+									0 , 0 , 0 , 0 ,
+									0 , 0 , 0 , 0 , 0 ,
+								:h_evt_send_msg_ind , :h_entl_send_msg_ind , :h_pymt_send_msg_ind ,
+								:h_disp_of_fract , :h_evt_stat, :chr_p_sys_date ,
+							   :h_maker , :chr_p_sys_date , :p_sys_date_time 
+							);
+	
+						if (sqlca.sqlcode == -1)
+							{
+
+								sprintf(chr_flog_buff,"Event Record already exists for instrument %s , could not generate event",chr_p_instr_list[int_counter]);
+								CO_ProcMonitor(p_flogfile,chr_flog_buff,NULL,NULL);
+								continue;
+							}
+	
+						else if (sqlca.sqlcode < 0)
+							{
+
+     							char    chr_buffer[KEY_LENGTH];
+                        ltoa_r(sqlca.sqlcode,chr_buffer,KEY_LENGTH-1);
+                        sqlca.sqlerrm.sqlerrmc[APL_ORA_MSG_LENGTH] = '\0';
+                        CO_InsertOraErr(l_debug_info_ptr,
+                                          sqlca.sqlerrm.sqlerrmc,
+                                          chr_buffer,
+                                          APL_NULL_STRING,
+                                          APL_NULL_STRING,
+                                          __LINE__,
+                                          __FILE__);
+                         goto RETURN_FAILURE;
+							}
+
+
+					sprintf(chr_flog_buff,"Generated a Redenom event for instrument %s ",chr_p_instr_list[int_counter]);
+					CO_ProcMonitor(p_flogfile,chr_flog_buff,NULL,NULL);
+					}
+				}
+
+         EXEC SQL UPDATE SYS_BATCHPROC
+            SET   status = 'completed'
+            WHERE  rowid = :chr_batch_in_proc_rowid;
+ 
+         IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,APL_NULL_STRING,APL_NULL_STRING,APL_NULL_STRING)
+
+			EXEC SQL COMMIT;	
+			IS_ANY_ORA_ERROR	  
+		  }
+
+	
+	else 
+
+		{
+			CO_ProcMonitor(p_flogfile,"parameter indicating All/Selected has an invalid chr_value. ,",NULL,NULL);
+         CO_ProcMonitor(p_flogfile," It should be either A or S ",NULL,NULL);
+			APL_GOBACK_FAIL
+		}
+
+	
+	APL_GOBACK_SUCCESS;
+
+RETURN_SUCCESS:
+	{
+	CO_ProcMonitor(p_flogfile,"Exiting out of CA_Proc_RedonimationEvent successfully",l_debug_info_ptr,p_intlenv_data_struct_h); 
+	CO_FreeErrLst(l_debug_info_ptr);
+	return (APL_SUCCESS);
+	}
+
+RETURN_FAILURE:
+	{	
+	CO_ProcMonitor(p_flogfile,"Exiting out of CA_Proc_RedonimationEvent unsuccessfully",l_debug_info_ptr,p_intlenv_data_struct_h); 
+	CO_FreeErrLst(l_debug_info_ptr);
+	return (APL_FAILURE);
+	}
+
+}
+
+
+
+
+
+
+
+
+
+
+
+int  CA_Mod_RedominationAuth  (    	FILE  *p_flogfile,
+										char	**argv,
+										char  **p_param_list,
+										char	*chr_p_sys_date,				
+										char	*p_sys_date_time,
+										INTL_ENV_DATA_STRUCT_H *p_intlenv_data_struct_h,
+										DEBUG_INFO_STRUCT_H		 **l_debug_info_ptr
+              			  ) 
+{
+
+	struct sqlca sqlca;
+   char chr_flog_buff[APL_STATINFO_LEN]=APL_NULL_STRING;
+	
+	
+
+	char **chr_p_instr_list=NULL;
+	int int_no_elm=0;
+	int int_counter=0;
+	int int_instr_counter=0;
+   int int_no_of_rec=0;
+
+	
+	
+	char chr_batch_in_proc_rowid[APL_ROWID_LEN] = APL_NULL_STRING;
+	char chr_status_started [APL_BATCHSTATUS_LEN] = {APL_STATUS_BATCH_STARTED};
+   char h_evt_stat[APL_STATUS_LEN]= APL_NULL_STRING;
+   char chr_h_event_stat_unauth[APL_STATUS_LEN]= {APL_STATUS_UNAUTH};
+   char chr_h_event_stat_intimate[APL_STATUS_LEN]= {STATUS_RDY_INT};	
+   char chr_h_ce_type[EVT_CLASS_]= {EVT_REDOM};
+	char h_checker[APL_USERID_LEN] = APL_NULL_STRING;
+   char h_maker[APL_USERID_LEN] =APL_NULL_STRING;	
+
+	char chr_selected_records[APL_INSTRUMENTCODE_LEN]     = APL_NULL_STRING;
+	char chr_auth_instr_name[INSTR_NAME_LEN_D]          = APL_NULL_STRING;
+	
+	
+
+
+	EXEC SQL VAR h_checker is string;
+   EXEC SQL VAR h_maker is string;	
+
+
+	strcpy(h_checker,argv[3]);
+
+
+
+	
+
+	EXEC SQL SELECT ROWID
+	INTO :chr_batch_in_proc_rowid
+	FROM SYS_BATCHPROC
+	WHERE
+				PROCESS_NAME =:argv[0]
+		and	PROC_INIT =:argv[1]
+		and	STARTDATE =:argv[2]
+		and 	STATUS =:chr_status_started
+	FOR UPDATE;
+
+	IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"BATCH_IN_PROC",argv[0],argv[1])
+
+
+	if(  !strcmp(p_param_list[1],"A"))
+	{
+  
+
+   
+
+      CO_ProcMonitor(p_flogfile,"Authorising Redenomination events for all unauthorised records ",NULL,NULL); 
+      CO_ProcMonitor(p_flogfile,"SELECTED CRITERIA : FOR ALL INSTRUMENT",NULL,NULL); 
+ 	
+		EXEC SQL UPDATE CAEVENT
+				SET status 	= :chr_h_event_stat_intimate,
+					 checker 	= :h_checker,
+					 CHECKER_DT = :chr_p_sys_date,
+					 PROCESSED_DATE 	= :chr_p_sys_date,
+					 access_stamp = :p_sys_date_time
+				WHERE
+					 CA_EVENT = :chr_h_ce_type
+				AND status = :chr_h_event_stat_unauth
+				AND maker <> :h_checker;		
+ 
+
+		IS_ANY_ORA_ERROR
+
+         EXEC SQL UPDATE SYS_BATCHPROC
+            SET   status = 'completed'
+            WHERE  rowid = :chr_batch_in_proc_rowid;
+ 
+         IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,APL_NULL_STRING,APL_NULL_STRING,APL_NULL_STRING)
+
+      EXEC SQL COMMIT;
+		IS_ANY_ORA_ERROR
+		CO_ProcMonitor(p_flogfile,"Authorised all Redenomination events  ",NULL,NULL);
+   
+
+   
+  EXEC SQL SELECT count(*) INTO :int_no_of_rec from CAEVENT WHERE access_stamp=:p_sys_date_time AND CA_EVENT=:chr_h_ce_type;
+
+  if ( int_no_of_rec == 0)
+	{
+	sprintf(chr_flog_buff,"\n**********  NO EVENT IS AUTHORISED **********\n");
+	CO_ProcMonitor(p_flogfile,chr_flog_buff,NULL,NULL);
+	}
+  else
+	{	  
+	EXEC SQL DECLARE Auth_Rec_Cur CURSOR 
+		FOR
+			SELECT
+					CAEVENT.instr_code,
+					MT_INSTRUMENT.instr_name
+			FROM
+					CAEVENT,
+					MT_INSTRUMENT
+			WHERE CAEVENT.access_stamp=:p_sys_date_time
+			AND 	CAEVENT.CA_EVENT=:chr_h_ce_type	
+			AND	CAEVENT.instr_code=MT_INSTRUMENT.instr_code;
+
+		EXEC SQL OPEN Auth_Rec_Cur;
+		IS_ANY_ORA_ERROR
+
+		sprintf(chr_flog_buff,"\n******** Authorised Redenomination Evnet For Following Instrurities  ******\n");
+	   CO_ProcMonitor(p_flogfile,chr_flog_buff,NULL,NULL);
+
+		int_instr_counter=1;
+
+		for(;;)
+		{
+			strcpy(chr_selected_records,APL_NULL_STRING);
+			strcpy(chr_auth_instr_name,APL_NULL_STRING);
+
+			EXEC SQL FETCH Auth_Rec_Cur
+			INTO
+				:chr_selected_records,
+				:chr_auth_instr_name;
+		
+			IS_ANY_ORA_ERROR_CURSOR
+	
+			CO_NewLine(chr_auth_instr_name);
+			sprintf(chr_flog_buff,"%d: %s %s",int_instr_counter,chr_selected_records,chr_auth_instr_name);
+			CO_ProcMonitor(p_flogfile,chr_flog_buff,NULL,NULL);
+			++int_instr_counter;
+		}
+		sprintf(chr_flog_buff,"\n***********************************************************************\n");
+	   CO_ProcMonitor(p_flogfile,chr_flog_buff,NULL,NULL);
+
+    }
+	}
+
+
+	else if(  !strcmp(p_param_list[1] , "S"))
+		  {
+      CO_ProcMonitor(p_flogfile,"Authorising Redenomination events for all unauthorised records ",NULL,NULL); 
+      CO_ProcMonitor(p_flogfile,"SELECTED CRITERIA : FOR SELECTED INSTRUMENT",NULL,NULL); 
+	     
+ 		  
+			
+		  CO_SplitStr( p_param_list[2] , GP_PARAM_SEP2 , &int_no_elm , &chr_p_instr_list );
+
+
+		  for( int_counter=0 ; int_counter < int_no_elm ; ++int_counter )
+				{
+				
+				EXEC SQL SELECT maker,status
+					INTO :h_maker,:h_evt_stat
+				FROM CAEVENT
+				WHERE
+				    CA_EVENT = :chr_h_ce_type
+				AND instr_code = :chr_p_instr_list[int_counter];
+		
+				IS_ANY_ORA_ERROR;
+
+				if(APL_ZERO_RESULT_SET)
+					 {
+  						sprintf(chr_flog_buff,"Redenomination Event for Instrurity %s was not int_found , Could not authorise Event ",chr_p_instr_list[int_counter]); 
+						CO_ProcMonitor(p_flogfile,chr_flog_buff,NULL,NULL);
+  						continue;
+					 }
+	
+				if(strcmp(h_evt_stat,chr_h_event_stat_unauth))
+					{
+						sprintf(chr_flog_buff,"Redenomination Event for Instrurity %s is not in correct status_ind , Could not authorise Event ",chr_p_instr_list[int_counter]);
+						CO_ProcMonitor(p_flogfile,chr_flog_buff,NULL,NULL);
+						continue;
+					}	
+	
+            
+				if(!strcmp(h_maker,h_checker))
+					{
+					  sprintf(chr_flog_buff,"Maker is same as Checker for Redenomination event for instrument %s , Could not authorise Event ",chr_p_instr_list[int_counter]);
+					  CO_ProcMonitor(p_flogfile,chr_flog_buff,NULL,NULL);
+					  continue;
+					}
+
+	
+				EXEC SQL UPDATE CAEVENT
+					SET status 	= :chr_h_event_stat_intimate,
+						 checker 	= :h_checker,
+						 CHECKER_DT = :chr_p_sys_date,
+					    PROCESSED_DATE 	= :chr_p_sys_date,
+					    access_stamp = :p_sys_date_time
+					WHERE
+					    CA_EVENT = :chr_h_ce_type
+					AND status = :chr_h_event_stat_unauth
+					AND instr_code = :chr_p_instr_list[int_counter];
+
+					IS_ANY_ORA_ERROR;
+			
+
+	            sprintf(chr_flog_buff,"Authorised Redenomination Event for instrument %s successfully",chr_p_instr_list[int_counter]);
+					CO_ProcMonitor(p_flogfile,chr_flog_buff,NULL,NULL);
+					}
+
+         EXEC SQL UPDATE SYS_BATCHPROC
+            SET   status = 'completed'
+            WHERE  rowid = :chr_batch_in_proc_rowid;
+ 
+         IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,APL_NULL_STRING,APL_NULL_STRING,APL_NULL_STRING)
+
+
+			EXEC SQL COMMIT;	
+		IS_ANY_ORA_ERROR
+		  }
+
+	
+	else 
+
+		{
+			CO_ProcMonitor(p_flogfile,"Parameter indicating All/Selected has an invalid chr_value ,",NULL,NULL);
+         CO_ProcMonitor(p_flogfile," It should be either A or S ",NULL,NULL);
+			APL_GOBACK_FAIL
+		}
+
+
+
+	
+	APL_GOBACK_SUCCESS;
+
+RETURN_SUCCESS:
+	{
+	CO_ProcMonitor(p_flogfile,"Exiting out of CA_Mod_RedominationAuth successfully",l_debug_info_ptr,p_intlenv_data_struct_h); 
+	CO_FreeErrLst(l_debug_info_ptr);
+	return (APL_SUCCESS);
+	}
+
+RETURN_FAILURE:
+	{	
+	CO_ProcMonitor(p_flogfile,"Exiting out of CA_Mod_RedominationAuth unsuccessfully",l_debug_info_ptr,p_intlenv_data_struct_h); 
+   CO_FreeErrLst(l_debug_info_ptr);
+	return (APL_FAILURE);
+	}
+
+
+
+} 
+
+
+
+//main(int argc , char ** argv)
+int main(int argc,char **argv)//Changes done for AIX Migration
+{
+	DEBUG_INFO_STRUCT_H	**l_debug_info_ptr=NULL,
+						*l_debug_info_struct = NULL;
+	FILE				*chr_finifile=NULL;
+	FILE				*flogfile=NULL;
+	char				chr_inifile[PATH_LENGTH]	=	APL_NULL_STRING;
+	char				chr_logfile[PATH_LENGTH]	=	APL_NULL_STRING;
+   char 				chr_uname[APL_USERID_LEN] = APL_NULL_STRING;
+   char 				chr_passwd[APL_PASSWD_LEN]= APL_NULL_STRING;
+	char				chr_log_buff[APL_STATINFO_LEN]	=	APL_NULL_STRING;
+	struct			sqlca sqlca;	
+	INTL_ENV_DATA_STRUCT_H   *l_intlenv_datastruct_h =  NULL;
+   char                 chr_custody_id_b[APL_USERID_LEN];
+	char				*int_pos;
+	char	pro_sys_date[APL_DATE_LEN] = APL_NULL_STRING;
+	char	chr_sys_date_time[APL_DATE_LEN] = APL_NULL_STRING;
+	char	**chr_param_list=NULL;
+	char	*chr_source_str = NULL;
+	int	int_no_elm = 0;
+
+	
+ 	EXEC SQL VAR chr_uname IS STRING;
+   EXEC SQL VAR chr_passwd IS STRING;  
+
+	l_debug_info_ptr = &l_debug_info_struct;
+	
+	
+	strcpy(chr_inifile,getenv("INTL_ROOT_PATH"));
+   strcat(chr_inifile,"intl_sun.cfg");
+
+
+	if ( ( chr_finifile=fopen(chr_inifile,"r") ) == NULL)
+  	{
+	  printf("\n Could not open the h_file %s \n",chr_inifile);
+     exit(-1);	
+  	}
+
+   APL_FETCH_DB_LOGIN_DETAILS(chr_finifile,chr_custody_id_b,chr_uname,chr_passwd,APL_OUT_FILE,l_debug_info_ptr)
+   EXEC SQL CONNECT :chr_uname IDENTIFIED BY :chr_passwd;
+   IS_ANY_ORA_ERROR
+
+   if ( CO_Rtv_RptFileName("2N",
+								APL_LOGFILE_DESC,
+								100,
+								argv[5],
+								argv,
+								&flogfile,
+								l_debug_info_ptr) == APL_FAILURE ) 
+	{
+		exit(-1);
+	}
+	EXEC SQL COMMIT;
+	IS_ANY_ORA_ERROR
+
+	
+   if ( CO_RtvSysDtTime(chr_sys_date_time,l_debug_info_ptr) == APL_FAILURE )
+         APL_GOBACK_FAIL
+   CLS_LOG_ARRAY
+   sprintf(chr_log_buff,"\nRedenomination event processing started on :[%s]\n",chr_sys_date_time);
+   CO_ProcMonitor(flogfile,chr_log_buff,NULL,NULL);
+
+	strcpy(pro_sys_date,chr_sys_date_time);
+   strcpy(pro_sys_date,strtok_r(pro_sys_date," ",&int_pos));
+   strcat(pro_sys_date,APL_NULL_TIME);
+
+	if ( CO_RtvSysParams(l_debug_info_ptr) == APL_FAILURE)
+      APL_GOBACK_FAIL
+
+	
+	l_intlenv_datastruct_h   =  (INTL_ENV_DATA_STRUCT_H*)calloc(1,sizeof(INTL_ENV_DATA_STRUCT_H));
+	APL_MALLOC_FAIL(l_intlenv_datastruct_h);
+
+	
+   if ( argc < 10 )
+   {
+      CO_ProcMonitor(flogfile,"All Arguments expected by  program not passed \n",NULL
+,NULL);
+      APL_GOBACK_FAIL
+   }
+
+  chr_source_str= (char *)calloc(strlen(argv[9]),sizeof(char));
+  APL_MALLOC_FAIL(chr_source_str);
+
+
+   strcpy(l_intlenv_datastruct_h->usr, argv[3]);
+	strcpy(chr_source_str,argv[9]);
+
+	if (	CO_SplitStr(chr_source_str,GP_PARAM_SEP1,&int_no_elm,&chr_param_list)
+			== APL_FAILURE
+		)
+	{
+		CO_ProcMonitor(flogfile,"Split String Function returned failure",NULL,NULL);
+		APL_GOBACK_FAIL
+	}
+
+	
+
+   
+
+	if ( int_no_elm < 5)
+	{  
+		CO_ProcMonitor(flogfile,"5 Concatenated Parameters are expected in arv[9].Less than expected have been passed",NULL,NULL);
+		APL_GOBACK_FAIL
+	}
+
+
+
+	
+
+  if(  !strcmp(chr_param_list[0],"G" ))
+		{  
+			if ( CA_Proc_RedonimationEvent (  flogfile,
+											argv,
+											chr_param_list,
+											pro_sys_date,
+											chr_sys_date_time,
+											l_intlenv_datastruct_h,
+											l_debug_info_ptr
+										)	==	APL_FAILURE
+				)
+				{
+					EXEC SQL ROLLBACK;
+					IS_ANY_ORA_ERROR
+					printf("\nROLLING BACK");
+					CO_ProcMonitor(flogfile,"\nROLLING BACK ",NULL,NULL);
+					APL_GOBACK_FAIL
+				}
+				else
+				{
+	 				EXEC SQL COMMIT;			
+					printf("\nRECORD COMMITTED ");
+					CO_ProcMonitor(flogfile,"\nRECORD COMMITTED ",NULL,NULL);
+					IS_ANY_ORA_ERROR
+					APL_GOBACK_SUCCESS
+				}
+		}
+
+
+
+
+	
+
+  else if(  !strcmp(chr_param_list[0],"A") )
+		{
+			if ( CA_Mod_RedominationAuth ( flogfile,
+											argv,
+											chr_param_list,
+											pro_sys_date,
+											chr_sys_date_time,
+											l_intlenv_datastruct_h,
+											l_debug_info_ptr
+										)	==	APL_FAILURE
+				)
+				{
+					EXEC SQL ROLLBACK;
+					IS_ANY_ORA_ERROR
+					printf("\nROLLING BACK ");
+					CO_ProcMonitor(flogfile,"\nROLLING BACK ",NULL,NULL);
+					APL_GOBACK_FAIL
+				}
+				else
+				{
+	 				EXEC SQL COMMIT;			
+					printf("\nRECORD COMMITTED ");
+					CO_ProcMonitor(flogfile,"\nRECORD COMMITTED ",NULL,NULL);
+					IS_ANY_ORA_ERROR
+					APL_GOBACK_SUCCESS
+				}
+		}
+
+	else 
+		{
+			CO_ProcMonitor(flogfile,"\nParameter indicating Generate/Authorise has an invalid chr_value ",NULL,NULL);
+			APL_GOBACK_FAIL
+		}
+
+
+   
+	
+   APL_GOBACK_SUCCESS
+ 
+   RETURN_SUCCESS:
+	{
+   	CLS_LOG_ARRAY
+	   printf("\nRedenomination Event Process exiting successfully\n");
+	   sprintf(chr_log_buff,"T:Redenomination Event Process exiting successfully\n");
+      CO_ProcMonitor(flogfile,chr_log_buff,l_debug_info_ptr,NULL);
+		CO_FreeErrLst(l_debug_info_ptr);
+      
+		APL_FREE(l_intlenv_datastruct_h);
+	
+		fclose(chr_finifile);
+		fclose(flogfile);
+		
+		exit(0);
+   }
+   RETURN_FAILURE:
+   {
+   	CLS_LOG_ARRAY
+      printf("\nRedenomination Event Process exiting unsuccessfully\n");
+      sprintf(chr_log_buff,"T:Redenomination Event Process exiting unsuccessfully\n");
+      CO_ProcMonitor(flogfile,chr_log_buff,l_debug_info_ptr,NULL);
+		CO_FreeErrLst(l_debug_info_ptr);
+      
+		APL_FREE(l_intlenv_datastruct_h);
+	
+		fclose(chr_finifile);
+		fclose(flogfile);
+      
+		exit(-1);
+   }
+}
+		
+
+

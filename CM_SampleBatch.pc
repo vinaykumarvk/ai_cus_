@@ -1,0 +1,297 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ 
+#include "CR_Common.h"
+EXEC SQL INCLUDE SQLCA.H;
+
+#define	S_RESTART_SEP_TOKEN	" "
+#define	S_LEVEL_T1				1
+#define	S_LEVEL_T2				2
+
+typedef struct {
+						char h_instr_class[4];
+					} H_TABLE1;
+
+typedef struct {
+						short i_instr_class;
+					} I_TABLE1;
+
+typedef struct {
+						char h_instr_class[4];
+						char h_instr_code[4];
+					} H_TABLE2;
+
+typedef struct {
+						short i_instr_class;
+						short i_instr_code;
+					} I_TABLE2;
+
+char						chr_g_tmp_restart_data	[APL_RESTARTDATA_LENGTH+1];
+char						chr_g_restart_data_h		[APL_RESTARTDATA_LENGTH+1];
+short						g_restart_data_i;
+
+H_TABLE1					g_table1_h;
+H_TABLE2					g_table2_h;
+
+I_TABLE1					g_table1_i;
+I_TABLE2					g_table2_i;
+
+char						chr_g_rest_table1_rowid			[APL_ROWID_LEN];
+char						chr_g_rest_table2_rowid			[APL_ROWID_LEN];
+char						chr_g_progname						[41];
+char						chr_g_key								[KEY_LENGTH];
+char						chr_g_start_date					[APL_DATE_LEN];
+
+extern	int	CO_Sample_Main(	INTL_ENV_DATA_STRUCT_H   *p_intlenv_data_struct_h,
+									DEBUG_INFO_STRUCT_H 			**l_debug_info_ptr);
+
+extern	int	CO_Sample_ProcRow ( INTL_ENV_DATA_STRUCT_H	*p_intlenv_data_struct_h,
+										DEBUG_INFO_STRUCT_H			**l_debug_info_ptr);
+
+extern	int 	CA_Commit ( 	int				p_commit_status,
+									int				p_commit_level,
+									DEBUG_INFO_STRUCT_H	**l_debug_info_ptr);
+main(int argc, char ** argv)
+{
+	DEBUG_INFO_STRUCT_H			*l_debug_info_ptr;
+	INTL_ENV_DATA_STRUCT_H	p_intlenv_data_struct_h;
+
+	EXEC SQL BEGIN DECLARE SECTION;
+		char chr_uname[APL_USERID_LEN];
+		char chr_passwd[APL_USERID_LEN];
+	EXEC SQL END DECLARE SECTION; 
+
+	strcpy(chr_uname,"tryuser");
+	strcpy(chr_passwd,"tryuser");
+
+	EXEC SQL CONNECT :chr_uname IDENTIFIED BY :chr_passwd;
+	IS_ANY_ORA_ERROR
+
+	strcpy(chr_g_progname,	argv[0]);
+	strcpy(chr_g_key,			argv[1]);
+	strcpy(chr_g_start_date,	argv[2]);
+	strcpy(p_intlenv_data_struct_h.usr, argv[3]);
+
+	if (CO_Sample_Main(&p_intlenv_data_struct_h, &l_debug_info_ptr) == APL_FAILURE)
+		APL_GOBACK_FAIL
+
+	
+	APL_GOBACK_SUCCESS
+	RETURN_SUCCESS:
+	{
+		exit(0);
+	}
+	RETURN_FAILURE:
+	{
+		exit(-1);
+	}
+}
+
+int	CO_Sample_Main(	INTL_ENV_DATA_STRUCT_H   *p_intlenv_data_struct_h,
+						DEBUG_INFO_STRUCT_H 			**l_debug_info_ptr)
+{
+	int	int_commit_status;
+	int	int_init_flg = 1;
+
+	
+
+	EXEC SQL DECLARE c_table1_gt CURSOR FOR
+	SELECT table1.*, rowid FROM table1
+	WHERE rowid > :chr_g_rest_table1_rowid
+	FOR UPDATE
+	ORDER by rowid;
+	 
+	IS_ANY_ORA_ERROR
+
+	
+
+	EXEC SQL DECLARE c_table1_ge CURSOR FOR
+	SELECT table1.*, rowid FROM table1
+	WHERE rowid >= :chr_g_rest_table1_rowid
+	FOR UPDATE
+	ORDER by rowid;
+
+	IS_ANY_ORA_ERROR
+
+	
+
+	EXEC SQL DECLARE c_table2 CURSOR FOR
+	SELECT table2.*, rowid FROM table2
+	WHERE typeofinstr = :g_table1_h.h_instr_class AND
+			rowid > :chr_g_rest_table2_rowid
+	FOR UPDATE
+	ORDER by rowid;
+
+	IS_ANY_ORA_ERROR
+
+	EXEC SQL SELECT processing_status INTO :chr_g_restart_data_h:g_restart_data_i
+	FROM SYS_BATCHPROC
+	WHERE process_name	=:chr_g_progname
+	AND	proc_init		=:chr_g_key
+	AND	START_DATE=:chr_g_start_date
+	AND 	status_ind	='started'
+	FOR UPDATE OF processing_status,status_ind;
+
+	IS_ANY_ORA_ERROR
+
+	if (g_restart_data_i == -1)
+	{
+		strcpy(chr_g_rest_table1_rowid, "00000000.0000.0000");
+		strcpy(chr_g_rest_table2_rowid, "00000000.0000.0000");
+	}
+	else
+	{
+		strcpy(chr_g_tmp_restart_data,chr_g_restart_data_h);
+		strcpy(chr_g_rest_table1_rowid, strtok(chr_g_tmp_restart_data,S_RESTART_SEP_TOKEN));
+		strcpy(chr_g_rest_table2_rowid, strtok(NULL,S_RESTART_SEP_TOKEN));
+	}
+
+	EXEC SQL OPEN c_table1_ge;
+	IS_ANY_ORA_ERROR
+
+	for(;;)
+	{
+		if ( int_init_flg == 1 )
+		{
+			EXEC SQL FETCH c_table1_ge INTO :g_table1_h:g_table1_i,
+													:chr_g_rest_table1_rowid;
+			IS_ANY_ORA_ERROR_CURSOR
+			int_init_flg = 0;
+		}
+		else
+		{
+			EXEC SQL FETCH c_table1_gt INTO :g_table1_h:g_table1_i,
+													:chr_g_rest_table1_rowid;
+			IS_ANY_ORA_ERROR_CURSOR
+		}
+
+		EXEC SQL OPEN c_table2;
+		IS_ANY_ORA_ERROR
+
+		for (;;)
+		{
+			EXEC SQL FETCH c_table2 INTO :g_table2_h:g_table2_i,
+												:chr_g_rest_table2_rowid;
+			IS_ANY_ORA_ERROR_CURSOR
+
+			if ( (CO_Sample_ProcRow(	p_intlenv_data_struct_h,
+										l_debug_info_ptr
+									) == APL_SUCCESS) )
+				int_commit_status = APL_SUCCESS;
+			else
+			{
+				IS_ANY_ERROR_FATAL
+				int_commit_status = APL_FAILURE;
+			}
+			if ( CA_Commit(int_commit_status,S_LEVEL_T2,l_debug_info_ptr) == APL_FAILURE )
+				APL_GOBACK_FAIL
+		}
+		strcpy(chr_g_rest_table2_rowid, "00000000.0000.0000");
+		if ( CA_Commit(APL_SUCCESS,S_LEVEL_T1,l_debug_info_ptr) == APL_FAILURE )
+			APL_GOBACK_FAIL
+	}
+
+	EXEC SQL UPDATE SYS_BATCHPROC
+  	SET status_ind = 'completed'
+  	WHERE PROCESS_NAME	=:chr_g_progname
+  	AND	PROC_INIT		=:chr_g_key
+  	AND	START_DATE=:chr_g_start_date
+  	AND STATUS		='started';
+	IS_ANY_ORA_ERROR
+
+	EXEC SQL COMMIT;
+	IS_ANY_ORA_ERROR
+
+	
+	APL_GOBACK_SUCCESS
+	RETURN_SUCCESS:
+	{
+		return (APL_SUCCESS);
+	}
+	RETURN_FAILURE:
+	{
+		return (APL_FAILURE);
+	}
+}
+
+int	CO_Sample_ProcRow ( INTL_ENV_DATA_STRUCT_H	*p_intlenv_data_struct_h,
+							DEBUG_INFO_STRUCT_H			**l_debug_info_ptr)
+{
+	sleep(3);
+	printf("Instr type = %s, Instr h_code = %s\n",g_table1_h.h_instr_class, g_table2_h.h_instr_code);
+	APL_GOBACK_SUCCESS
+	RETURN_SUCCESS:
+	{
+		return (APL_SUCCESS);
+	}
+	RETURN_FAILURE:
+	{
+		return (APL_FAILURE);
+	}
+}
+
+int CA_Commit ( int				p_commit_status,
+					int				p_commit_level,
+					DEBUG_INFO_STRUCT_H	**l_debug_info_ptr)
+{
+	if (p_commit_status == APL_FAILURE)
+	{
+		EXEC SQL ROLLBACK;
+		IS_ANY_ORA_ERROR
+	}
+
+  	sprintf(chr_g_restart_data_h,"%s %s",
+				chr_g_rest_table1_rowid,
+				chr_g_rest_table2_rowid);
+
+	EXEC SQL UPDATE SYS_BATCHPROC
+  	SET processing_status = :chr_g_restart_data_h
+  	WHERE PROCESS_NAME	=:chr_g_progname
+  	AND	PROC_INIT		=:chr_g_key
+  	AND	START_DATE=:chr_g_start_date
+  	AND STATUS		='started';
+	IS_ANY_ORA_ERROR
+
+	EXEC SQL COMMIT;
+	IS_ANY_ORA_ERROR
+
+	switch ( p_commit_level)
+	{
+		case (S_LEVEL_T1) :
+		{
+
+			EXEC SQL OPEN c_table1_gt;
+			IS_ANY_ORA_ERROR
+			break;
+		}
+		case (S_LEVEL_T2) :
+		{
+			EXEC SQL OPEN c_table2;
+			IS_ANY_ORA_ERROR
+			break;
+		}
+	}
+
+
+	APL_GOBACK_SUCCESS
+	RETURN_SUCCESS:
+	{
+		return (APL_SUCCESS);
+	}
+	RETURN_FAILURE:
+	{
+		return (APL_FAILURE);
+	}
+}

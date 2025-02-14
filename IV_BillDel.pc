@@ -1,0 +1,148 @@
+
+
+
+
+
+
+#include "stdio_64.h"
+#include <string.h> 
+#include <stdlib.h>
+#include "CR_Common.h"
+#include "IV_Control_A.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+
+
+int main(int argc, char *argv[]) // AIX - Warnings removal
+{
+	extern int CO_Rtv_RptFileName(char *chr_rep_st, char *chr_rep_desc, int rep_widateh, 
+				   char *func_desc, char **argv, FILE **flptr,
+				   DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+	extern int IV_Delivery(const char **p_argv, FILE *user_logfile,
+				 DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+	char chr_l_sys_date[APL_DATE_LEN], chr_l_sesaminipath[PATH_LENGTH];
+	char chr_custody_id_q[APL_USERID_LEN]; 
+	int int_returnval = 0;
+	FILE *l_UserRptFlPtr = (FILE *)NULL, *l_SesamIniFlPtr = (FILE *)NULL;
+        DEBUG_INFO_STRUCT_H *l_error_node = (DEBUG_INFO_STRUCT_H *)NULL;
+        DEBUG_INFO_STRUCT_H **l_debug_info_ptr = &l_error_node;
+	//INTL_ENV_DATA_STRUCT_H *l_intl_env_data_h = (INTL_ENV_DATA_STRUCT_H *)NULL;
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+		char chr_user_name[APL_USERID_LEN], chr_user_passwd[APL_PASSWD_LEN];
+		EXEC SQL VAR chr_user_name IS STRING;
+		EXEC SQL VAR chr_user_passwd IS STRING;
+		struct sqlca sqlca;
+
+	EXEC SQL END DECLARE SECTION;
+
+	#ifdef APL_THREADS
+		APL_SET_CONTEXT
+		EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	memset(chr_l_sys_date, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(chr_user_name, APL_NULL_CHAR, APL_USERID_LEN);
+	memset(chr_user_passwd, APL_NULL_CHAR, APL_PASSWD_LEN);
+	memset(chr_custody_id_q, APL_NULL_CHAR, APL_USERID_LEN);
+	memset(chr_l_sesaminipath, APL_NULL_CHAR, PATH_LENGTH);
+
+	strcpy(chr_l_sesaminipath, getenv("INTL_ROOT_PATH"));
+	strcat(chr_l_sesaminipath, "intl_sun.cfg");
+
+	if ( (l_SesamIniFlPtr = fopen(chr_l_sesaminipath, "r")) == (FILE *)NULL )
+	{
+		fprintf(APL_OUT_FILE, "Cannot open intl_sun.cfg\n");
+
+		APL_GOBACK_FAIL
+	}
+
+	APL_FETCH_DB_LOGIN_DETAILS(l_SesamIniFlPtr, chr_custody_id_q, chr_user_name, chr_user_passwd,
+			      APL_OUT_FILE, l_debug_info_ptr)
+
+	EXEC SQL CONNECT :chr_user_name IDENTIFIED BY :chr_user_passwd;
+
+	if ( sqlca.sqlcode < 0 )
+	{
+		fprintf(APL_OUT_FILE, "Cannot connect to ORACLE.\n");
+
+		APL_GOBACK_FAIL
+	}
+	
+	if ( APL_FAILURE == CO_Rtv_RptFileName("1e", "User Log File", 100, 
+					    argv[5], argv, &l_UserRptFlPtr, 
+					    l_debug_info_ptr) )
+	{
+		fprintf(APL_OUT_FILE, "Cannot open user debuglist report\n");
+
+		APL_GOBACK_FAIL
+	}
+
+	EXEC SQL COMMIT WORK;
+
+	if ( sqlca.sqlcode < 0 )
+	{
+		fprintf(APL_OUT_FILE, "Could not commit chr_log h_file entry to the table COMMON_REPORT.\n");
+
+		APL_GOBACK_FAIL
+	}
+
+	fprintf(l_UserRptFlPtr, "--------------------- Bill delivery User Log File -----------------------------\n\n");
+
+	if ( APL_FAILURE == CO_RtvSysParams(l_debug_info_ptr) )
+	{
+		fprintf(l_UserRptFlPtr, "Error : Failed to fetch system parameters.\n");
+
+		fflush(l_UserRptFlPtr);
+
+		APL_GOBACK_FAIL
+	}
+
+	fprintf(l_UserRptFlPtr, "Bill Delivery started on %s.\n", argv[2]);
+
+	fflush(l_UserRptFlPtr);
+
+	int_returnval = IV_Delivery((const char **)argv, l_UserRptFlPtr, l_debug_info_ptr);//AIX Warning Removal 
+
+	if ( int_returnval == APL_SUCCESS )
+	{
+		fprintf(l_UserRptFlPtr, "\nBill Delivery successful.\n");
+
+		fflush(l_UserRptFlPtr);
+	}
+	else
+	{
+		fprintf(l_UserRptFlPtr, "\nBill Delivery failed.\n");
+
+		fflush(l_UserRptFlPtr);
+
+		//CO_ProcMonitor(l_UserRptFlPtr, APL_NULL_STRING, l_debug_info_ptr, l_intl_env_data_h);
+
+		CO_FreeErrLst(l_debug_info_ptr);
+	}
+
+		EXEC SQL COMMIT WORK RELEASE;
+	if ( int_returnval == APL_SUCCESS )
+	{
+		APL_GOBACK_SUCCESS 
+	}
+	else
+	{
+		/*EXEC SQL ROLLBACK WORK RELEASE;*/
+		APL_GOBACK_FAIL 
+	}
+
+	RETURN_SUCCESS:
+			 fclose(l_SesamIniFlPtr);
+			 fclose(l_UserRptFlPtr);
+			 exit(0); 
+
+	RETURN_FAILURE:
+			 fclose(l_SesamIniFlPtr);
+			 fclose(l_UserRptFlPtr);
+			 exit(1); 
+}

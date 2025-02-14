@@ -1,0 +1,4868 @@
+/*
+ *   COPYRIGHT NOTICE
+ *   
+ *   Copyright 2005 Polaris Software Lab Limited. All rights reserved.
+ *   
+ *   These materials are confidential and proprietary to
+ *   Polaris Software Lab Limited and no part of these materials should
+ *   be reproduced, published, transmitted or distributed in any form or
+ *   by any means, electronic, mechanical, photocopying, recording or
+ *   otherwise, or stored in any information storage or retrieval system
+ *   of any nature nor should the materials be disclosed to third parties
+ *   or used in any other manner for which this is not authorized, without
+ *   the prior express written authorization of Polaris Software Lab Limited.
+ */
+/*******************************************************************************
+ *  
+ *    Module Name         :         Billing Module 
+ *    
+ *    File Name           :         IV_BillGenFn_E.pc
+ *    
+ *    
+ *                Version Control Block
+ *     
+ *    Date        Version     Author              Description     RFS No.
+ *   ---------   --------  ---------------  ----------------------------------
+ *   08-Dec-2010  1.0.1.6   Siva Ganapathi	  Changes done for ISKB_2470 -- safekeeping charges of NAV based client
+ *
+ *******************************************************************************/
+
+#include "stdio_64.h"
+#include <string.h>
+#include "IV_Control_A.h"
+#include <stdlib.h>
+
+#ifdef BILLDEBUG
+	extern FILE *TestRep;
+#endif
+
+EXEC SQL INCLUDE SQLCA;
+
+
+
+int IV_Proc_ConsolidatedCharges(int *int_p_retstat,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	printf("\n IV_BillGenFn_E.pc :IV_Proc_ConsolidatedCharges:  entered IV_Proc_ConsolidatedCharges");
+//AIX Warning Removal 
+	char chr_h_bl_upto_dt_t[APL_DATE_LEN]; /* PJ */
+	char chr_h_prev_mstacc_t[APL_CLIENT_LENGTH];
+	EXEC SQL BEGIN DECLARE SECTION;
+
+	char h_dl_client[APL_CLIENT_LENGTH],chr_h_param_val[IV_PARAM_LEN],chr_h_inter_param_val[IV_PARAM_LEN], proc_data_val[IV_PARAM_LEN];
+	char chr_h_param_code[IV_PARAM_LEN],h_mstclt[APL_CLIENT_LENGTH];
+	char chr_h_prev_mstacc[APL_CLIENT_LENGTH],chr_h_bl_upto_dt[APL_DATE_LEN],chr_h_bl_gen;
+	char chr_h_def_fee_acc[APL_CLIENT_LENGTH], h_ora_rowid[APL_ROWID_LEN];
+	char chr_h_bl_ccycode[APL_CCYCODE_LEN],chr_h_m_bl_ccycode[APL_CCYCODE_LEN],chr_h_group_ind[51],chr_h_inter_group_ind[51],chr_h_nilflg;
+
+	char chr_h_srv_ind[50];
+	char *chr_h_txnsrvind[50];
+	char chr_h_cons_ind[2];
+	long int_h_serv_code = 0,h_prev_serv=0, h_voldis_code = VOLDISCOUNTFEE;
+	long h_splfee_code =  SPECIALBILLING;
+	long h_minfee_code = MINFEECODE ; 
+	long h_annminfee_code = ANNUALMINFEE ;/*added by shruthi kumbla for ISKB_1737 inorder to calculate consolidated charges for 99994*/
+	double h_charge_quantity=0.0,h_fee_quantity=0.0,h_cm_amount=0.0,h_inil_fees_adj=0.0;
+	double h_nil_fees=0.0,h_maximum_fee=0.0,h_minimumfee=0.0;
+	double h_m_amount=0.0,h_m_nil_fees=0.0,h_m_minimumfee=0.0;
+	short i_dl_client=0,i_mstclt=0,i_parameter_cd=0,i_proc_data_val=0,i_b_gen_flag=0;
+	short i_bl_currencycode=0,i_charge_quantity=0,i_fee_quantity=0,i_cm_amount=0,i_service_cd=0;
+	short i_group_id = 0,i_nilflg=0,i_inilfeeadj=0,i_ora_rowid = 0;
+	short i_m_amt = 0,i_m_nilfee=0,i_m_maxfee=0,i_m_minfee = 0;
+	SYS_BATCHPROC_STRUCT_H l_sys_batchproc_struct_h;
+	SYS_BATCHPROC_STRUCT_I l_sys_batchproc_struct_i;
+	char chr_h_batch_in_proc_rowid[APL_ROWID_LEN];
+	short int_i_batch_in_proc_rowid=0;
+	short i_cons_flag=0;
+	char chr_h_restart_client[APL_CLIENT_LENGTH];
+	char chr_h_update_restart[APL_RESTARTDATA_LENGTH];
+	char *chr_l_param_dep = NULL,chr_tdep[IV_PARAM_LEN];
+	char chr_where_stmt[500];
+	char chr_l_instrflg = 'N',chr_prev_param_code[IV_PARAM_LEN];
+	IV_DEAL_DATA_STRUCT_H l_iv_deal_data_struct_h_dladmgrp[50];
+	IV_DATA_STRUCT_H l_iv_data_struct_h_dladmgrp[50];
+	char chr_l_temp_param_str[IV_PARAM_LEN];
+	short l_cond_no_tax_on_minfee = 0;
+	//shailesh0509 
+	
+	double dbl_consfee_servchrg=0;
+	
+	EXEC SQL VAR h_dl_client 		IS STRING;
+	EXEC SQL VAR chr_h_bl_ccycode 	IS STRING;
+	EXEC SQL VAR chr_h_def_fee_acc 	IS STRING;
+	EXEC SQL VAR h_mstclt 		IS STRING;
+	EXEC SQL VAR chr_h_prev_mstacc 	IS STRING;
+	EXEC SQL VAR chr_h_param_val 	IS STRING;
+	EXEC SQL VAR chr_h_param_code 	IS STRING;
+	EXEC SQL VAR chr_h_bl_upto_dt 	IS STRING;
+	EXEC SQL VAR chr_h_group_ind 	IS STRING;
+	EXEC SQL VAR l_sys_batchproc_struct_h.process_name IS STRING;
+	EXEC SQL VAR l_sys_batchproc_struct_h.proc_init IS STRING;
+	EXEC SQL VAR l_sys_batchproc_struct_h.status_ind IS STRING;
+	EXEC SQL VAR l_sys_batchproc_struct_h.processing_status IS STRING;
+	EXEC SQL VAR chr_h_restart_client IS STRING;
+	EXEC SQL VAR chr_h_update_restart IS STRING;
+	EXEC SQL VAR chr_h_inter_param_val IS STRING;
+	EXEC SQL VAR chr_h_inter_group_ind IS STRING;
+	EXEC SQL VAR chr_prev_param_code IS STRING;
+	EXEC SQL VAR chr_l_temp_param_str IS STRING;
+	struct sqlca sqlca;
+
+	EXEC SQL END DECLARE SECTION;
+
+	IV_DATA_STRUCT_H l_iv_data_struct_h_consgrp[50];
+	IV_DATA_STRUCT_H l_iv_data_struct_h_cons[50];
+	IV_CLIENT_SERV_BASIS_STRUCT l_iv_client_serv_basis_structa;
+	IV_SERV_BASIS_STRUCT l_iv_serv_basis_structa_a;
+	IV_CLIENTSETUP_STRUCT l_iv_clientsetup_struct;
+	IV_SERV_MAST_STRUCT l_iv_servmast_struct;
+	IV_DEAL_STRUCT l_iv_deal_struct;
+	int int_fetch_cnt=0,int_grp_cnt=0,int_new_grp=0,int_i_cnt=0,int_acc_exist=0,int_retstat=0,int_rec_cnt=0;
+	int int_is_conchg_cur_open = 0,int_is_minfee_cur_open = 0,int_is_lminfee_cur_open = 0;
+	double srv_charge=0.0,prev_charge_quantity=0.0,prev_fee_quantity=0.0;
+	double dbl_consfee=0.0,consminimumfee=0.0;
+	double consnil_fees=0.0,consmaximum_fee=0.0,l_exchg_rt=1.0;
+	double h_m_maximum_fee=0.0,prev_cm_amount=0.0;
+	double l_round_quantity = 0.0; 
+	char chr_acct_str[IV_CLT_LEN];
+	char chr_prev_client[APL_CLIENT_LENGTH],chr_l_minfee_to,chr_prev_nilflg;
+	char chr_prev_param_val[IV_PARAM_LEN],chr_l_buf[BUFFER_LEN];
+	char chr_l_charge_basis[IV_STRING_LEN],chr_l_fee_basis[IV_STRING_LEN],chr_l_charge_type;
+	char chr_l_fee_type,chr_mst_bl_ccycode[APL_CCYCODE_LEN];
+	char chr_err_buffer[KEY_LENGTH],chr_prev_mst_sub = 'M';
+	char chr_prev_bl_ccycode[APL_CCYCODE_LEN];
+	int int_l_bl_err_level = 0;
+	int int_l_commitcounter = 0; 
+	char chr_prev_where_stmt[600]=APL_NULL_STRING;
+	char chr_paramcode[200] = APL_NULL_STRING;
+	char chr_paramstr[200] = APL_NULL_STRING;
+	int int_num = 0;
+	char **temp;
+	char **chr_temp1;
+
+	char chr_l_loc[100]=APL_NULL_STRING;
+	char chr_l_prod[100]=APL_NULL_STRING;
+   char chr_l_trcode_a[100]=APL_NULL_STRING;
+   char chr_l_txtype[100]=APL_NULL_STRING; 
+	char chr_l_locval[100]=APL_NULL_STRING;
+   char chr_l_prodval[100]=APL_NULL_STRING;
+   char chr_l_trcodeval[100]=APL_NULL_STRING;
+   char chr_l_txtypeval[100]=APL_NULL_STRING;
+	char chr_l_adm_fee_basis[100] = APL_NULL_STRING;
+	char chr_l_adm_charge_basis[100] = APL_NULL_STRING;
+	int int_cd_no = 0, int_dv_no = 0, int_cashdivflag =0;  
+        char chr_cd_param_val[IV_PARAM_LEN],chr_temp_param_str[IV_PARAM_LEN], *chr_temp4, chr_cd_mstacc[APL_CLIENT_LENGTH];  
+	int l_dec_len=0;
+
+	sqlca.sqlcode = 0;
+	memset(l_iv_data_struct_h_consgrp[0].proc_data,APL_NULL_CHAR,100);
+	memset(l_iv_data_struct_h_cons[0].proc_data,APL_NULL_CHAR,100);
+	memset(chr_h_prev_mstacc,APL_NULL_CHAR,APL_CLIENT_LENGTH);
+	memset(chr_h_prev_mstacc_t,APL_NULL_CHAR,APL_CLIENT_LENGTH); /* PJ */
+	memset(chr_acct_str,APL_NULL_CHAR,IV_CLT_LEN);
+	memset(chr_l_charge_basis,APL_NULL_CHAR,IV_STRING_LEN);
+	memset(chr_l_fee_basis,APL_NULL_CHAR,IV_STRING_LEN);
+	memset(chr_prev_param_code,APL_NULL_CHAR,IV_PARAM_LEN);
+	memset(chr_prev_param_val,APL_NULL_CHAR,IV_PARAM_LEN);
+	memset(chr_prev_client,APL_NULL_CHAR,APL_CLIENT_LENGTH);
+	memset(chr_h_bl_upto_dt,APL_NULL_CHAR,APL_DATE_LEN);
+	memset(chr_h_bl_upto_dt_t,APL_NULL_CHAR,APL_DATE_LEN); /* PJ */
+	memset(chr_err_buffer,APL_NULL_CHAR,KEY_LENGTH);
+	memset(chr_l_buf,APL_NULL_CHAR,BUFFER_LEN);
+	memset(chr_h_bl_ccycode,APL_NULL_CHAR,APL_CCYCODE_LEN);
+	memset(chr_h_m_bl_ccycode,APL_NULL_CHAR,APL_CCYCODE_LEN);
+	memset(h_ora_rowid,APL_NULL_CHAR,APL_ROWID_LEN);
+	memset(chr_h_restart_client,APL_NULL_CHAR,APL_CLIENT_LENGTH);
+	memset(chr_h_update_restart,APL_NULL_CHAR,APL_RESTARTDATA_LENGTH);
+
+	memset(&l_iv_client_serv_basis_structa, NULL, sizeof(IV_CLIENT_SERV_BASIS_STRUCT));
+	memset(&l_iv_serv_basis_structa_a, NULL, sizeof(IV_SERV_BASIS_STRUCT));
+	memset(&l_iv_clientsetup_struct, NULL, sizeof(IV_CLIENTSETUP_STRUCT));
+	memset(&l_iv_servmast_struct, NULL, sizeof(IV_SERV_MAST_STRUCT));
+	memset(&l_iv_deal_struct, NULL, sizeof(IV_DEAL_STRUCT));
+	memset(chr_h_srv_ind,APL_NULL_CHAR,51);
+	memset(chr_h_txnsrvind,APL_NULL_CHAR,51);
+	memset(l_iv_deal_data_struct_h_dladmgrp[0].proc_data,APL_NULL_CHAR,100);
+	memset(&l_iv_deal_data_struct_h_dladmgrp, NULL, sizeof(IV_DEAL_DATA_STRUCT_H));
+	memset(&l_iv_data_struct_h_dladmgrp,NULL, sizeof(IV_DATA_STRUCT_H));
+	memset(chr_l_temp_param_str, NULL, IV_PARAM_LEN);
+
+	strcpy(chr_h_bl_upto_dt,chr_g_bl_upto_dt);
+	/* strcpy(chr_h_bl_upto_dt_t,chr_g_bl_upto_dt);  PJ  OPT:AIX */
+	strcpy(chr_h_bl_upto_dt_t,chr_g_bl_upto_dt); /* PJ */
+	strcpy(chr_h_restart_client, chr_g_restart_client);
+
+	*int_p_retstat = IV_SUCCESS;
+
+	strcpy(chr_h_batch_in_proc_rowid,chr_g_batch_in_proc_rowid);
+	l_sys_batchproc_struct_h = l_sys_batchproc_struct_hb;
+
+ 	
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Entering Successfully in function IV_Proc_ConsolidatedCharges()\n",
+				NULL , NULL);
+	}
+   if(CO_Chk_CntryEnabled("BILL_GEN",
+                        "NO_TAX_ON_MINFEE",
+                        &l_cond_no_tax_on_minfee,
+                        l_debug_info_ptr)==APL_FAILURE)
+		APL_GOBACK_FAIL
+
+	if(l_cond_no_tax_on_minfee==0)
+   {
+		EXEC SQL DECLARE conchg_cur CURSOR FOR
+		SELECT a.CLIENT,a.MASTER_CLT,a.SERVICE_CD,a.PROC_DATA_VAL,
+			a.GROUP_ID,a.PARAMETER_CD,
+			a.CHRG_QUANT,a.FEES_QTY,a.COMM_AMT,a.B_CCYCD,b.B_GEN_IND,
+			0 as NIL_FEES_ADJ,'N' as NILFEEFLG, a.CONS_FLAG
+		FROM IV_DEAL a, IV_CLIENTSETUP b 
+		WHERE a.DATEOF_BILLING = :chr_h_bl_upto_dt  
+		AND (a.CLIENT  = a.MASTER_CLT OR b.B_GEN_IND = 'M') 
+		AND a.CLIENT   = b.CLIENT  
+		AND a.SERVICE_CD != :h_voldis_code
+		AND a.SERVICE_CD NOT IN (:h_splfee_code)  
+		
+   	AND a.MASTER_CLT > :chr_h_restart_client
+	
+		UNION
+	
+		SELECT a.CLIENT,a.MASTER_CLT,a.SERVICE_CD,'NV' as PROC_DATA_VAL,
+			'NG' as GROUP_ID,'NP' as PARAMETER_CD,
+			0 as CHRG_QUANT,0 as FEES_QTY,0 as COMM_AMT,
+			a.B_CCYCD,b.B_GEN_IND,a.NIL_FEES_ADJ,'Y' as NILFEEFLG,
+			a.CONS_FLAG
+		FROM IV_SERVICE_CHRG a, IV_CLIENTSETUP b 
+		WHERE a.DATEOF_BILLING = :chr_h_bl_upto_dt 
+		AND (a.CLIENT  = a.MASTER_CLT OR b.B_GEN_IND = 'M') 
+		AND a.CLIENT   = b.CLIENT and a.CONS_FLAG = 'I'
+		AND a.NIL_FEES_ADJ > 0  
+		AND a.SERVICE_CD != :h_voldis_code
+		AND a.SERVICE_CD NOT IN (:h_splfee_code)
+		
+		AND a.MASTER_CLT > :chr_h_restart_client
+   	UNION
+		SELECT a.CLIENT,a.MASTER_CLT,a.SERVICE_CD,'NV' as PROC_DATA_VAL,
+         'NG' as GROUP_ID,'NP' as PARAMETER_CD,
+         0 as CHRG_QUANT,0 as FEES_QTY,a.COMM_AMT as COMM_AMT,
+         a.B_CCYCD,b.B_GEN_IND,a.NIL_FEES_ADJ,'N' as NILFEEFLG,
+			a.CONS_FLAG
+   	FROM IV_SERVICE_CHRG a, IV_CLIENTSETUP b
+   	WHERE a.DATEOF_BILLING = :chr_h_bl_upto_dt
+   	AND (a.CLIENT  = a.MASTER_CLT OR b.B_GEN_IND = 'M')
+   	AND a.CLIENT   = b.CLIENT and a.CONS_FLAG = 'I'
+		AND a.SERVICE_CD IN (:h_splfee_code,:h_annminfee_code) /*added by shruthi kumbla for ISKB_1737 inorder to calculate consolidated charges for 99994*/
+	 	AND a.MASTER_CLT > :chr_h_restart_client
+   	ORDER BY 2,3,1;
+		 /*shailesh 22-02-20008 NILFEEFLG changed from Y to N for special billing*/
+	
+		EXEC SQL OPEN conchg_cur;
+	}
+	else
+	{
+		EXEC SQL DECLARE conchg_cur_ru CURSOR FOR
+		SELECT a.CLIENT,a.MASTER_CLT,a.SERVICE_CD,a.PROC_DATA_VAL,
+			a.GROUP_ID,a.PARAMETER_CD,
+			a.CHRG_QUANT,a.FEES_QTY,a.COMM_AMT,a.B_CCYCD,b.B_GEN_IND,
+			0 as NIL_FEES_ADJ,'N' as NILFEEFLG, a.CONS_FLAG
+		FROM IV_DEAL a, IV_CLIENTSETUP b 
+		WHERE a.DATEOF_BILLING = :chr_h_bl_upto_dt  
+		AND (a.CLIENT  = a.MASTER_CLT OR b.B_GEN_IND = 'M') 
+		AND a.CLIENT   = b.CLIENT  
+		AND a.SERVICE_CD != :h_voldis_code
+		
+		AND a.SERVICE_CD NOT IN (:h_splfee_code,:h_minfee_code)
+   	AND a.MASTER_CLT > :chr_h_restart_client
+	
+		UNION
+	
+		SELECT a.CLIENT,a.MASTER_CLT,a.SERVICE_CD,'NV' as PROC_DATA_VAL,
+			'NG' as GROUP_ID,'NP' as PARAMETER_CD,
+			0 as CHRG_QUANT,0 as FEES_QTY,0 as COMM_AMT,
+			a.B_CCYCD,b.B_GEN_IND,a.NIL_FEES_ADJ,'Y' as NILFEEFLG,
+			a.CONS_FLAG
+		FROM IV_SERVICE_CHRG a, IV_CLIENTSETUP b 
+		WHERE a.DATEOF_BILLING = :chr_h_bl_upto_dt 
+		AND (a.CLIENT  = a.MASTER_CLT OR b.B_GEN_IND = 'M') 
+		AND a.CLIENT   = b.CLIENT and a.CONS_FLAG = 'I'
+		AND a.NIL_FEES_ADJ > 0  
+		AND a.SERVICE_CD != :h_voldis_code
+		
+		AND a.SERVICE_CD NOT IN (:h_splfee_code,:h_minfee_code)
+		AND a.MASTER_CLT > :chr_h_restart_client
+   	UNION
+		SELECT a.CLIENT,a.MASTER_CLT,a.SERVICE_CD,'NV' as PROC_DATA_VAL,
+         'NG' as GROUP_ID,'NP' as PARAMETER_CD,
+         0 as CHRG_QUANT,0 as FEES_QTY,a.COMM_AMT as COMM_AMT,
+         a.B_CCYCD,b.B_GEN_IND,a.NIL_FEES_ADJ,'Y' as NILFEEFLG,
+			a.CONS_FLAG
+   	FROM IV_SERVICE_CHRG a, IV_CLIENTSETUP b
+   	WHERE a.DATEOF_BILLING = :chr_h_bl_upto_dt
+   	AND (a.CLIENT  = a.MASTER_CLT OR b.B_GEN_IND = 'M')
+   	AND a.CLIENT   = b.CLIENT and a.CONS_FLAG = 'I'
+		
+		AND a.SERVICE_CD IN (:h_splfee_code,:h_minfee_code,:h_annminfee_code) /*added by shruthi kumbla for ISKB_1737 inorder to calculate consolidated charges for 99994*/
+   	AND a.MASTER_CLT > :chr_h_restart_client
+   	ORDER BY 2,3,1;
+	
+		EXEC SQL OPEN conchg_cur_ru;
+	}	
+
+	if(sqlca.sqlcode < 0)
+	{
+		fprintf(fp,"Error in accessing table in consolidation. Please contact support\n");
+		fflush(fp);
+		int_bl_err_level = 1;
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+		return APL_FAILURE;
+	}
+
+	IS_ANY_ORA_ERROR;
+	
+	int_is_conchg_cur_open = 1;
+	
+	for( ; ; )
+	{
+		/* strcpy(chr_h_prev_mstacc_t,chr_h_prev_mstacc);  OPT:AIX */
+		strcpy(chr_h_prev_mstacc_t,chr_h_prev_mstacc); 
+		h_nil_fees = 0;
+		h_minimumfee = 0;
+		h_maximum_fee = 0;
+		h_charge_quantity = 0;
+		h_fee_quantity = 0;
+
+		i_bl_currencycode = 0;
+		memset(chr_h_param_val, APL_NULL_CHAR, IV_PARAM_LEN);
+		memset(chr_h_group_ind,APL_NULL_CHAR,51);
+		memset(chr_h_param_code, APL_NULL_CHAR, IV_PARAM_LEN);
+		memset(h_dl_client, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+		memset(h_mstclt, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+		memset(chr_h_inter_param_val, APL_NULL_CHAR, IV_PARAM_LEN);
+      memset(chr_h_inter_group_ind, APL_NULL_CHAR, IV_PARAM_LEN);
+/*** SUBU Change below for AIX Migration ***/
+		memset(&l_iv_data_struct_h_dladmgrp, NULL, sizeof(IV_DATA_STRUCT_H)*50);
+		memset(chr_h_cons_ind,NULL,2);
+
+		
+		
+
+		memset(&l_iv_serv_basis_structa_a, NULL, sizeof(IV_SERV_BASIS_STRUCT));
+		memset(&l_iv_servmast_struct, NULL, sizeof(IV_SERV_MAST_STRUCT));
+		memset(&l_iv_client_serv_basis_structa, NULL, sizeof(IV_CLIENT_SERV_BASIS_STRUCT));
+		
+		if(l_cond_no_tax_on_minfee==0)
+		{
+			EXEC SQL FETCH conchg_cur 
+			INTO :h_dl_client:i_dl_client,
+				:h_mstclt:i_mstclt,
+				:int_h_serv_code:i_service_cd,
+				:chr_h_param_val:i_proc_data_val,
+				:chr_h_group_ind:i_group_id,
+				:chr_h_param_code:i_parameter_cd,
+				:h_charge_quantity:i_charge_quantity,
+				:h_fee_quantity:i_fee_quantity,
+				:h_cm_amount:i_cm_amount,
+				:chr_h_bl_ccycode:i_bl_currencycode,
+				:chr_h_bl_gen:i_b_gen_flag,
+				:h_inil_fees_adj:i_inilfeeadj,
+				:chr_h_nilflg:i_nilflg,
+				:chr_h_cons_ind:i_cons_flag;
+                            //printf("\_int_h_serv_code is [%ld] and h_cm_amount is [%lf]",int_h_serv_code,h_cm_amount);  Changes done for AIX Migration
+                            printf("\n int_h_serv_code is [%ld] and h_cm_amount is [%lf]",int_h_serv_code,h_cm_amount); 
+									 Alert("h_dl_client is |%s|",h_dl_client);
+									 Alert("h_mstclt is |%s|",h_mstclt);
+									 Alert("chr_h_cons_ind is %s",chr_h_cons_ind);
+		}
+		else
+		{
+			EXEC SQL FETCH conchg_cur_ru 
+			INTO :h_dl_client:i_dl_client,
+				:h_mstclt:i_mstclt,
+				:int_h_serv_code:i_service_cd,
+				:chr_h_param_val:i_proc_data_val,
+				:chr_h_group_ind:i_group_id,
+				:chr_h_param_code:i_parameter_cd,
+				:h_charge_quantity:i_charge_quantity,
+				:h_fee_quantity:i_fee_quantity,
+				:h_cm_amount:i_cm_amount,
+				:chr_h_bl_ccycode:i_bl_currencycode,
+				:chr_h_bl_gen:i_b_gen_flag,
+				:h_inil_fees_adj:i_inilfeeadj,
+				:chr_h_nilflg:i_nilflg,
+				:chr_h_cons_ind:i_cons_flag;
+                        printf("\n__shailesh 0509 h_cm_amount is [%lf] ",h_cm_amount);
+		}
+
+		if ( sqlca.sqlcode < 0 )
+		{
+			*int_p_retstat = IV_CRITCAL_ERROR_IND;
+		}
+
+		IS_ANY_ORA_ERROR
+		strcpy(chr_h_bl_upto_dt,chr_h_bl_upto_dt_t);  /* PJ */
+		strcpy(chr_h_prev_mstacc,chr_h_prev_mstacc_t);
+		if(sqlca.sqlcode == 1403)
+		{
+			if(int_fetch_cnt == 0 && strlen(chr_g_restart_client) == 0)
+			{
+				fprintf(fp,"Error : No accounts exist for consolidation\n");
+				fflush(fp);
+				int_bl_err_level = 1;
+				if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+				{
+					CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+					CO_FreeErrLst(l_debug_info_ptr);
+				}
+				*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+				APL_GOBACK_FAIL;
+			}
+			else if (int_fetch_cnt == 0 && strlen(chr_g_restart_client) != 0)
+			{
+				break;
+			}
+			else
+			{
+            if(h_prev_serv == CASH_DIV_FEE)
+            {
+                strcpy(chr_temp_param_str,chr_prev_param_val);
+                int_cd_no = int_cd_no + atoi(strtok_r(chr_temp_param_str,";",&chr_temp4));
+                int_dv_no = int_dv_no + atoi(strtok_r(NULL,";",&chr_temp4));
+            }
+				
+				if(((strcmp(h_mstclt,chr_h_prev_mstacc) != 0) || 
+					(int_h_serv_code != h_prev_serv)) &&
+					(chr_prev_mst_sub == 'M') && ((h_prev_serv != UNDERBILLING) 
+					&& (h_prev_serv != OVERBILLING))) 
+					
+				{
+					int_l_bl_err_level = int_bl_err_level;
+					int_bl_err_level = 0;
+
+					int_grp_cnt = 0;
+					consnil_fees = 0;
+					consminimumfee = 0;
+					consmaximum_fee = 0;
+					dbl_consfee = 0;
+					srv_charge = 0;
+					if ((h_prev_serv == ADM_TXN_FEE_IND) && (strcmp(chr_l_charge_basis, "COUNTERVALUE PER TXN") == 0) &&
+         		   (strcmp(chr_l_fee_basis, "COUNTERVALUE PER TXN") == 0))
+         		{
+						while (strlen((l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->proc_data)> 0)
+            		{
+               		srv_charge = 0;
+               		int_retstat= IV_SUCCESS;
+               		
+							if ( (l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->h_chrg > 0)
+							{
+                        if(APL_FAILURE == IV_Mod_NewIVTRANSAC(chr_h_prev_mstacc,ADM_TXN_FEE_IND,'C',chr_prev_param_code,(l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->proc_data,(l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->h_chrg,(l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->chrg_quant,chr_g_bl_ccycode,(l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->fees_qty, chr_h_prev_mstacc,(l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->param_flag, &int_retstat,l_debug_info_ptr))
+               			{
+                  			int_bl_err_level = 1;
+                  			if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+                  			{
+                      			CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+                      			CO_FreeErrLst(l_debug_info_ptr);
+                  			}
+                  			*int_p_retstat = int_retstat;
+                  			APL_GOBACK_FAIL;
+               			}
+							}
+							strcpy(chr_l_temp_param_str,APL_NULL_STRING);
+							strcpy(chr_l_temp_param_str, (l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->proc_data);
+
+							EXEC SQL DELETE IV_DEAL 
+							WHERE master_clt = :chr_h_prev_mstacc AND
+									cons_flag = 'S' AND
+									dateof_billing = :chr_g_bl_upto_dt AND
+									parameter_cd = :chr_prev_param_code AND
+									proc_data_val = :chr_l_temp_param_str;
+
+							if ( sqlca.sqlcode < 0 )
+      					{
+         					*int_p_retstat = IV_CRITCAL_ERROR_IND;
+      					}
+
+      					IS_ANY_ORA_ERROR; 
+								
+               		dbl_consfee += (l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->h_chrg;
+							memset((l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt), NULL, sizeof(IV_DATA_STRUCT_H));
+               		++int_grp_cnt;
+            		}
+					}
+					else 
+					if ((h_prev_serv == TXNFEE) && (strcmp(chr_l_charge_basis, "PER TXN") == 0) &&
+         		   (strcmp(chr_l_fee_basis, "COUNTERVALUE PER TXN") == 0))
+         		{
+						while (strlen((l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->proc_data)> 0)
+            		{
+					/* Bageshri HB_IV_003 -- Multiple settlement -- START --*/ 
+					
+					int_retstat = IV_SUCCESS;
+
+					if(APL_FAILURE == IV_Proc_CalcConTransacFee(chr_h_prev_mstacc,TXNFEE,'C',&int_retstat,l_debug_info_ptr))
+					{
+
+							int_bl_err_level = 1;
+							if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+							{
+								CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+								CO_FreeErrLst(l_debug_info_ptr);
+							}
+							*int_p_retstat = int_retstat;
+
+							APL_GOBACK_FAIL;
+					}
+			
+					/* Bageshri HB_IV_003 -- Multiple settlement -- END --*/ 
+
+               		srv_charge = 0;
+               		int_retstat= IV_SUCCESS;
+							if ( (l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->h_chrg > 0)
+							{
+                        if(APL_FAILURE == IV_Mod_NewIVTRANSAC(chr_h_prev_mstacc,TXNFEE,'C',chr_prev_param_code,(l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->proc_data,(l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->h_chrg,(l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->chrg_quant,chr_g_bl_ccycode,(l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->fees_qty, chr_h_prev_mstacc,(l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->param_flag, &int_retstat,l_debug_info_ptr))
+               			{
+                  			int_bl_err_level = 1;
+                  			if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+                  			{
+                      			CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+                      			CO_FreeErrLst(l_debug_info_ptr);
+                  			}
+                  			*int_p_retstat = int_retstat;
+                  			APL_GOBACK_FAIL;
+               			}
+							}
+							strcpy(chr_l_temp_param_str,APL_NULL_STRING);
+							strcpy(chr_l_temp_param_str, (l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->proc_data);
+
+							EXEC SQL DELETE IV_DEAL 
+							WHERE master_clt = :chr_h_prev_mstacc AND
+									cons_flag = 'S' AND
+									dateof_billing = :chr_g_bl_upto_dt AND
+									parameter_cd = :chr_prev_param_code AND
+									proc_data_val = :chr_l_temp_param_str;
+
+							if ( sqlca.sqlcode < 0 )
+      					{
+         					*int_p_retstat = IV_CRITCAL_ERROR_IND;
+      					}
+
+      					IS_ANY_ORA_ERROR; 
+								
+               		dbl_consfee += (l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->h_chrg;
+							memset((l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt), NULL, sizeof(IV_DATA_STRUCT_H));
+               		++int_grp_cnt;
+            		}
+					}
+					else
+					{
+						while (strlen((l_iv_data_struct_h_consgrp+int_grp_cnt)->proc_data)> 0)
+						{
+							srv_charge = 0;
+							int_retstat= IV_SUCCESS;
+
+							if(APL_FAILURE == IV_Proc_CalcFee("O",chr_acct_str,h_prev_serv,
+						  		(l_iv_data_struct_h_consgrp+int_grp_cnt)->proc_data,
+						   	(l_iv_data_struct_h_consgrp+int_grp_cnt)->param_flag,
+					   	 	chr_prev_param_code,(l_iv_data_struct_h_consgrp+int_grp_cnt)->fees_qty,
+					    		(l_iv_data_struct_h_consgrp+int_grp_cnt)->chrg_quant,chr_l_charge_type,chr_l_fee_type,
+						   	&srv_charge,l_iv_data_struct_h_consgrp,'C',chr_h_prev_mstacc,chr_l_charge_basis,chr_l_fee_basis,chr_h_srv_ind,
+						    	&int_retstat,l_debug_info_ptr))
+							{
+								if(int_retstat == IV_CRITCAL_ERROR_IND)
+								{
+									
+									fprintf(fp,"Error in accessing table for client %s. Please contact support\n", h_dl_client);
+						fprintf(fp, "File: %s, Line: %d\n", __FILE__, __LINE__);
+									fprintf(fp, "File: %s, Line: %d\n", __FILE__, __LINE__);
+									fflush(fp);
+									int_bl_err_level = 1;
+									if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+									{
+										CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+										CO_FreeErrLst(l_debug_info_ptr);
+									}
+									*int_p_retstat = int_retstat;
+	
+									
+								}
+								if(int_bl_err_level == 1)
+								{
+									
+									fprintf(fp,"Error in consolidation of bills for client %s for service %ld. Please regenerate bill.\n", chr_prev_client,h_prev_serv); //AIX - Warnings Removal
+									fflush(fp);
+									*int_p_retstat = IV_CRITCAL_ERROR_IND;
+									
+								}
+								int_bl_err_level = int_l_bl_err_level;
+							}
+							dbl_consfee += srv_charge;
+							++int_grp_cnt; 
+						} 
+					}
+
+					EXEC SQL DECLARE lminfee_cur CURSOR FOR
+					SELECT a.comm_amt,a.nil_fees_adj,
+							a.minimumfee_adj,a.maximum_fee_adj,a.b_ccycd
+					FROM IV_SERVICE_CHRG a,IV_CLIENTSETUP b
+					WHERE a.dateof_billing = :chr_h_bl_upto_dt 
+						AND	(a.client = :chr_h_prev_mstacc OR
+							(a.master_clt = :chr_h_prev_mstacc 
+						AND  b.b_gen_ind = 'M')) 
+						AND  a.service_cd = :h_prev_serv 
+						AND  a.cons_flag = 'I' 
+						AND  a.service_cd  NOT IN (:h_splfee_code)			
+						AND	b.client = a.client;
+					/*shailesh 22-02-2008 a.service_cd  NOT IN (:h_splfee_code) added for spcl.billing charges.(change for displaying consolidate spl.billing fee value)*/
+
+					EXEC SQL OPEN lminfee_cur;
+					dbl_consfee_servchrg = 0.0;/* 09-01-2008 before entering into loop this should be initialzed to 0*/
+					if(sqlca.sqlcode < 0)
+					{
+						int_bl_err_level = 1;
+						fprintf(fp,"Error in accessing table for client %s. Please contact support\n",
+									h_dl_client);
+						fprintf(fp, "File: %s, Line: %d\n", __FILE__, __LINE__);
+						fprintf(fp, "File: %s, Line: %d\n", __FILE__, __LINE__);
+						fflush(fp);
+						ltoa_r(sqlca.sqlcode,chr_err_buffer,KEY_LENGTH-1);
+						CO_InsertErr(l_debug_info_ptr,DB_ERR_NO,chr_err_buffer,APL_NULL_STRING,APL_NULL_STRING, __LINE__,__FILE__);
+						*int_p_retstat = IV_CRITCAL_ERROR_IND;
+						continue;
+					}
+					
+					int_is_lminfee_cur_open = 1;
+
+					for( ; ; )
+					{
+						h_m_amount = 0;
+						h_m_nil_fees = 0;
+						h_m_minimumfee = 0;
+						h_m_maximum_fee = 0;
+						memset(chr_h_m_bl_ccycode,APL_NULL_CHAR,APL_CCYCODE_LEN);
+
+						EXEC SQL FETCH lminfee_cur 
+						INTO :h_m_amount:i_m_amt,
+							:h_m_nil_fees:i_m_nilfee,
+							:h_m_minimumfee:i_m_minfee,
+							:h_m_maximum_fee:i_m_maxfee,
+							:chr_h_m_bl_ccycode:i_bl_currencycode;
+						
+						if ( sqlca.sqlcode < 0 )
+						{
+							*int_p_retstat = IV_CRITCAL_ERROR_IND;
+						}
+
+						IS_ANY_ORA_ERROR;
+
+						if(sqlca.sqlcode == 1403)
+						{
+							if(int_rec_cnt == 0)
+							{
+								int_bl_err_level = 1;
+								fprintf(fp,"Error in accessing table for client %s\n",chr_h_prev_mstacc);
+						fprintf(fp, "File: %s, Line: %d\n", __FILE__, __LINE__);
+						fprintf(fp, "File: %s, Line: %d\n", __FILE__, __LINE__);
+								fflush(fp);
+								if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+								{
+									
+									ltoa_r(sqlca.sqlcode,chr_err_buffer,KEY_LENGTH-1);
+									CO_InsertErr(l_debug_info_ptr,DB_ERR_NO,chr_err_buffer,APL_NULL_STRING,APL_NULL_STRING,__LINE__,__FILE__);
+									*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+									
+								}
+							}
+							break;
+						}
+						int_rec_cnt++;
+
+						#ifdef BILLDEBUG 
+
+							fprintf(TestRep, "LMin Fee Cursor Fetched for MstAcc: %s, Serv Code: %ld\n", chr_h_prev_mstacc, h_prev_serv);
+							fprintf(TestRep, "Cm Amt: %lf, Nilfee : %lf, Minfee : %lf, Maxfee : %lf\n", h_m_amount, h_m_nil_fees, h_m_minimumfee, h_m_maximum_fee);
+							fflush(TestRep);
+
+						#endif 
+			
+						l_exchg_rt = 1.0;
+						
+						if ( strcmp(chr_h_m_bl_ccycode, chr_g_fee_ccycode) != 0 )
+						{
+							int_retstat = IV_SUCCESS;
+							if(APL_FAILURE == IV_Rtv_ExchRate(chr_h_m_bl_ccycode, chr_g_fee_ccycode, chr_g_bl_upto_dt,&l_exchg_rt,&int_retstat,l_debug_info_ptr))
+							{
+								fprintf(fp,"Error : Exchange Rate not found for currency %s %s\n", chr_h_m_bl_ccycode, chr_g_fee_ccycode);
+								fflush(fp);
+								int_bl_err_level = 1;
+								if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+								{
+									CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+									CO_FreeErrLst(l_debug_info_ptr);
+								}
+								*int_p_retstat = int_retstat;
+							}
+						}
+						
+
+						l_round_quantity = 0.0;
+                                                //shailesh 0609 for consolidate charge in iv_service_chrg for servicecd 1
+						printf("\n_line 676_\n");
+						CO_Round(h_m_amount*l_exchg_rt,int_g_ccy_decimallen,&l_round_quantity);
+						dbl_consfee_servchrg+= l_round_quantity * g_exchg_rt_fee_bl;
+						l_round_quantity = 0.0;
+                                                //shailesh 0609 for consolidate charge in iv_service_chrg for servicecd 1
+						CO_Round(h_m_nil_fees*l_exchg_rt,int_g_ccy_decimallen,&l_round_quantity);
+						consnil_fees += l_round_quantity * g_exchg_rt_fee_bl;
+						l_round_quantity = 0.0;
+						CO_Round(h_m_minimumfee*l_exchg_rt,int_g_ccy_decimallen,&l_round_quantity);
+						consminimumfee += l_round_quantity * g_exchg_rt_fee_bl;
+						l_round_quantity = 0.0;
+						CO_Round(h_m_maximum_fee*l_exchg_rt,int_g_ccy_decimallen,&l_round_quantity);
+						consmaximum_fee += l_round_quantity * g_exchg_rt_fee_bl;
+					}
+
+					EXEC SQL CLOSE lminfee_cur;
+					int_is_lminfee_cur_open  = 0;
+
+					
+					if(consnil_fees + consminimumfee + consmaximum_fee + dbl_consfee_servchrg > 0)
+					{
+						memset(h_ora_rowid,APL_NULL_CHAR,APL_ROWID_LEN);
+						i_ora_rowid = 0;
+						EXEC SQL SELECT rowid
+						INTO :h_ora_rowid:i_ora_rowid
+						FROM IV_SERVICE_CHRG
+						WHERE dateof_billing = :chr_h_bl_upto_dt AND
+							client = :chr_h_prev_mstacc AND
+							service_cd = :h_prev_serv AND
+							cons_flag = 'C';
+
+						if(sqlca.sqlcode < 0)
+						{
+							fprintf(fp,"Error in accessing table for client %s. Please contact support\n",chr_h_prev_mstacc);
+						fprintf(fp, "File: %s, Line: %d\n", __FILE__, __LINE__);
+							fflush(fp);
+							int_bl_err_level = 1;
+							*int_p_retstat = IV_CRITCAL_ERROR_IND;
+						}
+
+						IS_ANY_ORA_ERROR;
+
+					   		/* Added by Gouse for Kotak AIX Prod Issue SR_344 - Start */
+							IF_COND_EXISTS("IV_BILLGEN","BILL_GEN_DEC_LEN")
+							{
+								EXEC SQL SELECT FIELD_VAL INTO :l_dec_len
+											FROM PRO_GSSPLVAL 
+											WHERE MAIN_FUN = 'IV_BILLGEN' 
+											AND SUB_PROCESS = 'BILL_GEN_DEC_LEN' 
+											AND NATION = :g_mt_commonsys_params_struct_h.nation_code;	
+								printf("sqlca.sqlcode after getting l_dec_len is |%d|\n",sqlca.sqlcode);
+								printf("l_dec_len is |%d|\n",l_dec_len);
+
+								EXEC SQL SELECT ROUND(:dbl_consfee_servchrg,:l_dec_len),ROUND(:consnil_fees,:l_dec_len),ROUND(:consminimumfee,:l_dec_len),ROUND(:consmaximum_fee,:l_dec_len) INTO 
+											:dbl_consfee_servchrg,:consnil_fees,:consminimumfee,:consmaximum_fee FROM DUAL;
+								printf("sqlca.sqlcode after round off is |%d|\n",sqlca.sqlcode);
+								printf("dbl_consfee_servchrg is |%lf|\n",dbl_consfee_servchrg);
+								printf("consnil_fees is |%lf|\n",consnil_fees);
+								printf("consminimumfee is |%lf|\n",consminimumfee);
+								printf("consmaximum_fee is |%lf|\n",consmaximum_fee);
+							}	
+							/* Added by Gouse for Kotak AIX Prod Issue SR_344 - End */
+
+						/* if ( sqlca.sqlcode != 1403)
+						{
+                       
+						EXEC SQL UPDATE IV_SERVICE_CHRG
+							SET comm_amt =  comm_amt + :dbl_consfee_servchrg,
+								nil_fees_adj  = :consnil_fees,
+								minimumfee_adj  = :consminimumfee,
+								maximum_fee_adj  = :consmaximum_fee
+							WHERE rowid = :h_ora_rowid;
+
+							if(sqlca.sqlcode < 0)
+								*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+							IS_ANY_ORA_ERROR;
+						}
+						else
+						{ Commented by Gouse - UAT Issue - ISKB_2470 - Consolidated charges were summing up in regeneration */
+
+						/* Added by Gouse - ISKB_2470 - Consolidated charges were summing up in regeneration - 10/04/2013 - Start */
+						if ( sqlca.sqlcode != 1403)
+						{
+							EXEC SQL DELETE FROM IV_SERVICE_CHRG
+									WHERE rowid = :h_ora_rowid;
+
+                  	printf("\n 1 sql error after deleting from IV_SERVICE_CHRG for tax fee is %d",sqlca.sqlcode);
+                     fflush(stdout);
+						}/* Added by Gouse - ISKB_2470 - Consolidated charges were summing up in regeneration - 10/04/2013 - End */
+							int_retstat = IV_SUCCESS;
+		/*added incld_in_ann_min_fee by shruthi kumbla for ISKB_1901*/
+							if(APL_FAILURE == IV_Mod_IVSRVCHRGNew(chr_h_bl_upto_dt,chr_h_prev_mstacc,
+						consnil_fees,consminimumfee,consmaximum_fee,dbl_consfee_servchrg,chr_mst_bl_ccycode,
+						'C',h_prev_serv,chr_h_prev_mstacc,'N',&int_retstat,l_debug_info_ptr))
+							{
+								fprintf(fp,"Error : Incorrect calculation of fees adjustments for %s\n",chr_h_prev_mstacc);
+								fflush(fp);
+								int_bl_err_level = 1;
+								if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+								{
+									CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+									CO_FreeErrLst(l_debug_info_ptr);
+								}
+								*int_p_retstat = int_retstat;
+							}
+						//}
+					}
+
+					int_i_cnt = 0;
+					while(int_i_cnt <= int_grp_cnt)
+					{
+						
+
+						memset((l_iv_data_struct_h_cons+int_i_cnt), NULL, sizeof(IV_DATA_STRUCT_H));
+						memset((l_iv_data_struct_h_consgrp+int_i_cnt), NULL, sizeof(IV_DATA_STRUCT_H));
+						++int_i_cnt;
+					}
+					
+					memset(chr_h_update_restart, APL_NULL_CHAR, APL_RESTARTDATA_LENGTH); 
+					sprintf(chr_h_update_restart, "%c", CONSOLE_BILL_IND);
+					strcat(chr_h_update_restart, ";");
+					strcat(chr_h_update_restart, chr_h_prev_mstacc);
+
+					EXEC SQL UPDATE SYS_BATCHPROC
+							SET PROCESSING_STATUS = :chr_h_update_restart
+							WHERE ROWID = :chr_h_batch_in_proc_rowid;
+
+					if ( sqlca.sqlcode < 0 )
+					{
+						*int_p_retstat = IV_CRITCAL_ERROR_IND;
+						int_bl_err_level = 1;
+
+						ltoa_r(sqlca.sqlcode,chr_err_buffer,KEY_LENGTH-1);
+						CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, chr_err_buffer,
+							 APL_NULL_STRING, APL_NULL_STRING,
+							 __LINE__, __FILE__);
+						
+						CO_ProcMonitor(TechRep,"Could not Update Batch in Proc Row\n",NULL,NULL);
+
+						APL_GOBACK_FAIL
+					}
+
+					EXEC SQL COMMIT;
+						
+					if ( sqlca.sqlcode < 0 )
+					{
+						*int_p_retstat = IV_CRITCAL_ERROR_IND;
+						int_bl_err_level = 1;
+
+						ltoa_r(sqlca.sqlcode,chr_err_buffer,KEY_LENGTH-1);	
+						CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, chr_err_buffer,
+							 APL_NULL_STRING, APL_NULL_STRING,
+							 __LINE__, __FILE__);
+							
+						CO_ProcMonitor(TechRep,"Could not Commit\n",NULL,NULL);
+
+						APL_GOBACK_FAIL
+					}
+
+					EXEC SQL SELECT ROWID, STATUS, PROCESSING_STATUS
+					INTO :chr_h_batch_in_proc_rowid:int_i_batch_in_proc_rowid,
+							:l_sys_batchproc_struct_h.status_ind:l_sys_batchproc_struct_i.i_status_ind,
+							:l_sys_batchproc_struct_h.processing_status:l_sys_batchproc_struct_i.i_restart_info
+					FROM SYS_BATCHPROC
+					WHERE ((PROCESS_NAME = :l_sys_batchproc_struct_h.process_name) AND
+							(STARTDATE = :l_sys_batchproc_struct_h.start_dt) AND
+							(STATUS = :l_sys_batchproc_struct_h.status_ind))
+					FOR UPDATE OF STATUS, PROCESSING_STATUS;
+
+					if ( sqlca.sqlcode < 0 )
+					{
+
+						ltoa_r(sqlca.sqlcode,chr_err_buffer,KEY_LENGTH-1);
+						CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, chr_err_buffer,
+				 		APL_NULL_STRING, APL_NULL_STRING,__LINE__,__FILE__);
+
+						CO_ProcMonitor(TechRep,"Could not lock Batch in Proc Row\n",NULL,NULL);
+
+						*int_p_retstat = IV_CRITCAL_ERROR_IND;
+						int_bl_err_level = 1;
+
+						APL_GOBACK_FAIL
+					}
+					
+					strcpy(chr_h_prev_mstacc,h_mstclt);
+					strcpy(chr_prev_client,h_dl_client);
+					h_prev_serv = int_h_serv_code;
+					strcpy(chr_prev_param_code,chr_h_param_code);
+					strcpy(chr_prev_param_val,chr_h_param_val);
+					prev_charge_quantity = h_charge_quantity;
+					prev_fee_quantity = h_fee_quantity;
+					strcpy(chr_prev_bl_ccycode,chr_h_bl_ccycode);
+					prev_cm_amount = h_cm_amount;
+					chr_prev_nilflg = chr_h_nilflg;
+
+				} 
+				
+            if(int_cashdivflag == 1)
+            {
+                int_cashdivflag = 0;
+
+                sprintf(chr_cd_param_val,"%d;%d",int_cd_no,int_dv_no);
+
+					 EXEC SQL UPDATE IV_DEAL SET PROC_DATA_VAL = :chr_cd_param_val
+                                          WHERE CLIENT = :chr_cd_mstacc
+                                          AND SERVICE_CD = '8'
+                                          AND CONS_FLAG = 'C'
+                                          AND DATEOF_BILLING = :chr_h_bl_upto_dt;
+
+                EXEC SQL UPDATE IV_DEAL_FEE SET PROC_DATA_VAL = :chr_cd_param_val
+                                          WHERE CLIENT = :chr_cd_mstacc
+                                          AND SERVICE_CD = '8'
+                                          AND CONS_FLAG = 'C'
+                                          AND DATEOF_BILLING = :chr_h_bl_upto_dt;
+
+                IS_ANY_ORA_ERROR;
+
+                int_cd_no = 0;
+                int_dv_no = 0;
+				}	
+			}
+			break;
+		} 
+
+		int_fetch_cnt++;
+		int_bl_err_level = 0;
+		int_is_minfee_cur_open = 0;
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(TechRep,"Consolidating charges for client ",NULL,NULL);
+			memset(chr_l_buf,NULL,BUFFER_LEN);
+			sprintf(chr_l_buf," %s\n",h_mstclt);
+			sprintf(chr_l_buf," Processing client %s",h_dl_client);
+			CO_ProcMonitor(TechRep,chr_l_buf,NULL,NULL);
+		}
+
+		//#ifdef BILLDEBUG 
+
+			fprintf(TechRep, "Consolidating charges for MstAcc: %s, Account: %s, Serv Code: %ld\n", h_mstclt, h_dl_client, int_h_serv_code);
+			fprintf(TechRep, "Param Code: %s, Param Val: %s, Group Ind: %s\n", chr_h_param_code, chr_h_param_val, chr_h_group_ind);
+			fprintf(TechRep, "Fee Qty: %lf, Charge Qty: %lf, Cm Amt: %lf\n", h_fee_quantity, h_charge_quantity, h_cm_amount);
+			fprintf(TechRep, "Nil Fee Adj: %lf, Nil Flag: %c\n", h_inil_fees_adj, chr_h_nilflg);
+			fflush(TechRep);
+
+		//#endif 
+
+
+		if(int_fetch_cnt == 1)
+		{
+			strcpy(chr_h_prev_mstacc,h_mstclt);
+			strcpy(chr_prev_client,h_dl_client);
+			h_prev_serv = int_h_serv_code;
+			if(chr_h_nilflg != 'Y')
+				strcpy(chr_prev_param_code,chr_h_param_code);
+			chr_prev_nilflg = chr_h_nilflg;
+			
+		}
+		
+      if((int_cashdivflag == 1) && (h_prev_serv != CASH_DIV_FEE || strcmp(chr_h_prev_mstacc,chr_cd_mstacc) != 0))
+		{
+			int_cashdivflag = 0;
+			sprintf(chr_cd_param_val,"%d;%d",int_cd_no,int_dv_no);
+
+			EXEC SQL UPDATE IV_DEAL SET PROC_DATA_VAL = :chr_cd_param_val
+                        WHERE CLIENT = :chr_cd_mstacc
+                        AND SERVICE_CD = '8'
+                        AND CONS_FLAG = 'C'
+                        AND DATEOF_BILLING = :chr_h_bl_upto_dt;
+
+                       
+                     
+
+         EXEC SQL UPDATE IV_DEAL_FEE SET PROC_DATA_VAL = :chr_cd_param_val
+                        WHERE CLIENT = :chr_cd_mstacc
+                        AND SERVICE_CD = '8'
+                        AND CONS_FLAG = 'C'
+                        AND DATEOF_BILLING = :chr_h_bl_upto_dt;
+
+         IS_ANY_ORA_ERROR;
+
+         int_cd_no = 0;
+         int_dv_no = 0;
+		}
+
+		
+      if(h_prev_serv == CASH_DIV_FEE && int_cashdivflag ==0)
+      {
+           int_cashdivflag = 1;
+           strcpy(chr_cd_mstacc,chr_h_prev_mstacc);
+		}
+
+		
+      if((h_prev_serv == CASH_DIV_FEE) && (strcmp(chr_cd_mstacc,chr_h_prev_mstacc) == 0))
+      {
+          strcpy(chr_temp_param_str,chr_prev_param_val);
+          int_cd_no = int_cd_no + atoi(strtok_r(chr_temp_param_str,";",&chr_temp4));
+          int_dv_no = int_dv_no + atoi(strtok_r(NULL,";",&chr_temp4));
+      }
+
+
+
+		int_retstat = IV_SUCCESS;
+		if(APL_FAILURE == IV_Rtv_IVSRVCHRGDel(int_h_serv_code,&l_iv_servmast_struct,
+													 &int_retstat,l_debug_info_ptr))
+		{
+			if(int_retstat != IV_COLUMN_NULL_ERR)
+			{
+				fprintf(fp,"Error : Service %ld not found during consolidation\n",int_h_serv_code); //AIX - Warnings Removal
+				fflush(fp);
+				int_bl_err_level = 1;
+				if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+				{
+					CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+					CO_FreeErrLst(l_debug_info_ptr);
+				}
+				*int_p_retstat = int_retstat;
+			}
+		}
+
+		//#ifdef BILLDEBUG 
+
+			fprintf(TechRep, "Consolidation : Serv_code %ld, Mast_Sub %c",int_h_serv_code, l_iv_servmast_struct.mastsub_ind );
+			fflush(TechRep);
+
+		//#endif 
+	
+		
+
+		if(((strcmp(h_mstclt,chr_h_prev_mstacc) != 0) ||
+		    (int_h_serv_code != h_prev_serv)) &&
+		    (chr_prev_mst_sub == 'M') && (h_prev_serv != 98 && 
+		    h_prev_serv != 99 && h_prev_serv != 99999 && h_prev_serv != 99994))/*added 99994 by shruthi kumbla for ISKB_1737 to add cons fee for 99994*/
+		{
+			int_l_bl_err_level = int_bl_err_level;
+			int_bl_err_level = 0;
+
+			int_grp_cnt = 0;
+			srv_charge = 0;
+			consnil_fees = 0;
+			consminimumfee = 0;
+			consmaximum_fee = 0;
+			dbl_consfee = 0;
+			if ((h_prev_serv == ADM_TXN_FEE_IND) && (strcmp(chr_l_fee_basis, "COUNTERVALUE PER TXN") == 0) &&
+            (strcmp(chr_l_charge_basis, "COUNTERVALUE PER TXN") == 0))
+			{
+				while (strlen((l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->proc_data)> 0)
+				{
+               srv_charge = 0;
+               int_retstat= IV_SUCCESS;
+					
+					if ((l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->h_chrg > 0)
+					{
+                  if(APL_FAILURE == IV_Mod_NewIVTRANSAC(chr_h_prev_mstacc,ADM_TXN_FEE_IND,'C',chr_prev_param_code,(l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->proc_data,(l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->h_chrg,(l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->chrg_quant,chr_g_bl_ccycode,(l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->fees_qty, h_mstclt,(l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->param_flag, &int_retstat,l_debug_info_ptr))
+               	{	
+							int_bl_err_level = 1;
+                  	if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+                 		{ 
+                     	 CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+                      	CO_FreeErrLst(l_debug_info_ptr);
+                  	}
+                  	*int_p_retstat = int_retstat;
+                  	APL_GOBACK_FAIL;
+               	}
+					}
+					strcpy(chr_l_temp_param_str, APL_NULL_STRING);
+					strcpy(chr_l_temp_param_str, (l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->proc_data);
+					
+					EXEC SQL DELETE IV_DEAL
+               WHERE master_clt = :chr_h_prev_mstacc AND
+                     cons_flag = 'S' AND
+                     dateof_billing = :chr_g_bl_upto_dt AND
+                     parameter_cd = :chr_prev_param_code AND
+                     proc_data_val = :chr_l_temp_param_str;
+
+               if ( sqlca.sqlcode < 0 )
+              	{ 
+                   *int_p_retstat = IV_CRITCAL_ERROR_IND;
+               }
+
+               IS_ANY_ORA_ERROR;					 
+
+					dbl_consfee += (l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->h_chrg;
+					memset((l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt), NULL, sizeof(IV_DATA_STRUCT_H));
+               ++int_grp_cnt;
+				}
+			}
+			else if ((h_prev_serv == TXNFEE) && (strcmp(chr_l_fee_basis, "COUNTERVALUE PER TXN") == 0) &&
+            (strcmp(chr_l_charge_basis, "PER TXN") == 0))
+			{
+				while (strlen((l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->proc_data)> 0)
+				{
+					/* Bageshri HB_IV_003 -- Multiple settlement -- START --*/ 
+					
+					int_retstat = IV_SUCCESS;
+
+					if(APL_FAILURE == IV_Proc_CalcConTransacFee(chr_h_prev_mstacc,TXNFEE,'C',&int_retstat,l_debug_info_ptr))
+					{
+
+							int_bl_err_level = 1;
+							if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+							{
+								CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+								CO_FreeErrLst(l_debug_info_ptr);
+							}
+							*int_p_retstat = int_retstat;
+
+							APL_GOBACK_FAIL;
+					}
+			
+					/* Bageshri HB_IV_003 -- Multiple settlement -- END --*/ 
+
+               srv_charge = 0;
+               int_retstat= IV_SUCCESS;
+					printf("h_chrg:|%lf|",(l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->h_chrg);		
+					if ((l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->h_chrg > 0)
+					{
+                  if(APL_FAILURE == IV_Mod_NewIVTRANSAC(chr_h_prev_mstacc,TXNFEE,'C',chr_prev_param_code,(l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->proc_data,(l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->h_chrg,(l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->chrg_quant,chr_g_bl_ccycode,(l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->fees_qty, h_mstclt,(l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->param_flag, &int_retstat,l_debug_info_ptr))
+               	{	
+							int_bl_err_level = 1;
+                  	if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+                 		{ 
+                     	 CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+                      	CO_FreeErrLst(l_debug_info_ptr);
+                  	}
+                  	*int_p_retstat = int_retstat;
+                  	APL_GOBACK_FAIL;
+               	}
+					}
+					strcpy(chr_l_temp_param_str, APL_NULL_STRING);
+					strcpy(chr_l_temp_param_str, (l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->proc_data);
+					
+					EXEC SQL DELETE IV_DEAL
+               WHERE master_clt = :chr_h_prev_mstacc AND
+                     cons_flag = 'S' AND
+                     dateof_billing = :chr_g_bl_upto_dt AND
+                     parameter_cd = :chr_prev_param_code AND
+                     proc_data_val = :chr_l_temp_param_str;
+
+               if ( sqlca.sqlcode < 0 )
+              	{ 
+                   *int_p_retstat = IV_CRITCAL_ERROR_IND;
+               }
+
+               IS_ANY_ORA_ERROR;					 
+
+					dbl_consfee += (l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->h_chrg;
+					memset((l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt), NULL, sizeof(IV_DATA_STRUCT_H));
+               ++int_grp_cnt;
+				}
+			}
+			else
+			{
+				
+				while (strlen((l_iv_data_struct_h_consgrp+int_grp_cnt)->proc_data)> 0)
+				{
+					srv_charge = 0;
+					int_retstat= IV_SUCCESS;
+					if ((strcmp(chr_h_prev_mstacc,"MAST-01")== 0 ) && (h_prev_serv == ADM_TXN_FEE_IND))
+					{
+						printf("HERE");
+					}
+					
+		 			if(APL_FAILURE == IV_Proc_CalcFee("O",chr_acct_str,h_prev_serv,(l_iv_data_struct_h_consgrp+int_grp_cnt)->proc_data, (l_iv_data_struct_h_consgrp+int_grp_cnt)->param_flag,chr_prev_param_code,(l_iv_data_struct_h_consgrp+int_grp_cnt)->fees_qty, (l_iv_data_struct_h_consgrp+int_grp_cnt)->chrg_quant,chr_l_charge_type,chr_l_fee_type, &srv_charge,l_iv_data_struct_h_consgrp,'C',chr_h_prev_mstacc,chr_l_charge_basis,chr_l_fee_basis,chr_h_srv_ind,&int_retstat,l_debug_info_ptr)) 
+					{
+						if(int_retstat == IV_CRITCAL_ERROR_IND)
+						{
+							fprintf(fp,"Error in accessing table for client %s. Please contact support\n", h_dl_client);
+						fprintf(fp, "File: %s, Line: %d\n", __FILE__, __LINE__);
+							fflush(fp);
+							int_bl_err_level = 1;
+							if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+							{
+								CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+								CO_FreeErrLst(l_debug_info_ptr);
+							}
+							*int_p_retstat = int_retstat;
+
+						}
+						if(int_bl_err_level == 1)
+						{
+							//fprintf(fp,"Error in consolidation of bills for client %s for service %d. Please regenerate bill.\n", chr_prev_client,h_prev_serv); Changes done for AIX Migration
+							fprintf(fp,"Error in consolidation of bills for client %s for service %ld. Please regenerate bill.\n", chr_prev_client,h_prev_serv);
+							fflush(fp);
+							*int_p_retstat = IV_CRITCAL_ERROR_IND;
+						}
+						int_bl_err_level = int_l_bl_err_level;
+					}
+					dbl_consfee += srv_charge;
+					++int_grp_cnt;
+				}	
+			}
+
+			EXEC SQL DECLARE minfee_cur CURSOR FOR
+			SELECT a.comm_amt,a.nil_fees_adj,
+					 a.minimumfee_adj,a.maximum_fee_adj,a.b_ccycd
+			FROM IV_SERVICE_CHRG a,IV_CLIENTSETUP b
+			WHERE a.dateof_billing = :chr_h_bl_upto_dt AND
+					(a.client = :chr_h_prev_mstacc OR
+					(a.master_clt = :chr_h_prev_mstacc AND
+					b.b_gen_ind = 'M')) AND
+					a.service_cd = :h_prev_serv AND
+					a.cons_flag = 'I' AND
+					b.client = a.client;
+
+			EXEC SQL OPEN minfee_cur;
+
+			if(sqlca.sqlcode < 0)
+			{
+				int_bl_err_level = 1;
+				fprintf(fp,"Error in accessing table for client %s. Please contact support\n",h_dl_client);
+						fprintf(fp, "File: %s, Line: %d\n", __FILE__, __LINE__);
+				fflush(fp);
+				ltoa_r(sqlca.sqlcode,chr_err_buffer,KEY_LENGTH-1);
+				CO_InsertErr(l_debug_info_ptr,DB_ERR_NO,chr_err_buffer,APL_NULL_STRING,APL_NULL_STRING,__LINE__, __FILE__);
+				*int_p_retstat = IV_CRITCAL_ERROR_IND;
+				continue;
+			}
+
+			int_is_minfee_cur_open = 1;
+
+			consnil_fees = 0;
+			consminimumfee = 0;
+			consmaximum_fee = 0;
+                        dbl_consfee_servchrg=0;
+			for( ; ; )
+			{
+				h_m_amount = 0.0;
+				h_m_nil_fees = 0.0;
+				h_m_minimumfee = 0.0;
+				h_m_maximum_fee = 0.0;
+				memset(chr_h_m_bl_ccycode, APL_NULL_CHAR, APL_CCYCODE_LEN);
+
+				EXEC SQL FETCH minfee_cur 
+				INTO :h_m_amount:i_m_amt,
+					  :h_m_nil_fees:i_m_nilfee,
+					  :h_m_minimumfee:i_m_minfee,
+					  :h_m_maximum_fee:i_m_maxfee,
+					  :chr_h_m_bl_ccycode:i_bl_currencycode;
+
+				if ( sqlca.sqlcode < 0 )
+				{
+					*int_p_retstat = IV_CRITCAL_ERROR_IND;
+				}
+
+				IS_ANY_ORA_ERROR;
+
+				if(sqlca.sqlcode == 1403)
+				{
+					if(int_rec_cnt == 0)
+					{
+						int_bl_err_level = 1;
+						fprintf(fp,"Error in accessing table for client %s\n",chr_h_prev_mstacc);
+						fprintf(fp, "File: %s, Line: %d\n", __FILE__, __LINE__);
+						fflush(fp);
+						if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+						{
+							ltoa_r(sqlca.sqlcode,chr_err_buffer,KEY_LENGTH-1);
+							CO_InsertErr(l_debug_info_ptr,DB_ERR_NO,chr_err_buffer,APL_NULL_STRING,APL_NULL_STRING,
+							    __LINE__,__FILE__);
+							*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+						}
+					}
+					break;
+				}
+				int_rec_cnt++;
+				//#ifdef BILLDEBUG 
+
+					fprintf(TechRep, "Min Fee Cursor Fetched for MstAcc: %s, Serv Code: %ld\n", chr_h_prev_mstacc, h_prev_serv);
+					fprintf(TechRep, "Cm Amt: %lf, Nilfee : %lf, Minfee : %lf, Maxfee : %lf\n", h_m_amount, h_m_nil_fees, h_m_minimumfee, h_m_maximum_fee);
+					fflush(TechRep);
+
+				//#endif 
+				l_exchg_rt = 1.0;
+
+				
+
+				if ( strcmp(chr_h_m_bl_ccycode, chr_g_fee_ccycode) != 0 )
+				{
+					int_retstat = IV_SUCCESS;
+					if(APL_FAILURE == IV_Rtv_ExchRate(chr_h_m_bl_ccycode, chr_g_fee_ccycode, chr_g_bl_upto_dt,&l_exchg_rt,&int_retstat,l_debug_info_ptr))
+					{
+						fprintf(fp,"Error : Exchange Rate not found for currency %s %s\n",chr_h_m_bl_ccycode,chr_g_fee_ccycode);
+						fflush(fp);
+						int_bl_err_level = 1;
+						if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+						{
+							CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+							CO_FreeErrLst(l_debug_info_ptr);
+						}
+						*int_p_retstat = int_retstat;
+					}
+				}
+
+				
+
+				l_round_quantity = 0.0;
+                                //shailesh 0609 for consolidate charge in iv_service_chrg for servicecd 1 
+				CO_Round(h_m_amount*l_exchg_rt,int_g_ccy_decimallen,&l_round_quantity);
+				dbl_consfee_servchrg+= l_round_quantity * g_exchg_rt_fee_bl;
+				l_round_quantity = 0.0;
+                                //shailesh 0609 for consolidate charge in iv_service_chrg for servicecd 1
+				CO_Round(h_m_nil_fees*l_exchg_rt,int_g_ccy_decimallen,&l_round_quantity);
+				consnil_fees += l_round_quantity * g_exchg_rt_fee_bl;
+				l_round_quantity = 0.0;
+				CO_Round(h_m_minimumfee*l_exchg_rt,int_g_ccy_decimallen,&l_round_quantity);
+				consminimumfee += l_round_quantity * g_exchg_rt_fee_bl;
+				l_round_quantity = 0.0;
+				CO_Round(h_m_maximum_fee*l_exchg_rt,int_g_ccy_decimallen,&l_round_quantity);
+				consmaximum_fee += l_round_quantity * g_exchg_rt_fee_bl;
+			}
+
+			EXEC SQL CLOSE minfee_cur;
+			int_is_minfee_cur_open = 0;
+
+			
+			if((consnil_fees + consminimumfee + consmaximum_fee + dbl_consfee_servchrg) > 0)
+			{
+				
+				memset(h_ora_rowid,APL_NULL_CHAR,APL_ROWID_LEN);
+				i_ora_rowid = 0;
+				EXEC SQL SELECT rowid
+				INTO :h_ora_rowid:i_ora_rowid
+				FROM IV_SERVICE_CHRG
+				WHERE dateof_billing = :chr_h_bl_upto_dt AND
+					client = :chr_h_prev_mstacc AND
+					service_cd = :h_prev_serv AND
+					cons_flag = 'C';
+
+				if(sqlca.sqlcode < 0)
+				{
+					fprintf(fp,"Error in accessing table for client %s. Please contact support\n",chr_h_prev_mstacc);
+						fprintf(fp, "File: %s, Line: %d\n", __FILE__, __LINE__);
+					fflush(fp);
+					int_bl_err_level = 1;
+					*int_p_retstat = IV_CRITCAL_ERROR_IND;
+				}
+
+				IS_ANY_ORA_ERROR;
+
+					/* Added by Gouse for Kotak AIX Prod Issue SR_344 - Start */
+					IF_COND_EXISTS("IV_BILLGEN","BILL_GEN_DEC_LEN")
+					{
+						EXEC SQL SELECT FIELD_VAL INTO :l_dec_len
+									FROM PRO_GSSPLVAL 
+									WHERE MAIN_FUN = 'IV_BILLGEN' 
+									AND SUB_PROCESS = 'BILL_GEN_DEC_LEN' 
+									AND NATION = :g_mt_commonsys_params_struct_h.nation_code;	
+						printf("sqlca.sqlcode after getting l_dec_len is |%d|\n",sqlca.sqlcode);
+						printf("l_dec_len is |%d|\n",l_dec_len);
+				
+						EXEC SQL SELECT ROUND(:dbl_consfee_servchrg,:l_dec_len),ROUND(:consnil_fees,:l_dec_len),ROUND(:consminimumfee,:l_dec_len),ROUND(:consmaximum_fee,:l_dec_len) INTO 
+									:dbl_consfee_servchrg,:consnil_fees,:consminimumfee,:consmaximum_fee FROM DUAL;
+						printf("sqlca.sqlcode after round off is |%d|\n",sqlca.sqlcode);
+						printf("l_dec_len is |%lf|\n",dbl_consfee_servchrg);
+						printf("l_dec_len is |%lf|\n",consnil_fees);
+						printf("l_dec_len is |%lf|\n",consminimumfee);
+						printf("l_dec_len is |%lf|\n",consmaximum_fee);
+					}	
+					/* Added by Gouse for Kotak AIX Prod Issue SR_344 - End */
+				
+				/* if ( sqlca.sqlcode != 1403)
+				{
+					
+					EXEC SQL UPDATE IV_SERVICE_CHRG
+					SET comm_amt =  comm_amt + :dbl_consfee_servchrg,
+						nil_fees_adj  = :consnil_fees,
+						minimumfee_adj  = :consminimumfee,
+						maximum_fee_adj  = :consmaximum_fee
+					WHERE rowid = :h_ora_rowid;
+
+					if(sqlca.sqlcode < 0)
+						*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+					IS_ANY_ORA_ERROR;
+				}
+				else
+				{
+					Commented by Gouse - UAT Issue - ISKB_2470 - Consolidated charges were summing up in regeneration */
+
+				/* Added by Gouse - ISKB_2470 - Consolidated charges were summing up in regeneration - 10/04/2013 - Start */
+				if ( sqlca.sqlcode != 1403)
+				{
+						EXEC SQL DELETE FROM IV_SERVICE_CHRG
+									WHERE rowid = :h_ora_rowid;
+
+                  printf("\n 1 sql error after deleting from IV_SERVICE_CHRG for tax fee is %d",sqlca.sqlcode);
+				}
+				/* Added by Gouse - ISKB_2470 - Consolidated charges were summing up in regeneration - 10/04/2013 - End */
+					int_retstat = IV_SUCCESS;
+					/*added incld_in_ann_min_fee by shruthi kumbla for ISKB_1901*/
+					if(APL_FAILURE == IV_Mod_IVSRVCHRGNew(chr_h_bl_upto_dt,chr_h_prev_mstacc,
+						 											consnil_fees,consminimumfee,consmaximum_fee,dbl_consfee_servchrg,chr_mst_bl_ccycode,
+						 											'C',h_prev_serv,chr_h_prev_mstacc,'N',&int_retstat,l_debug_info_ptr))
+					{
+						fprintf(fp,"Error : Incorrect calculation of fees adjustments for %s\n",chr_h_prev_mstacc);
+						fflush(fp);
+						int_bl_err_level = 1;
+						if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+						{
+							CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+
+							CO_FreeErrLst(l_debug_info_ptr);
+						}
+						*int_p_retstat = int_retstat;
+					}
+				//}
+			}
+
+			int_i_cnt = 0;
+			while(int_i_cnt <= int_grp_cnt)
+			{
+				
+
+				memset((l_iv_data_struct_h_cons+int_i_cnt), NULL, sizeof(IV_DATA_STRUCT_H));
+				memset((l_iv_data_struct_h_consgrp+int_i_cnt), NULL, sizeof(IV_DATA_STRUCT_H));
+				++int_i_cnt;
+			}
+
+			if (strcmp(h_mstclt, chr_h_prev_mstacc))
+			{
+				int_l_commitcounter++; 
+				if ( (!(int_l_commitcounter % COMMIT_COUNT_F)) && int_l_commitcounter > 0 )
+				{
+					memset(chr_h_update_restart, APL_NULL_CHAR, APL_RESTARTDATA_LENGTH);
+					sprintf(chr_h_update_restart, "%c", CONSOLE_BILL_IND);
+					strcat(chr_h_update_restart, ";");
+					strcat(chr_h_update_restart, chr_h_prev_mstacc);
+
+					EXEC SQL UPDATE SYS_BATCHPROC
+								SET PROCESSING_STATUS = :chr_h_update_restart
+								WHERE ROWID = :chr_h_batch_in_proc_rowid;
+
+					if ( sqlca.sqlcode < 0 )
+					{
+						*int_p_retstat = IV_CRITCAL_ERROR_IND;
+						int_bl_err_level = 1;
+						
+							ltoa_r(sqlca.sqlcode,chr_err_buffer,KEY_LENGTH-1);
+						CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, chr_err_buffer,
+							 APL_NULL_STRING, APL_NULL_STRING,
+							 __LINE__, __FILE__);
+							
+						CO_ProcMonitor(TechRep,"Could not Update Batch in Proc Row\n",NULL,NULL);
+
+						APL_GOBACK_FAIL
+					}
+
+					EXEC SQL COMMIT;
+				
+					if ( sqlca.sqlcode < 0 )
+					{
+						*int_p_retstat = IV_CRITCAL_ERROR_IND;
+						int_bl_err_level = 1;
+						
+			ltoa_r(sqlca.sqlcode,chr_err_buffer,KEY_LENGTH-1);	
+						CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, chr_err_buffer,
+							 APL_NULL_STRING, APL_NULL_STRING,
+							 __LINE__, __FILE__);
+							
+						CO_ProcMonitor(TechRep,"Could not Commit\n",NULL,NULL);
+
+						APL_GOBACK_FAIL
+					}
+	
+					EXEC SQL SELECT ROWID, STATUS, PROCESSING_STATUS
+					INTO :chr_h_batch_in_proc_rowid:int_i_batch_in_proc_rowid,
+							:l_sys_batchproc_struct_h.status_ind:l_sys_batchproc_struct_i.i_status_ind,
+							:l_sys_batchproc_struct_h.processing_status:l_sys_batchproc_struct_i.i_restart_info
+					FROM SYS_BATCHPROC
+					WHERE ((PROCESS_NAME = :l_sys_batchproc_struct_h.process_name) AND
+							(STARTDATE = :l_sys_batchproc_struct_h.start_dt) AND
+							(STATUS = :l_sys_batchproc_struct_h.status_ind))
+					FOR UPDATE OF STATUS, PROCESSING_STATUS;
+
+					if ( sqlca.sqlcode < 0 )
+					{
+
+		ltoa_r(sqlca.sqlcode,chr_err_buffer,KEY_LENGTH-1);
+						CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, chr_err_buffer,
+							 APL_NULL_STRING, APL_NULL_STRING,__LINE__,__FILE__);
+
+						CO_ProcMonitor(TechRep,"Could not lock Batch in Proc Row\n",NULL,NULL);
+
+						*int_p_retstat = IV_CRITCAL_ERROR_IND;
+						int_bl_err_level = 1;
+	
+						APL_GOBACK_FAIL
+					}
+				}
+			}
+
+			strcpy(chr_h_prev_mstacc,h_mstclt);
+			strcpy(chr_prev_client,h_dl_client);
+			h_prev_serv = int_h_serv_code;
+			if(chr_h_nilflg != 'Y')
+				strcpy(chr_prev_param_code,chr_h_param_code);
+			strcpy(chr_prev_param_val,chr_h_param_val);
+			prev_charge_quantity = h_charge_quantity;
+			prev_fee_quantity = h_fee_quantity;
+			strcpy(chr_prev_bl_ccycode,chr_h_bl_ccycode);
+			prev_cm_amount = h_cm_amount;
+			chr_prev_nilflg = chr_h_nilflg;
+
+		} 
+
+		int_retstat = IV_SUCCESS;
+		if(APL_FAILURE == IV_Rtv_IVCUSTSETUP(h_mstclt,&l_iv_clientsetup_struct,&int_retstat,l_debug_info_ptr))
+		{
+			if(int_retstat == IV_CRITCAL_ERROR_IND)
+			{
+				fprintf(fp,"Error : Master Account %s  not found in billing system during consolidation\n", h_mstclt);
+				fflush(fp);
+				int_bl_err_level = 1;
+				if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+				{
+					CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+					CO_FreeErrLst(l_debug_info_ptr);
+				}
+				*int_p_retstat = int_retstat;
+			}
+		}
+
+		strcpy(chr_g_bl_ccycode,l_iv_clientsetup_struct.b_ccycd);
+		strcpy(chr_g_fee_ccycode,l_iv_clientsetup_struct.fees_ccy); 
+		strcpy(chr_h_def_fee_acc,l_iv_clientsetup_struct.default_feeclt);
+		strcpy(chr_mst_bl_ccycode,l_iv_clientsetup_struct.b_ccycd);
+		strcpy(chr_acct_str,h_mstclt);
+		strcat(chr_acct_str,";");
+		strcat(chr_acct_str,chr_h_def_fee_acc);
+		strcat(chr_acct_str,";");
+		strcat(chr_acct_str,chr_g_cb_code);
+		strcat(chr_acct_str,";");
+		strcat(chr_acct_str,APL_NULL_STRING);
+
+		
+      
+		int_g_ccy_decimallen = RNDDEC;
+		
+
+		g_exchg_rt_fee_bl = 1.0;
+
+		if ( strcmp(l_iv_clientsetup_struct.fees_ccy, l_iv_clientsetup_struct.b_ccycd) != 0)
+		{
+			int_retstat = IV_SUCCESS;
+			if(APL_FAILURE == IV_Rtv_ExchRate(chr_g_fee_ccycode,chr_g_bl_ccycode,chr_g_bl_upto_dt,&g_exchg_rt_fee_bl, &int_retstat,l_debug_info_ptr))
+			{
+				fprintf(fp,"Error : Exchange Rate not found for currency %s %s\n",chr_g_fee_ccycode,chr_g_bl_ccycode);
+				fflush(fp);
+				int_bl_err_level = 1;
+				if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+				{
+					CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+
+					CO_FreeErrLst(l_debug_info_ptr);
+				}
+				*int_p_retstat = int_retstat;
+			}
+		}
+
+		
+
+		int_retstat = IV_SUCCESS;
+		if(APL_FAILURE == IV_Rtv_GetServBasis(chr_acct_str,int_h_serv_code,&l_iv_client_serv_basis_structa,&int_retstat,l_debug_info_ptr))
+		{
+			if(int_retstat == IV_CRITCAL_ERROR_IND)
+			{
+				//fprintf(fp,"Error : Fatal l_debuglist encountered in Service Basis during consolidation for client %s for service %d\n", chr_h_prev_mstacc,h_prev_serv); Changes done for AIX Migration
+				fprintf(fp,"Error : Fatal l_debuglist encountered in Service Basis during consolidation for client %s for service %ld\n", chr_h_prev_mstacc,h_prev_serv);
+				fflush(fp);
+				int_bl_err_level = 1;
+				if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+				{
+					CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+
+					CO_FreeErrLst(l_debug_info_ptr);
+				}
+				*int_p_retstat = int_retstat;
+			}
+		}
+
+		chr_l_charge_type = l_iv_client_serv_basis_structa.chrg_clas;
+		chr_l_fee_type = l_iv_client_serv_basis_structa.fees_class;
+		h_nil_fees   = l_iv_client_serv_basis_structa.nil_fees;
+		h_minimumfee   = l_iv_client_serv_basis_structa.minimumfee;
+		h_maximum_fee   = l_iv_client_serv_basis_structa.maximum_fee;
+		strcpy(chr_l_charge_basis, APL_NULL_STRING);
+		strcpy(chr_l_charge_basis,l_iv_client_serv_basis_structa.chrg_base);
+		strcpy(chr_l_fee_basis, APL_NULL_STRING);
+		strcpy(chr_l_fee_basis,l_iv_client_serv_basis_structa.fees_base);
+
+		#ifdef BILLDEBUG 
+
+			fprintf(TestRep, "Consolidating for MastAcc : %s, Serv Code: %ld, Fee Type: %c, bCharge Type : %c\n", h_mstclt, int_h_serv_code, 
+								   chr_l_fee_type, chr_l_charge_type);
+			fprintf(TechRep, "Fee Basis: %s, Charge Basis: %s\n", chr_l_fee_basis, chr_l_charge_basis);
+			fprintf(TestRep, "Nilfee : %lf, Minfee : %lf, Maxfee : %lf\n", h_nil_fees, h_minimumfee, h_maximum_fee);
+			fflush(TestRep);
+
+		#endif 
+		
+		int_retstat = IV_SUCCESS;
+		if(APL_FAILURE == IV_Rtv_IVSSRVBasis(int_h_serv_code,chr_l_charge_basis,chr_l_fee_basis,&l_iv_serv_basis_structa_a,&int_retstat,
+		    l_debug_info_ptr))
+		{
+			if(int_retstat == IV_CRITCAL_ERROR_IND)
+			{
+				fprintf(fp,"Error in accessing table. Please contact support\n");
+				fflush(fp);
+				int_bl_err_level = 1;
+				if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+				{
+					CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+
+					CO_FreeErrLst(l_debug_info_ptr);
+				}
+				*int_p_retstat = int_retstat;
+			}
+		}
+
+		if(l_iv_serv_basis_structa_a.chrg_vl_clas  == 'A' || 
+		    l_iv_serv_basis_structa_a.fees_val_class  == 'A')
+		{
+			l_exchg_rt = 1.0;
+
+			
+
+			if ( strcmp(chr_h_bl_ccycode, l_iv_clientsetup_struct.fees_ccy) != 0)
+			{
+				int_retstat = IV_SUCCESS;
+				if(APL_FAILURE == IV_Rtv_ExchRate(chr_h_bl_ccycode,l_iv_clientsetup_struct.fees_ccy,chr_g_bl_upto_dt,&l_exchg_rt, &int_retstat,l_debug_info_ptr))
+				{
+					fprintf(fp,"Error : Exchange Rate not found for currency %s %s\n",chr_h_bl_ccycode,l_iv_clientsetup_struct.fees_ccy);
+					fflush(fp);
+					int_bl_err_level = 1;
+					if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+					{
+						CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+
+						CO_FreeErrLst(l_debug_info_ptr);
+					}
+					*int_p_retstat = int_retstat;
+				}
+			}
+
+			if(l_iv_serv_basis_structa_a.chrg_vl_clas  == 'A')
+			{
+				
+
+				l_round_quantity = 0.0;
+				CO_Round(h_charge_quantity * l_exchg_rt, int_g_ccy_decimallen, &l_round_quantity);
+				h_charge_quantity = l_round_quantity * g_exchg_rt_fee_bl;
+			}
+
+			if(l_iv_serv_basis_structa_a.fees_val_class  == 'A')
+			{
+				
+
+				l_round_quantity = 0.0;
+				CO_Round(h_fee_quantity * l_exchg_rt, int_g_ccy_decimallen, &l_round_quantity);
+				h_fee_quantity = l_round_quantity * g_exchg_rt_fee_bl;
+			}
+
+			
+
+			l_round_quantity = 0.0;
+			CO_Round(h_cm_amount * l_exchg_rt, int_g_ccy_decimallen, &l_round_quantity);
+			h_cm_amount = l_round_quantity * g_exchg_rt_fee_bl;
+		}
+		/*addded ann min fee code to calculated consolidated charges by shruthi kumbla ISKB_1737*/
+		if((l_iv_servmast_struct.mastsub_ind == 'M') && (int_h_serv_code != 98 && 
+		    int_h_serv_code != 99 && int_h_serv_code != 99999 && int_h_serv_code != 99994) && chr_h_nilflg == 'N')
+		{
+			strcpy(chr_prev_param_val,chr_h_param_val);
+			prev_charge_quantity = h_charge_quantity;
+			prev_fee_quantity = h_fee_quantity;
+			prev_cm_amount = h_cm_amount;
+			strcpy(chr_prev_bl_ccycode,chr_h_bl_ccycode);
+			strcpy(chr_h_prev_mstacc,h_mstclt);
+			strcpy(chr_prev_client,h_dl_client);
+			h_prev_serv = int_h_serv_code;
+			strcpy(chr_prev_param_code,chr_h_param_code);
+			chr_prev_nilflg = chr_h_nilflg;
+
+			srv_charge = 0;
+			int_retstat= IV_SUCCESS;
+			if ((int_h_serv_code == ADM_TXN_FEE_IND) && (strcmp(chr_l_fee_basis, "COUNTERVALUE PER TXN") == 0) &&
+				(strcmp(chr_l_charge_basis, "COUNTERVALUE PER TXN") == 0))
+			{
+				if (strcmp(chr_h_cons_ind,"I") == 0 )
+				{
+					continue;
+					int_fetch_cnt = int_fetch_cnt - 1;
+				}
+			
+					strcpy(chr_h_inter_param_val  ,chr_h_param_val);
+					strcpy(chr_h_inter_group_ind, chr_h_group_ind);
+			
+	
+				int_grp_cnt = 0;
+            int_new_grp = 0;
+            
+				while(strlen((l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->proc_data) > 0)
+            {
+                if(strcmp((l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->proc_data,chr_h_inter_param_val) == 0)
+                {
+                    int_new_grp=1;
+                    break;
+                }
+                ++int_grp_cnt;
+            }
+				if (int_new_grp == 0)
+            {
+                memset((l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->proc_data,'\0',100);
+                strcpy((l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->proc_data,chr_h_inter_param_val);
+                memset((l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->param_flag,'\0',50);
+                strcpy((l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->param_flag,chr_h_inter_group_ind);
+                (l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->chrg_quant = h_charge_quantity;
+                (l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->fees_qty = h_fee_quantity;
+                (l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->h_chrg = h_cm_amount ;
+                if(int_grp_cnt < 49)
+                {
+                     memset((l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt+1)->proc_data,'\0',100);
+                    strcpy((l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt+1)->proc_data,APL_NULL_STRING);
+                     memset((l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt+1)->param_flag,'\0',50);
+                     strcpy((l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt+1)->param_flag,APL_NULL_STRING);
+                     (l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt+1)->chrg_quant = 0;
+                     (l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt+1)->fees_qty = 0;
+							(l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt+1)->h_chrg = 0;
+                 }
+
+             }
+             else
+             {
+                 (l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->chrg_quant += h_charge_quantity;
+                 (l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->fees_qty += h_fee_quantity;
+                 (l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->h_chrg += h_cm_amount;
+             }
+			}
+			else if ((int_h_serv_code == TXNFEE) && (strcmp(chr_l_fee_basis, "COUNTERVALUE PER TXN") == 0) &&
+				(strcmp(chr_l_charge_basis, "PER TXN") == 0))
+			{
+				if (strcmp(chr_h_cons_ind,"I") == 0 )
+				{
+					continue;
+					int_fetch_cnt = int_fetch_cnt - 1;
+				}
+			
+					strcpy(chr_h_inter_param_val  ,chr_h_param_val);
+					strcpy(chr_h_inter_group_ind, chr_h_group_ind);
+			
+	
+				int_grp_cnt = 0;
+            int_new_grp = 0;
+
+            while(strlen((l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->proc_data) > 0)
+            {
+                if(strcmp((l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->proc_data,chr_h_inter_param_val) == 0)
+                {
+                    int_new_grp=1;
+                    break;
+                }
+                ++int_grp_cnt;
+            }
+				if (int_new_grp == 0)
+            {
+                memset((l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->proc_data,'\0',100);
+                strcpy((l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->proc_data,chr_h_inter_param_val);
+                memset((l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->param_flag,'\0',50);
+                strcpy((l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->param_flag,chr_h_inter_group_ind);
+                (l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->chrg_quant = h_charge_quantity;
+                (l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->fees_qty = h_fee_quantity;
+                (l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->h_chrg = h_cm_amount ;
+                if(int_grp_cnt < 49)
+                {
+                     memset((l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt+1)->proc_data,'\0',100);
+                    strcpy((l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt+1)->proc_data,APL_NULL_STRING);
+                     memset((l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt+1)->param_flag,'\0',50);
+                     strcpy((l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt+1)->param_flag,APL_NULL_STRING);
+                     (l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt+1)->chrg_quant = 0;
+                     (l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt+1)->fees_qty = 0;
+							(l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt+1)->h_chrg = 0;
+                 }
+
+             }
+             else
+             {
+                 (l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->chrg_quant += h_charge_quantity;
+                 (l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->fees_qty += h_fee_quantity;
+                 (l_iv_deal_data_struct_h_dladmgrp+int_grp_cnt)->h_chrg += h_cm_amount;
+             }
+			}
+			else
+			{
+				if ( !strcmp(l_iv_serv_basis_structa_a.fees_base, "PORTFOLIO VALUE") || 
+					  !strcmp(l_iv_serv_basis_structa_a.fees_base, "COUNTERVALUE") )
+				{
+					h_fee_quantity /= g_exchg_rt_fee_bl;
+				}
+	
+				if ( !strcmp(l_iv_serv_basis_structa_a.chrg_base, "PORTFOLIO VALUE") || 
+					  !strcmp(l_iv_serv_basis_structa_a.chrg_base, "COUNTERVALUE") )
+				{
+					h_charge_quantity /= g_exchg_rt_fee_bl;
+				}
+
+				if ((strcmp(chr_h_param_val,"BOG;1;3;ALL")==0) && (int_h_serv_code == ADM_TXN_FEE_IND))
+				{
+					printf("COMEHERE");
+				}
+				
+				if(APL_FAILURE == IV_Proc_CalcFee("O",chr_acct_str,int_h_serv_code,
+				    chr_h_param_val,APL_NULL_STRING,chr_h_param_code,h_fee_quantity,h_charge_quantity,
+				    chr_l_charge_type,chr_l_fee_type,
+			   	 &srv_charge,l_iv_data_struct_h_consgrp,'X',h_mstclt,chr_l_charge_basis,chr_l_fee_basis,chr_h_srv_ind,&int_retstat,l_debug_info_ptr))
+				{
+					if(int_retstat == IV_CRITCAL_ERROR_IND)
+					{
+						fprintf(fp,"Error in accessing table for client %s. Please contact support\n",h_dl_client);
+						fprintf(fp, "File: %s, Line: %d\n", __FILE__, __LINE__);
+						fflush(fp);
+						int_bl_err_level = 1;
+						if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+						{
+							CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+							CO_FreeErrLst(l_debug_info_ptr);
+						}	
+						*int_p_retstat = int_retstat;
+					}
+				}
+			}
+		} 
+		else
+		{
+			
+				
+			if(chr_h_nilflg == 'N')
+			{
+				strcpy(l_iv_deal_struct.client,h_dl_client);
+				l_iv_deal_struct.service_cd = int_h_serv_code;
+				l_iv_deal_struct.chrg_quant = h_charge_quantity;
+				l_iv_deal_struct.fees_qty = h_fee_quantity;
+				l_iv_deal_struct.cons_flag = 'C';
+				l_iv_deal_struct.comm_amt = h_cm_amount;
+				strcpy(l_iv_deal_struct.dateof_billing,chr_g_bl_upto_dt);
+				strcpy(l_iv_deal_struct.b_ccycd,chr_h_bl_ccycode);
+				strcpy(l_iv_deal_struct.parameter_cd,chr_h_param_code);
+				strcpy(l_iv_deal_struct.proc_data_val,chr_h_param_val);
+				strcpy(l_iv_deal_struct.master_clt,h_mstclt);
+				strcpy(l_iv_deal_struct.group_id,chr_h_group_ind);
+			}
+			
+			int_retstat = IV_SUCCESS;
+
+			
+            if(int_h_serv_code == CASH_DIV_FEE)
+            {
+					
+					EXEC SQL SELECT PROC_DATA_VAL 
+               		INTO :chr_temp_param_str
+							FROM IV_DEAL
+               		WHERE CLIENT = :h_mstclt
+                     AND SERVICE_CD = '8'
+                     AND CONS_FLAG = 'C'
+                     AND DATEOF_BILLING = :chr_h_bl_upto_dt;
+
+               IS_ANY_ORA_ERROR;
+
+               if(sqlca.sqlcode != 1403)
+               strcpy(l_iv_deal_struct.proc_data_val,chr_temp_param_str);
+
+				}
+			
+			if(APL_FAILURE == IV_Proc_SubCharges(h_dl_client,int_h_serv_code,&l_iv_deal_struct,
+						l_iv_serv_basis_structa_a.chrg_vl_clas,l_iv_serv_basis_structa_a.fees_val_class,
+						chr_h_nilflg,&int_retstat,l_debug_info_ptr))
+			{
+				//fprintf(fp,"No charges found for client %s for service %d\n",h_dl_client,int_h_serv_code); Changes done for AIX Migration
+				fprintf(fp,"No charges found for client %s for service %ld\n",h_dl_client,int_h_serv_code);
+				fflush(fp);
+				if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+				{
+					CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+					CO_FreeErrLst(l_debug_info_ptr);
+				}
+				*int_p_retstat = int_retstat;
+			}
+
+			strcpy(chr_h_prev_mstacc,h_mstclt);
+			strcpy(chr_prev_client,h_dl_client);
+			h_prev_serv = int_h_serv_code;
+			if(chr_h_nilflg != 'Y')
+				strcpy(chr_prev_param_code,chr_h_param_code);
+			strcpy(chr_prev_param_val,chr_h_param_val);
+			prev_charge_quantity = h_charge_quantity;
+			prev_fee_quantity = h_fee_quantity;
+			prev_cm_amount = h_cm_amount;
+			strcpy(chr_prev_bl_ccycode,chr_h_bl_ccycode);
+			chr_prev_mst_sub = l_iv_servmast_struct.mastsub_ind;
+			chr_prev_nilflg = chr_h_nilflg;
+			
+			continue;
+		}
+
+		chr_prev_mst_sub = l_iv_servmast_struct.mastsub_ind;
+
+		if(int_bl_err_level == 1)
+		{
+			//fprintf(fp,"Error in consolidation of bills for client %s for service %d. Please regenerate bill.\n", h_dl_client,int_h_serv_code); Changes done for AIX Migration
+			fprintf(fp,"Error in consolidation of bills for client %s for service %ld. Please regenerate bill.\n", h_dl_client,int_h_serv_code);
+			fflush(fp);
+			*int_p_retstat = IV_CRITCAL_ERROR_IND;
+		}
+
+	} 
+
+	if(*int_p_retstat != IV_SUCCESS)
+	{
+		APL_GOBACK_FAIL;
+	}
+	else
+	{
+		*int_p_retstat = IV_SUCCESS;
+		APL_GOBACK_SUCCESS;
+	}
+
+RETURN_SUCCESS:
+	if(int_is_conchg_cur_open == 1)
+	{
+		if(l_cond_no_tax_on_minfee==0)
+		{
+			EXEC SQL CLOSE conchg_cur;
+		}
+		else
+		{
+			EXEC SQL CLOSE conchg_cur_ru;
+		}
+	}
+	if(int_is_minfee_cur_open == 1)
+	{
+		EXEC SQL CLOSE minfee_cur;
+	}
+	if(int_is_lminfee_cur_open == 1)
+	{
+		EXEC SQL CLOSE lminfee_cur;
+	}
+
+	strcpy(chr_g_batch_in_proc_rowid,chr_h_batch_in_proc_rowid);
+	l_sys_batchproc_struct_hb = l_sys_batchproc_struct_h;
+	return APL_SUCCESS;
+
+RETURN_FAILURE:
+	if(int_is_conchg_cur_open == 1)
+	{
+		if(l_cond_no_tax_on_minfee==0)
+		{
+			EXEC SQL CLOSE conchg_cur;
+		}
+		else
+		{
+			EXEC SQL CLOSE conchg_cur_ru;
+		}
+	}
+	if(int_is_minfee_cur_open == 1)
+	{
+		EXEC SQL CLOSE minfee_cur;
+	}
+	if(int_is_lminfee_cur_open == 1)
+	{
+		EXEC SQL CLOSE lminfee_cur;
+	}
+	
+	strcpy(chr_g_batch_in_proc_rowid,chr_h_batch_in_proc_rowid);
+	l_sys_batchproc_struct_hb = l_sys_batchproc_struct_h;
+	return APL_FAILURE;
+}
+
+
+int IV_Proc_MinFeeAdjust(char p_cons_ind, char *chr_p_client, int *int_p_retstat,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	int IV_Proc_CalcTax(char *,long ,double ,double,char, char,double *,char *,char *,char *,char *,int *,DEBUG_INFO_STRUCT_H **);
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+	char h_dl_client[APL_CLIENT_LENGTH],chr_h_bl_upto_dt[APL_DATE_LEN],chr_h_minfee_to,chr_h_maxfee_to;
+	char chr_h_minadj_hld,h_mstclt[APL_CLIENT_LENGTH], chr_h_minfee_str[1000], chr_h_maxadj_hld;
+	char chr_h_bl_gen,chr_h_def_fee_acc[APL_CLIENT_LENGTH],chr_h_bl_ccycode[APL_CCYCODE_LEN];
+   char chr_h_fee_ccycode[APL_CCYCODE_LEN]; 
+
+	char chr_h_srv_ind[50];
+	double h_minimumfee=0,dbl_h_comm_tax=0,h_maximumfee=0;
+	short i_dl_client=0,i_minimumfee_to=0,i_minimumfee=0,i_min_hld_adj=0,i_def_fee_clt=0,i_maximumfee=0;
+	short i_maximumfee_to = 0, i_max_hld_adj = 0;
+	short i_mstclt=0,i_b_gen_flag=0,i_comm_tax_amount=0,i_bl_currencycode=0;
+   short i_fee_currencycode;                
+	SYS_BATCHPROC_STRUCT_H l_sys_batchproc_struct_h;
+	SYS_BATCHPROC_STRUCT_I l_sys_batchproc_struct_i;
+	char chr_h_batch_in_proc_rowid[APL_ROWID_LEN];
+	char chr_h_update_restart[APL_RESTARTDATA_LENGTH], chr_h_restart_client[APL_CLIENT_LENGTH];
+	short int_i_batch_in_proc_rowid=0;
+
+   
+   double l_exl_cmamount = 0.0;
+   double l_exl_nonstdfee = 0.0;
+	double l_cons_cm_amountneg = 0.0;
+	double l_tot_cm_amountneg = 0.0; 
+	long h_annminfee_code = ANNUALMINFEE ;/*added by shruthi kumbla for ISKB_1737 inorder to calculate consolidated charges for 99994*/
+   long h_splfee_code =  SPECIALBILLING;
+	long h_underbill_code = UNDERBILLING;
+	long h_overbill_code = OVERBILLING;
+	long h_depofee_code = DEPOFEE; //shailesh 240807
+	long h_miscfee_code = MANUALDEALFEE; //shailesh 09-01-08 tax should not be there on MISC fees
+
+	long h_taxfee_code = TAXFEE;
+	long h_educess_code = EDUCESSFEE;
+	long h_minfee_code = MINFEECODE;
+	long h_maxfee_code = MAXFEECODE;
+	long h_annfee_code = ANNUALMNTFEE;
+	long  h_voldis_code = VOLDISCOUNTFEE; // Added by siva.ganapathi for ISKB_2470
+
+	EXEC SQL VAR h_dl_client IS STRING;
+	EXEC SQL VAR h_mstclt  IS STRING;
+	EXEC SQL VAR chr_h_bl_upto_dt IS STRING;
+	EXEC SQL VAR chr_h_bl_ccycode IS STRING;
+	EXEC SQL VAR chr_h_fee_ccycode IS STRING;           
+	EXEC SQL VAR chr_h_def_fee_acc IS STRING;
+	EXEC SQL VAR chr_h_minfee_str IS STRING;
+	EXEC SQL VAR l_sys_batchproc_struct_h.process_name IS STRING;
+	EXEC SQL VAR l_sys_batchproc_struct_h.proc_init IS STRING;
+	EXEC SQL VAR l_sys_batchproc_struct_h.status_ind IS STRING;
+	EXEC SQL VAR l_sys_batchproc_struct_h.processing_status IS STRING;
+	EXEC SQL VAR chr_h_update_restart IS STRING;
+	EXEC SQL VAR chr_h_restart_client IS STRING;
+	struct sqlca sqlca;
+
+	EXEC SQL END DECLARE SECTION;
+
+	IV_DEAL_STRUCT l_iv_deal_struct;
+	char chr_prev_client[APL_CLIENT_LENGTH],chr_acct_str[IV_CLT_LEN];
+	int int_retstat=0,int_min_adj_flg=0,int_volfeeexists=0,int_max_adj_flg=0;
+	double l_tot_cm_amount=0,l_minimumfee_adj=0,srv_charge=0,l_cons_cm_amount=0,l_maximumfee_adj=0;
+	double post_tax_amount=0,l_tot_minfee_amount=0,l_tot_maxfee_amount=0;
+	double l_round_val = 0.0, edurate=0.0, dbl_bill_amt = 0.0; 
+	int int_is_tot_cur_open = 0;
+	char chr_err_buffer[KEY_LENGTH];
+	char chr_h_prev_mstacc[APL_CLIENT_LENGTH];
+	int int_l_bl_ccy_decimallen = 0.0; 
+	int int_l_commitcounter = 0; 
+	int int_taxfeeexists = 0; 			/* Bageshri HB_IV_001 */
+	IV_DATA_STRUCT_H l_sun_port_param_struct[50];
+
+	sqlca.sqlcode = 0;
+	memset(l_sun_port_param_struct[0].proc_data,APL_NULL_CHAR,100); 
+	memset(h_dl_client, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+	memset(chr_h_prev_mstacc, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+	memset(h_mstclt, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+	memset(chr_h_def_fee_acc, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+	memset(chr_prev_client, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+	memset(chr_acct_str, APL_NULL_CHAR, IV_CLT_LEN);
+	memset(chr_h_bl_upto_dt, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(chr_h_bl_ccycode, APL_NULL_CHAR, APL_CCYCODE_LEN);
+	memset(chr_h_fee_ccycode, APL_NULL_CHAR, APL_CCYCODE_LEN);      
+	memset(chr_h_minfee_str, APL_NULL_CHAR, 1000);
+	memset(chr_err_buffer,APL_NULL_CHAR,KEY_LENGTH);
+	memset(chr_h_restart_client, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+	memset(chr_h_update_restart, APL_NULL_CHAR, APL_RESTARTDATA_LENGTH);
+	memset(chr_h_srv_ind,APL_NULL_CHAR,51);
+
+	strcpy(chr_h_bl_upto_dt,chr_g_bl_upto_dt);
+	strcpy(chr_h_batch_in_proc_rowid, chr_g_batch_in_proc_rowid);
+	l_sys_batchproc_struct_h = l_sys_batchproc_struct_hb;
+	strcpy(chr_h_restart_client, chr_g_restart_client);
+
+	if ( strlen(chr_p_client) )
+		strcpy(h_dl_client, chr_p_client);
+
+	*int_p_retstat = IV_SUCCESS;
+	/* HDFCIV_004	Rohit	Addition of condition for super master */
+	strcpy(chr_h_minfee_str," SELECT a.client,a.b_gen_ind,a.minimumfee,a.minimumfee_to,");
+	strcat(chr_h_minfee_str," a.min_hld_adj,nvl(a.cln_supermst,b.cln_master),a.comm_tax_amt,a.default_feeclt,a.b_ccycd"); 
+	strcat(chr_h_minfee_str,",a.fees_ccy,a.maximumfee,a.maximumfee_to,a.max_hld_adj");    
+	strcat(chr_h_minfee_str, " FROM IV_CLIENTSETUP a, MT_CLIENT b");
+	strcat(chr_h_minfee_str, " WHERE a.client = b.cln_code AND");
+	strcat(chr_h_minfee_str, " a.stat_ind = 'A' AND");
+	
+	strcat(chr_h_minfee_str, " b.status NOT IN ('CA','CU') AND");
+	
+	strcat(chr_h_minfee_str, " a.client != '");
+	strcat(chr_h_minfee_str, chr_g_cb_code);
+	strcat(chr_h_minfee_str, "'");
+
+	if(strlen(chr_p_client) != 0)
+	{
+		strcat(chr_h_minfee_str, " AND a.client = '");
+		strcat(chr_h_minfee_str, h_dl_client);
+		strcat(chr_h_minfee_str, "'");
+	}
+	else
+	{
+		strcat(chr_h_minfee_str, " AND nvl(a.cln_supermst,b.cln_master) > '");
+		strcat(chr_h_minfee_str, chr_h_restart_client);
+		strcat(chr_h_minfee_str, "'");
+		strcat(chr_h_minfee_str, " ORDER BY ");
+		strcat(chr_h_minfee_str, "nvl(a.cln_supermst,b.cln_master), a.client");
+	}
+
+	EXEC SQL PREPARE minfee_stmt FROM :chr_h_minfee_str;
+
+	EXEC SQL DECLARE tot_cur CURSOR FOR minfee_stmt;
+
+	EXEC SQL OPEN tot_cur;
+
+	if(sqlca.sqlcode < 0)
+	{
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+		int_bl_err_level = 1;
+	}
+
+	IS_ANY_ORA_ERROR;
+	int_is_tot_cur_open = 1;
+
+	for( ; ; )
+	{
+		memset(h_dl_client, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+		memset(h_mstclt, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+		memset(chr_h_def_fee_acc, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+		memset(chr_h_bl_ccycode, APL_NULL_CHAR, APL_CCYCODE_LEN);
+		memset(chr_h_fee_ccycode, APL_NULL_CHAR, APL_CCYCODE_LEN); 
+		
+		chr_h_bl_gen = NULL;
+		chr_h_minfee_to = NULL;
+		chr_h_minadj_hld = NULL;
+		chr_h_maxfee_to = NULL;
+		chr_h_maxadj_hld = NULL;
+
+		h_minimumfee = 0.0;
+		dbl_h_comm_tax = 0.0;
+		h_maximumfee = 0.0;
+
+		EXEC SQL FETCH tot_cur 
+		INTO :h_dl_client:i_dl_client,
+				:chr_h_bl_gen:i_b_gen_flag,
+				:h_minimumfee:i_minimumfee,
+				:chr_h_minfee_to:i_minimumfee_to,
+				:chr_h_minadj_hld:i_min_hld_adj,
+				:h_mstclt:i_mstclt,
+				:dbl_h_comm_tax:i_comm_tax_amount,
+				:chr_h_def_fee_acc:i_def_fee_clt,
+				:chr_h_bl_ccycode:i_bl_currencycode,            
+				:chr_h_fee_ccycode:i_fee_currencycode,
+				:h_maximumfee:i_maximumfee,
+				:chr_h_maxfee_to:i_maximumfee_to,
+				:chr_h_maxadj_hld:i_max_hld_adj;
+
+		if ( sqlca.sqlcode < 0 )
+		{
+			*int_p_retstat = IV_CRITCAL_ERROR_IND;
+		}
+
+		IS_ANY_ORA_ERROR
+
+
+		if(sqlca.sqlcode == 1403) 
+		{
+			if (int_l_commitcounter > 0)
+			{
+				memset(chr_h_update_restart, APL_NULL_CHAR, APL_RESTARTDATA_LENGTH);
+				sprintf(chr_h_update_restart, "%c", CONSOLE_MINFEE_IND);
+				strcat(chr_h_update_restart, ";");
+				strcat(chr_h_update_restart, chr_h_prev_mstacc);
+				
+				EXEC SQL UPDATE SYS_BATCHPROC 
+							SET PROCESSING_STATUS = :chr_h_update_restart
+							WHERE ROWID = :chr_h_batch_in_proc_rowid;
+								
+				if ( sqlca.sqlcode < 0 )
+				{
+					*int_p_retstat = IV_CRITCAL_ERROR_IND;
+					int_bl_err_level = 1;
+					
+					CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, ltoa(sqlca.sqlcode),
+						 APL_NULL_STRING, APL_NULL_STRING,
+						 __LINE__, __FILE__);
+
+					CO_ProcMonitor(TechRep,"Could not Update Batch in Proc Row\n",NULL,NULL);
+
+					APL_GOBACK_FAIL
+				}
+
+				EXEC SQL COMMIT;
+
+				if ( sqlca.sqlcode < 0 )
+				{
+					*int_p_retstat = IV_CRITCAL_ERROR_IND;
+					int_bl_err_level = 1;
+							
+					CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, ltoa(sqlca.sqlcode),
+						 APL_NULL_STRING, APL_NULL_STRING,
+						 __LINE__, __FILE__);
+								
+					CO_ProcMonitor(TechRep,"Could not Commit\n",NULL,NULL);
+
+					APL_GOBACK_FAIL
+				}
+
+				EXEC SQL SELECT ROWID, STATUS, PROCESSING_STATUS
+				INTO :chr_h_batch_in_proc_rowid:int_i_batch_in_proc_rowid,
+					  :l_sys_batchproc_struct_h.status_ind:l_sys_batchproc_struct_i.i_status_ind,
+					  :l_sys_batchproc_struct_h.processing_status:l_sys_batchproc_struct_i.i_restart_info
+				FROM SYS_BATCHPROC
+				WHERE ((PROCESS_NAME = :l_sys_batchproc_struct_h.process_name) AND
+						(STARTDATE = :l_sys_batchproc_struct_h.start_dt) AND
+						(STATUS = :l_sys_batchproc_struct_h.status_ind))
+				FOR UPDATE OF STATUS, PROCESSING_STATUS;
+
+				if ( sqlca.sqlcode < 0 )
+				{
+
+					CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, ltoa(sqlca.sqlcode),
+						 APL_NULL_STRING, APL_NULL_STRING,
+						 __LINE__, __FILE__);
+
+					CO_ProcMonitor(TechRep,"Could not lock Batch in Proc Row\n",NULL,NULL);
+
+					*int_p_retstat = IV_CRITCAL_ERROR_IND;
+					int_bl_err_level = 1;
+
+					APL_GOBACK_FAIL
+				}
+			}
+			break;
+		}
+
+		if ( (strlen(chr_p_client) == 0) && (strcmp(chr_h_prev_mstacc, h_mstclt) != 0) )
+		{
+			if ( (!(int_l_commitcounter % COMMIT_COUNT_F)) && int_l_commitcounter > 0 ) 
+			{
+				memset(chr_h_update_restart, APL_NULL_CHAR, APL_RESTARTDATA_LENGTH);
+				sprintf(chr_h_update_restart, "%c", CONSOLE_MINFEE_IND);
+				strcat(chr_h_update_restart, ";");
+				strcat(chr_h_update_restart, chr_h_prev_mstacc);
+
+				EXEC SQL UPDATE SYS_BATCHPROC 
+							SET PROCESSING_STATUS = :chr_h_update_restart
+							WHERE ROWID = :chr_h_batch_in_proc_rowid;
+							
+				if ( sqlca.sqlcode < 0 )
+				{
+					*int_p_retstat = IV_CRITCAL_ERROR_IND;
+					int_bl_err_level = 1;
+					
+					CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, ltoa(sqlca.sqlcode),
+						 APL_NULL_STRING, APL_NULL_STRING,
+						 __LINE__, __FILE__);
+							
+					CO_ProcMonitor(TechRep,"Could not Update Batch in Proc Row\n",NULL,NULL);
+
+					APL_GOBACK_FAIL
+				}
+
+				EXEC SQL COMMIT;
+
+				if ( sqlca.sqlcode < 0 )
+				{
+					*int_p_retstat = IV_CRITCAL_ERROR_IND;
+					int_bl_err_level = 1;
+							
+					CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, ltoa(sqlca.sqlcode),
+						 APL_NULL_STRING, APL_NULL_STRING,
+						 __LINE__, __FILE__);
+							
+					CO_ProcMonitor(TechRep,"Could not Commit\n",NULL,NULL);
+
+					APL_GOBACK_FAIL
+				}
+
+				EXEC SQL SELECT ROWID, STATUS, PROCESSING_STATUS
+				INTO :chr_h_batch_in_proc_rowid:int_i_batch_in_proc_rowid,
+					  :l_sys_batchproc_struct_h.status_ind:l_sys_batchproc_struct_i.i_status_ind,
+					  :l_sys_batchproc_struct_h.processing_status:l_sys_batchproc_struct_i.i_restart_info
+				FROM SYS_BATCHPROC
+				WHERE ((PROCESS_NAME = :l_sys_batchproc_struct_h.process_name) AND
+						(STARTDATE = :l_sys_batchproc_struct_h.start_dt) AND
+						(STATUS = :l_sys_batchproc_struct_h.status_ind))
+				FOR UPDATE OF STATUS, PROCESSING_STATUS;
+
+				if ( sqlca.sqlcode < 0 )
+				{
+				
+					CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, ltoa(sqlca.sqlcode),
+						 APL_NULL_STRING, APL_NULL_STRING,
+						 __LINE__, __FILE__);
+
+					CO_ProcMonitor(TechRep,"Could not lock Batch in Proc Row\n",NULL,NULL);
+
+					*int_p_retstat = IV_CRITCAL_ERROR_IND;
+					int_bl_err_level = 1;
+
+					APL_GOBACK_FAIL
+				}
+			}
+			int_l_commitcounter++;
+			strcpy(chr_h_prev_mstacc, h_mstclt);
+		}
+
+		if(i_dl_client == -1)
+			strcpy(h_dl_client," ");
+		if(i_b_gen_flag == -1)
+			chr_h_bl_gen = ' ';
+		if(i_minimumfee == -1)
+			h_minimumfee = 0;
+		if(i_minimumfee_to == -1)
+			chr_h_minfee_to = ' ';
+		if(i_min_hld_adj == -1)
+			chr_h_minadj_hld = ' ';
+		if(i_mstclt == -1)
+			strcpy(h_mstclt," ");
+		if(i_comm_tax_amount == -1)
+			dbl_h_comm_tax = 0;
+		if(i_def_fee_clt == -1)
+			strcpy(chr_h_def_fee_acc," ");
+		if(i_bl_currencycode == -1)       
+			strcpy(chr_h_bl_ccycode," ");
+		if(i_fee_currencycode == -1)       
+			strcpy(chr_h_fee_ccycode," "); 
+		if(i_maximumfee == -1)
+			h_maximumfee = 0;
+		if(i_maximumfee_to == -1)
+			chr_h_maxfee_to = ' ';
+		if(i_max_hld_adj == -1)
+			chr_h_maxadj_hld = ' ';
+
+		strcpy(chr_g_bl_ccycode,chr_h_bl_ccycode);       
+		strcpy(chr_g_fee_ccycode,chr_h_fee_ccycode);     
+
+		
+
+		if ( APL_FAILURE == CR_Rtv_CCYFldVal(chr_g_fee_ccycode, "decimallen",
+                                        &int_g_ccy_decimallen, l_debug_info_ptr) )
+      {
+          fprintf(TechRep, "Error: Could not fetch decimal length for currency %s\n", chr_g_fee_ccycode);
+          fflush(fp);
+          int_bl_err_level = 1;
+          *int_p_retstat = int_retstat;
+          if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+          {
+             CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+             CO_FreeErrLst(l_debug_info_ptr);
+          }
+      }
+
+      if ( APL_FAILURE == CR_Rtv_CCYFldVal(chr_h_bl_ccycode, "decimallen",
+                                        &int_l_bl_ccy_decimallen, l_debug_info_ptr) )
+      {
+         fprintf(TechRep, "Failed to fetch no. of decimal digits required for %s.\n", chr_h_bl_ccycode);
+
+         APL_GOBACK_FAIL
+      }
+
+		
+
+		
+
+		if ( (p_cons_ind == 'C') && !strlen(chr_p_client) )
+		{
+          
+
+			 g_exchg_rt_fee_bl = 1.0;      
+			 int_retstat = IV_SUCCESS;
+
+			if(APL_FAILURE == IV_Rtv_ExchRate(chr_g_fee_ccycode,chr_g_bl_ccycode,chr_g_bl_upto_dt,&g_exchg_rt_fee_bl, &int_retstat,l_debug_info_ptr))
+			{
+				fprintf(fp,"Error : Exchange Rate not found for currency %s %s\n",chr_g_fee_ccycode,chr_g_bl_ccycode);
+				fflush(fp);
+				int_bl_err_level = 1;
+				*int_p_retstat = int_retstat;
+				if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+				{
+					CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+					CO_FreeErrLst(l_debug_info_ptr);
+				}
+			}
+
+			#ifdef BILLDEBUG 
+
+			  fprintf(TestRep, "Exchange Rate Between Fee Currency and Billing Currency for client %s is %lf\n",h_dl_client, g_exchg_rt_fee_bl);
+			  fflush(TestRep);
+
+			#endif 
+			
+		}
+
+		h_minimumfee = h_minimumfee * g_exchg_rt_fee_bl;   													
+		h_maximumfee = h_maximumfee * g_exchg_rt_fee_bl;
+      
+
+		
+		if(p_cons_ind == 'C' && strcmp(h_dl_client,h_mstclt) == 0)
+		{
+			int_retstat = IV_SUCCESS;
+			if(APL_FAILURE == IV_Mod_TotIVSERVCHARGE(h_dl_client,'C',&l_cons_cm_amount,&int_retstat,l_debug_info_ptr))
+			{
+				int_bl_err_level = 1;
+				*int_p_retstat = int_retstat;
+			}
+		}
+		else if(p_cons_ind == 'I')
+		{
+			int_retstat = IV_SUCCESS;
+			if(APL_FAILURE == IV_Mod_TotIVSERVCHARGE(h_dl_client,'I',&l_tot_cm_amount,&int_retstat,l_debug_info_ptr))
+			{
+				int_bl_err_level = 1;
+				*int_p_retstat = int_retstat;
+			}
+		}
+
+      
+ 
+		
+		strcpy(chr_acct_str,h_dl_client);
+		strcat(chr_acct_str,";");
+		int_retstat = IV_SUCCESS;
+		int_volfeeexists = 0;
+		if(APL_FAILURE == IV_Chk_IsFeeExists(chr_acct_str,VOLDISCOUNTFEE,&int_volfeeexists,&int_retstat,l_debug_info_ptr))
+		{
+			if(int_retstat == IV_CRITCAL_ERROR_IND)
+			{
+				fprintf(fp,"Error in accessing table for client %s. Please contact support.\n",h_dl_client);
+						fprintf(fp, "File: %s, Line: %d\n", __FILE__, __LINE__);
+				fflush(fp);
+				int_bl_err_level = 1;
+				if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+				{
+					CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+					CO_FreeErrLst(l_debug_info_ptr);
+				}
+				*int_p_retstat = int_retstat;
+			}
+		}
+		else if(int_volfeeexists)
+		{
+			strcpy(chr_acct_str,h_dl_client);
+			strcat(chr_acct_str,";");
+			strcat(chr_acct_str,chr_h_def_fee_acc);
+			strcat(chr_acct_str,";");
+			strcat(chr_acct_str,chr_g_cb_code);
+			strcat(chr_acct_str,";");
+			strcat(chr_acct_str,"\0");
+
+			
+			srv_charge = 0;
+			if(p_cons_ind == 'C' && strcmp(h_dl_client,h_mstclt) == 0)
+			{
+				srv_charge = 0;
+				int_retstat= IV_SUCCESS;
+
+				
+
+				l_round_val = 0.0;
+				
+				CO_Round(l_cons_cm_amount / g_exchg_rt_fee_bl, int_g_ccy_decimallen, 
+						 &l_round_val);
+
+
+				if(APL_FAILURE == IV_Proc_CalcFee("O",chr_acct_str,VOLDISCOUNTFEE,";",APL_NULL_STRING," ", l_round_val,l_round_val,'T','T',&srv_charge,l_sun_port_param_struct,'C',h_mstclt, " "," ",chr_h_srv_ind,&int_retstat,l_debug_info_ptr))
+				{
+					if(int_retstat == IV_CRITCAL_ERROR_IND)
+					{
+						fprintf(fp,"Error in accessing table for client %s. Please contact support.\n", h_dl_client);
+						fprintf(fp, "File: %s, Line: %d\n", __FILE__, __LINE__);
+						fflush(fp);
+						int_bl_err_level = 1;
+						if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+						{
+							CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+							CO_FreeErrLst(l_debug_info_ptr);
+						}
+						*int_p_retstat = int_retstat;
+					}
+				}
+
+				if(srv_charge > 0)
+				{	
+					
+
+					CO_Round(srv_charge * 1.0, int_l_bl_ccy_decimallen, &srv_charge);
+
+					srv_charge = 0 - srv_charge;
+					int_retstat = IV_SUCCESS;
+
+				   /*Added by siva.ganapathi for ISKB_2470 on 07-Dec-2010 -- started*/
+	
+				   EXEC SQL DELETE FROM IV_SERVICE_CHRG 
+							WHERE CLIENT = :h_dl_client
+							AND DATEOF_BILLING = :chr_h_bl_upto_dt 
+							AND MASTER_CLT = :h_mstclt
+							AND SERVICE_CD = :h_voldis_code  
+							AND CONS_FLAG = 'C' ;
+
+   				   printf("\n 1 sql error after deleting from IV_SERVICE_CHRG for tax fee is %d",sqlca.sqlcode);
+                                   fflush(stdout);
+
+				   IS_ANY_ORA_ERROR
+
+				 /*Added by siva.ganapathi for ISKB_2470 on 07-Dec-2010-- Ended*/
+/*added incld_in_ann_min_fee by shruthi kumbla for ISKB_1901*/
+ 					if(APL_FAILURE == IV_Mod_IVSRVCHRGNew(chr_h_bl_upto_dt,h_dl_client,0.0,0.00,0.00,srv_charge, 
+					    chr_g_bl_ccycode,'C',VOLDISCOUNTFEE,h_mstclt,'N',&int_retstat,l_debug_info_ptr))
+					{
+						fprintf(fp,"Error in accessing table for client %s. Please contact support\n",h_dl_client);
+						fprintf(fp, "File: %s, Line: %d\n", __FILE__, __LINE__);
+						fflush(fp);
+						*int_p_retstat = IV_CRITCAL_ERROR_IND;
+						int_bl_err_level = 1;
+						if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+						{
+							CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+							CO_FreeErrLst(l_debug_info_ptr);
+						}
+						*int_p_retstat = int_retstat;
+
+						APL_GOBACK_FAIL;
+					}
+				}
+				l_cons_cm_amount = l_cons_cm_amount + srv_charge;
+			}
+			else if(p_cons_ind == 'I')
+			{
+				srv_charge = 0;
+				int_retstat= IV_SUCCESS;
+
+				
+
+				l_round_val = 0.0;
+				CO_Round(l_tot_cm_amount / g_exchg_rt_fee_bl, int_g_ccy_decimallen, 
+						 &l_round_val);
+
+
+				if(APL_FAILURE == IV_Proc_CalcFee("O",chr_acct_str,VOLDISCOUNTFEE,";", APL_NULL_STRING," ",l_round_val, l_round_val,'T','T',&srv_charge,l_sun_port_param_struct,'I',h_mstclt," "," ",chr_h_srv_ind,&int_retstat,l_debug_info_ptr))
+				{
+					if(int_retstat == IV_CRITCAL_ERROR_IND)
+					{
+						fprintf(fp,"Error in accessing table for client %s. Please contact support.\n",h_dl_client);
+						fprintf(fp, "File: %s, Line: %d\n", __FILE__, __LINE__);
+						fflush(fp);
+						int_bl_err_level = 1;
+						if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+						{
+							CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+							CO_FreeErrLst(l_debug_info_ptr);
+						}
+						*int_p_retstat = int_retstat;
+					}
+				}
+				if(srv_charge > 0)
+				{
+					
+
+					CO_Round(srv_charge * 1.0, int_l_bl_ccy_decimallen, &srv_charge);
+
+					/*Added by siva.ganapathi for ISKB_2470 on 07-Dec-2010 -- started*/
+
+					EXEC SQL DELETE FROM IV_SERVICE_CHRG 
+							WHERE CLIENT = :h_dl_client
+							AND DATEOF_BILLING = :chr_h_bl_upto_dt 
+							AND MASTER_CLT = :h_mstclt
+							AND SERVICE_CD = :h_voldis_code  
+							AND CONS_FLAG = 'I' ;
+
+					printf("\n 2 sql error after deleting from IV_SERVICE_CHRG for tax fee is %d",sqlca.sqlcode);
+                                        fflush(stdout);
+
+				       IS_ANY_ORA_ERROR
+
+					/*Added by siva.ganapathi for ISKB_2470 on 07-Dec-2010 -- Ended*/
+
+					int_retstat = IV_SUCCESS;
+					/*added incld_in_ann_min_fee by shruthi kumbla for ISKB_1901*/
+					srv_charge = 0 - srv_charge;
+					if(APL_FAILURE == IV_Mod_IVSRVCHRGNew(chr_h_bl_upto_dt,h_dl_client,0.0,
+				   	 0.00,0.00,srv_charge, 
+				    	chr_g_bl_ccycode,'I',VOLDISCOUNTFEE,h_mstclt,'Y',&int_retstat,l_debug_info_ptr))
+					{
+						fprintf(fp,"Error in accessing table for client %s. Please contact support\n",h_dl_client);
+						fprintf(fp, "File: %s, Line: %d\n", __FILE__, __LINE__);
+						fflush(fp);
+						*int_p_retstat = IV_CRITCAL_ERROR_IND;
+						int_bl_err_level = 1;
+						if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+						{
+							CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+							CO_FreeErrLst(l_debug_info_ptr);
+						}
+						*int_p_retstat = int_retstat;
+
+						APL_GOBACK_FAIL;
+					}
+				}
+				l_tot_cm_amount = l_tot_cm_amount + srv_charge;
+			}
+		}
+
+		
+		if(p_cons_ind == 'C' && strcmp(h_mstclt,h_dl_client) == 0)
+		{
+			if(chr_h_minfee_to == 'Y')
+			{
+				if(chr_h_minadj_hld == 'Y')
+				{
+					int_retstat = IV_SUCCESS;
+					if(APL_FAILURE == IV_Rtv_NewIVACCTSAFEK(h_dl_client,&int_retstat,l_debug_info_ptr))
+					{
+						if(int_retstat == IV_CRITCAL_ERROR_IND)
+						{
+							fprintf(fp,"Error in accessing table for client %s. Please contact support.\n", h_dl_client);
+						fprintf(fp, "File: %s, Line: %d\n", __FILE__, __LINE__);
+							fflush(fp);
+							int_bl_err_level = 1;
+							if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+							{
+								CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+								CO_FreeErrLst(l_debug_info_ptr);
+							}
+							*int_p_retstat = int_retstat;
+						}
+
+						if(int_retstat == IV_NO_DATA_FOUND_ERR)
+						{
+							*int_p_retstat = int_retstat;
+							int_min_adj_flg = 0;
+						}
+					}
+					else
+						int_min_adj_flg = 1;
+				}
+				else
+					int_min_adj_flg = 1;
+
+				if(int_min_adj_flg == 1)
+				{
+					
+                l_exl_nonstdfee = 0.0 ;
+		/*	ISKB-1994	Exclude Annual Maintenance for Min/Max Adjust	*/
+       IF_COND_EXISTS("IV_BILLGEN","IV_ADJ_TAX")
+             {
+                EXEC SQL SELECT NVL(SUM(a.COMM_AMT+a.NIL_FEES_ADJ+a.MAXIMUM_FEE_ADJ+a.MINIMUMFEE_ADJ),0)
+                  INTO :l_exl_nonstdfee
+                  FROM IV_SERVICE_CHRG a
+                  WHERE a.DATEOF_BILLING = :chr_h_bl_upto_dt
+                     AND a.CLIENT  = a.MASTER_CLT
+                     AND a.CONS_FLAG = 'C'
+                     AND a.MASTER_CLT = :h_mstclt
+                     AND (a.SERVICE_CD  IN (:h_depofee_code,:h_annfee_code)
+						  OR  a.SERVICE_CD IN (SELECT DISTINCT SERVICE_CD FROM IV_SERV_OTH WHERE B_UPTO_DATE = :chr_h_bl_upto_dt)); //shailesh 0709 for excluding depo 
+              }
+         else
+              {
+                  EXEC SQL SELECT NVL(SUM(a.COMM_AMT),0)
+                  INTO :l_exl_nonstdfee
+                  FROM IV_SERVICE_CHRG a
+                  WHERE a.DATEOF_BILLING = :chr_h_bl_upto_dt
+                     AND a.CLIENT  = a.MASTER_CLT
+                     AND a.CONS_FLAG = 'C'
+                     AND a.MASTER_CLT = :h_mstclt
+                     AND a.SERVICE_CD = :h_splfee_code;
+              }
+
+               l_cons_cm_amountneg = l_cons_cm_amount;
+               if ((l_cons_cm_amount) < 0)
+                  l_cons_cm_amountneg = l_cons_cm_amountneg * (-1);
+
+               IS_ANY_ORA_ERROR
+					if((l_cons_cm_amountneg - l_exl_nonstdfee) < h_minimumfee)            
+					{
+                   
+                  l_minimumfee_adj = h_minimumfee - (l_cons_cm_amount - l_exl_nonstdfee); 
+						
+                                                /*Added by siva.ganapathi for ISKB_2470 on 07-Dec-2010 -- started*/
+
+						EXEC SQL DELETE FROM IV_SERVICE_CHRG 
+								WHERE CLIENT = :h_dl_client
+								AND DATEOF_BILLING = :chr_h_bl_upto_dt 
+								AND MASTER_CLT = :h_mstclt
+								AND SERVICE_CD = :h_minfee_code 
+								AND CONS_FLAG = 'C' ;
+
+						printf("\n 3 sql error after deleting from IV_SERVICE_CHRG for tax fee is %d",sqlca.sqlcode);
+
+                                                 fflush(stdout);
+					        IS_ANY_ORA_ERROR
+
+						/*Added by siva.ganapathi for ISKB_2470 on 07-Dec-2010 -- Ended*/
+						/*added incld_in_ann_min_fee by shruthi kumbla for ISKB_1901*/
+						int_retstat = IV_SUCCESS;
+						if(APL_FAILURE == IV_Mod_IVSRVCHRGNew(chr_h_bl_upto_dt,h_dl_client,0.0,0.0,0.0,l_minimumfee_adj,chr_g_bl_ccycode,
+						    'C',MINFEECODE,h_dl_client,'N',&int_retstat,l_debug_info_ptr))
+						{
+							*int_p_retstat = IV_CRITCAL_ERROR_IND;
+							int_bl_err_level = 1;
+							if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+							{
+								CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+
+								CO_FreeErrLst(l_debug_info_ptr);
+							}
+
+						}
+						l_cons_cm_amount = l_cons_cm_amount + l_minimumfee_adj;
+					}
+				} 
+			}
+			else 
+			{
+				if(chr_h_minadj_hld == 'Y')
+				{
+					int_retstat = IV_SUCCESS;
+					if(APL_FAILURE == IV_Rtv_NewIVACCTSAFEK(h_dl_client,&int_retstat,l_debug_info_ptr))
+					{
+						if(int_retstat == IV_CRITCAL_ERROR_IND)
+						{
+							fprintf(fp,"Error in accessing table for client %s. Please contact support.\n", h_dl_client);
+						fprintf(fp, "File: %s, Line: %d\n", __FILE__, __LINE__);
+							fflush(fp);
+							int_bl_err_level = 1;
+							if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+							{
+								CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+								CO_FreeErrLst(l_debug_info_ptr);
+							}
+							*int_p_retstat = int_retstat;
+						}
+						if(int_retstat == IV_NO_DATA_FOUND_ERR)
+						{
+							*int_p_retstat = int_retstat;
+							int_min_adj_flg = 0;
+						}
+					}
+					else
+						int_min_adj_flg = 1;
+				}
+				else 
+					int_min_adj_flg = 1;
+
+				if(int_min_adj_flg == 1)
+				{
+					int_retstat = IV_SUCCESS;
+					if(APL_FAILURE == IV_Mod_MinFeeIVSERVCHARGE(h_dl_client,&l_tot_minfee_amount,&int_retstat,l_debug_info_ptr))
+					{
+						int_bl_err_level = 1;
+					}
+
+					if(l_tot_minfee_amount > 0 && int_retstat == 0)
+					{
+						int_retstat = IV_SUCCESS;
+
+						/*Added by siva.ganapathi for ISKB_2470 on 07-Dec-2010 -- started*/
+
+						EXEC SQL DELETE FROM IV_SERVICE_CHRG 
+								WHERE CLIENT = :h_dl_client
+								AND DATEOF_BILLING = :chr_h_bl_upto_dt 
+								AND MASTER_CLT = :h_mstclt
+								AND SERVICE_CD = :h_minfee_code  
+								AND CONS_FLAG = 'C' ;
+
+						printf("\n 11 sql error after deleting from IV_SERVICE_CHRG for tax fee is %d",sqlca.sqlcode);
+                                                fflush(stdout);
+						IS_ANY_ORA_ERROR
+
+						/*Added by siva.ganapathi for ISKB_2470 on 07-Dec-2010 -- Ended*/
+
+/*added incld_in_ann_min_fee by shruthi kumbla for ISKB_1901*/
+						if(APL_FAILURE == IV_Mod_IVSRVCHRGNew(chr_h_bl_upto_dt,h_dl_client,0.0,0.0,0.0,l_tot_minfee_amount,chr_g_bl_ccycode,
+						    'C',MINFEECODE,h_dl_client,'N',&int_retstat,l_debug_info_ptr))
+						{
+							*int_p_retstat = IV_CRITCAL_ERROR_IND;
+							int_bl_err_level = 1;
+							if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+							{
+								CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+								CO_FreeErrLst(l_debug_info_ptr);
+							}
+						}
+						l_cons_cm_amount = l_cons_cm_amount + l_tot_minfee_amount;
+					}
+				} 
+			} 
+		}
+		else if(p_cons_ind == 'I')
+		{
+			if(chr_h_minadj_hld == 'Y')
+			{
+				int_retstat = IV_SUCCESS;
+				if(APL_FAILURE == IV_Rtv_NewIVACCTSAFEK(h_dl_client,&int_retstat,l_debug_info_ptr))
+				{
+					if(int_retstat == IV_CRITCAL_ERROR_IND)
+					{
+						fprintf(fp,"Error in accessing table for client %s. Please contact support.\n", h_dl_client);
+						fprintf(fp, "File: %s, Line: %d\n", __FILE__, __LINE__);
+						fflush(fp);
+						int_bl_err_level = 1;
+						if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+						{
+							CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+							CO_FreeErrLst(l_debug_info_ptr);
+						}
+						*int_p_retstat = int_retstat;
+					}
+					if(int_retstat == IV_NO_DATA_FOUND_ERR)
+					{
+						*int_p_retstat = int_retstat;
+						int_min_adj_flg = 0;
+					}
+				}
+				else
+					int_min_adj_flg = 1;
+			}
+			else 
+				int_min_adj_flg = 1;
+
+			if(int_min_adj_flg == 1)
+			{
+				
+            l_exl_nonstdfee = 0.0 ;
+        IF_COND_EXISTS("IV_BILLGEN","IV_ADJ_TAX")
+           {
+          EXEC SQL SELECT NVL(SUM(a.COMM_AMT+a.NIL_FEES_ADJ+a.MAXIMUM_FEE_ADJ+a.MINIMUMFEE_ADJ),0)
+                INTO :l_exl_nonstdfee
+                FROM IV_SERVICE_CHRG a
+               WHERE a.DATEOF_BILLING = :chr_h_bl_upto_dt
+                 AND a.CLIENT  = :h_dl_client 
+                 AND a.CONS_FLAG = 'I'
+                 AND (a.SERVICE_CD IN (:h_depofee_code,:h_annfee_code)
+			     OR a.SERVICE_CD IN (SELECT SERVICE_CD FROM IV_SERV_OTH WHERE CLIENT =:h_dl_client AND B_UPTO_DATE =:chr_h_bl_upto_dt)); //shailesh 0709
+             }
+          else
+             {
+            EXEC SQL SELECT NVL(SUM(a.COMM_AMT),0)
+                INTO :l_exl_nonstdfee
+                FROM IV_SERVICE_CHRG a
+               WHERE a.DATEOF_BILLING = :chr_h_bl_upto_dt
+                 AND a.CLIENT  = :h_dl_client 
+                 AND a.CONS_FLAG = 'I'
+                 AND a.SERVICE_CD = :h_splfee_code;
+             }
+		
+		
+            l_tot_cm_amountneg = l_tot_cm_amount;
+            if ((l_tot_cm_amount) < 0)
+               l_tot_cm_amountneg = l_tot_cm_amountneg * (-1);
+
+				if((l_tot_cm_amountneg-l_exl_nonstdfee) < h_minimumfee)
+				{
+				   
+            	l_minimumfee_adj = h_minimumfee - (l_tot_cm_amount - l_exl_nonstdfee);
+
+					/*Added by siva.ganapathi for ISKB_2470 on 07-Dec-2010 -- started*/
+
+					EXEC SQL DELETE FROM IV_SERVICE_CHRG 
+								WHERE CLIENT = :h_dl_client
+								AND DATEOF_BILLING = :chr_h_bl_upto_dt 
+								AND MASTER_CLT = :h_mstclt
+								AND SERVICE_CD = :h_minfee_code  
+								AND CONS_FLAG = 'I' ;
+
+					printf("\n 222 sql error after deleting from IV_SERVICE_CHRG for tax fee is %d",sqlca.sqlcode);
+
+                                         fflush(stdout);
+
+					IS_ANY_ORA_ERROR
+
+					/*Added by siva.ganapathi for ISKB_2470 on 07-Dec-2010 -- Ended*/
+
+					int_retstat = IV_SUCCESS;
+/*added incld_in_ann_min_fee by shruthi kumbla for ISKB_1901*/
+					if(APL_FAILURE == IV_Mod_IVSRVCHRGNew(chr_h_bl_upto_dt,h_dl_client,0.0,0.0,0.0,l_minimumfee_adj,chr_g_bl_ccycode,
+					    'I',MINFEECODE,h_mstclt,'Y',&int_retstat,l_debug_info_ptr))
+					{
+						*int_p_retstat = IV_CRITCAL_ERROR_IND;
+						int_bl_err_level = 1;
+						if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+						{
+							CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+							CO_FreeErrLst(l_debug_info_ptr);
+						}
+					}
+					l_tot_cm_amount = l_tot_cm_amount + l_minimumfee_adj;
+				}
+			} 
+		}
+		/* Bageshri for max fee*/
+		if(h_maximumfee !=0)
+		{
+			if(p_cons_ind == 'C' && strcmp(h_mstclt,h_dl_client) == 0)
+			{
+				if(chr_h_maxfee_to == 'Y')
+				{
+					if(chr_h_maxadj_hld == 'Y')
+					{
+						int_retstat = IV_SUCCESS;
+						if(APL_FAILURE == IV_Rtv_NewIVACCTSAFEK(h_dl_client,&int_retstat,l_debug_info_ptr))
+						{
+							if(int_retstat == IV_CRITCAL_ERROR_IND)
+							{
+								fprintf(fp,"Error in accessing table for client %s. Please contact support.\n", h_dl_client);
+								fprintf(fp, "File: %s, Line: %d\n", __FILE__, __LINE__);
+								fflush(fp);
+								int_bl_err_level = 1;
+								if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+								{
+									CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+									CO_FreeErrLst(l_debug_info_ptr);
+								}
+								*int_p_retstat = int_retstat;
+							}
+
+							if(int_retstat == IV_NO_DATA_FOUND_ERR)
+							{
+								*int_p_retstat = int_retstat;
+								int_max_adj_flg = 0;
+							}
+								printf(" in IV_Rtv_NewIVACCTSAFEK failure ");
+						}
+						else
+							int_max_adj_flg = 1;
+					}
+					else
+						int_max_adj_flg = 1;
+printf("int_max_adj_flg :|%d|",int_max_adj_flg);
+					if(int_max_adj_flg == 1)
+					{
+
+						l_exl_nonstdfee = 0.0 ;
+                  IF_COND_EXISTS("IV_BILLGEN","IV_ADJ_TAX")
+                       { 
+						EXEC SQL SELECT NVL(SUM(a.COMM_AMT+a.NIL_FEES_ADJ+a.MAXIMUM_FEE_ADJ+a.MINIMUMFEE_ADJ),0)
+							INTO :l_exl_nonstdfee
+							FROM IV_SERVICE_CHRG a
+							WHERE a.DATEOF_BILLING = :chr_h_bl_upto_dt
+							AND a.CLIENT  = a.MASTER_CLT
+							AND a.CONS_FLAG = 'C'
+							AND a.MASTER_CLT = :h_mstclt
+							AND (a.SERVICE_CD  IN (:h_depofee_code,:h_annfee_code)
+						        OR  a.SERVICE_CD IN (SELECT DISTINCT SERVICE_CD FROM IV_SERV_OTH WHERE B_UPTO_DATE = :chr_h_bl_upto_dt));
+                          }
+                          else
+                         {
+                         EXEC SQL SELECT NVL(SUM(a.COMM_AMT),0)
+							INTO :l_exl_nonstdfee
+							FROM IV_SERVICE_CHRG a
+							WHERE a.DATEOF_BILLING = :chr_h_bl_upto_dt
+							AND a.CLIENT  = a.MASTER_CLT
+							AND a.CONS_FLAG = 'C'
+							AND a.MASTER_CLT = :h_mstclt
+							AND a.SERVICE_CD = :h_splfee_code;
+
+                           }
+printf(" com amt:|%lf| for client |%s| max fee |%lf| non std fee |%lf|",l_cons_cm_amount,h_dl_client,h_maximumfee,l_exl_nonstdfee);
+						l_cons_cm_amountneg = l_cons_cm_amount;
+						if ((l_cons_cm_amount) < 0)
+							l_cons_cm_amountneg = l_cons_cm_amountneg * (-1);
+
+						IS_ANY_ORA_ERROR
+							if((l_cons_cm_amountneg - l_exl_nonstdfee) > h_maximumfee)
+							{
+
+								l_maximumfee_adj = h_maximumfee - (l_cons_cm_amount - l_exl_nonstdfee);
+								printf(" cons max fee adj :|%lf| for client |%s|",l_maximumfee_adj,h_dl_client);
+								int_retstat = IV_SUCCESS;
+
+							/*Added by siva.ganapathi for ISKB_2470 on 07-Dec-2010 -- started*/
+
+						EXEC SQL DELETE FROM IV_SERVICE_CHRG 
+								WHERE CLIENT = :h_dl_client
+								AND DATEOF_BILLING = :chr_h_bl_upto_dt 
+								AND MASTER_CLT = :h_mstclt
+								AND SERVICE_CD = :h_maxfee_code  
+								AND CONS_FLAG = 'C' ;
+
+						printf("\n 2222 sql error after deleting from IV_SERVICE_CHRG for tax fee is %d",sqlca.sqlcode);
+                                                fflush(stdout);
+						IS_ANY_ORA_ERROR
+
+						/*Added by siva.ganapathi for ISKB_2470 on 07-Dec-2010 -- Ended*/
+				
+/*added incld_in_ann_min_fee by shruthi kumbla for ISKB_1901*/
+								if(APL_FAILURE == IV_Mod_IVSRVCHRGNew(chr_h_bl_upto_dt,h_dl_client,0.0,0.0,0.0,l_maximumfee_adj,chr_g_bl_ccycode,'C',MAXFEECODE,h_dl_client,'N',&int_retstat,l_debug_info_ptr))
+								{
+									*int_p_retstat = IV_CRITCAL_ERROR_IND;
+									int_bl_err_level = 1;
+									if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+									{
+										CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+
+										CO_FreeErrLst(l_debug_info_ptr);
+									}
+
+								}
+								l_cons_cm_amount = l_cons_cm_amount + l_maximumfee_adj;
+							}
+					}
+				}
+				else
+				{
+					if(chr_h_maxadj_hld == 'Y')
+					{
+						int_retstat = IV_SUCCESS;
+						if(APL_FAILURE == IV_Rtv_NewIVACCTSAFEK(h_dl_client,&int_retstat,l_debug_info_ptr))
+						{
+							if(int_retstat == IV_CRITCAL_ERROR_IND)
+							{
+								fprintf(fp,"Error in accessing table for client %s. Please contact support.\n", h_dl_client);
+								fprintf(fp, "File: %s, Line: %d\n", __FILE__, __LINE__);
+								fflush(fp);
+								int_bl_err_level = 1;
+								if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+								{
+									CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+									CO_FreeErrLst(l_debug_info_ptr);
+								}
+								*int_p_retstat = int_retstat;
+							}
+							if(int_retstat == IV_NO_DATA_FOUND_ERR)
+							{
+								*int_p_retstat = int_retstat;
+								int_max_adj_flg = 0;
+							}
+								printf(" in IV_Rtv_NewIVACCTSAFEK failure ");
+						}
+						else
+							int_max_adj_flg = 1;
+					}
+					else
+						int_max_adj_flg = 1;
+
+				printf("int_max_adj_flg :|%d|",int_max_adj_flg);
+					if(int_max_adj_flg == 1)
+					{
+						int_retstat = IV_SUCCESS;
+						if(APL_FAILURE == IV_Mod_MaxFeeIVSERVCHARGE(h_dl_client,&l_tot_maxfee_amount,&int_retstat,l_debug_info_ptr))
+						{
+							int_bl_err_level = 1;
+						}
+
+						if(l_tot_maxfee_amount < 0 && int_retstat == 0)
+						{
+							int_retstat = IV_SUCCESS;
+
+						/*Added by siva.ganapathi for ISKB_2470 on 07-Dec-2010 -- started*/
+
+						EXEC SQL DELETE FROM IV_SERVICE_CHRG 
+								WHERE CLIENT = :h_dl_client
+								AND DATEOF_BILLING = :chr_h_bl_upto_dt 
+								AND MASTER_CLT = :h_mstclt
+								AND SERVICE_CD = :h_maxfee_code  
+								AND CONS_FLAG = 'C' ;
+
+						printf("\n 1234 sql error after deleting from IV_SERVICE_CHRG for tax fee is %d",sqlca.sqlcode);
+                                                fflush(stdout);
+						IS_ANY_ORA_ERROR
+
+						/*Added by siva.ganapathi for ISKB_2470 on 07-Dec-2010 -- Ended*/
+/*added incld_in_ann_min_fee by shruthi kumbla for ISKB_1901*/
+							if(APL_FAILURE == IV_Mod_IVSRVCHRGNew(chr_h_bl_upto_dt,h_dl_client,0.0,0.0,0.0,l_tot_maxfee_amount,chr_g_bl_ccycode,'C',MAXFEECODE,h_dl_client,'N',&int_retstat,l_debug_info_ptr))
+							{
+								*int_p_retstat = IV_CRITCAL_ERROR_IND;
+								int_bl_err_level = 1;
+								if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+								{
+									CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+									CO_FreeErrLst(l_debug_info_ptr);
+								}
+							}
+							printf("com amt |%lf| tot max fee |%lf|",l_cons_cm_amount,l_tot_maxfee_amount);
+							l_cons_cm_amount = l_cons_cm_amount + l_tot_maxfee_amount;
+							printf("com amt |%lf| tot max fee |%lf|",l_cons_cm_amount,l_tot_maxfee_amount);
+						}
+					}
+				}
+			}
+			else if(p_cons_ind == 'I')
+			{
+				if(chr_h_maxadj_hld == 'Y')
+				{
+					int_retstat = IV_SUCCESS;
+					if(APL_FAILURE == IV_Rtv_NewIVACCTSAFEK(h_dl_client,&int_retstat,l_debug_info_ptr))
+					{
+						if(int_retstat == IV_CRITCAL_ERROR_IND)
+						{
+							fprintf(fp,"Error in accessing table for client %s. Please contact support.\n", h_dl_client);
+							fprintf(fp, "File: %s, Line: %d\n", __FILE__, __LINE__);
+							fflush(fp);
+							int_bl_err_level = 1;
+							if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+							{
+								CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+								CO_FreeErrLst(l_debug_info_ptr);
+							}
+							*int_p_retstat = int_retstat;
+						}
+						if(int_retstat == IV_NO_DATA_FOUND_ERR)
+						{
+							*int_p_retstat = int_retstat;
+							int_max_adj_flg = 0;
+						}
+					}
+					else
+						int_max_adj_flg = 1;
+				}
+				else
+					int_max_adj_flg = 1;
+printf("int_max_adj_flg :|%d|",int_max_adj_flg);
+
+				if(int_max_adj_flg == 1)
+				{
+					l_exl_nonstdfee = 0.0 ;
+				   IF_COND_EXISTS("IV_BILLGEN","IV_ADJ_TAX")
+					{
+					EXEC SQL SELECT NVL(SUM(a.COMM_AMT+a.NIL_FEES_ADJ+a.MAXIMUM_FEE_ADJ+a.MINIMUMFEE_ADJ),0)
+						INTO :l_exl_nonstdfee
+						FROM IV_SERVICE_CHRG a
+						WHERE a.DATEOF_BILLING = :chr_h_bl_upto_dt
+						AND a.CLIENT  = :h_dl_client
+						AND a.CONS_FLAG = 'I'
+						AND (a.SERVICE_CD IN (:h_depofee_code,:h_annfee_code)
+							 OR a.SERVICE_CD IN (SELECT SERVICE_CD FROM IV_SERV_OTH WHERE CLIENT = :h_dl_client AND B_UPTO_DATE = :chr_h_bl_upto_dt));
+					}
+					else
+					{
+					 EXEC SQL SELECT NVL(SUM(a.COMM_AMT),0)
+						INTO :l_exl_nonstdfee
+						FROM IV_SERVICE_CHRG a
+						WHERE a.DATEOF_BILLING = :chr_h_bl_upto_dt
+						AND a.CLIENT  = :h_dl_client
+						AND a.CONS_FLAG = 'I'
+						AND a.SERVICE_CD = :h_splfee_code; 
+                      }
+
+printf(" com amt:|%lf| for client |%s| max fee |%lf| non std fee |%lf|",l_tot_cm_amount,h_dl_client,h_maximumfee,l_exl_nonstdfee);
+					l_tot_cm_amountneg = l_tot_cm_amount;
+					if ((l_tot_cm_amount) < 0)
+						l_tot_cm_amountneg = l_tot_cm_amountneg * (-1);
+					if((l_tot_cm_amountneg-l_exl_nonstdfee) > h_maximumfee)
+					{
+						l_maximumfee_adj = h_maximumfee - (l_tot_cm_amount - l_exl_nonstdfee);
+						int_retstat = IV_SUCCESS;
+								printf(" indv max fee adj :|%lf| for client |%s|",l_maximumfee_adj,h_dl_client);
+						
+						/*Added by siva.ganapathi for ISKB_2470 on 07-Dec-2010 -- started*/
+
+						EXEC SQL DELETE FROM IV_SERVICE_CHRG 
+								WHERE CLIENT = :h_dl_client
+								AND DATEOF_BILLING = :chr_h_bl_upto_dt 
+								AND MASTER_CLT = :h_mstclt
+								AND SERVICE_CD = :h_maxfee_code  
+								AND CONS_FLAG = 'I' ;
+
+						printf("\n 11 22 33 sql error after deleting from IV_SERVICE_CHRG for tax fee is %d",sqlca.sqlcode);
+                                                 fflush(stdout);
+						IS_ANY_ORA_ERROR
+
+						/*Added by siva.ganapathi for ISKB_2470 on 07-Dec-2010 -- Ended*/
+
+/*added incld_in_ann_min_fee by shruthi kumbla for ISKB_1901*/
+						if(APL_FAILURE == IV_Mod_IVSRVCHRGNew(chr_h_bl_upto_dt,h_dl_client,0.0,0.0,0.0,l_maximumfee_adj,chr_g_bl_ccycode,'I',MAXFEECODE,h_mstclt,'Y',&int_retstat,l_debug_info_ptr))
+						{
+							*int_p_retstat = IV_CRITCAL_ERROR_IND;
+							int_bl_err_level = 1;
+							if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+							{
+								CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+								CO_FreeErrLst(l_debug_info_ptr);
+							}
+						}
+							printf("com amt |%lf| adj max fee |%lf|",l_tot_cm_amount,l_maximumfee_adj);
+						l_tot_cm_amount = l_tot_cm_amount + l_maximumfee_adj;
+							printf("com amt |%lf| adj max fee |%lf|",l_tot_cm_amount,l_maximumfee_adj);
+					}
+				}
+			}
+		}
+		/******************************************************/	
+		/* bageshri for taxfee */
+
+		strcpy(chr_acct_str,h_dl_client);
+		strcat(chr_acct_str,";");
+		strcat(chr_acct_str,chr_h_def_fee_acc);
+		strcat(chr_acct_str,";");
+		strcat(chr_acct_str,chr_g_cb_code);
+		strcat(chr_acct_str,";");
+		strcat(chr_acct_str,"\0");
+		
+		int_retstat = IV_SUCCESS;
+		int_taxfeeexists = 0;
+		if(APL_FAILURE == IV_Chk_IsFeeExists(chr_acct_str,TAXFEE,&int_taxfeeexists,&int_retstat,l_debug_info_ptr))
+		{
+			if(int_retstat == IV_CRITCAL_ERROR_IND)
+			{
+				fprintf(fp,"Error in accessing table for client %s. Please contact support.\n",h_dl_client);
+						fprintf(fp, "File: %s, Line: %d\n", __FILE__, __LINE__);
+				fflush(fp);
+				int_bl_err_level = 1;
+				if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+				{
+					CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+					CO_FreeErrLst(l_debug_info_ptr);
+				}
+				*int_p_retstat = int_retstat;
+			}
+		}
+
+		if(int_taxfeeexists == 1)
+{
+	   srv_charge = 0.0;	
+
+		if(p_cons_ind == 'C' && strcmp(h_mstclt,h_dl_client) == 0)
+		{
+			
+			
+		   
+			l_exl_cmamount = 0.0 ; 
+        IF_COND_EXISTS("IV_BILLGEN","IV_ADJ_TAX")
+        {
+		Alert("Condition is true");
+		
+		
+           EXEC SQL SELECT NVL(SUM(a.COMM_AMT),0)
+           			  INTO :l_exl_cmamount
+                    FROM IV_SERVICE_CHRG a
+                   WHERE a.DATEOF_BILLING = :chr_h_bl_upto_dt
+                     AND a.CLIENT  = a.MASTER_CLT 
+                     AND a.CONS_FLAG = 'C'
+                     AND a.MASTER_CLT = :h_mstclt
+                     AND a.SERVICE_CD IN (:h_annminfee_code);
+						 
+	
+	/*	No services will exclude for Tax in Kotak	ISKB-1932	*/
+	/*
+           EXEC SQL SELECT NVL(SUM(a.COMM_AMT+a.NIL_FEES_ADJ+a.MINIMUMFEE_ADJ+a.MAXIMUM_FEE_ADJ),0)
+           			  INTO :l_exl_cmamount
+                    FROM IV_SERVICE_CHRG a
+                   WHERE a.DATEOF_BILLING = :chr_h_bl_upto_dt
+                     AND a.CLIENT  = a.MASTER_CLT 
+                     AND a.CONS_FLAG = 'C'
+                     AND a.MASTER_CLT = :h_mstclt
+                     AND (a.SERVICE_CD IN (:h_depofee_code) 
+						 OR a.SERVICE_CD IN (SELECT DISTINCT SERVICE_CD FROM IV_SERV_OTH WHERE B_UPTO_DATE = :chr_h_bl_upto_dt AND SERVICE_CD NOT IN (:h_underbill_code,:h_overbill_code)));
+	*/
+						 //shailesh 270208 depofee and other services except underbilling and overbilling
+        }
+        else
+        {
+           EXEC SQL SELECT NVL(SUM(a.COMM_AMT),0)
+           			  INTO :l_exl_cmamount
+                    FROM IV_SERVICE_CHRG a
+                   WHERE a.DATEOF_BILLING = :chr_h_bl_upto_dt
+                     AND a.CLIENT  = a.MASTER_CLT 
+                     AND a.CONS_FLAG = 'C'
+                     AND a.MASTER_CLT = :h_mstclt
+                     AND a.SERVICE_CD IN ( :h_splfee_code, :h_overbill_code, :h_underbill_code,:h_depofee_code,:h_annminfee_code);
+					 
+					 Alert("Condition is not true");
+					 Alert("Amount to be excluded in tax calculation is |%lf",l_exl_cmamount);
+					 /*added by shruthi kumbla for ISKB_1737 inorder to not include consolidated charges for 99994*/
+					 //shailesh 230807--  h_depofee_code included in above query 
+					 //so that for depository fee -tax is not calculated
+
+          }      
+							
+         IS_ANY_ORA_ERROR
+         /*if(dbl_h_comm_tax > 0)
+			{
+				
+				post_tax_amount = ((l_cons_cm_amount-l_exl_cmamount)*(dbl_h_comm_tax/100));
+
+				
+
+				CO_Round(post_tax_amount * 1.0,int_l_bl_ccy_decimallen,&post_tax_amount);
+
+				int_retstat = IV_SUCCESS;
+				if (post_tax_amount > 0)
+				{
+					if(APL_FAILURE == IV_Mod_IVSRVCHRGNew(chr_h_bl_upto_dt,h_dl_client,
+				   	 0.0,0.0,0.0,
+				    	post_tax_amount,chr_g_bl_ccycode,'C',TAXFEE,h_mstclt,&int_retstat,l_debug_info_ptr))
+					{
+						*int_p_retstat = IV_CRITCAL_ERROR_IND;
+						int_bl_err_level = 1;
+						if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+						{
+							CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+	
+							CO_FreeErrLst(l_debug_info_ptr);
+						}
+					}
+					edurate = 0.0;	
+					EXEC SQL SELECT FIELD_VAL INTO :edurate FROM PRO_GSSPLVAL WHERE MAIN_FUN = 'BILLING_TAX' AND SUB_PROCESS= 'EDUCATION_CESS';
+					
+					IS_ANY_ORA_ERROR
+
+					if(sqlca.sqlcode!=0)
+					{
+						fprintf(fp,"Error in accessing PRO_GSSPLVAL.\n");
+						APL_GOBACK_FAIL
+					}	
+					edurate  =(edurate * post_tax_amount) /100;
+					if(APL_FAILURE == IV_Mod_IVSRVCHRGNew(chr_h_bl_upto_dt,h_dl_client,
+				   	 0.0,0.0,0.0,
+				    	edurate,chr_g_bl_ccycode,'C',EDUCESSFEE,h_mstclt,&int_retstat,l_debug_info_ptr))
+					{
+						*int_p_retstat = IV_CRITCAL_ERROR_IND;
+						int_bl_err_level = 1;
+						if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+						{
+							CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+	
+							CO_FreeErrLst(l_debug_info_ptr);
+						}
+					}
+				}
+			}*/
+ Alert("Amount to be excluded in tax calculation is |%lf",l_exl_cmamount);
+ Alert("TOTAL AMOUNT is |%lf",l_cons_cm_amount);
+				dbl_bill_amt = l_cons_cm_amount-l_exl_cmamount;
+printf(" acct str |%s| bill amt |%lf| srv chrg |%lf|",chr_acct_str,dbl_bill_amt,srv_charge);
+			
+			if(APL_FAILURE == IV_Proc_CalcTax(chr_acct_str, TAXFEE,dbl_bill_amt,dbl_bill_amt,'T','T',&srv_charge,h_mstclt,";"," "," ",&int_retstat,l_debug_info_ptr))
+					{
+						*int_p_retstat = int_retstat;
+						int_bl_err_level = 1;
+						if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+						{
+							CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+							CO_FreeErrLst(l_debug_info_ptr);
+						}
+					}
+
+printf("srv chrg fun |%lf|",srv_charge);
+				post_tax_amount = ( dbl_bill_amt * (srv_charge/100));
+
+				
+
+				CO_Round(post_tax_amount * 1.0,int_l_bl_ccy_decimallen,&post_tax_amount);
+
+				int_retstat = IV_SUCCESS;
+				if (post_tax_amount > 0)
+				{
+                   /*Added by siva.ganapathi for ISKB_2470 on 07-Dec-2010 -- started*/
+					
+				   EXEC SQL DELETE FROM IV_SERVICE_CHRG 
+							WHERE CLIENT = :h_dl_client
+							AND DATEOF_BILLING = :chr_h_bl_upto_dt 
+							AND MASTER_CLT = :h_mstclt
+							AND SERVICE_CD = :h_taxfee_code
+							AND CONS_FLAG = 'C' ;
+
+				   printf("\n 111111111 sql error after deleting from IV_SERVICE_CHRG for tax fee is %d",sqlca.sqlcode);
+                                   fflush(stdout);
+					IS_ANY_ORA_ERROR
+			   /*Added by siva.ganapathi for ISKB_2470 on 07-Dec-2010 -- Ended*/
+
+/*added incld_in_ann_min_fee by shruthi kumbla for ISKB_1901*/
+					if(APL_FAILURE == IV_Mod_IVSRVCHRGNew(chr_h_bl_upto_dt,h_dl_client,
+				   	 0.0,0.0,0.0,
+				    	post_tax_amount,chr_g_bl_ccycode,'C',TAXFEE,h_mstclt,'N',&int_retstat,l_debug_info_ptr))
+					{
+						*int_p_retstat = IV_CRITCAL_ERROR_IND;
+						int_bl_err_level = 1;
+						if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+						{
+							CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+
+							CO_FreeErrLst(l_debug_info_ptr);
+						}
+					}
+					printf("Inserting into IV_DEALFEE C ");
+
+					 /*Added by siva.ganapathi for ISKB_2470 on 07-Dec-2010 -- started*/
+					
+				   EXEC SQL DELETE FROM IV_DEAL_FEE 
+							WHERE CLIENT = :h_dl_client
+							AND DATEOF_BILLING = :chr_h_bl_upto_dt 
+							AND MASTER_CLT = :h_mstclt
+							AND SERVICE_CD = :h_taxfee_code
+							AND CONS_FLAG = 'C' 
+							AND GROUP_ID = 'I;'
+							AND PROC_DATA_VAL = ';';
+
+				   printf("\n 2222222222 sql error after deleting from IV_DEAL_FEE for tax fee is %d",sqlca.sqlcode);
+                                   fflush(stdout);
+					IS_ANY_ORA_ERROR
+
+				   /*Added by siva.ganapathi for ISKB_2470 on 07-Dec-2010 -- Ended*/
+
+					if(APL_FAILURE == IV_Mod_NewIVTRANSFee(h_dl_client,TAXFEE,'C'," ",post_tax_amount,";",srv_charge,dbl_bill_amt,chr_g_bl_ccycode,dbl_bill_amt, h_mstclt,"I;",&int_retstat,l_debug_info_ptr))
+					{
+						int_bl_err_level = 1;
+						if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+						{
+							CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+							CO_FreeErrLst(l_debug_info_ptr);
+						}
+						*int_p_retstat = int_retstat;
+
+						APL_GOBACK_FAIL;
+					}
+					edurate = 0.0;	
+					/*
+					EXEC SQL SELECT FIELD_VAL INTO :edurate FROM PRO_GSSPLVAL WHERE MAIN_FUN = 'BILLING_TAX' AND SUB_PROCESS= 'EDUCATION_CESS';
+					
+					IS_ANY_ORA_ERROR
+
+					if(sqlca.sqlcode!=0)
+					{
+						fprintf(fp,"Error in accessing PRO_GSSPLVAL.\n");
+						APL_GOBACK_FAIL
+					}	
+					*/	
+					if(APL_FAILURE == IV_Proc_CalcTax(chr_acct_str,EDUCESSFEE,dbl_bill_amt,dbl_bill_amt,'T','T',&edurate,h_mstclt,";"," "," ",&int_retstat,l_debug_info_ptr))
+			{
+				*int_p_retstat = int_retstat;
+				int_bl_err_level = 1;
+				if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+				{
+					CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+					CO_FreeErrLst(l_debug_info_ptr);
+				}
+			}
+					edurate  =(edurate * post_tax_amount) /100;
+					if ( edurate > 0)
+					{
+					/*Added by siva.ganapathi for ISKB_2470 on 07-Dec-2010 -- started*/
+					
+				   EXEC SQL DELETE FROM IV_SERVICE_CHRG 
+							WHERE CLIENT = :h_dl_client
+							AND DATEOF_BILLING = :chr_h_bl_upto_dt 
+							AND MASTER_CLT = :h_mstclt
+							AND SERVICE_CD = :h_educess_code
+							AND CONS_FLAG = 'C' ;
+
+				   printf("\n 2222222 sql error after deleting from IV_SERVICE_CHRG for educ. cess is %d",sqlca.sqlcode);
+                                   fflush(stdout);
+					IS_ANY_ORA_ERROR
+				   /*Added by siva.ganapathi for ISKB_2470 on 07-Dec-2010 -- Ended*/
+/*added incld_in_ann_min_fee by shruthi kumbla for ISKB_1901*/
+					if(APL_FAILURE == IV_Mod_IVSRVCHRGNew(chr_h_bl_upto_dt,h_dl_client,
+				   	 0.0,0.0,0.0,
+				    	edurate,chr_g_bl_ccycode,'C',EDUCESSFEE,h_mstclt,'N',&int_retstat,l_debug_info_ptr))
+					{
+						*int_p_retstat = IV_CRITCAL_ERROR_IND;
+						int_bl_err_level = 1;
+						if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+						{
+							CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+	
+							CO_FreeErrLst(l_debug_info_ptr);
+						}
+					}
+					}
+					else
+						printf("Education Cess is zero for client %s\n",h_dl_client);
+				}
+				
+		}
+		else if(p_cons_ind == 'I')
+		{
+			
+		   
+			l_exl_cmamount = 0.0 ; 
+        IF_COND_EXISTS("IV_BILLGEN","IV_ADJ_TAX")
+         {
+	/*	No services will exclude for Tax in Kotak	ISKB-1932	*/
+	/*
+         EXEC SQL SELECT  NVL(SUM(a.COMM_AMT+a.NIL_FEES_ADJ+a.MINIMUMFEE_ADJ+a.MAXIMUM_FEE_ADJ),0)
+           			  INTO :l_exl_cmamount
+                    FROM IV_SERVICE_CHRG a
+                    WHERE a.DATEOF_BILLING = :chr_h_bl_upto_dt
+                     AND a.CLIENT  = :h_dl_client 
+                     AND a.CONS_FLAG = 'I'
+                     AND (a.SERVICE_CD IN 	(:h_depofee_code) 
+						 OR a.SERVICE_CD IN (SELECT  SERVICE_CD FROM IV_SERV_OTH WHERE CLIENT = :h_dl_client AND B_UPTO_DATE = :chr_h_bl_upto_dt AND SERVICE_CD NOT IN (:h_underbill_code,:h_overbill_code)));
+	*/					 
+					 //shailesh 230807--  h_depofee_code included in above query 
+					 //so that for depository fee -tax is not calculated
+                                         //09-01-08 shailesh  h_miscfee_code added
+          }
+          else
+          {
+              EXEC SQL SELECT NVL(SUM(a.COMM_AMT),0)
+           			  INTO :l_exl_cmamount
+                    FROM IV_SERVICE_CHRG a
+                    WHERE a.DATEOF_BILLING = :chr_h_bl_upto_dt
+                     AND a.CLIENT  = :h_dl_client 
+                     AND a.CONS_FLAG = 'I'
+                     AND a.SERVICE_CD IN (:h_splfee_code,:h_underbill_code,:h_overbill_code,:h_depofee_code);
+					 //shailesh 230807--  h_depofee_code included in above query 
+					 //so that for depository fee -tax is not calculated
+   
+           }
+		
+         IS_ANY_ORA_ERROR
+			
+			/*if(dbl_h_comm_tax > 0)
+			{
+			  	
+			  	post_tax_amount = ((l_tot_cm_amount-l_exl_cmamount)*(dbl_h_comm_tax/100));
+
+				
+
+				CO_Round(post_tax_amount * 1.0,int_l_bl_ccy_decimallen,&post_tax_amount);
+
+				if (post_tax_amount > 0)
+				{
+					int_retstat = IV_SUCCESS;
+					if(APL_FAILURE == IV_Mod_IVSRVCHRGNew(chr_h_bl_upto_dt,h_dl_client,0.0,0.0,0.0,post_tax_amount,
+											chr_g_bl_ccycode,'I',TAXFEE,h_mstclt,&int_retstat,l_debug_info_ptr))
+					{
+						*int_p_retstat = int_retstat;
+						int_bl_err_level = 1;
+						if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+						{
+							CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+							CO_FreeErrLst(l_debug_info_ptr);
+						}
+					}
+					edurate = 0.0;
+				EXEC SQL SELECT FIELD_VAL INTO :edurate FROM PRO_GSSPLVAL WHERE MAIN_FUN = 'BILLING_TAX' AND SUB_PROCESS= 'EDUCATION_CESS';
+					
+					IS_ANY_ORA_ERROR
+
+					if(sqlca.sqlcode!=0)
+					{
+						fprintf(fp,"Error in accessing PRO_GSSPLVAL.\n");
+						APL_GOBACK_FAIL
+					}	
+					edurate  =(edurate * post_tax_amount) /100;
+					
+					int_retstat = IV_SUCCESS;
+					if(APL_FAILURE == IV_Mod_IVSRVCHRGNew(chr_h_bl_upto_dt,h_dl_client,0.0,0.0,0.0,edurate,
+											chr_g_bl_ccycode,'I',EDUCESSFEE,h_mstclt,&int_retstat,l_debug_info_ptr))
+					{
+						*int_p_retstat = int_retstat;
+						int_bl_err_level = 1;
+						if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+						{
+							CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+							CO_FreeErrLst(l_debug_info_ptr);
+						}
+					}
+
+
+
+
+
+					
+				}
+			}*/
+
+		
+		dbl_bill_amt = l_tot_cm_amount-l_exl_cmamount;
+			
+printf(" acct str |%s| bill amt |%lf| srv chrg |%lf|",chr_acct_str,dbl_bill_amt,srv_charge);
+			if(APL_FAILURE == IV_Proc_CalcTax(chr_acct_str, TAXFEE,dbl_bill_amt,dbl_bill_amt,'T','T',&srv_charge,h_mstclt,";"," "," ",&int_retstat,l_debug_info_ptr))
+			{
+				*int_p_retstat = int_retstat;
+				int_bl_err_level = 1;
+				if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+				{
+					CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+					CO_FreeErrLst(l_debug_info_ptr);
+				}
+			}
+
+
+printf("srv chrg fun |%lf|",srv_charge);
+				post_tax_amount = ( dbl_bill_amt * (srv_charge/100));
+
+				
+				CO_Round(post_tax_amount * 1.0,int_l_bl_ccy_decimallen,&post_tax_amount);
+
+				if (post_tax_amount > 0)
+				{
+					int_retstat = IV_SUCCESS;
+
+					/*Added by siva.ganapathi for ISKB_2470 on 07-Dec-2010 -- started*/
+	
+					   EXEC SQL DELETE FROM IV_SERVICE_CHRG 
+								WHERE CLIENT = :h_dl_client
+								AND DATEOF_BILLING = :chr_h_bl_upto_dt 
+								AND MASTER_CLT = :h_mstclt
+								AND SERVICE_CD = :h_taxfee_code
+								AND CONS_FLAG = 'I' ;
+
+					   printf("\n 444444444444 sql error after deleting from IV_SERVICE_CHRG for tax fee is %d",sqlca.sqlcode);
+                                           fflush(stdout);
+
+						IS_ANY_ORA_ERROR
+					/*Added by siva.ganapathi for ISKB_2470 on 07-Dec-2010 -- Ended*/
+/*added incld_in_ann_min_fee by shruthi kumbla for ISKB_1901*/
+					if(APL_FAILURE == IV_Mod_IVSRVCHRGNew(chr_h_bl_upto_dt,h_dl_client,0.0,0.0,0.0,post_tax_amount,
+											chr_g_bl_ccycode,'I',TAXFEE,h_mstclt,'N',&int_retstat,l_debug_info_ptr))
+					{
+						*int_p_retstat = int_retstat;
+						int_bl_err_level = 1;
+						if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+						{
+							CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+							CO_FreeErrLst(l_debug_info_ptr);
+						}
+					}
+
+					printf("Inserting into IV_DEALFEE I ");
+					
+				   /*Added by siva.ganapathi for ISKB_2470 on 07-Dec-2010 -- started*/
+					
+				   EXEC SQL DELETE FROM IV_DEAL_FEE 
+							WHERE CLIENT = :h_dl_client
+							AND DATEOF_BILLING = :chr_h_bl_upto_dt 
+							AND MASTER_CLT = :h_mstclt
+							AND SERVICE_CD = :h_taxfee_code
+							AND CONS_FLAG = 'I' 
+							AND GROUP_ID = 'I;'
+							AND PROC_DATA_VAL = ';';
+
+				   printf("\n 123456 sql error after deleting from IV_DEAL_FEE for tax fee is %d",sqlca.sqlcode);
+
+                                   fflush(stdout);
+					IS_ANY_ORA_ERROR
+
+				   /*Added by siva.ganapathi for ISKB_2470 on 07-Dec-2010 -- Ended*/
+
+					if(APL_FAILURE == IV_Mod_NewIVTRANSFee(h_dl_client,TAXFEE,'I'," ",post_tax_amount,";",srv_charge,dbl_bill_amt,chr_g_bl_ccycode,dbl_bill_amt, h_mstclt,"I;",&int_retstat,l_debug_info_ptr))
+					{
+						int_bl_err_level = 1;
+						if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+						{
+							CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+							CO_FreeErrLst(l_debug_info_ptr);
+						}
+						*int_p_retstat = int_retstat;
+
+						APL_GOBACK_FAIL;
+					}
+
+					edurate = 0.0;
+					/*
+				EXEC SQL SELECT FIELD_VAL INTO :edurate FROM PRO_GSSPLVAL WHERE MAIN_FUN = 'BILLING_TAX' AND SUB_PROCESS= 'EDUCATION_CESS';
+					
+					IS_ANY_ORA_ERROR
+						
+					if(sqlca.sqlcode!=0)
+					{
+						fprintf(fp,"Error in accessing PRO_GSSPLVAL.\n");
+						APL_GOBACK_FAIL
+					}	
+					*/
+					if(APL_FAILURE == IV_Proc_CalcTax(chr_acct_str,EDUCESSFEE,dbl_bill_amt,dbl_bill_amt,'T','T',&edurate,h_mstclt,";"," "," ",&int_retstat,l_debug_info_ptr))
+			{
+				*int_p_retstat = int_retstat;
+				int_bl_err_level = 1;
+				if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+				{
+					CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+					CO_FreeErrLst(l_debug_info_ptr);
+				}
+			}
+
+					edurate  =(edurate * post_tax_amount) /100;
+					if (edurate > 0)
+					{
+					int_retstat = IV_SUCCESS;
+					
+					/*Added by siva.ganapathi for ISKB_2470 on 07-Dec-2010 -- started*/
+	
+					   EXEC SQL DELETE FROM IV_SERVICE_CHRG 
+								WHERE CLIENT = :h_dl_client
+								AND DATEOF_BILLING = :chr_h_bl_upto_dt 
+								AND MASTER_CLT = :h_mstclt
+								AND SERVICE_CD = :h_educess_code
+								AND CONS_FLAG = 'I' ;
+
+					   printf("\n 7878098 sql error after deleting from IV_SERVICE_CHRG for tax fee is %d",sqlca.sqlcode);
+                       fflush(stdout);
+
+						IS_ANY_ORA_ERROR
+					/*Added by siva.ganapathi for ISKB_2470 on 07-Dec-2010 -- Ended*/
+/*added incld_in_ann_min_fee by shruthi kumbla for ISKB_1901*/
+					if(APL_FAILURE == IV_Mod_IVSRVCHRGNew(chr_h_bl_upto_dt,h_dl_client,0.0,0.0,0.0,edurate,
+											chr_g_bl_ccycode,'I',EDUCESSFEE,h_mstclt,'N',&int_retstat,l_debug_info_ptr))
+					{
+						*int_p_retstat = int_retstat;
+						int_bl_err_level = 1;
+						if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+						{
+							CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+							CO_FreeErrLst(l_debug_info_ptr);
+						}
+					}
+					}
+					else
+						printf("Education Cess is zero for client %s\n",h_dl_client);
+
+
+
+
+					
+				}
+			}
+			}
+			
+
+		}
+	
+
+	EXEC SQL CLOSE tot_cur;
+	int_is_tot_cur_open = 0;
+
+	if(*int_p_retstat != IV_SUCCESS)
+	{
+		APL_GOBACK_FAIL;
+	}
+	else
+	{
+		*int_p_retstat = IV_SUCCESS;
+		APL_GOBACK_SUCCESS;
+	}
+
+RETURN_SUCCESS:
+	if(int_is_tot_cur_open == 1)
+	{
+		EXEC SQL CLOSE tot_cur;
+	}
+	strcpy(chr_g_batch_in_proc_rowid,chr_h_batch_in_proc_rowid);
+	l_sys_batchproc_struct_hb = l_sys_batchproc_struct_h;
+	return APL_SUCCESS;
+
+RETURN_FAILURE:
+	if(int_is_tot_cur_open == 1)
+	{
+		EXEC SQL CLOSE tot_cur;
+	}
+	strcpy(chr_g_batch_in_proc_rowid,chr_h_batch_in_proc_rowid);
+	l_sys_batchproc_struct_hb = l_sys_batchproc_struct_h;
+	return APL_FAILURE;
+
+}
+
+/*added by shruthi kumbla for ISKB_1737 start*/
+int IV_Proc_AnnMinFeeAdjust(IV_CLIENTSETUP_STRUCT l_iv_clt_setup_struct, char *chr_g_bl_upto_dt, int *int_p_retstat,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+//IV_CLIENTSETUP_STRUCT *l_iv_clt_setup_struct;	
+
+
+Alert("Inside IV_Proc_AnnMinFeeAdjust fn");
+	EXEC SQL BEGIN DECLARE SECTION;
+
+	char h_dl_client[APL_CLIENT_LENGTH],chr_h_bl_upto_dt[APL_DATE_LEN],chr_l_buf[BUFFER_LEN];
+	char h_mstclt[APL_CLIENT_LENGTH],  chr_h_annminfee_str[1000] = APL_NULL_STRING;
+	int int_retstat=0;
+	double l_tot_minfee_amount_adj=0;
+	int int_is_tot_cur_open = 0;
+	IV_CLIENT_SERV_BASIS_STRUCT l_iv_client_serv_basis_structa;
+	long int_h_serv_code=0;/*added by shruthi for ISKB_1737*/
+	short i_h_serv_code = 0;/*added by shruthi for ISKB_1737*/
+	double h_tot_cm_amount = 0.0;/*added by shruthi for ISKB_1737*/
+	short i_tot_cm_amount=0;/*added by shruthi for ISKB_1737*/
+	char chr_proc_month[APL_CCYCODE_LEN];
+	double h_tot_bill_amount =0.0;
+	int ann_min_adj_flag =1;
+	int int_l_bl_ccy_decimallen = 0.0; 
+    char chr_ann_monthdt[20]=APL_NULL_STRING;
+	char h_bill_dt[APL_DATE_LEN];
+	char h_incl_in_annminfee_flg=NULL;
+	short i_incl_in_annminfee_flg=0;
+	short i_deal_dt =0;
+	char chr_h_bill_ccy[APL_CCYCODE_LEN];
+	short i_h_bill_ccy=0;
+	long h_annminfee_code = ANNUALMINFEE ;
+	double exch_rate =1.0;
+	int int_ann_month_exists=0;
+	char chr_l_uptodate_yyyy[5] = APL_NULL_STRING;
+	char chr_l_uptodate_mm[3] = APL_NULL_STRING;
+	char *chr_l_last = (char *)NULL;
+	EXEC SQL VAR h_dl_client IS STRING;
+	EXEC SQL VAR h_mstclt  IS STRING;
+	EXEC SQL VAR chr_h_bl_upto_dt IS STRING;
+	EXEC SQL VAR chr_proc_month 		IS STRING;
+	EXEC SQL VAR chr_h_annminfee_str IS STRING;
+    EXEC SQL VAR chr_h_bill_ccy IS STRING; 
+    EXEC SQL VAR h_bill_dt IS STRING; 
+    EXEC SQL VAR chr_ann_monthdt IS STRING; 
+    EXEC SQL VAR chr_l_uptodate_mm IS STRING; 
+    EXEC SQL VAR chr_l_uptodate_yyyy IS STRING; 
+
+
+	struct sqlca sqlca;
+
+	EXEC SQL END DECLARE SECTION;
+
+
+
+	memset(chr_proc_month,APL_NULL_CHAR,APL_CCYCODE_LEN);
+	memset(h_bill_dt,APL_NULL_CHAR,APL_DATE_LEN);
+	memset(chr_h_bill_ccy,APL_NULL_CHAR,APL_CCYCODE_LEN);
+	memset(chr_l_buf,APL_NULL_CHAR,BUFFER_LEN);
+	sqlca.sqlcode = 0;
+	memset(h_dl_client, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+
+	memset(h_mstclt, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+	memset(chr_ann_monthdt, APL_NULL_CHAR, 20);
+	memset(chr_l_uptodate_mm, APL_NULL_CHAR, 3);
+	memset(chr_l_uptodate_yyyy, APL_NULL_CHAR, 5);
+	memset(&l_iv_client_serv_basis_structa, NULL, sizeof(IV_CLIENT_SERV_BASIS_STRUCT));
+	
+	memset(chr_h_bl_upto_dt, APL_NULL_CHAR, APL_DATE_LEN);
+	
+
+	memset(chr_h_annminfee_str,APL_NULL_CHAR,1000);
+
+
+	strcpy(chr_h_bl_upto_dt,chr_g_bl_upto_dt);
+	Alert("ann_min_chrg |%lf|",l_iv_clt_setup_struct.ann_min_chrg);
+	Alert("ann_fee_month |%s|",l_iv_clt_setup_struct.ann_fee_month);
+	
+	
+	strcpy(chr_l_buf, strtok(chr_h_bl_upto_dt, " "));
+	Alert("chr_h_bl_upto_dt is |%s|",chr_h_bl_upto_dt);
+	Alert("chr_g_bl_upto_dt is |%s|",chr_g_bl_upto_dt);
+
+	strtok_r(chr_l_buf, "/", &chr_l_last);
+	strcpy(chr_l_uptodate_mm, strtok_r(NULL, "/", &chr_l_last));
+	strcpy(chr_l_uptodate_yyyy, strtok_r(NULL, "/", &chr_l_last));
+	Alert("chr_l_uptodate_mm |%s|",chr_l_uptodate_mm);
+	Alert("chr_l_uptodate_yyyy |%s|",chr_l_uptodate_yyyy);
+	strcpy(chr_ann_monthdt,l_iv_clt_setup_struct.ann_fee_month);	
+	strcat(chr_ann_monthdt,chr_l_uptodate_yyyy);
+	strcat(chr_ann_monthdt," 12:00:00");
+	Alert("chr_ann_monthdt |%s|",chr_ann_monthdt);
+	if( l_iv_clt_setup_struct.ann_min_chrg > 0 )
+	{
+		
+		EXEC SQL 		
+		SELECT count(*) INTO :int_ann_month_exists  FROM SYS_IVCONTROLPARAM 
+		where (LAST_DAY(TO_DATE((:chr_ann_monthdt),'MMYYYY hh24:mi:ss'))) between B_PREV_DATE+1 and B_UPTO_DATE;
+	
+		IS_ANY_ORA_ERROR
+		if (int_ann_month_exists==1)
+			{
+				
+					strcpy(h_dl_client,l_iv_clt_setup_struct.client);
+					
+				Alert("h_dl_client |%s|\n",h_dl_client);
+				Alert("chr_proc_month |%s|\n",chr_proc_month);
+				
+				if(APL_FAILURE == IV_Rtv_GetMasterAcc(h_dl_client,h_mstclt,l_debug_info_ptr))
+					{
+						int_bl_err_level = 1;
+						if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+						{
+							CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+							CO_FreeErrLst(l_debug_info_ptr);
+						}
+						*int_p_retstat = IV_CRITCAL_ERROR_IND;
+						APL_GOBACK_FAIL;
+					}
+			
+				
+				strcpy(chr_h_annminfee_str," SELECT B_CCYCD,DATEOF_BILLING,SERVICE_CD,");   
+				strcat(chr_h_annminfee_str,"SUM(COMM_AMT+NIL_FEES_ADJ+MINIMUMFEE_ADJ+MAXIMUM_FEE_ADJ),INCLD_IN_ANN_MIN_FEE FROM IV_SERVICE_CHRG ");   
+				strcat(chr_h_annminfee_str," WHERE DATEOF_BILLING BETWEEN ADD_MONTHS(TO_DATE('");
+				strcat(chr_h_annminfee_str,chr_g_bl_upto_dt);
+				strcat(chr_h_annminfee_str,"','DD/MM/YYYY hh24:mi:ss'),-11) AND  TO_DATE('");
+				strcat(chr_h_annminfee_str,chr_g_bl_upto_dt);
+				strcat(chr_h_annminfee_str,"','DD/MM/YYYY hh24:mi:ss') AND  CLIENT  = '");
+				strcat(chr_h_annminfee_str,h_dl_client);
+				strcat(chr_h_annminfee_str,"' AND  CONS_FLAG = 'I'  ");
+				strcat(chr_h_annminfee_str," AND  INCLD_IN_ANN_MIN_FEE = 'Y'  ");
+				strcat(chr_h_annminfee_str,"AND    SERVICE_CD NOT IN ('3','4','16','28','99994')  ");
+				strcat(chr_h_annminfee_str," GROUP BY B_CCYCD, SERVICE_CD, DATEOF_BILLING,INCLD_IN_ANN_MIN_FEE");
+				strcat(chr_h_annminfee_str," ORDER BY DATEOF_BILLING ");
+			
+			
+			
+				printf("chr_h_annminfee_str |%s|\n",chr_h_annminfee_str);
+				EXEC SQL PREPARE annminfee_stmt FROM :chr_h_annminfee_str;
+
+				EXEC SQL DECLARE tot_anncur CURSOR FOR annminfee_stmt;
+
+				EXEC SQL OPEN tot_anncur;
+
+				if(sqlca.sqlcode < 0)
+				{
+					Alert("error okkk|%d|",sqlca.sqlcode);
+					*int_p_retstat = IV_CRITCAL_ERROR_IND;
+					int_bl_err_level = 1;
+				}
+Alert("error okkk|%d|",sqlca.sqlcode);
+				IS_ANY_ORA_ERROR;
+				int_is_tot_cur_open = 1;
+			
+				for( ; ; )
+				{
+				
+					memset(h_bill_dt,APL_NULL_CHAR,APL_DATE_LEN);
+					memset(chr_h_bill_ccy,APL_NULL_CHAR,APL_CCYCODE_LEN);
+					h_incl_in_annminfee_flg=NULL;
+					int_h_serv_code = 0;
+					h_tot_cm_amount =0.0;
+					
+					EXEC SQL FETCH tot_anncur 
+					into :chr_h_bill_ccy:i_h_bill_ccy,
+					:h_bill_dt:i_deal_dt,
+					:int_h_serv_code:i_h_serv_code,
+					:h_tot_cm_amount:i_tot_cm_amount,
+					:h_incl_in_annminfee_flg:i_incl_in_annminfee_flg;
+					
+					Alert("chr_h_bill_ccy |%s|",chr_h_bill_ccy );
+					Alert("h_bill_dt |%s|",h_bill_dt );
+					Alert("int_h_serv_code |%ld|",int_h_serv_code );
+					Alert("h_tot_cm_amount |%lf|",h_tot_cm_amount );
+					Alert("h_incl_in_annminfee_flg |%c|",h_incl_in_annminfee_flg );
+					if ( sqlca.sqlcode < 0 )
+					{
+						*int_p_retstat = IV_CRITCAL_ERROR_IND;
+					}
+
+					IS_ANY_ORA_ERROR
+					
+					if(sqlca.sqlcode == 1403) 
+					{
+						*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+						//APL_GOBACK_FAIL;
+						break;
+					}
+				
+				
+						Alert("h_dl_client |%s|",h_dl_client);
+						Alert("l_iv_clt_setup_struct.b_ccycd |%s|",l_iv_clt_setup_struct.b_ccycd);
+						
+					
+						
+						
+					if ( APL_FAILURE == CR_Rtv_CCYFldVal(l_iv_clt_setup_struct.b_ccycd, "decimallen",
+									&int_l_bl_ccy_decimallen, l_debug_info_ptr) )
+					{
+						 fprintf(TechRep, "Failed to fetch no. of decimal digits required for %s.\n", l_iv_clt_setup_struct.b_ccycd);
+
+						 APL_GOBACK_FAIL
+					}
+						  
+					exch_rate =1.0;
+					if (strcmp(chr_h_bill_ccy, l_iv_clt_setup_struct.b_ccycd) != 0)
+					{
+						 int_retstat = IV_SUCCESS;
+						 if(APL_FAILURE == IV_Rtv_ExchRate(chr_h_bill_ccy,l_iv_clt_setup_struct.b_ccycd,h_bill_dt,&exch_rate, &int_retstat,l_debug_info_ptr))
+						 {
+							fprintf(fp,"Error : Exchange Rate not int_found for currency %s %s\n",l_iv_clt_setup_struct.b_ccycd,chr_h_bill_ccy);
+							fflush(fp);
+							int_bl_err_level = 1;
+							*int_p_retstat = int_retstat;
+						 }
+					}	
+									
+						
+					
+						
+						Alert("Exchange rate  is |%lf|",exch_rate);		 
+						Alert("Comm amt for int_h_serv_code |%ld| is |%lf|",int_h_serv_code,h_tot_cm_amount);		 
+						CO_Round(h_tot_cm_amount * exch_rate, int_l_bl_ccy_decimallen, &h_tot_cm_amount);
+							
+						Alert("Comm amt for int_h_serv_code |%ld| is |%lf|",int_h_serv_code,h_tot_cm_amount);	
+						
+						
+						h_tot_bill_amount =h_tot_bill_amount+h_tot_cm_amount;
+						
+						
+						
+					
+						
+								
+							
+						
+						
+						
+					*int_p_retstat = int_retstat;
+					Alert("\n h_tot_bill_amount |%lf|\n", h_tot_bill_amount);
+					Alert("\n annual min charge |%lf|\n", l_iv_clt_setup_struct.ann_min_chrg);
+						
+					if(h_tot_bill_amount >=l_iv_clt_setup_struct.ann_min_chrg)
+					{
+						ann_min_adj_flag=0;
+						printf("\n Annual Minimum Charges not calculated for Client |%s| as total bill amt %lf is greater than annual min charge |%lf| ",h_dl_client,h_tot_bill_amount,l_iv_clt_setup_struct.ann_min_chrg);
+						fprintf(fp," Annual Minimum Charges not calculated for Client |%s| as total bill amt %lf is greater than annual min charge |%lf| ",h_dl_client,h_tot_bill_amount,l_iv_clt_setup_struct.ann_min_chrg);
+						break;
+						
+					}			
+					if(h_tot_bill_amount==0)
+					{
+						ann_min_adj_flag=0;
+						printf("\n Annual Minimum Charges not calculated for Client |%s| as total bill amt %lf is",h_dl_client,h_tot_bill_amount);
+						fprintf(fp," Annual Minimum Charges not calculated for Client |%s| as total bill amt %lf is ",h_dl_client,h_tot_bill_amount);
+						break;
+					
+					}
+						
+					
+				}
+				
+				Alert("value of ann_min_adj_flag |%d|",ann_min_adj_flag);
+				if(ann_min_adj_flag==1)
+				{
+					CO_ProcMonitor(TechRep,"Calculating Annual Minimum fee for client ",NULL,NULL);
+					memset(chr_l_buf,NULL,BUFFER_LEN);
+					sprintf(chr_l_buf," %s",h_dl_client);
+					CO_ProcMonitor(TechRep,chr_l_buf,NULL,NULL);
+					
+				
+					
+					l_tot_minfee_amount_adj = (l_iv_clt_setup_struct.ann_min_chrg)-h_tot_bill_amount;
+					Alert("Adjustment for Annual Minimum Fee is |%lf|",l_tot_minfee_amount_adj);
+					printf(" Annual Minimum Fee is |%lf|\n Bill Amount is |%lf|\n Adjustment for Annual Minimum Fee is |%lf|\n",(l_iv_clt_setup_struct.ann_min_chrg),h_tot_bill_amount,l_tot_minfee_amount_adj);
+
+					
+					if(l_tot_minfee_amount_adj > 0)
+					{
+						EXEC SQL DELETE FROM IV_SERVICE_CHRG 
+								WHERE CLIENT = :h_dl_client
+								AND DATEOF_BILLING = :chr_h_bl_upto_dt 
+								AND MASTER_CLT = :h_mstclt
+								AND SERVICE_CD = :h_annminfee_code  
+								AND CONS_FLAG = 'I' ;
+								
+						fflush(stdout);
+
+						IS_ANY_ORA_ERROR
+						
+						/*added incld_in_ann_min_fee by shruthi kumbla for ISKB_1901*/
+						if(APL_FAILURE == IV_Mod_IVSRVCHRGNew(chr_g_bl_upto_dt,h_dl_client,0.0,0.0,0.0,l_tot_minfee_amount_adj,
+												chr_g_bl_ccycode,'I',ANNUALMINFEE,h_mstclt,'N',&int_retstat,l_debug_info_ptr))
+						{
+							*int_p_retstat = int_retstat;
+							int_bl_err_level = 1;
+							if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+							{
+								CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+								CO_FreeErrLst(l_debug_info_ptr);
+							}
+						}
+						
+						
+					
+					
+		
+					}
+				}
+			
+			}
+			else
+			{
+				printf("Client |%s| Annual Fee month |%s| not in billing period  |%s|\n",h_dl_client,l_iv_clt_setup_struct.ann_fee_month,chr_h_bl_upto_dt);
+				fprintf(fp,"Client |%s| Annual Fee month |%s| not in billing period |%s|\n",h_dl_client,l_iv_clt_setup_struct.ann_fee_month,chr_h_bl_upto_dt);
+                         	*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+				APL_GOBACK_FAIL;
+			}
+	
+	}
+	else
+	{
+		Alert("annual minimum fee not maintained |%lf|\n",l_iv_clt_setup_struct.ann_min_chrg);
+	}
+
+		
+RETURN_SUCCESS:
+	if(int_is_tot_cur_open == 1)
+	{
+		EXEC SQL CLOSE tot_anncur;
+	}
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Exiting Successfully Out Of IV_Proc_AnnMinFeeAdjust\n",
+				NULL , NULL);
+	}
+	return APL_SUCCESS;
+
+RETURN_FAILURE:
+	if(int_is_tot_cur_open == 1)
+	{
+		EXEC SQL CLOSE tot_anncur;
+	}
+
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Exiting Unsuccessfully Out Of IV_Proc_AnnMinFeeAdjust\n",
+				NULL , NULL);
+	}	
+	return APL_FAILURE;
+
+	
+}
+
+
+/*added by shruthi kumbla for ISKB_1737 end*/
+
+
+
+int IV_Proc_SubCharges(char *chr_p_client,long p_serv_code,IV_DEAL_STRUCT *p_iv_deal_struct,char p_charge_value,char p_fee_value,
+char p_nilflg,int *int_p_retstat,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+	char h_dl_client[APL_CLIENT_LENGTH],h_ora_rowid[APL_ROWID_LEN],h_mstclt[APL_CLIENT_LENGTH];
+	char chr_h_mst_ccycode[APL_CCYCODE_LEN],chr_h_sub_ccycode[APL_CCYCODE_LEN];
+	char chr_h_param_val[IV_PARAM_LEN];
+	char chr_h_bl_upto_dt[APL_DATE_LEN];
+	short int i_ora_rowid = 0;
+	long int_h_serv_code = 0;
+	double h_nil_fees=0,h_minimumfee=0,h_maximum_fee=0,h_cm_amount=0,h_charge_quantity=0,h_fee_quantity=0;
+	double h_cons_cm_amount =0,h_nil_fees_adj=0,h_minimumfee_adj=0,h_maximum_fee_adj=0;
+	int l_dec_len=0;
+
+	
+	IV_DEAL_STRUCT l_iv_deal_struct_h;
+
+	EXEC SQL VAR h_dl_client IS STRING;
+	EXEC SQL VAR chr_h_param_val IS STRING;
+	EXEC SQL VAR chr_h_bl_upto_dt IS STRING;
+	EXEC SQL VAR h_mstclt  IS STRING;
+	EXEC SQL VAR h_ora_rowid  IS STRING;
+	EXEC SQL VAR chr_h_mst_ccycode IS STRING;
+	EXEC SQL VAR chr_h_sub_ccycode IS STRING;
+	EXEC SQL VAR l_iv_deal_struct_h.client IS STRING;
+	EXEC SQL VAR l_iv_deal_struct_h.proc_data_val IS STRING;
+	EXEC SQL VAR l_iv_deal_struct_h.master_clt IS STRING;
+	EXEC SQL VAR l_iv_deal_struct_h.b_ccycd IS STRING;
+	EXEC SQL VAR l_iv_deal_struct_h.dateof_billing IS STRING;
+	EXEC SQL VAR l_iv_deal_struct_h.parameter_cd IS STRING;
+	struct sqlca sqlca;
+
+	EXEC SQL END  DECLARE SECTION;
+
+	IV_DEAL_STRUCT l_iv_deal_struct;
+	IV_CLIENTSETUP_STRUCT l_iv_clientsetup_struct;
+	int int_acc_exist=0,int_retstat=0,int_stat_flg =0;
+	double l_exchg_rt=1.0;
+
+	sqlca.sqlcode = 0;
+	memset(h_dl_client, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+	memset(h_ora_rowid, APL_NULL_CHAR, APL_ROWID_LEN);
+	memset(h_mstclt, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+	memset(chr_h_mst_ccycode, APL_NULL_CHAR, APL_CCYCODE_LEN);
+	memset(chr_h_sub_ccycode, APL_NULL_CHAR, APL_CCYCODE_LEN);
+	memset(chr_h_param_val, APL_NULL_CHAR, IV_PARAM_LEN);
+	memset(chr_h_bl_upto_dt, APL_NULL_CHAR, APL_DATE_LEN);
+
+	
+
+	memset(&l_iv_deal_struct_h, NULL, sizeof(IV_DEAL_STRUCT));
+	memset(&l_iv_clientsetup_struct, NULL, sizeof(IV_CLIENTSETUP_STRUCT));
+
+	strcpy(h_dl_client,chr_p_client);
+	strcpy(chr_h_bl_upto_dt,chr_g_bl_upto_dt);
+	int_h_serv_code = p_serv_code;
+	l_iv_deal_struct_h  = *p_iv_deal_struct;
+
+	*int_p_retstat = IV_SUCCESS;
+
+	if(p_nilflg == 'N')
+	{
+		int_retstat = IV_SUCCESS;
+		if(APL_FAILURE == IV_Rtv_IVTRANSAC(l_iv_deal_struct_h.master_clt,'C'
+		    ,p_serv_code,l_iv_deal_struct_h.proc_data_val,
+		    &l_iv_deal_struct , &int_retstat,
+		    l_debug_info_ptr))
+		{
+			if(int_retstat == IV_CRITCAL_ERROR_IND)
+			{
+				int_bl_err_level = 1;
+				if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+				{
+					CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+
+					CO_FreeErrLst(l_debug_info_ptr);
+				}
+				*int_p_retstat = int_retstat;
+				APL_GOBACK_FAIL;
+			}
+			if(int_retstat == IV_NO_DATA_FOUND_ERR)
+			{
+				int_stat_flg = IV_NO_DATA_FOUND_ERR;
+			}
+		}
+
+		strcpy(h_mstclt,l_iv_deal_struct_h.master_clt);
+		h_cm_amount = l_iv_deal_struct_h.comm_amt;
+		h_charge_quantity = l_iv_deal_struct_h.chrg_quant;
+		h_fee_quantity = l_iv_deal_struct_h.fees_qty;
+		strcpy(chr_h_param_val,l_iv_deal_struct_h.proc_data_val);
+
+		if(int_stat_flg  == IV_NO_DATA_FOUND_ERR)
+		{
+			int_retstat = IV_SUCCESS;
+		
+			if(APL_FAILURE == IV_Mod_NewIVTRANSAC(l_iv_deal_struct_h.master_clt,
+			    l_iv_deal_struct_h.service_cd,
+			    l_iv_deal_struct_h.cons_flag,
+			    l_iv_deal_struct_h.parameter_cd,
+			    l_iv_deal_struct_h.proc_data_val,
+			    h_cm_amount,
+			    h_charge_quantity,
+			    l_iv_deal_struct_h.b_ccycd,
+			    h_fee_quantity,
+			    l_iv_deal_struct_h.master_clt,
+			    l_iv_deal_struct_h.group_id,
+			    &int_retstat,l_debug_info_ptr))
+
+			{
+				int_bl_err_level = 1;
+				if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+				{
+					CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+					CO_FreeErrLst(l_debug_info_ptr);
+				}
+
+				*int_p_retstat = int_retstat;
+				APL_GOBACK_FAIL;
+			}
+			
+			int_retstat = IV_SUCCESS;
+			if(APL_FAILURE == IV_Mod_NewIVTRANSFee(l_iv_deal_struct_h.master_clt,
+			    l_iv_deal_struct_h.service_cd,
+			    l_iv_deal_struct_h.cons_flag,
+			    l_iv_deal_struct_h.parameter_cd,
+			    h_cm_amount,
+			    l_iv_deal_struct_h.proc_data_val,
+			    0.0,
+			    h_charge_quantity,
+			    l_iv_deal_struct_h.b_ccycd,
+			    h_fee_quantity,
+			    l_iv_deal_struct_h.master_clt,
+			    l_iv_deal_struct_h.group_id,
+			    &int_retstat,l_debug_info_ptr))
+
+			{
+				int_bl_err_level = 1;
+				if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+				{
+					CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+					CO_FreeErrLst(l_debug_info_ptr);
+				}
+
+				*int_p_retstat = int_retstat;
+				APL_GOBACK_FAIL;
+			}
+		}
+		else
+		{
+			EXEC SQL UPDATE IV_DEAL 
+			SET comm_amt = comm_amt + :h_cm_amount,
+				chrg_quant = chrg_quant + :h_charge_quantity,
+				fees_qty = fees_qty + :h_fee_quantity
+			WHERE dateof_billing = :chr_h_bl_upto_dt and
+					client = :h_mstclt and 
+					service_cd = :int_h_serv_code and
+					cons_flag = 'C' and
+					proc_data_val = :chr_h_param_val;
+
+			if(sqlca.sqlcode < 0)
+				*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+			IS_ANY_ORA_ERROR;
+			
+			EXEC SQL UPDATE IV_DEAL_FEE 
+			SET comm_amt = comm_amt + :h_cm_amount,
+				chrg_quant = chrg_quant + :h_charge_quantity,
+				fees_qty = fees_qty + :h_fee_quantity
+			WHERE dateof_billing = :chr_h_bl_upto_dt and
+					client = :h_mstclt and 
+					service_cd = :int_h_serv_code and
+					cons_flag = 'C' and
+					proc_data_val = :chr_h_param_val;
+
+			if(sqlca.sqlcode < 0)
+				*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+			IS_ANY_ORA_ERROR;
+		}
+
+	} 
+
+
+	EXEC SQL SELECT comm_amt,nil_fees_adj,minimumfee_adj,maximum_fee_adj,master_clt,b_ccycd
+	INTO :h_cm_amount,:h_nil_fees,:h_minimumfee,:h_maximum_fee,:h_mstclt, :chr_h_sub_ccycode
+	FROM IV_SERVICE_CHRG
+	WHERE dateof_billing = :chr_h_bl_upto_dt AND
+			client = :h_dl_client AND
+			service_cd = :int_h_serv_code AND
+         	cons_flag = 'I';
+
+	   
+	if ( sqlca.sqlcode < 0 )
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+	IS_ANY_ORA_ERROR;
+
+	if(sqlca.sqlcode == 1403)
+	{
+		*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+		APL_GOBACK_SUCCESS;
+	}
+
+	int_retstat = IV_SUCCESS;
+	if( APL_FAILURE == IV_Rtv_IVCUSTSETUP(h_mstclt,&l_iv_clientsetup_struct,&int_retstat,l_debug_info_ptr))
+	{
+		if(int_retstat == IV_CRITCAL_ERROR_IND)
+		{
+			fprintf(fp,"Error : Master Account %s of client %s  not found in billing system\n",h_mstclt,h_dl_client);
+			fflush(fp);
+			*int_p_retstat = int_retstat;
+			int_bl_err_level = 1;
+			if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+			{
+				CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+				CO_FreeErrLst(l_debug_info_ptr);
+			}
+
+			*int_p_retstat = int_retstat;
+
+			APL_GOBACK_FAIL;
+		}
+	}
+
+	
+	strcpy(chr_h_mst_ccycode,l_iv_clientsetup_struct.fees_ccy);
+
+	EXEC SQL SELECT rowid
+	INTO :h_ora_rowid:i_ora_rowid
+	FROM IV_SERVICE_CHRG
+	WHERE dateof_billing = :chr_h_bl_upto_dt AND
+			client = :h_mstclt AND
+			service_cd = :int_h_serv_code AND
+			cons_flag = 'C';
+
+	if(sqlca.sqlcode < 0)
+	{
+		fprintf(fp,"Error in accessing table for client %s. Please contact support\n",h_dl_client);
+						fprintf(fp, "File: %s, Line: %d\n", __FILE__, __LINE__);
+		fflush(fp);
+		int_bl_err_level = 1;
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+	}
+
+	IS_ANY_ORA_ERROR;
+
+	l_exchg_rt = 1.0;
+	if ( strcmp(chr_h_sub_ccycode, chr_h_mst_ccycode) != 0 )
+	{
+		*int_p_retstat = IV_SUCCESS;
+		if(APL_FAILURE == IV_Rtv_ExchRate(chr_h_sub_ccycode,chr_h_mst_ccycode,chr_g_bl_upto_dt,&l_exchg_rt,&int_retstat,l_debug_info_ptr))
+		{
+			fprintf(fp,"Error : Exchange Rate not found for currency %s %s\n",chr_h_sub_ccycode,chr_h_mst_ccycode);
+			fflush(fp);
+			int_bl_err_level = 1;
+			*int_p_retstat = int_retstat;
+		}
+	}
+
+	
+
+	CO_Round(h_cm_amount * l_exchg_rt, int_g_ccy_decimallen, &h_cm_amount);
+	CO_Round(h_nil_fees * l_exchg_rt, int_g_ccy_decimallen, &h_nil_fees_adj);
+	CO_Round(h_minimumfee * l_exchg_rt, int_g_ccy_decimallen, &h_minimumfee_adj);
+	CO_Round(h_maximum_fee * l_exchg_rt, int_g_ccy_decimallen, &h_maximum_fee_adj);
+
+	h_cm_amount *= g_exchg_rt_fee_bl;
+	h_nil_fees *= g_exchg_rt_fee_bl;
+	h_minimumfee *= g_exchg_rt_fee_bl;
+	h_maximum_fee *= g_exchg_rt_fee_bl;
+
+	if ( sqlca.sqlcode != 1403)
+	{
+
+		/* Added by Gouse for Kotak AIX Prod Issue SR_344 - Start */
+		IF_COND_EXISTS("IV_BILLGEN","BILL_GEN_DEC_LEN")
+		{
+			EXEC SQL SELECT FIELD_VAL INTO :l_dec_len
+						FROM PRO_GSSPLVAL 
+						WHERE MAIN_FUN = 'IV_BILLGEN' 
+						AND SUB_PROCESS = 'BILL_GEN_DEC_LEN' 
+						AND NATION = :g_mt_commonsys_params_struct_h.nation_code;	
+			printf("sqlca.sqlcode after getting l_dec_len is |%d|\n",sqlca.sqlcode);
+			printf("l_dec_len is |%d|\n",l_dec_len);
+
+			EXEC SQL SELECT ROUND(:h_cm_amount,:l_dec_len),ROUND(:h_nil_fees_adj,:l_dec_len),ROUND(:h_minimumfee_adj,:l_dec_len),ROUND(:h_maximum_fee_adj,:l_dec_len) INTO 
+						:h_cm_amount,:h_nil_fees_adj,:h_minimumfee_adj,:h_maximum_fee_adj FROM DUAL;
+			printf("sqlca.sqlcode after round off is |%d|\n",sqlca.sqlcode);
+			printf("h_cm_amount is |%lf|\n",h_cm_amount);
+			printf("h_nil_fees_adj is |%lf|\n",h_nil_fees_adj);
+			printf("h_minimumfee_adj is |%lf|\n",h_minimumfee_adj);
+			printf("h_maximum_fee_adj is |%lf|\n",h_maximum_fee_adj);
+		}	
+		/* Added by Gouse for Kotak AIX Prod Issue SR_344 - End */        
+           
+		EXEC SQL UPDATE IV_SERVICE_CHRG
+		SET comm_amt =  comm_amt + :h_cm_amount,
+			nil_fees_adj  = nil_fees_adj + :h_nil_fees_adj,
+			minimumfee_adj  = minimumfee_adj + :h_minimumfee_adj,
+			maximum_fee_adj  = maximum_fee_adj + :h_maximum_fee_adj
+		WHERE rowid = :h_ora_rowid;
+
+		if(sqlca.sqlcode < 0)
+			*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+		IS_ANY_ORA_ERROR;
+	}
+	else
+	{
+		int_retstat = IV_SUCCESS;
+		
+		strcpy(chr_h_mst_ccycode,l_iv_clientsetup_struct.b_ccycd);
+	/*added incld_in_ann_min_fee by shruthi kumbla for ISKB_1901*/
+		if(APL_FAILURE == IV_Mod_IVSRVCHRGNew(chr_h_bl_upto_dt,
+		    h_mstclt,h_nil_fees_adj,
+		    h_minimumfee_adj,h_maximum_fee_adj,h_cm_amount,
+		    chr_h_mst_ccycode,
+		    'C',int_h_serv_code,h_mstclt,'N',&int_retstat,l_debug_info_ptr))
+		{
+			fprintf(fp,"Error in accessing table for client %s. Please contact support\n",h_dl_client);
+						fprintf(fp, "File: %s, Line: %d\n", __FILE__, __LINE__);
+			fflush(fp);
+			int_bl_err_level = 1;
+			*int_p_retstat = int_retstat;
+		}
+	}
+
+
+
+
+
+	if(*int_p_retstat == IV_CRITCAL_ERROR_IND)
+	{
+		APL_GOBACK_FAIL;
+	}
+	else
+	{
+		*int_p_retstat = IV_SUCCESS;
+		APL_GOBACK_SUCCESS;
+	}
+
+
+RETURN_SUCCESS:
+	return APL_SUCCESS;
+
+RETURN_FAILURE:
+	return APL_FAILURE;
+
+}
+
+int IV_Proc_CalcTax(char *p_cltt_str,long p_serv_code,
+		double p_fee_qty,double p_charge_qty,char p_charge_type,char p_fee_type,double *p_charge,
+		char *p_mstclt_a,char *chr_p_param_str,
+		char *p_charge_basis,char *p_fee_basis,
+		int *int_p_retstat,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+
+	char chr_h_fee_str[IV_PARAM_LEN],chr_h_actcode[APL_CLIENT_LENGTH];
+	char h_mstclt[APL_CLIENT_LENGTH],chr_h_group_ind[51];
+	double h_fee_quantity=0,h_charge_quantity=0,h_nfee_quantity=0,h_ncharge_quantity=0;
+	long int_h_serv_code=0;
+	double h_schdl_fee=0.0,h_frm_fbase=0.0,h_tof_base=0.0,h_toc_base=0.0,h_frm_cbase=0.0;
+	short i_schdl_fee,i_frm_fbase,i_tof_base,i_frm_cbase,i_toc_base,i_group_id;
+	struct sqlca sqlca;
+
+	EXEC SQL VAR chr_h_fee_str   IS STRING;
+	EXEC SQL VAR chr_h_group_ind IS STRING;
+	EXEC SQL VAR chr_h_actcode   IS STRING;
+	EXEC SQL VAR h_mstclt    IS STRING;
+
+	EXEC SQL END DECLARE SECTION;
+
+	char *s,*chr_actcode=NULL,*p,*chr_basis_act=NULL;
+	char chr_acct[IV_CLT_LEN],chr_basis_str[IV_CLT_LEN];
+	char chr_l_actcode[APL_CLIENT_LENGTH];
+	char chr_l_basis_str[IV_CLT_LEN];
+	char chr_l_buf[BUFFER_LEN];
+	double fees=0.0; 
+	int int_retstat=0,int_mismatch_flg=0,int_fee_found=0;
+	IV_SERV_MAST_STRUCT l_iv_servmast_struct;
+	IV_CLIENT_SERV_BASIS_STRUCT l_iv_client_serv_basis_structa;
+	IV_CLIENTSETUP_STRUCT l_iv_clientsetup_struct;
+	IV_CLIENTPARAM_STRUCT_H l_iv_clientparam_struct_hb;
+	/*char h_fee_type,h_charge_type;*/
+	char h_apl_frm_date[9];  /* Added by monica for kotak ISKB_1737 */
+	EXEC SQL VAR h_apl_frm_date IS STRING;  /* Added by monica for kotak ISKB_1737 */
+
+	sqlca.sqlcode = 0;
+
+
+	s=(char *) calloc(IV_CLT_LEN,sizeof(char));
+	p=(char *) calloc(IV_CLT_LEN,sizeof(char));
+	memset(chr_h_actcode, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+	memset(chr_h_fee_str, APL_NULL_CHAR, IV_PARAM_LEN);
+	memset(h_mstclt, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+
+	memset(chr_h_group_ind, APL_NULL_CHAR, 51);
+
+	memset(chr_acct,APL_NULL_CHAR,IV_CLT_LEN);
+	memset(chr_basis_str,APL_NULL_CHAR,IV_CLT_LEN);
+	memset(chr_l_basis_str,APL_NULL_CHAR,IV_CLT_LEN);
+	memset(chr_l_actcode,APL_NULL_CHAR,APL_CLIENT_LENGTH);
+	memset(chr_l_buf,APL_NULL_CHAR,BUFFER_LEN);
+
+	memset(&l_iv_servmast_struct, NULL, sizeof(IV_SERV_MAST_STRUCT));
+	memset(&l_iv_client_serv_basis_structa, NULL, sizeof(IV_CLIENT_SERV_BASIS_STRUCT));
+	memset(&l_iv_clientsetup_struct, NULL, sizeof(IV_CLIENTSETUP_STRUCT));
+	memset(&l_iv_clientparam_struct_hb, NULL, sizeof(IV_CLIENTPARAM_STRUCT_H));
+
+
+	*int_p_retstat = IV_SUCCESS;
+
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(TechRep,"Calculating Fee for account",NULL,NULL);
+		memset(chr_l_buf,APL_NULL_CHAR,BUFFER_LEN);
+		//sprintf(chr_l_buf,"%s for service %d for parameters %s",p_cltt_str,p_serv_code,chr_p_param_str); Changes done for AIX Migration
+		sprintf(chr_l_buf,"%s for service %ld for parameters %s",p_cltt_str,p_serv_code,chr_p_param_str);
+		CO_ProcMonitor(TechRep,chr_l_buf,NULL,NULL);
+	}
+
+	printf("bagee SUCCESS");
+	if (p_fee_qty == 0)
+		p_fee_qty = 1;
+	//printf("\n *** In calcfee 3522,%s,%ld,%s,%lf,%lf,%s,%s,%s \n",p_cltt_str,p_serv_code,chr_p_param_str,p_fee_qty,p_charge,p_mstclt_a,p_charge_basis,p_fee_basis); Changes done for AIX Migration
+	printf("\n *** In calcfee 3522,%s,%ld,%s,%lf,%lf,%s,%s,%s \n",p_cltt_str,p_serv_code,chr_p_param_str,p_fee_qty,*p_charge,p_mstclt_a,p_charge_basis,p_fee_basis);
+
+
+	h_fee_quantity = p_fee_qty;
+	h_charge_quantity = p_charge_qty;
+	int_h_serv_code = p_serv_code;
+	if(h_charge_quantity == 0)
+	{
+		*int_p_retstat = IV_SUCCESS;
+		APL_GOBACK_SUCCESS
+	}
+	strcpy(chr_h_fee_str,chr_p_param_str);
+
+	strcpy(chr_acct,p_cltt_str);
+	strcat(chr_acct,APL_NULL_STRING);
+	strcpy(chr_basis_str,p_cltt_str);
+	strcat(chr_basis_str,APL_NULL_STRING);
+	chr_actcode = strtok_r(chr_acct,";",&s);
+	strcpy(chr_l_actcode,chr_actcode);
+	APL_IF_DEBUG
+	{
+		memset(chr_l_buf, APL_NULL_CHAR, BUFFER_LEN);
+		sprintf(chr_l_buf, "In CalcFee Acc Str: %s Serv Code: %ld\n",p_cltt_str,p_serv_code);
+		CO_ProcMonitor(TechRep, chr_l_buf, NULL, NULL);
+		memset(chr_l_buf, APL_NULL_CHAR, BUFFER_LEN);
+
+		sprintf(chr_l_buf, "In CalcFee chr_p_param_str: %s  Bill Gen to M/S: %c\n",chr_p_param_str,chr_g_bl_gen);
+		CO_ProcMonitor(TechRep, chr_l_buf, NULL, NULL);
+	}
+
+	if(APL_FAILURE == IV_Rtv_IVCUSTSETUP(chr_actcode,&l_iv_clientsetup_struct,&int_retstat,l_debug_info_ptr))
+	{
+		if(int_retstat != IV_COLUMN_NULL_ERR)
+		{
+			fprintf(fp,"Error : Billing Setup not found for client %s\n",chr_actcode);
+			fflush(fp);
+			int_bl_err_level = 1;
+			if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+			{
+				CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+				CO_FreeErrLst(l_debug_info_ptr);
+			}
+			*int_p_retstat = int_retstat;
+			APL_GOBACK_FAIL;
+		}
+	}
+
+	if (chr_g_bl_gen == 'M')
+	{
+		memset(&l_iv_clientsetup_struct, NULL, sizeof(IV_CLIENTSETUP_STRUCT));
+		int_retstat = IV_SUCCESS;
+		if(APL_FAILURE == IV_Rtv_IVCUSTSETUP(p_mstclt_a,&l_iv_clientsetup_struct,&int_retstat,l_debug_info_ptr))
+		{
+			if(int_retstat != IV_COLUMN_NULL_ERR)
+			{
+				fprintf(fp,"1414 Error : Billing Setup not found for client %s %d\n",p_mstclt_a, int_retstat);
+				fflush(fp);
+				int_bl_err_level = 1;
+				if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+				{
+					CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+					CO_FreeErrLst(l_debug_info_ptr);
+				}
+				*int_p_retstat = int_retstat;
+				APL_GOBACK_FAIL;
+			}
+		}
+
+	}
+
+	int_retstat = IV_SUCCESS;
+	if(APL_FAILURE == IV_Rtv_IVSRVCHRGDel(int_h_serv_code,&l_iv_servmast_struct,&int_retstat,l_debug_info_ptr))
+	{
+		if(int_retstat != IV_COLUMN_NULL_ERR)
+		{
+			//fprintf(fp,"Error : Service %d not found\n",int_h_serv_code); Changes done for AIX Migration
+			fprintf(fp,"Error : Service %ld not found\n",int_h_serv_code);
+			fflush(fp);
+			int_bl_err_level = 1;
+			if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+			{
+				CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+				CO_FreeErrLst(l_debug_info_ptr);
+			}
+			*int_p_retstat = int_retstat;
+
+			APL_GOBACK_FAIL
+		}
+	}
+
+
+	printf("chr_actcode:|%s|",chr_actcode);
+
+	while((chr_actcode != (char *)NULL) && (strlen(chr_actcode) > 0))
+	{
+
+		/* Verify if null exiting... */
+		if ( strcmp(chr_actcode, " ") == 0  )
+		{
+			if(s == (char *)NULL)
+				strcpy(chr_actcode, APL_NULL_STRING);
+			else
+				chr_actcode = strtok_r(NULL, ";", &s);
+			continue;
+		}
+
+		memset(chr_h_actcode, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+		strcpy(chr_h_actcode,chr_actcode);
+
+		int_retstat = IV_SUCCESS;
+		if(APL_FAILURE == IV_Rtv_IVCUSTSETUP(chr_h_actcode,&l_iv_clientsetup_struct,&int_retstat,l_debug_info_ptr))
+		{
+			if(int_retstat != IV_COLUMN_NULL_ERR)
+			{
+				fprintf(fp,"1496 Error : Billing Setup not found for client %s\n",chr_h_actcode);
+				fflush(fp);
+				int_bl_err_level = 1;
+				if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+				{
+					CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+					CO_FreeErrLst(l_debug_info_ptr);
+				}
+				*int_p_retstat = int_retstat;
+				APL_GOBACK_FAIL;
+			}
+		}
+
+		printf("\n 3648 ***|%s| |%s|\n", chr_basis_str, l_iv_clientsetup_struct.client);
+		int_retstat = IV_SUCCESS;
+		memset(&l_iv_clientparam_struct_hb, NULL, sizeof(IV_CLIENTPARAM_STRUCT_H));
+		if(APL_FAILURE == IV_Rtv_ServiceParam(chr_basis_str,p_serv_code,&l_iv_clientparam_struct_hb,&int_retstat,l_debug_info_ptr))
+		{
+			if(int_retstat != IV_NO_DATA_FOUND_ERR)
+			{
+				//fprintf(fp,"Error : Service dependencies not found for service %d for client %s\n",p_serv_code,chr_h_actcode); Changes done for AIX Migration
+				fprintf(fp,"Error : Service dependencies not found for service %ld for client %s\n",p_serv_code,chr_h_actcode);
+				fflush(fp);
+				int_bl_err_level = 1;
+				if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+				{
+					CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+					CO_FreeErrLst(l_debug_info_ptr);
+				}
+				*int_p_retstat = int_retstat;
+				APL_GOBACK_FAIL;
+			}
+		}
+
+
+		memset(&l_iv_client_serv_basis_structa, NULL, sizeof(IV_CLIENT_SERV_BASIS_STRUCT));
+		int_retstat = IV_SUCCESS;
+		printf("\n 3671 calling with |%s|\n", chr_basis_str);
+		if(APL_FAILURE == IV_Rtv_GetServBasis( chr_basis_str,p_serv_code,&l_iv_client_serv_basis_structa,&int_retstat,l_debug_info_ptr))
+		{
+			//fprintf(fp,"Error : Service basis not found for service %d for client %s\n",p_serv_code,chr_l_actcode); Changes done for AIX Migration
+			fprintf(fp,"Error : Service basis not found for service %ld for client %s\n",p_serv_code,chr_l_actcode);
+			fflush(fp);
+			int_bl_err_level = 1;
+			if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+			{
+				CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+				CO_FreeErrLst(l_debug_info_ptr);
+			}
+
+			*int_p_retstat = int_retstat;
+			APL_GOBACK_FAIL;
+		}
+		else
+			int_retstat = IV_SUCCESS;
+		printf("chr_g_bl_gen:|%c||%ld|", chr_g_bl_gen,p_serv_code );
+
+
+		if(strcmp(p_charge_basis,l_iv_client_serv_basis_structa.chrg_base) != 0)
+		{
+			fprintf(fp,"Error : Mismatch in h_chrg basis for %s for service code :%ld \n",chr_l_actcode,p_serv_code);
+			fflush(fp);
+			int_mismatch_flg =  1;
+		}
+
+		if(strcmp(p_fee_basis,l_iv_client_serv_basis_structa.fees_base) != 0)
+		{
+			fprintf(fp,"Error : Mismatch in fees basis for %s for service code :%ld \n",chr_l_actcode,p_serv_code );
+			fflush(fp);
+			int_mismatch_flg =  1;
+		}
+
+		if(p_fee_type != l_iv_client_serv_basis_structa.fees_class)
+		{
+			fprintf(fp,"Error : Mismatch in fees type for %s for service code :%ld %c %c\n",chr_l_actcode,p_serv_code, p_fee_type
+					, l_iv_client_serv_basis_structa.fees_class);
+			fflush(fp);
+			int_mismatch_flg =  1;
+		}
+
+		printf("p_charge_type:|%c||%c|",p_charge_type,l_iv_client_serv_basis_structa.chrg_clas);
+		if(p_charge_type != l_iv_client_serv_basis_structa.chrg_clas)
+		{
+			fprintf(fp,"Error : Mismatch in h_chrg type for %s for service h_code :%ld\n",chr_l_actcode,p_serv_code);
+			fflush(fp);
+			int_mismatch_flg =  1;
+		}
+
+		if(int_mismatch_flg == 1)
+		{
+			*p_charge = 0;
+			int_bl_err_level = 1;
+			*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+			APL_GOBACK_FAIL;
+		}
+
+		/*h_fee_type = l_iv_client_serv_basis_structa.fees_class;
+
+		h_charge_type = l_iv_client_serv_basis_structa.chrg_clas;
+
+		h_fee_quantity = p_fee_qty;*/
+
+		int_retstat = IV_SUCCESS;
+		printf("\n 3736 clientname|%s| \n", l_iv_client_serv_basis_structa.client);
+		if(APL_FAILURE == IV_Rtv_IVCUSTSETUP(l_iv_client_serv_basis_structa.client,&l_iv_clientsetup_struct,&int_retstat,l_debug_info_ptr))
+		{
+			if(int_retstat != IV_COLUMN_NULL_ERR)
+			{
+				fprintf(fp,"1689 Error : Billing Setup not found for client %s\n",l_iv_client_serv_basis_structa.client);
+				fflush(fp);
+				int_bl_err_level = 1;
+				if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+				{
+					CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+					CO_FreeErrLst(l_debug_info_ptr);
+				}
+				*int_p_retstat = int_retstat;
+				APL_GOBACK_FAIL;
+			}
+		}
+
+		strcpy(h_apl_frm_date,l_iv_client_serv_basis_structa.apl_frm_date);  /*Added by monica for ISKB_1737*/
+		printf("\n Applicable from date |%s| ",h_apl_frm_date);
+
+//printf(" Bagee -- |%s| |%d| |%s| |%lf| |%lf|",chr_h_actcode,int_h_serv_code,chr_h_fee_str,h_fee_quantity,h_charge_quantity); Changes done for AIX Migration
+printf(" Bagee -- |%s| |%ld| |%s| |%lf| |%lf|",chr_h_actcode,int_h_serv_code,chr_h_fee_str,h_fee_quantity,h_charge_quantity);
+		if((p_charge_type == 'T') && (p_fee_type == 'T'))
+		{
+			EXEC SQL SELECT SCHDL_FEE,FRM_CBASE,TOC_BASE,
+				  FRM_FBASE,TOF_BASE,GROUP_ID
+					  INTO  :h_schdl_fee:i_schdl_fee,
+				  :h_frm_cbase:i_frm_cbase,
+				  :h_toc_base:i_toc_base,
+				  :h_frm_fbase:i_frm_fbase,
+				  :h_tof_base:i_tof_base,
+				  :chr_h_group_ind:i_group_id
+					  FROM IV_CLIENTFEE
+					  WHERE CLIENT   = :chr_h_actcode
+					  AND SERVICE_CD   = :int_h_serv_code
+					  AND APL_FRM_DATE = :h_apl_frm_date    /* Added by monica for kotak ISKB_1737 */
+					  AND PROC_DATA_VAL   = :chr_h_fee_str
+					  AND FRM_FBASE < :h_fee_quantity
+					  AND TOF_BASE   >= :h_fee_quantity
+					  AND FRM_CBASE < :h_charge_quantity
+					  AND TOC_BASE   >= :h_charge_quantity;
+
+			if(sqlca.sqlcode < 0)
+			{
+				*int_p_retstat = IV_CRITCAL_ERROR_IND;
+			}
+
+			IS_ANY_ORA_ERROR;
+
+			if( APL_ZERO_RESULT_SET)
+			{	
+					int_retstat = IV_SUCCESS;
+					if(s == (char *)NULL)
+						strcpy(chr_actcode, APL_NULL_STRING);
+					else
+						chr_actcode = strtok_r(NULL,";",&s);
+				chr_basis_act = strtok_r(chr_basis_str,";",&p);
+				strcpy(chr_l_basis_str,APL_NULL_STRING);
+
+				while(chr_basis_act != (char *)NULL )
+				{
+					if(p == (char *)NULL)
+						strcpy(chr_basis_act, APL_NULL_STRING);
+					else
+						chr_basis_act = strtok_r(NULL,";",&p);
+					if (chr_basis_act == NULL) break; /* PJ */
+					if(strlen(chr_basis_act) > 0)
+					{
+						strcat(chr_l_basis_str,chr_basis_act);
+						strcat(chr_l_basis_str,";");
+					}
+				}
+				strcpy(chr_basis_str,chr_l_basis_str);
+			}			
+			else
+			{
+				int_fee_found = 1;
+				fees  = h_schdl_fee;
+				printf("fees****chrg qty :|%lf| |%lf|",fees,h_charge_quantity);
+				*p_charge = fees;
+
+				break;
+			}
+		}
+
+		if(chr_actcode == (char *)NULL)
+			break;
+
+	}
+
+						
+	
+RETURN_SUCCESS:
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Exiting Successfully Out Of IV_Proc_CalcTax\n",
+				NULL , NULL);
+	}
+	return APL_SUCCESS;
+
+RETURN_FAILURE:
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Exiting Unsuccessfully Out Of IV_Proc_CalcTax\n",
+				NULL , NULL);
+	}
+	return APL_FAILURE;
+}
+

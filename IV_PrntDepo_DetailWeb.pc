@@ -1,0 +1,318 @@
+
+
+
+#include "IV_Control_A.h"
+#include<string.h>
+EXEC SQL INCLUDE SQLCA.H;
+
+
+int IV_Proc_PrnDepoDETWEB(	FILE *bill,
+				  	FILE *fl_userlog,	
+					char *chr_p_billdt,
+					char *chr_p_client,
+					IV_CLIENTSETUP_STRUCT l_iv_clt_setup_struct,
+					char p_mastsub,
+					double *p_tottran,
+					int *int_currpos,
+					DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+
+struct sqlca sqlca;
+
+int   int_l_pagelength = 0;
+short int_l_condexists = 0;
+int int_headerlen = 8;
+int int_counter=0;
+int int_retval=0;
+int int_l_count=0;
+
+int int_retstat=0;
+
+double dbl_h_depofee = DEPOFEE;
+double roundedamount = 0.0;
+char *int_pos = NULL;
+char chr_f_amt[20],chr_l_amtstr[30]; 
+
+EXEC SQL BEGIN DECLARE SECTION;
+
+
+char h_dl_client[APL_CLIENT_LENGTH];
+char h_dl_class[3];
+char h_exch_code[4];
+char h_settlement_no[16];
+char h_instr_code[9];
+char h_instr_name[131];
+char h_domestic_cpclt[APL_CLIENT_LENGTH];	
+char h_cpclt_name[66];
+char h_indentity_no[17];
+char h_instr_isin[13];
+char h_deal_date[APL_DATE_LEN];
+char h_crn_no[17];
+char h_currency_cd[4];
+char h_trade_type[41];
+double dbl_h_qty;
+double dbl_h_cost;
+double dbl_h_brokercomm;
+double dbl_h_net_amt;
+double dbl_h_bill_amt;
+
+
+short i_dl_client;
+short i_dl_class;
+short i_exch_code;
+short i_settlement_no;
+short i_instr_code;
+short i_instr_name;
+short i_domestic_cpclt;
+short i_cpclt_name;
+short i_indentity_no;
+short i_instr_isin;
+short i_deal_date;
+short i_crn_no;
+short i_qty;
+short i_cost;
+short i_brokercomm;
+short i_net_amt;
+short int_i_count;
+short i_currency_cd;
+short i_trade_type;
+short i_bill_amt;
+
+	
+EXEC SQL VAR l_iv_clt_setup_struct.b_ccycd IS STRING;
+EXEC SQL VAR h_dl_client IS STRING;
+EXEC SQL VAR h_dl_class IS STRING;
+EXEC SQL VAR h_exch_code IS STRING;
+EXEC SQL VAR h_settlement_no IS STRING;
+EXEC SQL VAR h_instr_code IS STRING;
+EXEC SQL VAR h_instr_name IS STRING;
+EXEC SQL VAR h_domestic_cpclt IS STRING;
+EXEC SQL VAR h_cpclt_name IS STRING;
+EXEC SQL VAR h_indentity_no IS STRING;
+EXEC SQL VAR h_instr_isin IS STRING;
+EXEC SQL VAR h_deal_date IS STRING;
+EXEC SQL VAR h_crn_no IS STRING;
+EXEC SQL VAR h_currency_cd IS STRING;
+EXEC SQL VAR h_trade_type IS STRING;
+EXEC SQL VAR g_mt_commonsys_params_struct_h.nation_code IS STRING;
+EXEC SQL END DECLARE SECTION;
+sqlca.sqlcode=0;
+
+
+   
+   if ( APL_FAILURE == CO_Chk_CntryEnabled( "BILL_PRINTING",
+                                          "PAGE_LENGTH",
+                                          &int_l_condexists,
+                                          l_debug_info_ptr) )
+   {
+      APL_GOBACK_FAIL
+   }
+
+   if (int_l_condexists)
+      int_l_pagelength = 70;
+   else  int_l_pagelength = 58;
+
+
+	if (APL_FAILURE == IV_Proc_PrnDepoHdrDETWEB(bill,int_currpos,l_iv_clt_setup_struct,&int_retval,l_debug_info_ptr))
+	{
+		fprintf(fl_userlog,"Could not print chr_header fo rtransaction charges\n");
+		APL_GOBACK_FAIL;
+
+	}
+
+
+
+printf("CURSOR DEPO SERVICE \n");
+fflush(stdout);
+EXEC SQL DECLARE deposerv CURSOR FOR
+SELECT A.CLIENT, A.DL_CLASS, A.EXCH_CODE, A.SETTLEMENT_NO, B.INSTR_CODE, B.INSTR_NAME, A.DOMESTIC_CPCLT,
+		 D.PTY_NAME, A.IDENTIY_NO, B.INSTR_ISIN, TO_CHAR(A.DEAL_DATE,'dd/mm/yyyy'), A.CRN_NO, A.QTY, A.COST,
+		 A.BROKERCOMM, A.NET_AMT, A.CURRENCY_CD,E.MAP_DESC, A.COMM_AMT
+FROM DL_DEAL A, MT_INSTRUMENT B, MT_PARTY D, PRO_SGENSTAT E
+WHERE A.CLIENT = :chr_p_client
+AND TO_CHAR(A.DATEOFBILLING,'DD/MM/YYYY HH24:MI:SS') = :chr_p_billdt
+AND A.DEAL_STAT !='DD'
+AND A.INSTR_CODE = B.INSTR_CODE
+AND A.DL_CLASS != '19'
+AND A.DOMESTIC_CPCLT = D.PTY_CODE
+AND E.MAP_TYPE = 'TYPEOFTRD'
+AND A.DL_CLASS = E.MAP_VAL
+AND A.DL_CLASS NOT in (SELECT DL_CLASS FROM IV_DEAL_TYPE WHERE (NATION_CD = :g_mt_commonsys_params_struct_h.nation_code OR NATION_CD ='XX'))
+AND EXISTS ( SELECT 1 FROM IV_SERVICE_CHRG C
+				  WHERE C.CLIENT = :chr_p_client 
+					 AND TO_CHAR(C.DATEOF_BILLING,'DD/MM/YYYY HH24:MI:SS') =:chr_p_billdt
+					 AND C.SERVICE_CD = :dbl_h_depofee
+					 AND C.CONS_FLAG = 'I' )
+UNION
+SELECT A.CLIENT, A.DL_CLASS, A.EXCH_CODE, A.SETTLEMENT_NO, B.INSTR_CODE, B.INSTR_NAME, A.DOMESTIC_CPCLT,
+       D.PTY_NAME, A.IDENTIY_NO, B.INSTR_ISIN, TO_CHAR(A.DEAL_DATE,'dd/mm/yyyy'), A.CRN_NO, A.QTY, A.COST,
+		 A.BROKERCOMM, A.NET_AMT, A.CURRENCY_CD, E.MAP_DESC, A.COMM_AMT
+FROM DL_HISDEAL A, MT_INSTRUMENT B, MT_PARTY D, PRO_SGENSTAT E
+WHERE A.CLIENT = :chr_p_client
+AND TO_CHAR(A.DATEOFBILLING,'DD/MM/YYYY HH24:MI:SS') = :chr_p_billdt
+AND A.DEAL_STAT !='DD'
+AND A.INSTR_CODE = B.INSTR_CODE
+AND A.DL_CLASS != '19'
+AND A.DOMESTIC_CPCLT = D.PTY_CODE
+AND E.MAP_TYPE = 'TYPEOFTRD'
+AND A.DL_CLASS = E.MAP_VAL
+AND A.DL_CLASS NOT in (SELECT DL_CLASS FROM IV_DEAL_TYPE WHERE (NATION_CD = :g_mt_commonsys_params_struct_h.nation_code OR NATION_CD ='XX'))
+AND EXISTS ( SELECT 1 FROM IV_SERVICE_CHRG C
+				  WHERE C.CLIENT = :chr_p_client 
+					 AND TO_CHAR(C.DATEOF_BILLING,'DD/MM/YYYY HH24:MI:SS') =:chr_p_billdt
+					 AND C.SERVICE_CD = :dbl_h_depofee
+					 AND C.CONS_FLAG = 'I' )
+ORDER BY 1,2;
+
+IS_ANY_ORA_ERROR
+EXEC SQL OPEN deposerv;
+IS_ANY_ORA_ERROR
+
+if (sqlca.sqlcode <0)
+{
+	fprintf(fl_userlog,"Db Error(BTRANSAC)\n");
+	APL_GOBACK_FAIL
+}
+fprintf(bill,"\n<tr><td></td></tr><tr><td>&nbsp;</td></tr>");
+fprintf(bill,"\n<tr class='ez4'><td colspan='3'>DEPOSITORY INSTRUCTIONS</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td></tr>");
+fprintf(bill,"\n<tr class='ez4'><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td></tr>");
+(*int_currpos)++;
+(*int_currpos)++;
+
+
+for(;;)
+{
+
+	strcpy(h_dl_client,APL_NULL_STRING);
+	strcpy(h_dl_class,APL_NULL_STRING);
+	strcpy(h_exch_code,APL_NULL_STRING);
+	strcpy(h_settlement_no,APL_NULL_STRING);
+	strcpy(h_instr_code,APL_NULL_STRING);
+	strcpy(h_instr_name,APL_NULL_STRING);
+	strcpy(h_domestic_cpclt,APL_NULL_STRING);
+	strcpy(h_cpclt_name,APL_NULL_STRING);
+	strcpy(h_indentity_no, APL_NULL_STRING);
+	strcpy(h_instr_isin, APL_NULL_STRING);
+	strcpy(h_deal_date, APL_NULL_STRING);
+	strcpy(h_crn_no, APL_NULL_STRING);
+	strcpy(h_currency_cd, APL_NULL_STRING);
+	strcpy(h_trade_type, APL_NULL_STRING);
+	dbl_h_qty=0;
+	dbl_h_cost=0;
+	dbl_h_brokercomm=0;
+	dbl_h_net_amt=0;
+	dbl_h_bill_amt = 0;
+
+	EXEC SQL FETCH deposerv INTO
+	:h_dl_client:i_dl_client, :h_dl_class:i_dl_class, :h_exch_code:i_exch_code, :h_settlement_no:i_settlement_no, :h_instr_code:i_instr_code, :h_instr_name:i_instr_name, :h_domestic_cpclt:i_domestic_cpclt, :h_cpclt_name:i_cpclt_name, :h_indentity_no:i_indentity_no, :h_instr_isin:i_instr_isin, :h_deal_date:i_deal_date, :h_crn_no:i_crn_no, :dbl_h_qty:i_qty, :dbl_h_cost:i_cost, :dbl_h_brokercomm:i_brokercomm, :dbl_h_net_amt:i_net_amt, :h_currency_cd:i_currency_cd, :h_trade_type:i_trade_type, :dbl_h_bill_amt:i_bill_amt;
+
+	if (sqlca.sqlcode == 1403) break;
+	int_counter++;	
+
+	int_retstat= IV_Proc_Round(&dbl_h_bill_amt,h_currency_cd,chr_f_amt,l_debug_info_ptr);
+
+	if (int_retstat == 1)
+	{
+
+		roundedamount = 0.0;
+		memset(chr_l_amtstr, APL_NULL_CHAR, 30);
+		sscanf(chr_f_amt, "%lf", &roundedamount);
+		CO_Rtv_FormatAmtCcy(roundedamount, chr_l_amtstr, 'Y', 'Y', h_currency_cd,l_debug_info_ptr);
+
+	}
+	else
+		APL_GOBACK_FAIL
+
+
+			fprintf(bill,"\n<tr><td width='15%%'>%s</td><td witdth='10%%'>%s</td><td>%s</td><td>%s - %s</td><td>%s</td><td>%s</td><td>%s</td></tr><tr><td>%s</td><td width='10%%'>%s</td><td>%d</td><td>%s - %s</td>", h_trade_type, h_exch_code, h_settlement_no, h_instr_code, h_instr_name, h_indentity_no, h_instr_isin, h_deal_date, chr_l_amtstr, h_crn_no, (int)dbl_h_qty, h_domestic_cpclt,h_cpclt_name);
+
+	
+	int_retstat= IV_Proc_Round(&dbl_h_cost,h_currency_cd,chr_f_amt,l_debug_info_ptr);
+	if (int_retstat == 1)
+	{
+
+		roundedamount = 0.0;
+		memset(chr_l_amtstr, APL_NULL_CHAR, 30);
+		sscanf(chr_f_amt, "%lf", &roundedamount);
+		CO_Rtv_FormatAmtCcy(roundedamount, chr_l_amtstr, 'Y', 'Y', h_currency_cd,l_debug_info_ptr);
+		fprintf(bill,"<td>%s</td>",chr_l_amtstr);
+
+	}
+	else
+		APL_GOBACK_FAIL
+
+	int_retstat= IV_Proc_Round(&dbl_h_brokercomm,h_currency_cd,chr_f_amt,l_debug_info_ptr);
+
+	if (int_retstat == 1)
+	{
+
+		roundedamount = 0.0;
+		memset(chr_l_amtstr, APL_NULL_CHAR, 30);
+		sscanf(chr_f_amt, "%lf", &roundedamount);
+		CO_Rtv_FormatAmtCcy(roundedamount, chr_l_amtstr, 'Y', 'Y', h_currency_cd,l_debug_info_ptr);
+		fprintf(bill,"<td>%s</td>",chr_l_amtstr);
+
+	}
+	else
+		APL_GOBACK_FAIL
+
+	int_retstat= IV_Proc_Round(&dbl_h_net_amt,h_currency_cd,chr_f_amt,l_debug_info_ptr);
+	
+	if (int_retstat == 1)
+	{
+
+		roundedamount = 0.0;
+		memset(chr_l_amtstr, APL_NULL_CHAR, 30);
+		sscanf(chr_f_amt, "%lf", &roundedamount);
+		CO_Rtv_FormatAmtCcy(roundedamount, chr_l_amtstr, 'Y', 'Y', h_currency_cd,l_debug_info_ptr);
+		fprintf(bill,"<td>%s</td>",chr_l_amtstr);
+
+	}
+	else
+		APL_GOBACK_FAIL
+	
+	fprintf(bill,"</tr>");		
+	fprintf(bill,"\n<tr><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td></tr>");
+}
+
+EXEC SQL CLOSE deposerv; 
+
+if (int_counter == 0) 
+{
+	fprintf(bill,"\n<tr><td colspan='7'>NO DEPOSITORY FOR ACCOUNT %s</td></tr>",chr_p_client);
+	(*int_currpos)++;
+	(*int_currpos)++;
+	(*int_currpos)++;
+}
+else
+{
+	(*int_currpos)++;
+	(*int_currpos)++;
+}
+
+
+fprintf(bill,"\n<tr><td></td></tr><tr><td>&nbsp;</td></tr>");	
+fprintf(bill,"\n</table><br>");
+APL_GOBACK_SUCCESS
+
+
+
+        {
+
+        RETURN_SUCCESS:
+                APL_IF_DEBUG
+					 {
+						CO_ProcMonitor(APL_OUT_FILE,"Exiting successfully out of IV_Proc_PrnDepoDETWEB\n",NULL,NULL);	
+					 }	
+                return(APL_SUCCESS);
+
+        RETURN_FAILURE:
+                APL_IF_DEBUG
+					 {
+						CO_ProcMonitor(APL_OUT_FILE,"Exiting unsuccessfully out of IV_Proc_PrnDepoDETWEB\n",NULL,NULL);	
+					 }
+                return (APL_FAILURE);
+        }
+
+}

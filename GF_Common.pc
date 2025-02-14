@@ -1,0 +1,2555 @@
+/*
+ *    COPYRIGHT NOTICE
+ *
+ *   Copyright 2005 Polaris Software Lab Limited. All rights reserved.
+ *
+ *   These materials are confidential and proprietary to
+ *    Polaris Software Lab Limited and no part of these materials should
+ *    be reproduced, published, transmitted or distributed in any form or
+ *    by any means, electronic, mechanical, photocopying, recording or
+ *    otherwise, or stored in any information storage or retrieval system
+ *    of any nature nor should the materials be disclosed to third parties
+ *    or used in any other manner for which this is not authorized, without
+ *    the prior express written authorization of Polaris Software Lab Limited.
+ */
+/*********************************************************************
+ *
+ * Module Name         : Utility
+ *
+ * File Name           : GF_Upload.pc
+ *
+ * Description         : Common file for Generic File Upload processing.
+ *
+ *
+ *
+ *            Version Control Block
+ *
+ * Date        Version          Author               Description
+ * ---------   --------  ---------------  ---------------------------
+ * 07/12/2005  1.0		 Biju George		Generic File Upload Common 
+ *											Functions
+ * 24/03/2022  1.1       kotubabu N         Linux Migration    Kotak Implementation
+ *********************************************************************/
+
+
+
+#include <sqlca.h>
+#include "stdio_64.h"
+#include <unistd.h>
+/*** AIX Migration Changes -START*/
+/*#include <sys/iso/signal_iso.h>*/
+#ifdef OS_AIX
+  #if !defined(_AIXVERSION_430) || !defined(_AIXVERSION_431) || !defined(_AIXVERSION_434) || !defined(_AIXVERSION_510) || !defined(_AIXVERSION_520) || !defined(_AIXVERSION_530) || !defined(_AIXVERSION_610)
+   #include <sys/iso/signal_iso.h>
+  #endif 
+#endif 
+#ifdef OS_LINUX           //added by kotubabu for Linux Migration
+		#include <bits/signum.h>
+#endif
+
+/*** AIX Migration Changes -END*/
+
+#include <sys/wait.h>
+#include <ctype.h>
+#include <GF_Common.h>
+#include <BT_Common.h>
+
+
+extern FILE *l_logfile;
+extern FILE *l_skipped_file;
+extern FILE *l_userfile;
+extern FILE *l_format_file;
+extern FILE *l_bk_file; 
+extern char g_file_name[];
+extern char g_param_data[];
+extern char g_sys_date[];
+extern char g_sys_date_time[]; /*to populate system date with 12:00:00 in date fields for upload process changes done by shrinath ends 17_Apr_2020*/
+extern char g_line[];
+extern GFU_FILE_MAP_STRUCT_H *g_gfu_file_map_h;
+
+//AIX Warning Removal -START
+int Rtv_Value_Frm_Lst(GFU_TOKEN_VAL_STRUCT_LST **p_token_value, 
+		      char *p_token, char *p_value,
+		      DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+int CO_InsertOraErr(DEBUG_INFO_STRUCT_H **l_debug_info_ptr,
+                    char *ora_msg,
+                    char *h_key1,
+                    char *h_key2,
+                    char *h_key3,
+                    int h_line,
+                    char *h_file );
+int Rtv_Data_Any(char *p_line,
+                 int p_line_no,
+                 char *p_file_type,
+                 char *p_label,
+                 int p_sequence,
+                 int p_start_pos,
+                 int p_end_pos,
+                 char *p_delimiter,
+                 char *p_remove_char,
+                 char *p_remove_lastchar,
+                 char *p_value_type,
+                 char *p_date_format,
+                 char *p_value,
+                 DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+int CO_Rtv_ErrString(DEBUG_INFO_STRUCT_H **l_debug_info_ptr, char *p_error_desc);
+int Rtv_Dir_Path(char *p_dir_alias, char *p_path, DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+int CO_Rtv_FileNm_From_Pointer(FILE *fp, char *directorypath,char *chr_fl_name);
+int ltoa_r(long p_long,char *p_return, int p_length);
+//AIX Warning Removal -END
+int Add_Value_To_Lst( 	GFU_TOKEN_VAL_STRUCT_LST **p_token_value,
+		char *p_token,
+		char *p_value,
+		DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+		GFU_TOKEN_VAL_STRUCT_LST **l_token_value = p_token_value;
+		APL_FUNCTION_ENTER(l_logfile)
+		fprintf(l_logfile,"Adding For |%s| Value |%s|\n",p_token,p_value);
+		while(*l_token_value)
+		{
+			if(!strcmp((*l_token_value) -> h_token , p_token))
+			{
+				strcpy((*l_token_value) -> h_value,p_value);
+				break;
+			}
+			l_token_value = &((*l_token_value) -> h_next);
+		}
+		if(!(*l_token_value))
+		{
+			(*l_token_value) = (GFU_TOKEN_VAL_STRUCT_LST *)calloc(1,sizeof(GFU_TOKEN_VAL_STRUCT_LST));
+			strcpy((*l_token_value) -> h_token,p_token);
+			strcpy((*l_token_value) -> h_value,p_value);
+			(*l_token_value) -> h_next = (GFU_TOKEN_VAL_STRUCT_LST *)NULL;
+		}
+
+
+APL_GOBACK_SUCCESS//AIX Warning Removal 
+
+RETURN_SUCCESS:
+	APL_FUNCTION_RET_SUCCESS(l_logfile)
+/* AIX - Warnings Removal
+RETURN_FAILURE:
+	APL_FUNCTION_RET_FAILURE(l_logfile)
+*/
+
+}
+int GF_FnlProc(GFU_TOKEN_VAL_STRUCT_LST **p_param_data,
+					GFU_TOKEN_VAL_STRUCT_LST **p_env_data,
+					int p_line_no,
+					char *p_module,
+					DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	char l_value[GFU_VALUE_LEN] = APL_NULL_STRING;
+	char l_line[10] = APL_NULL_STRING;
+	char l_cond[30] = APL_NULL_STRING;
+	
+	Lst_rtvValue(p_param_data,"MODE",l_value);
+	if(strlen(l_value))
+		Lst_AddValue(p_env_data,"MODE",l_value);
+
+	strcpy(l_cond,p_module);
+	IF_COND_EXISTS("GF_DL_ORD_SUMM",l_cond)
+	{
+		sprintf(l_line,"%d",p_line_no);
+		Lst_AddValue(p_param_data,"ROWSEQUENCE",l_line);
+	}
+
+APL_GOBACK_SUCCESS
+
+RETURN_SUCCESS:
+	APL_FUNCTION_RET_SUCCESS(l_logfile)
+
+RETURN_FAILURE:
+	APL_FUNCTION_RET_FAILURE(l_logfile)
+
+}
+
+/*********************************************************************************************************
+ *                                                                                                       *
+ * Function Name         : GFU_Rtv_Line																	 *
+ *                                                                                                       *
+ * Description           : Function to retrieve specific line from file									 *
+ *                                                                                                       *
+ * Parameter                           Type                             Mode   Description               *
+ * ------------                        --------                         -----  ---------------           *
+ *																										 *
+ * p_line_no							   int 								I	   record number -not line number *
+ *																										 *
+ * p_line							   char *							I      line retrive 			 *
+ *                                                                                                       *
+ * l_debug_info_ptr                    DEBUG_INFO_STRUCT_H **           I      Debug Info Structure      *
+ *                                                                                                       *
+ * Return Values        :                                                                                *
+ *                                                                                                       *
+ *  APL_SUCCESS  - SUCCESS                                                                               *
+ *  APL_FAILURE  - FAILURE                                                                               *
+ *                                                                                                       *
+ ********************************************************************************************************/
+
+int GFU_Rtv_Line(	int p_line_no,
+			char *p_line,
+			DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	int l_rec_no = 1;
+	if(p_line_no == 0)return APL_SUCCESS;
+	memset(p_line,APL_NULL_CHAR, GFU_LINE_LEN);
+	rewind(l_bk_file);
+	while(!feof(l_bk_file))
+	{
+		fgets(p_line,GFU_LINE_LEN,l_bk_file);
+		if(l_rec_no == p_line_no)break;
+		memset(p_line,APL_NULL_CHAR, GFU_LINE_LEN);
+		l_rec_no ++;
+	}
+	return APL_SUCCESS;
+}
+
+/*********************************************************************************************************
+ *                                                                                                       *
+ * Function Name         : GFU_Write_Skipped																	 *
+ *                                                                                                       *
+ * Description           : Function to write specific line to report									 *
+ *                                                                                                       *
+ * Parameter                           Type                             Mode   Description               *
+ * ------------                        --------                         -----  ---------------           *
+ *																										 *
+ * p_line_no						   int 								I	   line number				 *
+ *																										 *
+ * l_debug_info_ptr                    DEBUG_INFO_STRUCT_H **           I      Debug Info Structure      *
+ *                                                                                                       *
+ * Return Values        :                                                                                *
+ *                                                                                                       *
+ *  APL_SUCCESS  - SUCCESS                                                                               *
+ *  APL_FAILURE  - FAILURE                                                                               *
+ *                                                                                                       *
+ ********************************************************************************************************/
+int GFU_Write_Skipped(	int p_line_no,
+			DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	//char l_line[GFU_LINE_LEN]; //AIX - Warnings Removal
+
+/**
+	if(APL_FAILURE == GFU_Rtv_Line(	p_line_no,
+					l_line,
+					l_debug_info_ptr))
+	{
+		printf("Failed in GFU_Rtv_Line\n");
+		APL_GOBACK_FAIL
+	}
+	**/
+
+	/**fprintf(l_skipped_file,l_line);**/
+        /*** Added (int)& fro AIX Migration***/
+	//printf("Skipped File |%0x|\n",(int)&l_skipped_file);  // AIX - Warnings Removal
+	printf("Skipped Line |%s|\n",g_line);
+	fprintf(l_skipped_file,"%s\n",g_line);
+	fflush(l_skipped_file);
+
+
+APL_GOBACK_SUCCESS
+
+RETURN_SUCCESS:
+	APL_FUNCTION_RET_SUCCESS(l_logfile)
+/* AIX - Warnigs Removal
+RETURN_FAILURE:
+	APL_FUNCTION_RET_FAILURE(l_logfile)
+*/
+}
+
+/*********************************************************************************************************
+ *                                                                                                       *
+ * Function Name         : Format_Value															 *
+ *                                                                                                       *
+ * Description           : Function to write specific line to report									 *
+ *                                                                                                       *
+ * Parameter                           Type                             Mode   Description               *
+ * ------------                        --------                         -----  ---------------           *
+ *																										 *
+ * p_value							   char * 							I	   value				     *
+ *																										 *
+ * p_value_type						   char *							I	   format					 *
+ *																										 *
+ * l_debug_info_ptr                    DEBUG_INFO_STRUCT_H **           I      Debug Info Structure      *
+ *                                                                                                       *
+ * Return Values        :                                                                                *
+ *                                                                                                       *
+ *  APL_SUCCESS  - SUCCESS                                                                               *
+ *  APL_FAILURE  - FAILURE                                                                               *
+ *                                                                                                       *
+ ********************************************************************************************************/
+
+
+
+int Format_Value(char *p_value,char *p_value_type,char *p_date_format,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	char l_value[GFU_VALUE_LEN];
+	char l_date[GFU_VALUE_LEN];
+	char l_date_format[GFU_DATE_FORMAT_LEN];
+	struct sqlca sqlca;
+	sqlca.sqlcode = 0;
+/*	APL_FUNCTION_ENTER(l_logfile)	*/
+	memset(l_value,APL_NULL_CHAR,sizeof(l_value));
+	strcpy(l_value,p_value);
+	memset(p_value,APL_NULL_CHAR,sizeof(p_value));
+	if(!strlen(p_date_format))
+		strcpy(l_date_format,GFU_DEFAULT_DATE_FORMAT);
+	else
+		strcpy(l_date_format,p_date_format);
+
+
+
+	if(!strcmp(p_value_type,"ST"))
+	{
+		strcpy(p_value,l_value);
+	}
+	else if(!strcmp(p_value_type,"DD"))
+	{
+		Remove_Char(l_value,GF_DELIM_STR_SPACE,l_debug_info_ptr);
+		if(!strlen(l_value))
+			APL_GOBACK_SUCCESS
+		/*EXEC SQL SELECT TO_CHAR(TO_DATE(:l_value,'dd-MON-yy'),'dd/mm/yyyy') INTO :l_date FROM DUAL;*/
+		EXEC SQL SELECT TO_CHAR(TO_DATE(:l_value,:l_date_format),'dd/mm/yyyy') INTO :l_date FROM DUAL;
+		strcpy(p_value,l_date);
+		IS_ANY_ORA_ERROR
+	}
+	else if(!strcmp(p_value_type,"DT"))
+	{
+		Remove_Char(l_value,GF_DELIM_STR_SPACE,l_debug_info_ptr);
+		if(!strlen(l_value))
+			APL_GOBACK_SUCCESS
+
+		/*EXEC SQL SELECT TO_CHAR(TO_DATE(:l_value,'dd-MON-yy'),'dd/mm/yyyy')||' 12:00:00' INTO :l_date FROM DUAL;*/
+		/** whether the format contains time format also **/
+/*(ISKB_9496) - Deals getting uploaded even with incorrect date in PMS upload. Changes by Tushar - Starts*/
+		if(strchr(l_date_format,':'))
+			/**EXEC SQL SELECT TO_CHAR(TO_DATE(:l_value,:l_date_format),'dd/mm/yyyy hh24:mi:ss') INTO :l_date FROM DUAL;**/
+			EXEC SQL SELECT TO_CHAR(TO_DATE(:l_value,:l_date_format),'dd/mm/yyyy hh24:mi:ss') INTO :l_date FROM DUAL WHERE EXTRACT(YEAR FROM TO_DATE(:l_value, :l_date_format)) >= 2000;
+		else
+			/*EXEC SQL SELECT TO_CHAR(TO_DATE(:l_value,:l_date_format),'dd/mm/yyyy')||' 12:00:00' INTO :l_date FROM DUAL;*/
+			EXEC SQL SELECT TO_CHAR(TO_DATE(:l_value,:l_date_format),'dd/mm/yyyy')||' 12:00:00' INTO :l_date FROM DUAL WHERE EXTRACT(YEAR FROM TO_DATE(:l_value, :l_date_format)) >= 2000;
+/*(ISKB_9496) - Deals getting uploaded even with incorrect date in PMS upload. Changes by Tushar - Ends*/
+BT_IF_DEBUG
+				fprintf(l_logfile," Value |%s| Format |%s| Date |%s\n",l_value,l_date_format,l_date);
+		strcpy(p_value,l_date);
+		IS_ANY_ORA_ERROR
+	}
+	else if(!strcmp(p_value_type,"NU"))
+	{
+		Remove_Char(l_value,GF_DELIM_STR_SPACE,l_debug_info_ptr);
+		strcpy(p_value,l_value);
+	}
+
+RETURN_SUCCESS:
+
+/*	APL_FUNCTION_RET_SUCCESS(l_logfile)		*/
+		return(APL_SUCCESS);
+
+RETURN_FAILURE:
+
+
+	APL_FUNCTION_RET_FAILURE(l_logfile)
+
+}
+
+
+
+
+/*********************************************************************************************************
+ *                                                                                                       *
+ * Function Name         : GFU_Rtv_PosStr																 *
+ *                                                                                                       *
+ * Description           : Gets value from string according to starting and ending positions			 *
+ *                                                                                                       *
+ * Parameter                           Type                             Mode   Description               *
+ * ------------                        --------                         -----  ---------------           *
+ *																										 *
+ * p_line							   char * 							I	   value				     *
+ *																										 *
+ * p_start							   int								I	   starting position		 *
+ *																										 *	
+ * p_end							   int								I	   End position				 *
+ *																										 *
+ * p_value							   char *							O	   Value returned			 *
+ *																										 *
+ * l_debug_info_ptr                    DEBUG_INFO_STRUCT_H **           I      Debug Info Structure      *
+ *                                                                                                       *
+ * Return Values        :                                                                                *
+ *                                                                                                       *
+ *  APL_SUCCESS  - SUCCESS                                                                               *
+ *  APL_FAILURE  - FAILURE                                                                               *
+ *                                                                                                       *
+ ********************************************************************************************************/
+
+
+int GFU_Rtv_PosStr( char *p_line,
+					int  p_start,
+					int  p_end,
+					char *p_value,
+					DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{						
+	memset(p_value,APL_NULL_CHAR,sizeof(p_value));
+	APL_FUNCTION_ENTER(l_logfile)
+BT_IF_DEBUG
+	fprintf(l_logfile,"Start |%d| End |%d| Value |%s|\n",p_start,p_end,p_value);
+	fprintf(l_logfile,"\nLine passed is = |%s| Strlen is |%d|",p_line,strlen(p_line));
+	fflush(stdout);
+	if((strlen(p_line) >= p_end) && (p_end >= p_start) && (p_start != 0))
+	{
+		strncpy(p_value,p_line + p_start - 1 , p_end - p_start + 1);
+		*(p_value + p_end - p_start + 1) = APL_NULL_CHAR;
+		fprintf(l_logfile,"\n p_value in loop is = |%s|",p_value);
+		
+	}
+	fprintf(l_logfile,"\nValue now is = |%s|",p_value);
+
+APL_GOBACK_SUCCESS
+
+RETURN_SUCCESS:
+	APL_FUNCTION_RET_SUCCESS(l_logfile)
+/* AIX - Warnings Removal
+RETURN_FAILURE:
+	APL_FUNCTION_RET_FAILURE(l_logfile)
+*/
+}
+
+	
+
+/*********************************************************************************************************
+ *                                                                                                       *
+ * Function Name         : Remove_Char																	 *
+ *                                                                                                       *
+ * Description           : Removes character passed from the value										 *
+ *                                                                                                       *
+ * Parameter                           Type                             Mode   Description               *
+ * ------------                        --------                         -----  ---------------           *
+ *																										 *
+ * p_value							   char *							I/O	   Value returned			 *
+ *																										 *	
+ * p_remove_chars					   char *							I	   characters to be removed  *
+ *																										 *
+ * l_debug_info_ptr                    DEBUG_INFO_STRUCT_H **           I      Debug Info Structure      *
+ *                                                                                                       *
+ * Return Values        :                                                                                *
+ *                                                                                                       *
+ *  APL_SUCCESS  - SUCCESS                                                                               *
+ *  APL_FAILURE  - FAILURE                                                                               *
+ *                                                                                                       *
+ ********************************************************************************************************/
+
+			    
+int Remove_Char( char *p_value,
+				 char *p_remove_chars,
+				 DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+
+{
+	//char *l_ptr = p_value; // AIX - Warnings Removal
+	//char *l_remove_chars = p_remove_chars; // AIX - Warnings Removal
+	char *l_prev;
+
+/*	APL_FUNCTION_ENTER(l_logfile)	*/
+	if(!strlen(p_value) || !strlen(p_remove_chars))APL_GOBACK_SUCCESS;
+	while(*p_remove_chars)
+	{
+		/**
+		while(strchr(l_ptr,*p_remove_chars))
+		{
+			l_ptr = strchr(l_ptr,*p_remove_chars);
+			l_prev = l_ptr;
+			l_ptr++;
+			while(*l_ptr)
+			{
+				*l_prev = *l_ptr;
+				l_ptr++;
+				l_prev++;
+			}
+			*l_prev = APL_NULL_CHAR;
+			l_ptr = p_value;
+		}
+		**/
+		while((l_prev = strchr(p_value,*p_remove_chars)) != NULL)
+		{
+			*l_prev = APL_NULL_CHAR;
+			strcat(p_value,l_prev + 1);
+		}
+		p_remove_chars++;
+	}
+
+APL_GOBACK_SUCCESS // AIX - Warnings Removal
+
+RETURN_SUCCESS:
+	APL_FUNCTION_RET_SUCCESS(l_logfile)	
+	return(APL_SUCCESS);
+/* AIX - Warnings Removal
+RETURN_FAILURE:
+	APL_FUNCTION_RET_FAILURE(l_logfile)
+*/
+}
+
+
+
+/*********************************************************************************************************
+ *                                                                                                       *
+ * Function Name         : Remove_Char																	 *
+ *                                                                                                       *
+ * Description           : Removes character passed from end of the value										 *
+ *                                                                                                       *
+ * Parameter                           Type                             Mode   Description               *
+ * ------------                        --------                         -----  ---------------           *
+ *																										 *
+ * p_value							   char *							I/O	   Value returned			 *
+ *																										 *	
+ * p_remove_last_chars				   char *							I	   characters to be removed  from end*
+ *																										 *
+ * l_debug_info_ptr                    DEBUG_INFO_STRUCT_H **           I      Debug Info Structure      *
+ *                                                                                                       *
+ * Return Values        :                                                                                *
+ *                                                                                                       *
+ *  APL_SUCCESS  - SUCCESS                                                                               *
+ *  APL_FAILURE  - FAILURE                                                                               *
+ *                                                                                                       *
+ ********************************************************************************************************/
+
+//AIX - Warnings Removal --- added int
+int Remove_Last_Char(char *p_value,			 char *p_remove_last_chars,
+				 DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	int l_pos = 0;
+	char *l_remove_char = p_remove_last_chars;
+	/**l_pos = strlen(p_value);**/
+	if(!strlen(p_value) || !strlen(p_remove_last_chars))APL_GOBACK_SUCCESS;
+/*	APL_FUNCTION_ENTER(l_logfile)	*/
+	while(*l_remove_char)
+	{
+		l_pos = strlen(p_value);
+		while(l_pos)
+		{
+			if(p_value[l_pos - 1] == *l_remove_char)
+				p_value[l_pos - 1] = APL_NULL_CHAR;
+			else
+				break;
+			l_pos--;
+		}
+		l_remove_char ++;
+	}
+
+APL_GOBACK_SUCCESS
+
+RETURN_SUCCESS:
+	APL_FUNCTION_RET_SUCCESS(l_logfile)	
+	return(APL_SUCCESS);
+/* AIX - Warnings Removal
+RETURN_FAILURE:
+	APL_FUNCTION_RET_FAILURE(l_logfile)
+*/
+}
+
+
+/*********************************************************************************************************
+ *                                                                                                       *
+ * Function Name         : Rtv_Start_End_Pos																	 *
+ *                                                                                                       *
+ * Description           : Gets Starting and ending positions	of value in specific index				 *
+ *                                                                                                       *
+ * Parameter                           Type                             Mode   Description               *
+ * ------------                        --------                         -----  ---------------           *
+ *																										 *
+ * p_line							   char *							I	   line						 *
+ *																										 *
+ * p_char							   char *							I/O	   Delimiter				 *
+ *																										 *
+ * p_index							   int 								I/O	   Index of the value		 *
+ *																										 *
+ * p_start							   int *							O	   starting position		 *
+ *																										 *
+ * p_end							   int *							O	   End position				 *
+ *																										 *
+ * l_debug_info_ptr                    DEBUG_INFO_STRUCT_H **           I      Debug Info Structure      *
+ *                                                                                                       *
+ * Return Values        :                                                                                *
+ *                                                                                                       *
+ *  APL_SUCCESS  - SUCCESS                                                                               *
+ *  APL_FAILURE  - FAILURE                                                                               *
+ *                                                                                                       *
+ ********************************************************************************************************/
+
+int Rtv_Start_End_Pos(	char *p_line, 
+					char *p_char, 
+					int p_index,
+					int *p_start,
+					int *p_end,
+					DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	char l_line[GFU_LINE_LEN];
+	int l_index = 1;
+
+
+	*p_start = 1;
+	*p_end = 0;
+	APL_FUNCTION_ENTER(l_logfile)
+	
+	while(1)
+	{
+			
+		if(APL_FAILURE == GFU_Rtv_DelStr(	p_line,
+							p_char,
+							l_index,
+							l_line,
+							l_debug_info_ptr))
+			APL_GOBACK_FAIL
+		
+		if(!strlen(l_line))APL_GOBACK_FAIL
+
+		*p_end = *p_start - 1 + strlen(l_line);
+		if(l_index == p_index)break;
+		*p_start = *p_start + 1 +strlen(l_line);
+		l_index ++;
+	}
+
+APL_GOBACK_SUCCESS // AIX - Warnings Removal
+RETURN_SUCCESS:
+	APL_FUNCTION_RET_SUCCESS(l_logfile)
+
+RETURN_FAILURE:
+	APL_FUNCTION_RET_FAILURE(l_logfile)
+
+}
+
+		
+
+			
+
+/*********************************************************************************************************
+ *                                                                                                       *
+ * Function Name         : Rtv_Start_End_Pos															 *
+ *                                                                                                       *
+ * Description           : Gets value in specific index													 *
+ *                                                                                                       *
+ * Parameter                           Type                             Mode   Description               *
+ * ------------                        --------                         -----  ---------------           *
+ *																										 *
+ * p_line							   char *							I	   line						 *
+ *																										 *
+ * p_delim							   char *							I	   Delimiter				 *
+ *																										 *
+ * p_index							   int 								I	   Index of the value		 *
+ *																										 *
+ * p_value							   char *							O	   Value					 *
+ *																										 *
+ * l_debug_info_ptr                    DEBUG_INFO_STRUCT_H **           I      Debug Info Structure      *
+ *                                                                                                       *
+ * Return Values        :                                                                                *
+ *                                                                                                       *
+ *  APL_SUCCESS  - SUCCESS                                                                               *
+ *  APL_FAILURE  - FAILURE                                                                               *
+ *                                                                                                       *
+ ********************************************************************************************************/
+
+
+int GFU_Rtv_DelStr(	char *p_line, 
+					char *p_delim, 
+					int p_index,
+					char *p_value,
+					DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	char *l_ptr;
+	int l_index = 0;
+	char l_line[GFU_LINE_LEN];
+	
+	memset(p_value,APL_NULL_CHAR,sizeof(p_value));
+	memset(l_line,APL_NULL_CHAR,sizeof(p_line) + sizeof(l_line));
+	if(strrchr(p_line,'\n'))*(strrchr(p_line,'\n')) = APL_NULL_CHAR;
+	strcpy(l_line,p_line);
+	strcat(l_line,p_delim);
+	
+	l_ptr = l_line;
+
+/*	APL_FUNCTION_ENTER(l_logfile)	*/
+	while(strstr(l_ptr,p_delim))
+	{
+		l_index++;
+		if (l_index == p_index)break;
+		l_ptr = strstr(l_ptr,p_delim) + strlen(p_delim);
+		
+	}
+	
+	if(strstr(l_ptr,p_delim))
+	{
+		strncpy(p_value,l_ptr,strlen(l_ptr) - strlen(strstr(l_ptr,p_delim)));
+		p_value[strlen(l_ptr) - strlen(strstr(l_ptr,p_delim))] = APL_NULL_CHAR; 
+	}
+	else
+		memset(p_value,APL_NULL_CHAR,sizeof(p_value));	
+
+APL_GOBACK_SUCCESS // AIX - Warnings Removal
+
+RETURN_SUCCESS:
+	APL_FUNCTION_RET_SUCCESS(l_logfile)	
+	return(APL_SUCCESS);
+/* AIX - Warnings Removal
+RETURN_FAILURE:
+	APL_FUNCTION_RET_FAILURE(l_logfile)
+*/
+}
+
+
+
+
+/*********************************************************************************************************
+ *                                                                                                       *
+ * Function Name         : Rtv_Data_Replace																 *
+ *                                                                                                       *
+ * Description           : Gets Value for the field REPLACE												 *
+ *                                                                                                       *
+ * Parameter                           Type                             Mode   Description               *
+ * ------------                        --------                         -----  ---------------           *
+ *																										 *
+ ********************************************************************************************************/
+
+int Rtv_Data_Replace(	char *p_line,
+			int p_line_no,
+			char *p_file_type,
+			char *p_label,
+			int p_sequence,
+			int p_start_pos,
+			int p_end_pos,
+			char *p_delimiter,
+			char *p_remove_char,
+			char *p_remove_lastchar,
+			char *p_value_type,
+			char *p_date_format,
+			char *p_static_val,
+			char *p_value,
+			DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	if(APL_FAILURE == Rtv_Data_Direct(p_line,
+			p_file_type,
+			p_sequence,
+			p_start_pos,
+			p_end_pos,
+			p_delimiter,
+			p_remove_char,
+			p_remove_lastchar,
+			p_value_type,
+			p_date_format,
+			p_value,
+			l_debug_info_ptr))
+		APL_GOBACK_FAIL
+BT_IF_DEBUG
+	fprintf(l_logfile,"Value for %s  tsrt |%d| End |%d| Is %s \n",p_label,p_start_pos,p_end_pos,p_value);
+	if(APL_FAILURE == Remove_Char(p_value,GF_DELIM_STR_SPACE, l_debug_info_ptr))
+		APL_GOBACK_FAIL
+
+
+	if(!strlen(p_value))
+	{
+		
+/*		if(APL_FAILURE == GFU_UpdErrorDet(	p_line_no,
+							"N",
+							APL_NULL_STRING,
+							p_label,
+							p_static_val,
+							"Value From File Is Null, Static Value Is Used",
+							l_debug_info_ptr))
+		APL_GOBACK_FAIL
+		
+*/				
+		strcpy(p_value,p_static_val);
+	}
+
+APL_GOBACK_SUCCESS // AIX - Warnings Removal
+
+RETURN_SUCCESS:
+	APL_FUNCTION_RET_SUCCESS(l_logfile)
+
+RETURN_FAILURE:
+	APL_FUNCTION_RET_FAILURE(l_logfile)
+
+}
+
+
+/*********************************************************************************************************
+ *                                                                                                       *
+ * Function Name         : Rtv_Data_Direct																 *
+ *                                                                                                       *
+ * Description           : Gets Value for the field DIRECT												 *
+ *                                                                                                       *
+ * Parameter                           Type                             Mode   Description               *
+ * ------------                        --------                         -----  ---------------           *
+ *																										 *
+ ********************************************************************************************************/
+
+int Rtv_Data_Direct(	char *p_line,
+			char *p_file_type,
+			int p_sequence,
+			int p_start_pos,
+			int p_end_pos,
+			char *p_delimiter,
+			char *p_remove_char,
+			char *p_remove_lastchar,
+			char *p_value_type,
+			char *p_date_format,
+			char *p_value,
+			DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	APL_FUNCTION_ENTER(l_logfile)
+
+	if(p_file_type[0] == 'P')/** Position Based **/
+	{
+		if(p_start_pos  == 0) APL_GOBACK_SUCCESS
+		if(p_start_pos > p_end_pos)APL_GOBACK_SUCCESS
+		if(APL_FAILURE == GFU_Rtv_PosStr(	p_line,
+						p_start_pos,
+						p_end_pos,
+						p_value,
+						l_debug_info_ptr))
+			APL_GOBACK_FAIL
+		if(APL_FAILURE == Remove_Char(p_value,
+					p_remove_char,
+					l_debug_info_ptr))
+			APL_GOBACK_FAIL
+		if(APL_FAILURE == Remove_Last_Char(	p_value,
+							p_remove_lastchar,
+							l_debug_info_ptr))
+			APL_GOBACK_FAIL
+
+		if(APL_FAILURE == Format_Value(	p_value,
+				p_value_type,
+				p_date_format,
+				l_debug_info_ptr))
+			APL_GOBACK_FAIL
+				
+		fprintf(l_logfile,"Value |%s|\n",p_value);
+	}
+	else if(p_file_type[0] == 'A') /** Delimited Chnage To 'A' From 'D'**/
+	{
+BT_IF_DEBUG
+		fprintf(l_logfile," Delim |%s| Sequence |%d|\n",p_delimiter,p_sequence);
+		if(!strlen(p_delimiter))APL_GOBACK_SUCCESS;
+		if(p_sequence == 0)APL_GOBACK_SUCCESS;
+		if(APL_FAILURE == GFU_Rtv_DelStr(	p_line,
+						p_delimiter,
+						p_sequence,
+						p_value,
+						l_debug_info_ptr))
+			APL_GOBACK_FAIL
+
+		if(APL_FAILURE == Remove_Char(p_value,
+					p_remove_char,
+					l_debug_info_ptr))
+			APL_GOBACK_FAIL
+		if(APL_FAILURE == Remove_Last_Char(	p_value,
+											p_remove_lastchar,
+											l_debug_info_ptr))
+			APL_GOBACK_FAIL
+
+		if(APL_FAILURE == Format_Value(	p_value,
+				p_value_type,
+				p_date_format,
+				l_debug_info_ptr))
+			APL_GOBACK_FAIL
+	}
+
+RETURN_SUCCESS:
+	APL_FUNCTION_RET_SUCCESS(l_logfile)
+
+RETURN_FAILURE:
+	APL_FUNCTION_RET_FAILURE(l_logfile)
+}
+
+
+
+/*********************************************************************************************************
+ *                                                                                                       *
+ * Function Name         : Rtv_Data_Static																 *
+ *                                                                                                       *
+ * Description           : Gets Value for the field STATIC												 *
+ *                                                                                                       *
+ * Parameter                           Type                             Mode   Description               *
+ * ------------                        --------                         -----  ---------------           *
+ *																										 *
+ ********************************************************************************************************/
+
+int Rtv_Data_Static(	char *p_line,
+						char *p_static_val,
+						char *p_value,
+						DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	APL_FUNCTION_ENTER(l_logfile)
+	strcpy(p_value,p_static_val);
+
+APL_GOBACK_SUCCESS // AIX - Warnings Removal
+
+RETURN_SUCCESS:
+	APL_FUNCTION_RET_SUCCESS(l_logfile)
+/* AIX - Warnings Removal
+RETURN_FAILURE:
+	APL_FUNCTION_RET_FAILURE(l_logfile)
+*/
+}
+
+
+/*********************************************************************************************************
+ *                                                                                                       *
+ * Function Name         : Rtv_Data_MapVal																 *
+ *                                                                                                       *
+ * Description           : Gets Value for the field MAPVAL												 *
+ *                                                                                                       *
+ * Parameter                           Type                             Mode   Description               *
+ * ------------                        --------                         -----  ---------------           *
+ *																										 *
+ ********************************************************************************************************/
+
+
+int Rtv_Data_MapVal(	char *p_line,
+			char *p_refno,	
+			char *p_file_type,
+						int p_sequence,
+						int p_start_pos,
+						int p_end_pos,
+						char *p_delimiter,
+						char *p_remove_char,
+						char *p_remove_last_char,
+						char *p_value_type,
+						char *p_date_format,
+						char *p_value,
+						DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	struct sqlca sqlca;
+	char l_value[GFU_VALUE_LEN];
+	char l_rtv_value[GFU_VALUE_LEN];
+	short i_rtv_value = 0;
+
+	APL_FUNCTION_ENTER(l_logfile)
+	if(APL_FAILURE == Rtv_Data_Direct(	p_line,
+						p_file_type,
+						p_sequence,
+						p_start_pos,
+						p_end_pos,
+						p_delimiter,
+						p_remove_char,
+						p_remove_last_char,
+						p_value_type,
+						p_date_format,
+						l_value,
+						l_debug_info_ptr))
+		APL_GOBACK_FAIL
+	if(APL_FAILURE == Remove_Last_Char(l_value,GF_DELIM_STR_SPACE,l_debug_info_ptr))
+		APL_GOBACK_FAIL
+	
+	EXEC SQL	SELECT VALUE
+				INTO :l_rtv_value:i_rtv_value
+				FROM GFCODEMAP 
+				WHERE CODE = :l_value
+				AND REFNO = :p_refno;
+
+	if(sqlca.sqlcode == 1403)
+	{
+		strcpy(p_value,l_value);
+		APL_GOBACK_SUCCESS
+	}
+	IS_ANY_ORA_ERROR
+	strcpy(p_value,l_rtv_value);
+	
+RETURN_SUCCESS:
+
+	BT_IF_DEBUG
+		fprintf(l_logfile,"VAL |%s| |%s|\n",l_value,p_value);
+
+	APL_FUNCTION_RET_SUCCESS(l_logfile)
+
+RETURN_FAILURE:
+BT_IF_DEBUG
+	fprintf(l_logfile,"VAL |%s| |%s|\n",l_value,p_value);
+	APL_FUNCTION_RET_FAILURE(l_logfile)
+	
+	
+}
+
+
+/*********************************************************************************************************
+ *                                                                                                       *
+ * Function Name         : Rtv_Data_Other																 *
+ *                                                                                                       *
+ * Description           : Gets Value for the field OTHER												 *
+ *                                                                                                       *
+ * Parameter                           Type                             Mode   Description               *
+ * ------------                        --------                         -----  ---------------           *
+ *																										 *
+ ********************************************************************************************************/
+
+int Rtv_Data_Other(char *p_value)
+{
+	APL_FUNCTION_ENTER(l_logfile)
+	memset(p_value,APL_NULL_CHAR,sizeof(p_value));
+
+APL_GOBACK_SUCCESS // AIX - Warnings Removal
+RETURN_SUCCESS:
+	APL_FUNCTION_RET_SUCCESS(l_logfile)
+/* AIX - Warnings Removal
+RETURN_FAILURE:
+	APL_FUNCTION_RET_FAILURE(l_logfile)
+*/
+}
+
+
+/*********************************************************************************************************
+ *                                                                                                       *
+ * Function Name         : DynamicQuery																	 *
+ *                                                                                                       *
+ * Description           : Gets Value for the field OTHER												 *
+ *                                                                                                       *
+ * Parameter                           Type                             Mode   Description               *
+ * ------------                        --------                         -----  ---------------           *
+ *																										 *
+ * p_sql_query						   char *							I	   Query to be executed		 *
+ *																										 *
+ * p_output							   char *							O	   result					 *
+ *																										 *
+ * l_debug_info_ptr                    DEBUG_INFO_STRUCT_H **           I      Debug Info Structure      *
+ *                                                                                                       *
+ * Return Values        :                                                                                *
+ *                                                                                                       *
+ *  APL_SUCCESS  - SUCCESS                                                                               *
+ *  APL_FAILURE  - FAILURE                                                                               *
+ *                                                                                                       *
+ ********************************************************************************************************/
+
+
+int DynamicQuery(	char *p_sql_query, 
+					char *p_output, 
+					DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	
+	struct sqlca sqlca;
+	sqlca.sqlcode = 0;
+
+BT_IF_DEBUG
+	fprintf(l_logfile,"In dynamic qry|%s|\n",p_sql_query);
+
+	short i_result = 0;
+	char l_result[GFU_VALUE_LEN];
+	APL_FUNCTION_ENTER(l_logfile)
+   VARCHAR    sqlstmt[4000]; /* Increased Query length From 100 to 4000 **/
+
+
+
+	memset(l_result,APL_NULL_CHAR,sizeof(l_result));
+	strcpy((char *)sqlstmt.arr,p_sql_query); // AIX Warnings Removal
+   sqlstmt.len = strlen((char *)sqlstmt.arr);
+   sqlstmt.arr[sqlstmt.len] = '\0';
+   sqlstmt.len++;
+
+
+
+	 printf(" sqlstmt.arr is |%s|\n",sqlstmt.arr);
+	 fflush(stdout);
+
+BT_IF_DEBUG
+	fprintf(l_logfile," before prep |%s|\n", sqlstmt.arr);
+    	EXEC SQL PREPARE S FROM :sqlstmt;
+
+	IS_ANY_ORA_ERROR
+
+	EXEC SQL DECLARE sql_cur CURSOR FOR S;
+
+	IS_ANY_ORA_ERROR
+
+    	EXEC SQL OPEN sql_cur;
+
+	IS_ANY_ORA_ERROR
+        
+	EXEC SQL FETCH sql_cur into :l_result:i_result;
+
+    	IS_ANY_ORA_ERROR
+	
+	strcpy(p_output, l_result);
+        
+	EXEC SQL CLOSE sql_cur;
+	IS_ANY_ORA_ERROR
+        
+BT_IF_DEBUG
+	fprintf(l_logfile,"The output is %s\n", l_result);
+	APL_GOBACK_SUCCESS
+
+RETURN_SUCCESS:
+
+	APL_FUNCTION_RET_SUCCESS(l_logfile)
+
+RETURN_FAILURE:
+
+	APL_FUNCTION_RET_FAILURE(l_logfile)
+}
+
+
+/*********************************************************************************************************
+ *                                                                                                       *
+ * Function Name         : Replace_In_Str																	 *
+ *                                                                                                       *
+ * Description           : Replace in string for old value with new one									 *
+ *                                                                                                       *
+ * Parameter                           Type                             Mode   Description               *
+ * ------------                        --------                         -----  ---------------           *
+ *																										 *
+ * p_line							   char *							I/O	   line						 *
+ *																										 *
+ * p_old							   char *							I	   old string				 *
+ *																										 *
+ * p_new							   char *							I	   New String				 *
+ *																										 *
+ * l_debug_info_ptr                    DEBUG_INFO_STRUCT_H **           I      Debug Info Structure      *
+ *                                                                                                       *
+ * Return Values        :                                                                                *
+ *                                                                                                       *
+ *  APL_SUCCESS  - SUCCESS                                                                               *
+ *  APL_FAILURE  - FAILURE                                                                               *
+ *                                                                                                       *
+ ********************************************************************************************************/
+
+
+int Replace_In_Str(	char *p_line,
+					char *p_old,
+					char *p_new, 
+					DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+        char *ptr = p_line;
+        char l_line[10000];
+
+	memset(l_line,APL_NULL_CHAR,sizeof(l_line));
+	APL_FUNCTION_ENTER(l_logfile)
+BT_IF_DEBUG
+	fprintf(l_logfile,"query |%s| old |%s| new |%s|\n",p_line,p_old,p_new);
+        while(strstr(ptr,p_old))
+        {
+                        strncat(l_line,ptr,strlen(ptr) -strlen( strstr(ptr,p_old)));
+                        strcat(l_line,p_new);
+                        ptr = strstr(ptr,p_old)  + strlen(p_old);
+        }
+	strcat(l_line,ptr);
+	memset(p_line,'\0',sizeof(p_line));
+        strcpy(p_line,l_line);
+BT_IF_DEBUG
+	fprintf(l_logfile,"query |%s| old |%s new |%s|\n",p_line,p_old,p_new);
+
+APL_GOBACK_SUCCESS // AIX - Warnings Removal
+
+RETURN_SUCCESS:
+
+	APL_FUNCTION_RET_SUCCESS(l_logfile)
+/* AIX - Warnings Removal
+RETURN_FAILURE:
+
+	APL_FUNCTION_RET_FAILURE(l_logfile)
+*/
+		
+}
+
+
+/*********************************************************************************************************
+ *                                                                                                       *
+ * Function Name         : Rtv_Data_Query																	 *
+ *                                                                                                       *
+ * Description           : Retrieve Query																 *
+ *                                                                                                       *
+ * Parameter                           Type                             Mode   Description               *
+ * ------------                        --------                         -----  ---------------           *
+ *																										 *
+ ********************************************************************************************************/
+
+int Rtv_Data_Query(	char *p_line,
+			int p_line_no,
+			char *p_file_type,
+			char *p_label,
+			char *p_refno,
+			char *p_field_type,
+					char *p_sequence,
+					char *p_start_pos,
+					char *p_end_pos,
+					char *p_delimiter,
+					char *p_remove_char,
+					char *p_remove_last_char,
+					char *p_static_val,
+					char *p_value_type,
+					char *p_date_format,
+					int p_srl_no,
+					char *p_repeat,
+					char *p_query,
+					DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	char *l_ptr = p_field_type;
+
+	char l_search_str[10];
+
+	char l_field[GFU_FIELD_LEN];
+	char l_sequence[GFU_SEQ_LEN];
+	char l_start[GFU_START_LEN];
+	char l_end[GFU_END_LEN];
+	char l_remove[GFU_REM_CHAR_LEN];
+	char l_remove_last[GFU_REM_LAST_CHAR_LEN];
+	char l_static[GFU_STATIC_VAL_LEN];
+	char l_valtype[GFU_VAL_TYPE_LEN];
+	char l_value[GFU_VALUE_LEN];
+	char l_date_format[50];
+	int l_index = 1;
+	
+   /* Bageshri *********/
+   char *token ="\'";
+   char l_data_val[GFU_VALUE_LEN];
+   char *l_data = "";
+   char l_mod_val[GFU_VALUE_LEN];
+
+   int l_data_val_len = 0;
+   int l_data_len = 0;
+   int l_token_flg = 0;
+   /***********************/
+	
+APL_FUNCTION_ENTER(l_logfile)
+	
+	memset(l_field,APL_NULL_CHAR,sizeof(l_field));
+	memset(l_sequence,APL_NULL_CHAR,sizeof(l_sequence));
+	memset(l_start,APL_NULL_CHAR,sizeof(l_start));
+	memset(l_end,APL_NULL_CHAR,sizeof(l_end));
+	memset(l_remove,APL_NULL_CHAR,sizeof(l_remove));
+	memset(l_remove_last,APL_NULL_CHAR,sizeof(l_remove_last));
+	memset(l_static,APL_NULL_CHAR,sizeof(l_static));
+	memset(l_valtype,APL_NULL_CHAR,sizeof(l_valtype));
+	memset(l_date_format,APL_NULL_CHAR,sizeof(l_date_format));
+	memset(l_value,APL_NULL_CHAR,sizeof(l_value));
+	
+
+	while(l_ptr != NULL && *l_ptr == GF_DELIM_CHAR_HASH)
+	{
+
+			if(p_field_type != (char *)NULL)
+				if(APL_FAILURE == GFU_Rtv_DelStr(	p_field_type + 1, 
+								GF_DELIM_STR_HASH, 
+								l_index,
+								l_field,
+								l_debug_info_ptr))
+					APL_GOBACK_FAIL
+
+
+			if(strlen(p_sequence))
+				if(APL_FAILURE == GFU_Rtv_DelStr(	p_sequence + 1, 
+								GF_DELIM_STR_HASH, 
+								l_index,
+								l_sequence,
+								l_debug_info_ptr))
+					APL_GOBACK_FAIL
+
+			if(strlen(p_start_pos))
+				if(APL_FAILURE == GFU_Rtv_DelStr(	p_start_pos + 1, 
+								GF_DELIM_STR_HASH, 
+								l_index,
+								l_start,
+								l_debug_info_ptr))
+					APL_GOBACK_FAIL
+			if(strlen(p_end_pos))
+				if(APL_FAILURE == GFU_Rtv_DelStr(	p_end_pos + 1, 
+								GF_DELIM_STR_HASH, 
+								l_index,
+								l_end,
+								l_debug_info_ptr))
+					APL_GOBACK_FAIL
+			if(strlen(p_remove_char))
+				if(APL_FAILURE == GFU_Rtv_DelStr(	p_remove_char + 1, 
+								GF_DELIM_STR_HASH, 
+								l_index,
+								l_remove,
+								l_debug_info_ptr))
+					APL_GOBACK_FAIL
+			if(strlen(p_remove_last_char))
+				if(APL_FAILURE == GFU_Rtv_DelStr(	p_remove_last_char + 1, 
+								GF_DELIM_STR_HASH, 
+								l_index,
+								l_remove_last,
+								l_debug_info_ptr))
+					APL_GOBACK_FAIL
+			if(strlen(p_static_val))
+				if(APL_FAILURE == GFU_Rtv_DelStr(	p_static_val + 1, 
+								GF_DELIM_STR_HASH, 
+								l_index,
+								l_static,
+								l_debug_info_ptr))
+					APL_GOBACK_FAIL
+			if(strlen(p_value_type))
+				if(APL_FAILURE == GFU_Rtv_DelStr(	p_value_type + 1, 
+								GF_DELIM_STR_HASH, 
+								l_index,
+								l_valtype,
+								l_debug_info_ptr))
+					APL_GOBACK_FAIL
+			if(strlen(p_date_format))
+				if(APL_FAILURE == GFU_Rtv_DelStr(	p_date_format + 1, 
+								GF_DELIM_STR_HASH, 
+								l_index,
+								l_date_format,
+								l_debug_info_ptr))
+					APL_GOBACK_FAIL
+
+
+
+			if(APL_FAILURE == Rtv_Data_Value(	p_line,
+							p_line_no,
+							p_file_type,
+							p_label,
+							p_refno,
+							l_field,
+							l_sequence,
+							l_start,
+							l_end,
+							p_delimiter,
+							l_remove,
+							l_remove_last,
+							l_static,
+							l_valtype,
+							l_date_format,
+							p_srl_no,
+							p_repeat,
+							p_query,
+							l_value,
+							l_debug_info_ptr))
+				APL_GOBACK_FAIL
+			memset(l_search_str,APL_NULL_CHAR,sizeof(l_search_str));
+			sprintf(l_search_str,"%c%d%c",GF_DELIM_CHAR_HASH,l_index,APL_NULL_CHAR);
+			/** Value Used In Query Can Contain ' So **/
+
+         /* Bageshri to replace ' by ''*/
+			/*Remove_Char(l_value,"\'",l_debug_info_ptr);*/
+
+         strcpy(l_data_val,l_value);
+         l_data_val_len = strlen(l_data_val);
+         while((l_data= strchr(l_data_val,*token))!= NULL)
+         {
+                 l_data_len = strlen(l_data);
+                 strncat(l_mod_val,l_data_val,l_data_val_len-l_data_len);
+                 strcat(l_mod_val,"''");
+                 strcpy(l_data_val,l_data + 1);
+                 l_data_val_len = strlen(l_data_val);
+                 l_token_flg = 1;
+         }
+
+         if(l_token_flg == 1)
+         {
+                 if(l_data_val_len > 0)
+                         strcat(l_mod_val,l_data_val);
+
+                 strcat(l_mod_val,"\0");
+
+                 strcpy(l_value,l_mod_val);
+                 Alert("After replace l_value |%s|",l_value);
+         }
+         /**********************************************/
+			if(APL_FAILURE == Replace_In_Str(	p_query,
+							l_search_str,
+							l_value,
+							l_debug_info_ptr))
+				APL_GOBACK_FAIL
+
+
+			
+			l_index ++;
+			l_ptr = strchr(l_ptr + strlen(GF_DELIM_STR_HASH),GF_DELIM_CHAR_HASH);
+	}
+
+APL_GOBACK_SUCCESS // AIX - Warnings Removal
+
+RETURN_SUCCESS:
+	APL_FUNCTION_RET_SUCCESS(l_logfile)
+
+RETURN_FAILURE:
+	APL_FUNCTION_RET_FAILURE(l_logfile)
+
+}
+
+/*********************************************************************************************************
+ *                                                                                                       *
+ * Function Name         : Rtv_Data_Value																	 *
+ *                                                                                                       *
+ * Description           : Retrieve value according each field type										 *
+ *                                                                                                       *
+ * Parameter                           Type                             Mode   Description               *
+ * ------------                        --------                         -----  ---------------           *
+ *																										 *
+ ********************************************************************************************************/
+
+
+int Rtv_Data_Value( char *p_line,
+			int p_line_no,
+			char *p_file_type,
+			char *p_label,
+					char *p_refno,
+					char *p_field_type,
+					char *p_sequence,
+					char *p_start,
+					char *p_end,
+					char *p_delimiter,
+					char *p_remove_char,
+					char *p_remove_last_char,
+					char *p_static_val,
+					char *p_value_type,
+					char *p_date_format,
+					int p_srl_no,
+					char *p_repeat,
+					char *p_query,
+					char *p_value,
+					DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	int l_seq = 0;
+	int l_start = 0;
+	int l_end = 0;
+
+APL_FUNCTION_ENTER(l_logfile)
+		l_seq = atoi(p_sequence);
+		l_start = atoi(p_start);
+		l_end = atoi(p_end);
+BT_IF_DEBUG
+		fprintf(l_logfile,"\tLabel : |%s|\n",p_label);
+	/*to populate system date with 12:00:00 in date fields for upload process changes done by shrinath start 17_Apr_2020*/
+	if(!strcmp(p_field_type,"SYSDTTIME"))
+	{
+	strcpy(p_value, g_sys_date);
+	APL_GOBACK_SUCCESS
+	}
+	else if(!strcmp(p_field_type,"SYSDATE"))
+	{
+	strcpy(p_value, g_sys_date_time);
+	APL_GOBACK_SUCCESS
+	}
+	/*to populate system date with 12:00:00 in date fields for upload process changes done by shrinath ends 17_Apr_2020*/	
+	else if(!strcmp(p_field_type,"DIRECT"))
+	{
+		if(APL_FAILURE == Rtv_Data_Direct(	p_line,
+							p_file_type,
+							l_seq,
+							l_start,
+							l_end,
+							p_delimiter,
+							p_remove_char,
+							p_remove_last_char,
+							p_value_type,
+							p_date_format,
+							p_value,
+							l_debug_info_ptr))
+			APL_GOBACK_FAIL
+
+
+
+	}
+	else if(!strcmp(p_field_type,"STATIC"))
+	{
+		if(APL_FAILURE == Rtv_Data_Static(	p_line,
+											p_static_val,
+											p_value,
+											l_debug_info_ptr))
+			APL_GOBACK_FAIL
+	}
+	else if(!strcmp(p_field_type,"MAPVAL"))
+	{
+		l_seq = atoi(p_sequence);
+		l_start = atoi(p_start);
+		l_end = atoi(p_end);
+		if(APL_FAILURE == Rtv_Data_MapVal(p_line,
+						p_refno,	
+						p_file_type,
+											l_seq,
+											l_start,
+											l_end,
+											p_delimiter,
+											p_remove_char,
+											p_remove_last_char,
+											p_value_type,
+											p_date_format,
+											p_value,
+											l_debug_info_ptr))
+			APL_GOBACK_FAIL
+	}
+	else if(!strcmp(p_field_type,"OTHER"))
+	{
+		if(APL_FAILURE == Rtv_Data_Other(p_value))
+			APL_GOBACK_FAIL
+	}
+	else if(!strcmp(p_field_type,"ALL"))
+	{
+		fprintf(l_logfile,"\n******************************************* \nValue of Line |%s|\n",p_line);	
+		strcpy(p_value,p_line);
+		fprintf(l_logfile,"\n******************************************* \nValue of Line After copy |%s|\n",p_value);	
+	}
+	else if(!strcmp(p_field_type,"ANY"))
+	{
+		fprintf(l_logfile,"\nSelected ANY\n");	
+		if(APL_FAILURE == Rtv_Data_Any(	p_line,
+ 						p_line_no,
+							p_file_type,
+							p_label,
+							l_seq,
+							l_start,
+							l_end,
+							p_delimiter,
+							p_remove_char,
+							p_remove_last_char,
+							p_value_type,
+							p_date_format,
+							p_value,
+							l_debug_info_ptr))
+			APL_GOBACK_FAIL
+
+	}
+	else if(!strcmp(p_field_type,"REPLACE"))
+	{
+		if(APL_FAILURE == Rtv_Data_Replace(p_line,
+							p_line_no,
+							p_file_type,
+							p_label,
+							l_seq,
+							l_start,
+							l_end,
+							p_delimiter,
+							p_remove_char,
+							p_remove_last_char,
+							p_value_type,
+							p_date_format,
+							p_static_val,
+							p_value,
+							l_debug_info_ptr))
+			APL_GOBACK_FAIL
+	}
+	else if(*p_field_type == GF_DELIM_CHAR_HASH)
+	{
+		if(APL_FAILURE == Rtv_Data_Query(	p_line,
+							p_line_no,
+							p_file_type,
+							p_label,
+							p_refno,
+							p_field_type,
+											p_sequence,
+											p_start,
+											p_end,
+											p_delimiter,
+											p_remove_char,
+											p_remove_last_char,
+											p_static_val,
+											p_value_type,
+											p_date_format,
+											p_srl_no,
+											p_repeat,
+											p_query,
+											l_debug_info_ptr))
+			APL_GOBACK_FAIL
+		if(APL_FAILURE == DynamicQuery(	p_query,
+										p_value,
+										l_debug_info_ptr))
+			APL_GOBACK_FAIL
+	}
+	else
+	{
+BT_IF_DEBUG
+	fprintf(l_logfile,"Field Not Proper |%s|\n",p_field_type);
+		APL_GOBACK_FAIL
+	}
+BT_IF_DEBUG
+	fprintf(l_logfile,"Value We Got id|%s|\n",p_value);
+
+APL_GOBACK_SUCCESS // AIX - Warnings Removal
+
+RETURN_SUCCESS:
+	
+	APL_FUNCTION_RET_SUCCESS(l_logfile)
+
+RETURN_FAILURE:
+	APL_FUNCTION_RET_FAILURE(l_logfile)
+}
+
+
+
+/*********************************************************************************************************
+ *                                                                                                       *
+ * Function Name         : GFU_UpdErrorDet																*
+ *                                                                                                       *
+ * Description           : update in error table														 *
+ *                                                                                                       *
+ * Parameter                           Type                             Mode   Description               *
+ * ------------                        --------                         -----  ---------------           *
+ *																										 *
+ ********************************************************************************************************/
+
+int GFU_UpdErrorDet(	int p_line_no,
+			char *p_skipped,
+			char *p_status,
+			char *p_token,
+			char *p_value,
+			char *p_reason,
+			DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	//DEBUG_INFO_STRUCT_H **l_temp = l_debug_info_ptr; // AIX - Warnings Removal
+	int l_line_no = p_line_no;
+	char l_status[50];
+	char l_token[GFU_TOKEN_LEN];
+	char l_value[GFU_VALUE_LEN];
+	char l_reason[GFU_ERROR_LEN];
+	char l_skipped[2];
+
+	short i_line_no = 0;
+	short i_skipped = 0;
+	short i_token = 0;
+	short i_value = 0;
+	short i_status = 0;
+	short i_reason = 0;
+	short i_file_name = 0;
+	short i_sys_date = 0;
+
+	
+				
+	
+	strcpy(l_skipped,p_skipped);
+	strcpy(l_status,p_status);
+	strcpy(l_token,p_token);
+	strcpy(l_value,p_value);
+	strcpy(l_skipped,p_skipped);
+
+	if(!strlen(p_reason))
+	{
+		CO_Rtv_ErrString(l_debug_info_ptr,l_reason);
+	}
+	else
+	{
+		strcpy(l_reason,p_reason);
+	}
+
+	
+	EXEC SQL INSERT INTO GFU_ERROR_DET 
+			VALUES(	:g_file_name:i_file_name,
+				:l_line_no:i_line_no,
+				:l_skipped:i_skipped,
+				:l_token:i_token,
+				:l_value:i_value,
+				:l_status:i_status,
+				:l_reason:i_reason,
+				:g_sys_date:i_sys_date);
+	IS_ANY_ORA_ERROR
+BT_IF_DEBUG
+	/*fprintf(l_userfile,"%d\t%s\t%s\t%s\t%s\t%s\n",l_line_no,l_skipped,l_token,l_value,l_status,l_reason);*/
+	/**fprintf(APL_OUT_FILE,"%d\t%s\t%s\t%s\t%s\t%s\n",l_line_no,l_skipped,l_token,l_value,l_status,l_reason);**/
+	fprintf(l_userfile,"%4d\t%7s\t%8s\t%s\n",l_line_no,l_skipped,l_status,l_reason);
+	fprintf(APL_OUT_FILE,"%4d\t%7s\t%8s\t%s\n",l_line_no,l_skipped,l_status,l_reason);
+
+	fflush(l_userfile);
+				
+APL_GOBACK_SUCCESS
+
+RETURN_SUCCESS:
+	
+	APL_FUNCTION_RET_SUCCESS(l_logfile)
+
+RETURN_FAILURE:
+	APL_FUNCTION_RET_FAILURE(l_logfile)
+}
+
+
+/*********************************************************************************************************
+ *                                                                                                       *
+ * Function Name         : Replace_MultBy_One																*
+ *                                                                                                       *
+ * Description           : Replace multi occurance of character with single								 *
+ *                                                                                                       *
+ * Parameter                           Type                             Mode   Description               *
+ * ------------                        --------                         -----  ---------------           *
+ *																										 *
+ ********************************************************************************************************/
+
+int Replace_MultBy_One(char *p_line,char p_char)
+{
+	//int i = 0; // AIX - Warnings Removal
+	int j = 0;
+	char l_line[GFU_LINE_LEN];
+	char *ptr = p_line;
+	char l_prev = APL_NULL_CHAR;
+
+	l_line[j]= APL_NULL_CHAR;
+
+	while(*ptr)
+	{
+		if(((*ptr == p_char) && (l_prev != p_char)) || (*ptr != p_char))
+		{
+			l_line[j] = *ptr;
+			j++;
+		}
+		l_prev = *ptr;
+		ptr++;
+	}
+	l_line[j] = APL_NULL_CHAR;
+	memset(p_line,APL_NULL_CHAR,sizeof(p_line));
+	strcpy(p_line,l_line);
+
+APL_GOBACK_SUCCESS // AIX - Warnings Removal
+
+RETURN_SUCCESS:
+	
+	APL_FUNCTION_RET_SUCCESS(l_logfile)
+/* AIX - Warnings Removal
+RETURN_FAILURE:
+	APL_FUNCTION_RET_FAILURE(l_logfile)
+*/
+}
+
+
+/*********************************************************************************************************
+ *                                                                                                       *
+ * Function Name         : Rtv_Format_Frm_Header																*
+ *                                                                                                       *
+ * Description           : Retrieves format from header line											 *
+ *                                                                                                       *
+ * Parameter                           Type                             Mode   Description               *
+ * ------------                        --------                         -----  ---------------           *
+ *																										 *
+ ********************************************************************************************************/
+int Rtv_Format_Frm_Header(	char *p_refno,
+				int p_header_no,
+				int p_format_no,
+				GFU_FORMAT_MAP_STRUCT_LST **p_header_lst,
+				DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	GFU_FORMAT_MAP_STRUCT_LST **l_temp = p_header_lst;
+	int l_field_no = 1;
+	char l_header[GFU_LINE_LEN];
+	char l_value[GFU_LINE_LEN];
+	char l_dotline[GFU_LINE_LEN];
+	int l_start = 0;
+	int l_end = 0;
+
+
+APL_FUNCTION_ENTER(l_logfile)
+
+	if(APL_FAILURE == GFU_Rtv_Line(	p_header_no,
+					l_header,
+					l_debug_info_ptr))
+	{
+		printf("Failed in GFU_Rtv_Line");
+		APL_GOBACK_FAIL
+	}
+	
+	
+	if(APL_FAILURE == GFU_Rtv_Line(	p_format_no,
+					l_dotline,
+					l_debug_info_ptr))
+	{
+		printf("Failed in GFU_Rtv_Line\n");
+		APL_GOBACK_FAIL
+	}
+	
+	if(APL_FAILURE == Replace_MultBy_One(l_header, GF_DELIM_CHAR_SPACE))
+	{
+		printf("Failed in Replace_MultSpace_One\n");
+		APL_GOBACK_FAIL
+	}
+	
+
+	if(APL_FAILURE == GFU_Rtv_DelStr(	l_header, 
+						GF_DELIM_STR_SPACE,
+						l_field_no,
+						l_value,
+						l_debug_info_ptr))
+	{
+		printf("Failed in GFU_Rtv_DelStr");
+		APL_GOBACK_FAIL
+	}
+
+
+	while(strlen(l_value))
+	{
+		while((*l_temp) != NULL)
+		{
+			l_temp = &((*l_temp)->h_next);
+		}
+		if(((*l_temp) = (GFU_FORMAT_MAP_STRUCT_LST *)calloc(1,sizeof(GFU_FORMAT_MAP_STRUCT_LST))) == NULL)
+		{
+BT_IF_DEBUG
+			fprintf(l_logfile,"failed in New Allocation\n");
+			APL_GOBACK_FAIL
+		}
+		
+		if(APL_FAILURE == Rtv_Start_End_Pos(	l_dotline,
+							GF_DELIM_STR_SPACE,
+							l_field_no,
+							&l_start,
+							&l_end,
+							l_debug_info_ptr))
+
+		{
+			printf("Failed in Rtv_Start_End_Pos");
+			APL_GOBACK_FAIL
+		}						
+
+
+		strcpy(	(*l_temp) -> h_refno,p_refno);
+		strcpy(	(*l_temp) -> h_valid,"Y");
+		strcpy(	(*l_temp) -> h_header_text,"T");
+		strcpy(	(*l_temp) -> h_field_type,"DIRECT");
+		strcpy(	(*l_temp) -> h_label,APL_NULL_STRING);
+		strcpy(	(*l_temp) -> h_seq,ltoa(l_field_no));
+		strcpy(	(*l_temp) -> h_start,ltoa(l_start));
+		strcpy(	(*l_temp) -> h_end,ltoa(l_end));
+		strcpy(	(*l_temp) -> h_remove_char,APL_NULL_STRING);
+		strcpy(	(*l_temp) -> h_remove_last_char,GF_DELIM_STR_SPACE);
+		strcpy(	(*l_temp) -> h_static_val,APL_NULL_STRING);
+		strcpy(	(*l_temp) -> h_val_type,"ST");
+		strcpy(	(*l_temp) -> h_header,l_value);
+		(*l_temp) -> h_srl_no = l_field_no;
+		strcpy(	(*l_temp) -> h_repeat,"N");
+		strcpy(	(*l_temp) -> h_query,APL_NULL_STRING);
+		l_field_no++;
+
+
+      fprintf(l_format_file,"\t%s\t%s\t%s\t%s\n",
+				      (*l_temp) -> h_header,
+						      (*l_temp) -> h_seq,
+								      (*l_temp) -> h_start,
+										      (*l_temp) -> h_end);
+		fflush(l_format_file);
+
+		memset(l_value,APL_NULL_CHAR,sizeof(l_value));
+		if(APL_FAILURE == GFU_Rtv_DelStr(	l_header, 
+							GF_DELIM_STR_SPACE, 
+							l_field_no,
+							l_value,
+							l_debug_info_ptr))
+		{
+			printf("Failed in GFU_Rtv_DelStr\n");
+			APL_GOBACK_FAIL
+		}
+
+
+
+	}
+	
+APL_GOBACK_SUCCESS // AIX - Warnings Removal
+
+RETURN_SUCCESS:
+	APL_FUNCTION_RET_SUCCESS(l_logfile)
+
+RETURN_FAILURE:
+	APL_FUNCTION_RET_FAILURE(l_logfile)
+}
+	
+
+
+
+/*********************************************************************************************************
+ *                                                                                                       *
+ * Function Name         : GFU_Rtv_Format_Ref_Map																*
+ *                                                                                                       *
+ * Description           : Get Rows for selecting ref no, if the format depends on data in file			 *
+ *                                                                                                       *
+ * Parameter                           Type                             Mode   Description               *
+ * ------------                        --------                         -----  ---------------           *
+ *																										 *
+ ********************************************************************************************************/
+
+
+
+int GFU_Rtv_Format_Ref_Map(	char *p_refno,
+					GFU_FORMAT_REF_MAP_STRUCT_LST **p_gfu_format_ref_map_lst,
+					DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	struct sqlca sqlca;
+	GFU_FORMAT_REF_MAP_STRUCT_LST **l_temp_ptr = p_gfu_format_ref_map_lst;
+	GFU_FORMAT_REF_MAP_STRUCT_I		*l_gfu_format_ref_map_i;
+	GFU_FORMAT_REF_MAP_STRUCT_H		*l_gfu_format_ref_map_h;
+	sqlca.sqlcode = 0;
+
+	APL_FUNCTION_ENTER(l_logfile)
+
+	EXEC SQL DECLARE l_cur_format_ref_map CURSOR FOR 
+			SELECT *
+			FROM GFU_FORMAT_REF_MAP
+			WHERE REFNO_MAP = :p_refno
+			ORDER BY SEQ;
+
+	IS_ANY_ORA_ERROR
+
+	EXEC SQL OPEN l_cur_format_ref_map;
+
+	IS_ANY_ORA_ERROR
+
+	l_gfu_format_ref_map_h = (GFU_FORMAT_REF_MAP_STRUCT_H *)calloc(1,sizeof(GFU_FORMAT_REF_MAP_STRUCT_H));
+	l_gfu_format_ref_map_i = (GFU_FORMAT_REF_MAP_STRUCT_I *)calloc(1,sizeof(GFU_FORMAT_REF_MAP_STRUCT_I));	
+
+	for(;;)
+	{
+		
+		memset(l_gfu_format_ref_map_h,NULL,sizeof(GFU_FORMAT_REF_MAP_STRUCT_H));
+		memset(l_gfu_format_ref_map_i,NULL,sizeof(GFU_FORMAT_REF_MAP_STRUCT_I));
+		EXEC SQL FETCH l_cur_format_ref_map
+				INTO :l_gfu_format_ref_map_h:l_gfu_format_ref_map_i;
+		
+		
+		if(sqlca.sqlcode == 1403)break;
+		IS_ANY_ORA_ERROR
+
+		while((*l_temp_ptr) != (GFU_FORMAT_REF_MAP_STRUCT_LST *)NULL)
+		{
+			l_temp_ptr = &((*l_temp_ptr)->h_next);
+		}
+		if(((*l_temp_ptr) = (GFU_FORMAT_REF_MAP_STRUCT_LST *)calloc(1,sizeof(GFU_FORMAT_REF_MAP_STRUCT_LST))) == NULL)
+		{
+			APL_GOBACK_FAIL
+		}
+		(*l_temp_ptr) -> h_seq = l_gfu_format_ref_map_h -> h_seq;
+		strcpy((*l_temp_ptr)->h_refno_map,l_gfu_format_ref_map_h -> h_refno_map);
+		strcpy((*l_temp_ptr) -> h_field,l_gfu_format_ref_map_h -> h_field);
+		strcpy((*l_temp_ptr) -> h_value,l_gfu_format_ref_map_h -> h_value);
+		strcpy((*l_temp_ptr) -> h_refno,l_gfu_format_ref_map_h -> h_refno);
+		strcpy((*l_temp_ptr) -> h_wrapper,l_gfu_format_ref_map_h -> h_wrapper);
+		strcpy((*l_temp_ptr) -> h_sp_name,l_gfu_format_ref_map_h -> h_sp_name);
+
+		(*l_temp_ptr) -> h_next = (GFU_FORMAT_REF_MAP_STRUCT_LST *)NULL;
+
+	}
+	EXEC SQL CLOSE l_cur_format_ref_map;
+	APL_GOBACK_SUCCESS
+RETURN_FAILURE:
+	
+	APL_FREE(l_gfu_format_ref_map_h);
+	APL_FREE(l_gfu_format_ref_map_i);
+	 APL_FUNCTION_RET_FAILURE(l_logfile)
+
+RETURN_SUCCESS:
+
+	APL_FREE(l_gfu_format_ref_map_h);
+	APL_FREE(l_gfu_format_ref_map_i);
+/*		CO_ProcMonitor(l_logfile," ",l_debug_info_ptr,NULL);	*/
+	APL_FUNCTION_RET_SUCCESS(l_logfile)
+}
+
+
+/*********************************************************************************************************
+ *                                                                                                       *
+ * Function Name         : Rtv_Value_Frm_Lst																*
+ *                                                                                                       *
+ * Description           : Gets the value from list for specific token			 *
+ *                                                                                                       *
+ * Parameter                           Type                             Mode   Description               *
+ * ------------                        --------                         -----  ---------------           *
+ *																										 *
+ ********************************************************************************************************/
+
+int Rtv_Value_Frm_Lst(	GFU_TOKEN_VAL_STRUCT_LST **p_token_value,
+						char *p_token,
+						char *p_value,
+						DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	GFU_TOKEN_VAL_STRUCT_LST **l_token_value = p_token_value;
+	
+	while((*l_token_value))
+	{
+		if(!strcmp((*l_token_value)->h_token,p_token))break;
+		l_token_value = &((*l_token_value) -> h_next);
+	}
+	memset(p_value,APL_NULL_CHAR,sizeof(p_value));
+	if((*l_token_value))strcpy(p_value,(*l_token_value) -> h_value);
+	APL_GOBACK_SUCCESS
+
+RETURN_SUCCESS:
+	APL_FUNCTION_RET_SUCCESS(l_logfile)
+/* AIX - Warnings Removal
+RETURN_FAILURE:
+	APL_FUNCTION_RET_FAILURE(l_logfile)
+*/
+}
+	
+
+
+/*********************************************************************************************************
+ *                                                                                                       *
+ * Function Name         : Compare_Value																*
+ *                                                                                                       *
+ * Description           : Compares with the values passed... for selecting refno			 *
+ *                                                                                                       *
+ * Parameter                           Type                             Mode   Description               *
+ * ------------                        --------                         -----  ---------------           *
+ *																										 *
+ ********************************************************************************************************/
+
+
+int Compare_Value(	GFU_FORMAT_REF_MAP_STRUCT_LST **p_gfu_format_ref_map_lst,
+					GFU_TOKEN_VAL_STRUCT_LST **p_token_value,
+					char *p_refno,
+					GFU_REQ_MAP_STRUCT_H *p_gfu_req_map_h,
+					DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	GFU_FORMAT_REF_MAP_STRUCT_LST **l_ref_map_lst = p_gfu_format_ref_map_lst;
+	char l_field[GFU_FIELD_LEN];
+	char l_map_value[GFU_VALUE_LEN];
+	char l_value[GFU_VALUE_LEN];
+	char *l_ptr;
+	int l_index = 0;
+	int l_valid = 1;
+	fprintf(l_logfile,"********* Inside Comapre Value \n");
+	memset(l_field,APL_NULL_CHAR,sizeof(l_field));
+	memset(l_map_value,APL_NULL_CHAR,sizeof(l_map_value));
+
+	while(*l_ref_map_lst)
+	{
+		if(*((*l_ref_map_lst) -> h_field) == GF_DELIM_CHAR_HASH)
+		{
+			l_ptr = (*l_ref_map_lst) -> h_field;
+			l_index = 1;
+			while(l_ptr != NULL && *l_ptr == GF_DELIM_CHAR_HASH)
+			{
+				if(APL_FAILURE == GFU_Rtv_DelStr(	((*l_ref_map_lst) -> h_field) + 1, 
+								GF_DELIM_STR_HASH,	 
+								l_index,
+								l_field,
+								l_debug_info_ptr))
+					APL_GOBACK_FAIL
+
+				if(APL_FAILURE == GFU_Rtv_DelStr(	((*l_ref_map_lst) -> h_value) + 1, 
+								GF_DELIM_STR_HASH, 
+								l_index,
+								l_map_value,
+								l_debug_info_ptr))
+					APL_GOBACK_FAIL
+
+				if(APL_FAILURE == Rtv_Value_Frm_Lst(	p_token_value,
+														l_field,
+														l_value,
+														l_debug_info_ptr))
+					APL_GOBACK_FAIL
+				BT_IF_DEBUG
+					fprintf(l_logfile,"Value From File |%s| value From table |%s|\n",l_value,l_map_value);
+				if(strcmp(l_map_value,l_value))
+				{
+					l_valid = 0;
+					break;
+				}
+				else 
+					l_valid = 1;
+				l_ptr = strchr(l_ptr + strlen(GF_DELIM_STR_HASH),GF_DELIM_CHAR_HASH);
+				l_index ++;
+			}
+			fprintf(l_logfile,"********* The valid |%d|\n",l_valid);
+			if(l_valid==1)break;
+		}
+		else
+		{
+			Rtv_Value_Frm_Lst(p_token_value,(*l_ref_map_lst) -> h_field,l_value,l_debug_info_ptr);
+			BT_IF_DEBUG
+
+ /** AIX migration chnges -- to remove warning **/ 
+				fprintf(l_logfile,"********* The val |%s| |%s|\n",(*l_ref_map_lst) -> h_field,l_value);
+			if(!strcmp((*l_ref_map_lst) -> h_value,l_value))break;
+		}
+
+		l_ref_map_lst = &((*l_ref_map_lst) -> h_next);
+	}
+	memset(p_refno,'\0',sizeof(p_refno));
+	fprintf(l_logfile,"********* Inside Comapre Value before IF\n");
+	if(*l_ref_map_lst)
+	{
+		strcpy(p_refno,(*l_ref_map_lst) -> h_refno);
+		/*Changes done for Addition of wrapper, SP_Name*/
+		fprintf(l_logfile,"********* Old Wrapper  |%s|\n",(*l_ref_map_lst)-> h_wrapper);
+		fprintf(l_logfile,"********* Old SP_Name  |%s|\n",(*l_ref_map_lst)-> h_sp_name);
+		if(strcmp((*l_ref_map_lst) -> h_wrapper,APL_NULL_STRING))
+		{
+			strcpy(p_gfu_req_map_h -> h_wrapper,(*l_ref_map_lst) -> h_wrapper);
+			strcpy(p_gfu_req_map_h -> h_sp_name,(*l_ref_map_lst) -> h_sp_name);
+		}
+		/*BT_IF_DEBUG*/
+			fprintf(l_logfile,"********* New Wrapper  |%s|\n",p_gfu_req_map_h -> h_wrapper);
+		/*BT_IF_DEBUG*/
+			fprintf(l_logfile,"********* New SP_Name  |%s|\n",p_gfu_req_map_h -> h_sp_name);
+			
+	}
+
+APL_GOBACK_SUCCESS
+
+RETURN_SUCCESS:
+	APL_FUNCTION_RET_SUCCESS(l_logfile)
+
+RETURN_FAILURE:
+	APL_FUNCTION_RET_FAILURE(l_logfile)
+}
+
+/*********************************************************************************************************
+ *                                                                                                       *
+ * Function Name         : Rtv_Format_Refno																*
+ *                                                                                                       *
+ * Description           : Gets The format according to the value in file			 *
+ *                                                                                                       *
+ * Parameter                           Type                             Mode   Description               *
+ * ------------                        --------                         -----  ---------------           *
+ *																										 *
+ ********************************************************************************************************/
+
+		
+int Rtv_Format_Refno(	char *p_line,
+						int p_line_no,
+						char *p_refno,
+						GFU_REQ_MAP_STRUCT_H *p_gfu_req_map_h,
+						DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	/**GFU_FILE_MAP_STRUCT_H *g_gfu_file_map_h = (GFU_FILE_MAP_STRUCT_H *)NULL;**/
+
+	GFU_FORMAT_MAP_STRUCT_LST **l_gfu_format_map_lst = (GFU_FORMAT_MAP_STRUCT_LST **)NULL;
+	GFU_FORMAT_MAP_STRUCT_LST *l_gfu_format_map_free = (GFU_FORMAT_MAP_STRUCT_LST *)NULL;
+
+	GFU_FORMAT_REF_MAP_STRUCT_LST **l_gfu_format_ref_map_lst = (GFU_FORMAT_REF_MAP_STRUCT_LST **)NULL;
+	GFU_FORMAT_REF_MAP_STRUCT_LST *l_gfu_format_ref_map_free = (GFU_FORMAT_REF_MAP_STRUCT_LST *)NULL;
+
+	GFU_TOKEN_VAL_STRUCT_LST **l_token_value = (GFU_TOKEN_VAL_STRUCT_LST **)NULL;
+	GFU_TOKEN_VAL_STRUCT_LST *l_token_value_free = (GFU_TOKEN_VAL_STRUCT_LST *)NULL;
+
+	l_gfu_format_map_lst = (GFU_FORMAT_MAP_STRUCT_LST **)calloc(1,sizeof(GFU_FORMAT_MAP_STRUCT_LST *));
+	l_gfu_format_ref_map_lst = (GFU_FORMAT_REF_MAP_STRUCT_LST **)calloc(1,sizeof(GFU_FORMAT_REF_MAP_STRUCT_LST *));
+	l_token_value = (GFU_TOKEN_VAL_STRUCT_LST **)calloc(1,sizeof(GFU_TOKEN_VAL_STRUCT_LST *));
+	/**g_gfu_file_map_h = (GFU_FILE_MAP_STRUCT_H *)calloc(1,sizeof(GFU_FILE_MAP_STRUCT_H));**/
+
+
+	memset(p_refno,'\0',sizeof(p_refno));
+
+	/**if(APL_FAILURE == GFU_Rtv_File(	g_gfu_file_map_h,
+									(FILE **)NULL,
+									l_debug_info_ptr))
+	{
+		printf("Failed in GFU_Rtv_File\n");
+		APL_GOBACK_FAIL
+	}
+	**/
+	APL_FUNCTION_ENTER(l_logfile)
+
+	if(APL_FAILURE == GFU_Rtv_Format(	g_gfu_file_map_h -> h_module,
+										g_gfu_file_map_h,
+										l_gfu_format_map_lst,
+										l_debug_info_ptr))
+	{	
+		printf("Failed in GFU_Rtv_Format\n");
+		APL_GOBACK_FAIL
+	}
+
+	
+	if(APL_FAILURE == Read_Ascii(	p_line,
+									p_line_no,
+									g_gfu_file_map_h,
+									l_gfu_format_map_lst,
+									l_token_value,
+									l_debug_info_ptr))
+	{
+		printf("Failed in Read_Ascii\n");
+		APL_GOBACK_FAIL
+	}
+
+	if(APL_FAILURE == GFU_Rtv_Format_Ref_Map(	g_gfu_file_map_h -> h_module,
+												l_gfu_format_ref_map_lst,
+											l_debug_info_ptr))
+	{
+		printf("Failed in GFU_Rtv_Format_Ref_Map\n");
+		APL_GOBACK_FAIL
+	}
+												
+
+	if(APL_FAILURE == Compare_Value(l_gfu_format_ref_map_lst,
+									l_token_value,
+									p_refno,
+									p_gfu_req_map_h,
+									l_debug_info_ptr))
+	{
+		printf("Failed in Compare_Value\n");
+		APL_GOBACK_FAIL
+	}
+
+	if(!strlen(p_refno))
+	{
+		memset(p_refno,'\0',sizeof(p_refno));
+		strcpy(p_refno,g_gfu_file_map_h -> h_module);
+	}
+	
+APL_GOBACK_SUCCESS // AIX - Warnings Removal
+
+RETURN_SUCCESS:
+	while(*l_gfu_format_map_lst)
+	{
+		l_gfu_format_map_free = (*l_gfu_format_map_lst) -> h_next;
+		APL_FREE((*l_gfu_format_map_lst));
+		(*l_gfu_format_map_lst) = l_gfu_format_map_free;
+    }
+	while(*l_gfu_format_ref_map_lst)
+	{
+		l_gfu_format_ref_map_free = (*l_gfu_format_ref_map_lst) -> h_next;
+		APL_FREE((*l_gfu_format_ref_map_lst));
+		(*l_gfu_format_ref_map_lst) = l_gfu_format_ref_map_free;
+    }
+	while(*l_token_value)
+	{
+		l_token_value_free = (*l_token_value) -> h_next;
+		APL_FREE((*l_token_value));
+		(*l_token_value) = l_token_value_free;
+    }
+	/**APL_FREE(g_gfu_file_map_h);**/
+
+	APL_FUNCTION_RET_SUCCESS(l_logfile)
+
+RETURN_FAILURE:
+	while(*l_gfu_format_map_lst)
+	{
+		l_gfu_format_map_free = (*l_gfu_format_map_lst) -> h_next;
+		APL_FREE((*l_gfu_format_map_lst));
+		(*l_gfu_format_map_lst) = l_gfu_format_map_free;
+    }
+	while(*l_gfu_format_ref_map_lst)
+	{
+		l_gfu_format_ref_map_free = (*l_gfu_format_ref_map_lst) -> h_next;
+		APL_FREE((*l_gfu_format_ref_map_lst));
+		(*l_gfu_format_ref_map_lst) = l_gfu_format_ref_map_free;
+    }
+	while(*l_token_value)
+	{
+		l_token_value_free = (*l_token_value) -> h_next;
+		APL_FREE((*l_token_value));
+		(*l_token_value) = l_token_value_free;
+    }
+	/**APL_FREE(g_gfu_file_map_h);**/
+	APL_FUNCTION_RET_FAILURE(l_logfile)
+}
+
+
+int GF_SpecificRecFun(	GFU_TOKEN_VAL_STRUCT_LST **p_token_val,
+								GFU_FILE_MAP_STRUCT_H *p_gfu_file_map,
+								char *p_start_date,
+								DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	char l_value[50] = APL_NULL_STRING;
+	/** This functions is introduced for exch - ord files**/
+	static int l_recorded = 0; // AIX - Warnings Removal
+	static int l_seq      = 0; // AIX - Warnings Removal
+	static char l_str_seq[6]	= APL_NULL_STRING;
+	char l_cond[30] = APL_NULL_STRING;
+	char l_upld_date[GFU_VALUE_LEN] = APL_NULL_STRING;
+	strcpy(l_cond,p_gfu_file_map -> h_module);
+
+	APL_FUNCTION_ENTER(l_logfile)
+	if(!l_recorded)
+	{
+		/** This block will be  executed only once **/
+		fprintf(l_logfile,"if cond exists %s",l_cond);
+		fprintf(l_logfile,"For the first time in GF_SpecificRecFun |%s|%d\n",p_gfu_file_map -> h_refno,l_recorded);
+		IF_COND_EXISTS("GF_DL_ORD_SUMM",l_cond)
+		{
+			fprintf(l_logfile," in side ifff ");
+			/** If the ref no matches we need to update in DL_ORD_SUMM table and pass in parameter string the 
+			 * line no and record no**/
+			Lst_rtvValue(p_token_val,"EXCHG_CODE",l_value);
+			EXEC SQL SELECT exch_ord_seq.nextval
+						INTO :l_seq
+						FROM DUAL;
+			IS_ANY_ORA_ERROR
+
+			fprintf(l_logfile," SQL Code for exch_ord_seq sequence %d",sqlca.sqlcode);
+
+
+			/** Now the Sequence **/
+			fprintf(l_logfile,"Exch code %s\n",l_value);
+			if(!strlen(l_value))
+			{
+				fprintf(l_logfile,"Unable to retrieve Ex-code\n");
+				APL_GOBACK_FAIL
+			}
+			if(!strcmp(l_value,"OTR"))
+			{
+				strcpy(l_value,"NSE");
+			}	
+			strncpy(l_upld_date,p_start_date,10);
+			strcat(l_upld_date," 12:00:00");
+			strcat(l_upld_date,APL_NULL_STRING);
+
+			/** Now Insert the values we got **/
+			//Changed By Sana -- retro from HDFC -- fprintf(l_logfile,"inserting DL_ORD_SUMM %s %s %s \n",p_gfu_file_map -> h_file_name,p_start_date,l_value);
+			fprintf(l_logfile,"inserting DL_ORD_SUMM %s %s %s \n",p_gfu_file_map -> h_file_name,l_upld_date,l_value);
+			Alert("Upload date is |%s|",l_upld_date);
+			EXEC SQL INSERT INTO DL_ORD_SUMM
+						VALUES( 	:p_gfu_file_map -> h_file_name,
+									:l_upld_date,
+									NULL,
+									:l_value,
+									:l_seq);
+
+			printf(" DL_ORD_SUMM SQL Insert |%d|\n",sqlca.sqlcode);
+			if (sqlca.sqlcode == -1)
+			{
+				fprintf(l_logfile,"File Already Uploaded  File Name : %s on dated  %s for Exchange %s \n",p_gfu_file_map -> h_file_name,l_upld_date,l_value);
+				fprintf(l_userfile,"File Already Uploaded  File Name : %s on dated  %s for Exchange %s \n",p_gfu_file_map -> h_file_name,l_upld_date,l_value);
+				APL_GOBACK_FAIL
+			}
+
+			IS_ANY_ORA_ERROR
+
+
+		}
+	}
+	strcpy(l_cond,p_gfu_file_map -> h_module);
+	IF_COND_EXISTS("GF_DL_ORD_SUMM",l_cond)
+	{
+		memset(l_str_seq,APL_NULL_CHAR,sizeof(l_str_seq));
+		sprintf(l_str_seq,"%d",l_seq);
+		Lst_AddValue(p_token_val,"FILELINKINFO",l_str_seq)
+	}
+
+	l_recorded = 1;
+
+
+APL_GOBACK_SUCCESS // AIX - Warnings Removal
+
+RETURN_SUCCESS:
+	APL_FUNCTION_RET_SUCCESS(l_logfile)
+RETURN_FAILURE:
+	APL_FUNCTION_RET_FAILURE(l_logfile)
+}
+
+/*********************************************************************************************************
+ *                                                                                                       *
+ * Function Name         : Rtv_Data_Any																 *
+ *                                                                                                       *
+ * Description           : Gets Value for the field REPLACE												 *
+ *                                                                                                       *
+ * Parameter                           Type                             Mode   Description               *
+ * ------------                        --------                         -----  ---------------           *
+ *																										 *
+ ********************************************************************************************************/
+
+int Rtv_Data_Any(	char *p_line,
+			int p_line_no,
+			char *p_file_type,
+			char *p_label,
+			int p_sequence,
+			int p_start_pos,
+			int p_end_pos,
+			char *p_delimiter,
+			char *p_remove_char,
+			char *p_remove_lastchar,
+			char *p_value_type,
+			char *p_date_format,
+			char *p_value,
+			DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	fprintf(l_logfile,"Start POS =|%d| End Pos =|%d| Seq=|%d|\n",p_start_pos,p_end_pos,p_sequence);	
+	if(p_start_pos  == 0) 
+	{
+		
+		fprintf(l_logfile,"\nInside IF 1");	
+		if(p_sequence == 0)
+		{
+			fprintf(l_logfile,"\nInside IF 2");	
+			APL_GOBACK_SUCCESS;
+		}
+		else
+		{
+			fprintf(l_logfile,"\nInside Else 2");	
+			/*strcpy(p_file_type,"A");*/
+			if(APL_FAILURE == Rtv_Data_Direct(p_line,
+				"A",
+				p_sequence,
+				p_start_pos,
+				p_end_pos,
+				p_delimiter,
+				p_remove_char,
+				p_remove_lastchar,
+				p_value_type,
+				p_date_format,
+				p_value,
+				l_debug_info_ptr))
+			APL_GOBACK_FAIL
+		}
+	}
+	else if(p_start_pos > p_end_pos)
+	{
+		fprintf(l_logfile,"\nInside Else IF 1");	
+				APL_GOBACK_SUCCESS;
+	}
+	else
+	{
+		fprintf(l_logfile,"\nInside Else 1");	
+		/*strcpy(p_file_type,"A");*/
+		if(APL_FAILURE == Rtv_Data_Direct(p_line,
+			"P",
+			p_sequence,
+			p_start_pos,
+			p_end_pos,
+			p_delimiter,
+			p_remove_char,
+			p_remove_lastchar,
+			p_value_type,
+			p_date_format,
+			p_value,
+			l_debug_info_ptr))
+		APL_GOBACK_FAIL
+	}
+
+BT_IF_DEBUG
+	fprintf(l_logfile,"Value for %s  tsrt |%d| End |%d| Is %s \n",p_label,p_start_pos,p_end_pos,p_value);
+	if(APL_FAILURE == Remove_Char(p_value,GF_DELIM_STR_SPACE, l_debug_info_ptr))
+		APL_GOBACK_FAIL
+fprintf(l_logfile,"Value |%s|\n",p_value);
+RETURN_SUCCESS:
+	APL_FUNCTION_RET_SUCCESS(l_logfile)
+
+RETURN_FAILURE:
+	APL_FUNCTION_RET_FAILURE(l_logfile)
+}
+
+int GFU_Summ_Rpt( char *p_sys_date,
+			char *p_process_name,
+			char *p_user,
+			FILE *p_userfile,
+			FILE *p_logfile,
+			FILE *p_skipped_file,
+			FILE *p_format_file,
+			char *p_module,
+			DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	struct sqlca sqlca;
+	char l_rep_path[GFU_PATH_LEN] = APL_NULL_STRING;
+	int l_success = 0;
+	int l_failed = 0;
+	int l_total_rec = 0;
+	int l_line_no = 0;
+	int l_skipped = 0;
+	FILE *l_sum_file = (FILE *)NULL;
+	char l_userfile_name[GFU_PATH_LEN];
+	char l_logfile_name[GFU_PATH_LEN];
+	char l_skipped_file_name[GFU_PATH_LEN];
+	char l_format_file_name[GFU_PATH_LEN];
+	char l_end_date[APL_DATE_LEN] ;
+	char l_sys_date[APL_DATE_LEN] ;
+	char l_rep_name[50] = APL_NULL_STRING;
+
+
+	APL_FUNCTION_ENTER(l_logfile)
+	if(Rtv_Dir_Path(	"INTL_REP_PATH",
+				 			l_rep_path,
+							l_debug_info_ptr) == APL_FAILURE)
+	{
+
+		 APL_GOBACK_FAIL
+	}
+	printf("Path |%s| \n",l_rep_path);
+
+	if(CO_Rtv_FileNm_From_Pointer(	p_userfile,
+												l_rep_path,
+												l_userfile_name) == APL_FAILURE)
+	{
+		 APL_GOBACK_FAIL
+	}	
+	printf("Name |%s| \n",l_userfile_name);
+				 			
+	if(CO_Rtv_FileNm_From_Pointer(	p_logfile,
+												l_rep_path,
+												l_logfile_name) == APL_FAILURE)
+	{
+		 APL_GOBACK_FAIL
+	}	
+	printf("Name |%s| \n",l_logfile_name);
+
+	if(CO_Rtv_FileNm_From_Pointer(	p_skipped_file,
+												l_rep_path,
+												l_skipped_file_name) == APL_FAILURE)
+	{
+		 APL_GOBACK_FAIL
+	}	
+	printf("Name |%s| \n",l_skipped_file_name);
+	if(CO_Rtv_FileNm_From_Pointer(	p_format_file,
+												l_rep_path,
+												l_format_file_name) == APL_FAILURE)
+	{
+		 APL_GOBACK_FAIL
+	}	
+	printf("Name |%s| \n",l_format_file_name);
+	if(	CO_RtvSysDtTime(	l_end_date,
+									l_debug_info_ptr) == APL_FAILURE)
+	{
+		APL_GOBACK_FAIL
+	}
+	strncpy(l_sys_date,p_sys_date,10);
+	strcat(l_sys_date,APL_NULL_STRING);
+	l_sys_date[2] = '_';
+	l_sys_date[5] = '_';
+	strcat(l_rep_path,"DmSummRpt_On_");
+	strcat(l_rep_path,l_sys_date);
+	strcat(l_rep_path,".rpt");
+	strcpy(l_rep_name,strrchr(l_rep_path,'/') + 1);
+
+
+	EXEC SQL	SELECT nvl(count(*) ,0)
+				INTO :l_success
+				from gfu_error_det 
+				where file_name = :g_file_name 
+				and status = 'SUCCESS' 
+				and start_date = :p_sys_date;
+	IS_ANY_ORA_ERROR
+
+	EXEC SQL	SELECT nvl(max(line_no),0)
+				INTO :l_line_no
+				from gfu_error_det 
+				where file_name = :g_file_name 
+				and start_date = :p_sys_date;
+	IS_ANY_ORA_ERROR
+	
+
+	EXEC SQL	SELECT nvl(count(*) ,0)
+				INTO :l_skipped
+				from gfu_error_det 
+				where file_name = :g_file_name 
+				and skipped = 'Y'
+				and start_date = :p_sys_date;
+	IS_ANY_ORA_ERROR
+		
+	l_total_rec = l_line_no - l_skipped;	
+	l_failed = l_total_rec - l_success;
+
+	l_sum_file = fopen(l_rep_path,"a");
+	if(l_sum_file == (FILE *)NULL)
+		APL_GOBACK_FAIL
+
+	if(ftell(l_sum_file) == 0)
+			fprintf(l_sum_file,"%20s\t%20s\t%20s\t%5s\t%5s\t%8s\t%20s%20s\n","Entity","Start Date","End Date","Total","Success","Fail","File","Log");
+
+	fprintf(l_sum_file,"%20s\t%20s\t%20s\t%d\t%d\t%d\t%20s%20s\n",
+				p_module,
+				p_sys_date,
+				l_end_date,
+				l_total_rec,
+				l_success,
+				l_failed,
+				g_file_name,
+				l_userfile_name);
+	fclose(l_sum_file);	
+	/*********Added By sundar **********************/
+	printf("\nValues before inserting PRO_COMMON_REPORT ... \n");
+	printf("l_rep_name is |%s|\n",l_rep_name);
+	printf("p_sys_date is |%s|\n",p_sys_date);
+	printf("p_process_name is |%s|\n",p_process_name);
+	printf("p_user is |%s|\n",p_user);
+	printf("l_rep_path is |%s|\n",l_rep_path);
+	printf("\n*******************************\n");
+	EXEC SQL INSERT INTO PRO_COMMON_REPORT VALUES (:l_rep_name,
+			'Upload Summary Report',
+			:p_sys_date,
+			100,
+			:p_process_name,
+			'B',
+			:p_user,
+			:l_rep_path
+			); 
+	 IS_ANY_ORA_ERROR
+
+APL_GOBACK_SUCCESS // AIX - Warnings Removal
+
+RETURN_SUCCESS:
+	APL_FUNCTION_RET_SUCCESS(l_logfile)
+RETURN_FAILURE:
+	APL_FUNCTION_RET_FAILURE(l_logfile)
+}
+

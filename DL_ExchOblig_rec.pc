@@ -1,0 +1,358 @@
+/*
+ **    COPYRIGHT NOTICE
+ **
+ **   Copyright 2005 Polaris Software Lab Limited. All rights reserved.
+ **
+ **   These materials are confidential and proprietary to
+ **    Polaris Software Lab Limited and no part of these materials should
+ **    be reproduced, published, transmitted or distributed in any form or
+ **    by any means, electronic, mechanical, photocopying, recording or
+ **    otherwise, or stored in any information storage or retrieval system
+ **    of any nature nor should the materials be disclosed to third parties
+ **    or used in any other manner for which this is not authorized, without
+ **    the prior express written authorization of Polaris Software Lab Limited.
+ **/
+/*********************************************************************
+ **
+ ** Module Name         :      DEAL PROCESSING
+ **
+ ** File Name           :      DL_ExchOblig_rec.pc
+ **
+ ** Description         :      DEAL OBLIGATION RECONCILATION
+ **
+ **
+ **
+ **            Version Control Block
+ **
+ ** Date        Version     Author           Description        RFS No.
+ ** ---------   --------  ---------------  ------------------   ---------
+ ** 31/03/2006  1.0       Amol Kulkarni
+ **************************************************************************/
+
+
+
+#include "stdio_64.h"
+#include "Intellect_Common.h"
+#include "Intellect_Interface.h"
+#include "DL_Interface.h"
+#include "BT_Common.h"
+#include "Intellect_Error.h"
+#include "CO_IndStructdef.h"
+
+/* OPT:AIX */
+#ifdef DATA_FIELD_SEPRTR
+#undef DATA_FIELD_SEPRTR
+#endif
+#define DATA_FIELD_SEPRTR ''
+#define DATA_VALUE_SEPRTR ''
+
+
+EXEC SQL INCLUDE SQLCA.H;
+
+int main(int argc,char **argv)  //AIX-Warnings Removal
+{	
+	/***********	Variable Declaration Section	**********/
+	DEBUG_INFO_STRUCT_H **l_debug_info_ptr = (DEBUG_INFO_STRUCT_H **) NULL;
+	l_debug_info_ptr = (DEBUG_INFO_STRUCT_H **)calloc(1,sizeof(DEBUG_INFO_STRUCT_H *)); 
+	int l_int_num = 0, count=0;
+	char l_chr_exchange[10] = APL_NULL_STRING;
+	char l_chr_settlement_no[16] = APL_NULL_STRING;
+	char  **temp = ( char **)NULL;
+	FILE *l_logfile = (FILE *)NULL;
+	FILE *p_logfile = NULL;
+	double l_aggr_qty;
+	double l_agg_amt;
+	char l_comment[501]=APL_NULL_STRING;
+	double l_aggr_qty_p;
+	double l_agg_amt_p;
+	double l_aggr_qty_s;
+	double l_agg_amt_s;
+	char deal_cd[2];
+	int flag=0;
+	int l_int_agg_amt=0;
+	int l_int_rec_amt=0;
+
+	/* Variable Declaration*/	
+	DL_EXCHOBLIGATION_STRUCT_H *l_dl_exchobligation_rec=NULL;	
+	DL_EXCHOBLIGATION_STRUCT_I *l_dl_exchobligation_rec_ind=NULL;	
+	DL_EXCHRECON_RPT_STRUCT_H *l_dl_exchrecon=NULL;	
+	DL_EXCHRECON_RPT_STRUCT_I *l_dl_exchrecon_ind=NULL;	
+	
+	/***********	Data Base Connention	**********/
+	if(CO_Get_DBConnect(l_debug_info_ptr) == APL_FAILURE)
+	{
+		APL_GOBACK_FAIL
+	}
+
+	/***********	Processing INPUT PARAMETERS	START	**********/
+	if (APL_FAILURE == CO_Rtv_RptFileName( "7g",
+				APL_LOGFILE_DESC,
+				100,
+				argv[5],
+				argv,
+				&l_logfile,
+				l_debug_info_ptr ) ) 
+	{
+		CO_ProcMonitor(l_logfile, "Failure from CO RTY:", NULL, NULL);
+		APL_GOBACK_FAIL
+	} 
+
+	
+
+	if(BT_Status_Update(argv[0],
+				argv[1],
+				argv[2],
+				APL_STARTED_STATUS,
+				l_debug_info_ptr) ==APL_FAILURE)
+	{
+		APL_GOBACK_FAIL
+	}
+
+
+	
+	if(APL_FAILURE == CO_SplitStr(argv[9],
+				'|',
+				&l_int_num,&temp))
+	{
+		CO_ProcMonitor(l_logfile, "Failure from StrSplitFn", NULL, NULL);
+		APL_GOBACK_FAIL
+
+	}
+
+	if(sqlca.sqlcode)
+	{
+		APL_GOBACK_FAIL
+	}
+	/*Calloc*/
+	l_dl_exchobligation_rec=(DL_EXCHOBLIGATION_STRUCT_H *)calloc(1,sizeof(DL_EXCHOBLIGATION_STRUCT_H));	
+	l_dl_exchobligation_rec_ind=(DL_EXCHOBLIGATION_STRUCT_I *)calloc(1,sizeof(DL_EXCHOBLIGATION_STRUCT_I));	
+	l_dl_exchrecon=(DL_EXCHRECON_RPT_STRUCT_H *)calloc(1,sizeof(DL_EXCHRECON_RPT_STRUCT_H));	
+	l_dl_exchrecon_ind=(DL_EXCHRECON_RPT_STRUCT_I *)calloc(1,sizeof(DL_EXCHRECON_RPT_STRUCT_I));	
+
+	/*MemSet*/
+	memset(l_dl_exchobligation_rec, NULL, sizeof(DL_EXCHOBLIGATION_STRUCT_H));
+	memset(l_dl_exchobligation_rec_ind, NULL, sizeof(DL_EXCHOBLIGATION_STRUCT_I));
+	memset(l_dl_exchrecon, NULL, sizeof(DL_EXCHRECON_RPT_STRUCT_H));
+	memset(l_dl_exchrecon_ind, NULL, sizeof(DL_EXCHRECON_RPT_STRUCT_I));
+
+	if (!strlen(temp[0]))
+	{
+		printf("\n\tSettlment Number missing!!!!!!!!!\n");
+		APL_GOBACK_FAIL
+	}
+
+	if(strcmp(temp[0],APL_NULL_STRING) == 0)
+		strcpy(l_chr_settlement_no,"%");
+	else
+		strcpy(l_chr_settlement_no, temp[0]);
+
+	if(strcmp(temp[1],APL_NULL_STRING) == 0)
+		strcpy(l_chr_exchange,"%");
+	else
+		strcpy(l_chr_exchange, temp[1]);
+//AIX Warning Removal
+	printf("\n Selected Exchange Code is  |%s|, length=%d",l_chr_exchange,(int)strlen(l_chr_exchange));
+	printf("\n Selected settlment Number is  |%s|,length =%d",l_chr_settlement_no,(int)strlen(l_chr_settlement_no));
+
+	/*SQL Declaration*/
+	EXEC SQL BEGIN DECLARE SECTION;
+	EXEC SQL VAR l_dl_exchobligation_rec->h_settlement_no is STRING;
+	EXEC SQL VAR l_dl_exchobligation_rec->h_instr_cd is STRING;
+	EXEC SQL VAR l_dl_exchobligation_rec->h_mkt_type is STRING;
+	EXEC SQL VAR l_dl_exchobligation_rec->h_deal_cd is STRING;
+	EXEC SQL VAR l_dl_exchobligation_rec->h_deal_dt is STRING;
+	EXEC SQL VAR l_dl_exchobligation_rec->h_status is STRING;
+	EXEC SQL VAR l_dl_exchobligation_rec->h_exch_code is STRING;
+	EXEC SQL END DECLARE SECTION;
+
+	/*Cursor Declaration retrieving values from  DL_EXCHOBLIGATION_REC where  status != 'RC'*/
+	EXEC SQL DECLARE deal_outer CURSOR FOR
+		SELECT *  FROM  DL_EXCHOBLIGATION_REC WHERE TRIM(SETTLEMENT_NO)=TRIM(:l_chr_settlement_no) AND EXCH_CODE LIKE :l_chr_exchange;
+
+	EXEC SQL OPEN deal_outer;
+
+	for(;;)
+	{
+		l_aggr_qty=0;
+		l_agg_amt=0;
+		flag=0;
+		EXEC SQL FETCH deal_outer INTO :l_dl_exchobligation_rec:l_dl_exchobligation_rec_ind;
+		printf("\nsqlcode=%d",sqlca.sqlcode);
+		if(APL_ZERO_RESULT_SET)
+			break;
+		printf("1");
+		if(strcmp(l_dl_exchobligation_rec->h_status,"RC"))
+		{
+			printf("\nInside IF for status !=RC");
+			printf("\n l_dl_exchobligation_rec->h_settlement_no=|%s| \n",l_dl_exchobligation_rec->h_settlement_no);
+			printf("\n l_dl_exchobligation_rec->h_instr_cd=|%s| \n",l_dl_exchobligation_rec->h_instr_cd);
+			printf("\n l_dl_exchobligation_rec->h_mkt_type=|%s| \n",l_dl_exchobligation_rec->h_mkt_type);
+			printf("\n l_dl_exchobligation_rec->h_deal_cd=|%s| \n",l_dl_exchobligation_rec->h_deal_cd);
+			printf("\n l_dl_exchobligation_rec->h_deal_dt=|%s| \n",l_dl_exchobligation_rec->h_deal_dt);
+			printf("\n l_dl_exchobligation_rec->h_exch_code=|%s| \n",l_dl_exchobligation_rec->h_exch_code);
+		
+			if(!strcmp(l_dl_exchobligation_rec->h_exch_code,"BSE"))
+			{
+				printf("\nInside BSE");
+				EXEC SQL SELECT nvl(sum(AGGR_QTY),0) ,nvl(sum(agg_amt),0) INTO :l_aggr_qty, :l_agg_amt FROM DL_EXCHOBLIGATION WHERE TRIM(SETTLEMENT_NO) = TRIM(:l_dl_exchobligation_rec->h_settlement_no) AND TRIM(INSTR_CD) = TRIM(:l_dl_exchobligation_rec->h_instr_cd) AND TRIM(MKT_TYPE) = TRIM(:l_dl_exchobligation_rec->h_mkt_type) AND TRIM(DEAL_CD) = TRIM(:l_dl_exchobligation_rec->h_deal_cd) AND TRUNC(deal_dt) = TRUNC(to_date(:l_dl_exchobligation_rec->h_deal_dt,'DD/MM/YYYY HH:MI:SS')) AND TRIM(EXCH_CODE)=TRIM(:l_dl_exchobligation_rec->h_exch_code);
+				printf("\nsqlcode=%d for BSE",sqlca.sqlcode);
+				if(APL_ZERO_RESULT_SET)
+					break;
+				printf("\nAgg_QTY=%lf\nAgg_AMT=%lf",l_aggr_qty,l_agg_amt );
+
+			}
+			else
+			{
+				if(!strcmp(l_dl_exchobligation_rec->h_mkt_type,"22 "))
+				{
+					/*Checking the existance of data in DL_EXCHOBLIGATION table */
+					EXEC SQL SELECT nvl(sum(AGGR_QTY),0) ,nvl(sum(agg_amt),0) INTO :l_aggr_qty, :l_agg_amt FROM DL_EXCHOBLIGATION WHERE TRIM(SETTLEMENT_NO) = TRIM(:l_dl_exchobligation_rec->h_settlement_no) AND TRIM(INSTR_CD) = TRIM(:l_dl_exchobligation_rec->h_instr_cd) /*AND AGGR_QTY = :l_dl_exchobligation_rec->h_aggr_qty AND agg_amt = :l_dl_exchobligation_rec->h_agg_amt */AND TRIM(MKT_TYPE) = TRIM(:l_dl_exchobligation_rec->h_mkt_type) AND TRIM(DEAL_CD) = TRIM(:l_dl_exchobligation_rec->h_deal_cd) AND TRUNC(deal_dt) = TRUNC(to_date(:l_dl_exchobligation_rec->h_deal_dt,'DD/MM/YYYY HH:MI:SS')) AND TRIM(EXCH_CODE)=TRIM(:l_dl_exchobligation_rec->h_exch_code);
+					printf("\nsqlcode=%d for mkt_type=22",sqlca.sqlcode);
+					if(APL_ZERO_RESULT_SET)
+						break;
+					printf("\nfor mkt_type=22\nAgg_QTY=%lf\nAgg_AMT=%lf",l_aggr_qty,l_agg_amt );
+				}
+				else
+				{
+					l_aggr_qty_s=0;
+					l_aggr_qty_p=0;
+					l_agg_amt_s=0;
+					l_agg_amt_p=0;
+
+					/*Checking the existance of data in DL_EXCHOBLIGATION table */
+					EXEC SQL SELECT nvl(sum(AGGR_QTY),0) ,nvl(sum(agg_amt),0) INTO :l_aggr_qty_p, :l_agg_amt_p FROM DL_EXCHOBLIGATION WHERE TRIM(SETTLEMENT_NO) = TRIM(:l_dl_exchobligation_rec->h_settlement_no) AND TRIM(INSTR_CD) = TRIM(:l_dl_exchobligation_rec->h_instr_cd) /*AND AGGR_QTY = :l_dl_exchobligation_rec->h_aggr_qty AND agg_amt = :l_dl_exchobligation_rec->h_agg_amt */AND TRIM(MKT_TYPE) = TRIM(:l_dl_exchobligation_rec->h_mkt_type) AND TRIM(DEAL_CD) = 'P' AND TRUNC(deal_dt) = TRUNC(to_date(:l_dl_exchobligation_rec->h_deal_dt,'DD/MM/YYYY HH:MI:SS')) AND TRIM(EXCH_CODE)=TRIM(:l_dl_exchobligation_rec->h_exch_code);
+					printf("\nsqlcode=%d for mkt_type!=22 and Deal_CD=P",sqlca.sqlcode);
+					if(APL_ZERO_RESULT_SET)
+						break;
+					printf("\nfor mkt_type!=22 and Deal_CD=P\nAgg_QTY=%lf\nAgg_AMT=%lf",l_aggr_qty_p,l_agg_amt_p );
+
+					/*Checking the existance of data in DL_EXCHOBLIGATION table */
+					EXEC SQL SELECT nvl(sum(AGGR_QTY),0) ,nvl(sum(agg_amt),0) INTO :l_aggr_qty_s, :l_agg_amt_s FROM DL_EXCHOBLIGATION WHERE TRIM(SETTLEMENT_NO) = TRIM(:l_dl_exchobligation_rec->h_settlement_no) AND TRIM(INSTR_CD) = TRIM(:l_dl_exchobligation_rec->h_instr_cd) /*AND AGGR_QTY = :l_dl_exchobligation_rec->h_aggr_qty AND agg_amt = :l_dl_exchobligation_rec->h_agg_amt */AND TRIM(MKT_TYPE) = TRIM(:l_dl_exchobligation_rec->h_mkt_type) AND TRIM(DEAL_CD) = 'S' AND TRUNC(deal_dt) = TRUNC(to_date(:l_dl_exchobligation_rec->h_deal_dt,'DD/MM/YYYY HH:MI:SS')) AND TRIM(EXCH_CODE)=TRIM(:l_dl_exchobligation_rec->h_exch_code);
+					printf("\nsqlcode=%d for mkt_type!=22 and Deal_CD=P",sqlca.sqlcode);
+					if(APL_ZERO_RESULT_SET)
+						break;
+					printf("\nfor mkt_type!=22 and Deal_CD=P\nAgg_QTY=%lf\nAgg_AMT=%lf",l_aggr_qty_s,l_agg_amt_s );
+					
+					l_aggr_qty = l_aggr_qty_s - l_aggr_qty_p;
+					l_agg_amt = l_agg_amt_s - l_agg_amt_p;
+					printf("\nFor mkt_type!=22\nAGG_QTY=%lf\nAgg_AMT=%lf ",l_aggr_qty,l_agg_amt);
+					if(l_agg_amt <0)
+					{
+						l_agg_amt =l_agg_amt *(-1);
+						l_aggr_qty =l_aggr_qty *(-1);
+						strcpy(deal_cd,"P");
+					}
+					else
+					{
+						strcpy(deal_cd,"S");
+					}
+				
+					if(strcmp(l_dl_exchobligation_rec->h_deal_cd,deal_cd))
+					{
+						flag=1;
+					}
+					else
+					{
+						flag=0;
+					}
+				}
+			}
+			printf("\nsqlcode for inner select=%d",sqlca.sqlcode);
+			printf("\nAgg-QTY=%lf\nAAgg-AMT=%lf",l_aggr_qty,l_agg_amt);
+			l_int_agg_amt=l_agg_amt;
+			l_int_rec_amt=l_dl_exchobligation_rec->h_agg_amt;
+			
+			printf("\nAfter Conversion into Int\nDump AMT=%d\nUpload AMT=%d",l_int_rec_amt,l_int_agg_amt);
+			
+			/*updating L_DL_EXCHRECON  structure*/
+			strcpy(l_dl_exchrecon->h_settlement_no,l_dl_exchobligation_rec->h_settlement_no);
+			strcpy(l_dl_exchrecon->h_instr_cd,l_dl_exchobligation_rec->h_instr_cd);
+			strcpy(l_dl_exchrecon->h_deal_cd,l_dl_exchobligation_rec->h_deal_cd);
+			strcpy(l_dl_exchrecon->h_status,l_dl_exchobligation_rec->h_status);
+			strcpy(l_dl_exchrecon->h_exch_code,l_dl_exchobligation_rec->h_exch_code);
+			strcpy(l_dl_exchrecon->h_mkt_type,l_dl_exchobligation_rec->h_mkt_type);
+
+			/*Checking count value which is retrieved from DL_EXCHOBLIGATION table query*/
+			if(l_aggr_qty==l_dl_exchobligation_rec->h_aggr_qty && l_int_agg_amt==l_int_rec_amt && flag==0)
+			{
+				/*updating L_DL_EXCHRECON  structure*/
+				strcpy(l_dl_exchrecon->h_status,"RC");
+				strcpy(l_dl_exchrecon->h_failcode,"40");
+				strcpy(l_dl_exchrecon->h_comments,"Data is correct");
+
+				/* Updating Status as "RC" into DL_EXCHOBLIGATION table */
+				EXEC SQL UPDATE DL_EXCHOBLIGATION SET STATUS='RC' WHERE TRIM(SETTLEMENT_NO) = TRIM(:l_dl_exchobligation_rec->h_settlement_no) AND TRIM(INSTR_CD) = TRIM(:l_dl_exchobligation_rec->h_instr_cd) AND AGGR_QTY = :l_dl_exchobligation_rec->h_aggr_qty AND agg_amt = :l_dl_exchobligation_rec->h_agg_amt AND TRIM(MKT_TYPE) = TRIM(:l_dl_exchobligation_rec->h_mkt_type) AND TRIM(DEAL_CD) = TRIM(:l_dl_exchobligation_rec->h_deal_cd) AND TRIM(to_char(deal_dt)) = TRIM(:l_dl_exchobligation_rec->h_deal_dt) AND TRIM(EXCH_CODE)=TRIM(:l_dl_exchobligation_rec->h_exch_code);
+				printf("\nsqlcode for exchobligation for update=%d",sqlca.sqlcode);
+
+				/* Updating Status as "RC" into DL_EXCHOBLIGATION_REC table */
+				EXEC SQL UPDATE DL_EXCHOBLIGATION_REC SET STATUS='RC' WHERE TRIM(SETTLEMENT_NO) = TRIM(:l_dl_exchobligation_rec->h_settlement_no) AND TRIM(INSTR_CD) = TRIM(:l_dl_exchobligation_rec->h_instr_cd) AND AGGR_QTY = :l_dl_exchobligation_rec->h_aggr_qty AND agg_amt = :l_dl_exchobligation_rec->h_agg_amt AND TRIM(MKT_TYPE) = TRIM(:l_dl_exchobligation_rec->h_mkt_type) AND TRIM(DEAL_CD) = TRIM(:l_dl_exchobligation_rec->h_deal_cd) AND TRIM(to_char(deal_dt)) = TRIM(:l_dl_exchobligation_rec->h_deal_dt) AND  TRIM(EXCH_CODE)=TRIM(:l_dl_exchobligation_rec->h_exch_code);
+				printf("\nsqlcode for exchobligation_rec for update=%d",sqlca.sqlcode);
+			}
+			else
+			{
+				EXEC SQL UPDATE DL_EXCHOBLIGATION_REC SET STATUS='RF' WHERE TRIM(SETTLEMENT_NO) =TRIM(:l_dl_exchobligation_rec->h_settlement_no) AND TRIM(EXCH_CODE)=TRIM(:l_dl_exchobligation_rec->h_exch_code) AND TRIM(INSTR_CD) = TRIM(:l_dl_exchobligation_rec->h_instr_cd); 
+				printf("\nsqlcode for update1=%d",sqlca.sqlcode);
+				EXEC SQL UPDATE DL_EXCHOBLIGATION SET STATUS='RF' WHERE TRIM(SETTLEMENT_NO) =TRIM(:l_dl_exchobligation_rec->h_settlement_no) AND TRIM(EXCH_CODE)=TRIM(:l_dl_exchobligation_rec->h_exch_code) AND TRIM(INSTR_CD) = TRIM(:l_dl_exchobligation_rec->h_instr_cd);	
+				printf("\nsqlcode for update2=%d",sqlca.sqlcode);
+				/*updating L_DL_EXCHRECON  structure*/
+				/*strcpy(l_dl_exchrecon->h_status,"RF");
+				strcpy(l_dl_exchrecon->h_failcode,"50");
+				strcpy(l_comment,l_dl_exchobligation_rec->h_exch_code);
+				strcat(l_comment," AGG_AMT:");
+				strcat(l_comment,((char*)ltoa(l_agg_amt)));
+				strcat(l_comment," , AGG_QTY:");
+				strcat(l_comment,((char*)ltoa(l_aggr_qty)));
+				strcat(l_comment," ; DEAL AGG_AMT:");
+				strcat(l_comment,((char*)ltoa(l_dl_exchobligation_rec->h_agg_amt)));
+				strcat(l_comment," , AGG_QTY:");
+				strcat(l_comment,((char*)ltoa(l_dl_exchobligation_rec->h_aggr_qty)));
+				strcpy(l_dl_exchrecon->h_comments,l_comment);
+				*/
+				strcpy(l_dl_exchrecon->h_status,"RF");
+				strcpy(l_dl_exchrecon->h_failcode,"50");
+				strcpy(l_comment,l_dl_exchobligation_rec->h_exch_code);
+				strcat(l_comment," AGG_AMT:");
+				strcat(l_comment,((char*)ltoa(l_agg_amt)));
+				strcat(l_comment," ,DEAL AGG_AMT:");
+				strcat(l_comment,((char*)ltoa(l_dl_exchobligation_rec->h_agg_amt)));
+				strcat(l_comment," ,Diff AGG_AMT:");
+				strcat(l_comment,((char*)ltoa((l_agg_amt-l_dl_exchobligation_rec->h_agg_amt))));
+				strcat(l_comment," ; ");
+				strcat(l_comment,l_dl_exchobligation_rec->h_exch_code);
+				strcat(l_comment," AGG_QTY:");
+				strcat(l_comment,((char*)ltoa(l_aggr_qty)));
+				strcat(l_comment," , DEAL AGG_QTY:");
+				strcat(l_comment,((char*)ltoa(l_dl_exchobligation_rec->h_aggr_qty)));
+				strcat(l_comment," , Diff AGG_QTY:");
+				strcat(l_comment,((char*)ltoa((l_aggr_qty-l_dl_exchobligation_rec->h_aggr_qty))));
+				strcpy(l_dl_exchrecon->h_comments,l_comment);
+			}
+			
+			/*Insrting values in DL_ExchRecon table from l_dl_exchrecon structure*/
+			EXEC SQL INSERT INTO DL_ExchRecon_rpt VALUES(:l_dl_exchrecon:l_dl_exchrecon_ind);
+			printf("\nsqlcode for insert=%d",sqlca.sqlcode);
+		}
+	}
+
+RETURN_SUCCESS :
+	if(BT_Status_Completed(argv[0],
+				argv[1],
+				argv[2],
+				l_debug_info_ptr)   ==  APL_FAILURE )
+	{
+		APL_GOBACK_FAIL
+	}
+	CO_Proc_RptClose(l_logfile, l_debug_info_ptr);
+
+	EXEC SQL COMMIT WORK;
+
+	if(sqlca.sqlcode != 0)APL_GOBACK_FAIL
+		exit(0);
+
+RETURN_FAILURE    :
+/*	strcpy(l_debug_info_ptr,"Data Not Found");	*/
+	CO_ProcMonitor(l_logfile, "Data Not Found", NULL, NULL);
+	CO_Proc_RptClose(l_logfile, l_debug_info_ptr);
+	exit(-1);
+
+}	

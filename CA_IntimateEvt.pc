@@ -1,0 +1,4187 @@
+/*
+ *    COPYRIGHT NOTICE
+ *
+ *   Copyright 2005 Polaris Software Lab Limited. All rights reserved.
+ *
+ *   These materials are confidential and proprietary to
+ *    Polaris Software Lab Limited and no part of these materials should
+ *    be reproduced, published, transmitted or distributed in any form or
+ *    by any means, electronic, mechanical, photocopying, recording or
+ *    otherwise, or stored in any information storage or retrieval system
+ *    of any nature nor should the materials be disclosed to third parties
+ *    or used in any other manner for which this is not authorized, without
+ *    the prior express written authorization of Polaris Software Lab Limited.
+ */
+/*********************************************************************
+ *
+ * Module Name         :      Corporate Actions
+ *
+ * File Name           :      CA_IntimateEvt.pc
+ *
+ * Description         :      Contains Functions Related to Event Intimation
+ *
+ *
+ *
+ *            Version Control Block
+ *
+ * Date        Version     Author           Description        RFS No.
+ * ---------   --------  ---------------  ------------------   ---------
+ * 18/01/2006   1.2        Smita Bhat        New File          Base Version
+ * 20/01/2006   1.3        Smita Bhat	    Changed Column Names HDFCCA_027
+ *					    (Common for All)
+ *************************************************************************/
+
+#include	"CA_Common.h"
+
+EXEC SQL INCLUDE SQLCA.H;
+
+#define	RTV_SYSTEM_DATA
+#define	MSG_NO_EVT_INT_MEETING	"560N01" 
+#define  MSG_NO_EVT_INT_OT			"564N91"
+#define	MSG_NO_EVT_INT_OTHERS	"551N01"
+#define	MSG_NO_EVT_INT_OP			"552N01" 
+#define  MSG_PARAM_STRUCT_SEP ";" 
+
+
+FILE*						g_inifile;
+FILE*						g_logfile;
+char						chr_g_progname			[APL_BATCH_PROGNAME_LEN]= APL_NULL_STRING;
+char						chr_g_key					[APL_BATCH_KEY_LEN]= APL_NULL_STRING;
+char						chr_g_start_date		[APL_DATE_LEN]= APL_NULL_STRING;
+char						chr_g_funccode			[CA_FUNC_CD_LEN]= APL_NULL_STRING;
+char						chr_g_sys_date			[APL_DATE_LEN]= APL_NULL_STRING;
+char						chr_g_sys_date_time	[APL_DATE_LEN]= APL_NULL_STRING;
+char						chr_g_restart_data_h	[APL_RESTARTDATA_LENGTH]= APL_NULL_STRING;
+char						chr_g_client			[APL_CLIENT_LENGTH]= APL_NULL_STRING;
+char						chr_g_log_buff[150]= APL_NULL_STRING; // AIX - MSG_LENGTH changed to 150
+//CA_CANOTIFY_STRUCT_H		l_ca_canotify_struct_h; //commented by Sunny
+short						g_restart_data_i;
+int						int_g_countacc;
+short                g_cond_gr=0;
+/*Retro from ICICI for filters on Intimation Process - Nitya - Starts*/
+char g_instr_code_t [22];
+char g_event_type [3];
+char g_declare_dt [11];
+short l_cond_exists_ca_pay = 0;
+int   flag_g_instr_code_t=0;
+int   flag_g_event_type=0;
+int   flag_g_declare_dt=0;
+char g_declare_dt_f [23];
+char g_declare_dt_s [23];
+/*Retro from ICICI for filters on Intimation Process - Nitya - Ends*/
+
+
+CA_CAEVENT_STRUCT_H		g_ca_caevent_struct_h;
+CA_CAEVENT_STRUCT_I		g_ca_caevent_struct_i;
+CA_CASECEVENT_STRUCT_H	q_ca_casecevent_struct_h;
+char						chr_g_event_rowid[APL_ROWID_LEN]= APL_NULL_STRING;
+MT_INSTRUMENT_STRUCT_H	l_mt_instrument_struct_h;
+char  chr_msg_param_struct[100]=APL_NULL_STRING;    
+
+/** Added By YOG For Event Intimation Message for Positions > 0 -- START **/
+char l_entl_basis_93B[2] = APL_NULL_STRING;
+char l_inst_typ[4] = APL_NULL_STRING ;
+double h_total_safek_93B=0;
+
+EXEC SQL VAR l_entl_basis_93B   IS STRING;
+EXEC SQL VAR l_inst_typ IS STRING;
+
+/** Added By YOG For Event Intimation Message for Positions > 0 -- END **/
+
+
+static int	CA_Proc_SendMsg(		char				*chr_p_ca_id,
+									char				*p_ce_typ,
+									char				*chr_p_client,
+									DEBUG_INFO_STRUCT_H	**l_debug_info_ptr);
+static int	CA_Chk_SubAccountPos( 	char				*p_instr_code,
+										char           *p_event_type,
+                              char           *p_entl_basis,
+										char				*p_evnt_stat,
+										char				*p_decl_date,
+										char				*p_ex_date,
+                              char           *p_rec_dt,
+										char				*p_proxy_dt,
+										char           *p_prelim_ind,
+										int				p_ismsgagain,
+										char				*chr_p_ca_id,   
+										char *chr_p_attach_ca_id,   // added by siva.ganapathi for ISKB_3629 
+										int p_evt_priotity,// added by siva.ganapathi for ISKB_3629 
+										int				*int_p_result,
+										int				*p_noevemsgs,
+										char				*p_effect_dt,
+										char				*p_start_dt,
+										char				*p_issue_cls_dt, // Added Chirag for ISKB 1034
+										DEBUG_INFO_STRUCT_H	**l_debug_info_ptr);
+static int	CA_Mod_EventStat(			char				*chr_p_ca_id,
+										char				*p_ce_typ,
+										char				*p_prelim_ind,
+										char           *p_evnt_stat,
+										int				p_countacs,
+										int				p_noevemsgs,
+										DEBUG_INFO_STRUCT_H	**l_debug_info_ptr);
+extern int MT_Chk_CmpanyFn(	char*,
+				char,
+				char,
+				char,
+				DEBUG_INFO_STRUCT_H**
+   			   );
+
+int main(int argc, char ** argv)  // AIX -Warnings Removal
+{
+	struct sqlca sqlca;
+	DEBUG_INFO_STRUCT_H			**l_debug_info_ptr=NULL,
+								*l_debug_info_struct=NULL;
+	INTL_ENV_DATA_STRUCT_H	p_intlenv_data_struct_h;
+	char						chr_inifile[PATH_LENGTH]= APL_NULL_STRING;
+	char						chr_logfile[PATH_LENGTH]= APL_NULL_STRING;
+	char						chr_custody_id[APL_USERID_LEN];
+	char						chr_warn_cd_eventunauth[CA_ALERT_CODE_LEN]={ALERT_EVT_UAUTH};
+
+	EXEC SQL BEGIN DECLARE SECTION;
+		char chr_uname[APL_USERID_LEN];
+		char chr_passwd[APL_PASSWD_LEN];
+	EXEC SQL END DECLARE SECTION; 
+
+	EXEC SQL VAR chr_uname IS STRING;
+	EXEC SQL VAR chr_passwd IS STRING;
+	
+	l_debug_info_ptr = &l_debug_info_struct;
+	
+	
+	strcpy(chr_inifile,getenv("INTL_ROOT_PATH"));
+	strcat(chr_inifile,"/intl_sun.cfg");
+	
+	if ( ( g_inifile=fopen(chr_inifile,"r") ) == NULL)
+		exit(-1);	
+
+	
+
+	
+	APL_FETCH_DB_LOGIN_DETAILS(g_inifile,chr_custody_id,chr_uname,chr_passwd,APL_OUT_FILE,l_debug_info_ptr)
+	EXEC SQL CONNECT :chr_uname IDENTIFIED BY :chr_passwd;
+	IS_ANY_ORA_ERROR
+	
+
+	
+   if ( CO_Rtv_RptFileName("2F",
+								APL_LOGFILE_DESC,
+								100,
+								argv[5],
+								argv,
+								&g_logfile,
+								l_debug_info_ptr) ==APL_FAILURE) 
+	{
+		exit(-1);
+	}
+	EXEC SQL COMMIT;
+	IS_ANY_ORA_ERROR
+
+	
+	
+		
+	
+   if ( argc < 4 )
+   {
+      CO_ProcMonitor(g_logfile,"All Arguments expected by  program not passed \n",NULL
+,NULL);
+      APL_GOBACK_FAIL
+   }
+
+/*Retro from ICICI for filters on Intimation Process - Nitya - Starts */
+	
+	memset(g_declare_dt,NULL,sizeof(g_declare_dt));
+	memset(g_declare_dt_f,NULL,sizeof(g_declare_dt_f));
+	memset(g_declare_dt_s,NULL,sizeof(g_declare_dt_s));
+	memset(g_event_type,NULL,sizeof(g_event_type));
+	memset(g_instr_code_t,NULL,sizeof(g_instr_code_t));
+
+
+		CO_Rtv_DataString(argv[9],"INSTR_CODE",g_instr_code_t);
+		CO_Rtv_DataString(argv[9],"CA_EVENT",g_event_type);
+		CO_Rtv_DataString(argv[9],"DECLARE_DT",g_declare_dt);
+
+		printf("\n\n\n g_instr_code_t:::|%s|",g_instr_code_t);
+		printf("\n g_event_type:::|%s|",g_event_type);
+		printf("\n g_declare_dt:::|%s|\n\n",g_declare_dt);
+
+
+
+
+
+		if(strcmp(g_instr_code_t,APL_NULL_STRING))
+		{
+			flag_g_instr_code_t=1;
+		}
+		if(strcmp(g_event_type,APL_NULL_STRING))
+		{
+			flag_g_event_type=1;
+		}
+		if(strcmp(g_declare_dt,APL_NULL_STRING))
+		{
+			flag_g_declare_dt=1;
+		}
+
+		printf("\n\n\n flag_g_instr_code_t:::|%d|",flag_g_instr_code_t);
+		printf("\n flag_g_event_type:::|%d|",flag_g_event_type);
+		printf("\n flag_g_declare_dt:::|%d|\n\n",flag_g_declare_dt);
+
+		strcpy(g_declare_dt_f,g_declare_dt);
+		strcat(g_declare_dt_f," 00:00:00");
+
+		strcpy(g_declare_dt_s,g_declare_dt);
+		strcat(g_declare_dt_s," 23:59:59");
+		
+		printf("\n g_declare_dt_f:= |%s|\n\n",g_declare_dt_f);
+		printf("\n g_declare_dt_s:= |%s|\n\n",g_declare_dt_s);
+
+/*Retro from ICICI for filters on Intimation Process - Nitya - Ends*/
+
+	strcpy(chr_g_progname,	argv[0]);
+	strcpy(chr_g_key,			argv[1]);
+	strcpy(chr_g_start_date,	argv[2]);
+	strcpy(chr_g_funccode,argv[5]);
+	
+	if ( CO_RtvSysParams(l_debug_info_ptr) == APL_FAILURE)
+		APL_GOBACK_FAIL
+	if(CO_RtvSysDt(chr_g_sys_date,l_debug_info_ptr)==APL_FAILURE)
+		APL_GOBACK_FAIL
+
+	if ( CA_Proc_EventIntimation(&p_intlenv_data_struct_h,l_debug_info_ptr) == APL_FAILURE)
+		APL_GOBACK_FAIL
+
+   /*Smita - Changed Column Names - HDFCCA_027*/
+   EXEC SQL DELETE FROM CA_EVENTMESGSEND
+   WHERE corp_id IN
+   (SELECT corp_id FROM CAEVENT WHERE
+   (CA_EVENT='SM' AND MEETING_DATE<TO_DATE(:chr_g_sys_date) AND PRELIMINARY_FLAG='N')
+	OR  (CA_EVENT = 'OT' and EFFECTIVE_DATE < TO_DATE(:chr_g_sys_date) AND PRELIMINARY_FLAG = 'N')
+	OR  (status  IN ('CP','RV','DL')) );
+   IS_ANY_ORA_ERROR
+
+	
+	APL_GOBACK_SUCCESS
+   RETURN_SUCCESS:
+   {
+	   
+		/*EXEC SQL INSERT INTO CANOTIFY
+		(select(:chr_g_sys_date_time),
+		:chr_g_funccode,
+		:chr_warn_cd_eventunauth,
+		corp_id,
+		NULL,
+		instr_code,
+		NULL,
+		NULL
+		FROM CAEVENT where status = 'UU');
+		IS_ANY_ORA_ERROR */
+
+		EXEC SQL UPDATE SYS_BATCHPROC
+		SET status 			= 'completed'
+		WHERE process_name		=	RTRIM(:argv[0])
+		AND	proc_init			=	RTRIM(:argv[1])
+		AND	STARTDATE	=	:argv[2]
+		AND	status		=	'started';
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"BATCH_IN_PROC",chr_g_progname,chr_g_key)
+		
+		EXEC SQL COMMIT;
+		IS_ANY_ORA_ERROR
+   	CO_ProcMonitor(g_logfile,"RECORD COMMITTED \n",NULL,NULL);
+		
+		sprintf(chr_g_log_buff,"T:Event Intimation exiting successfully\n");
+		CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+		fclose(g_logfile);
+		exit(0);
+	}
+	RETURN_FAILURE:
+	{
+		/*EXEC SQL INSERT INTO CANOTIFY
+		(select(:chr_g_sys_date_time),
+		:chr_g_funccode,
+		:chr_warn_cd_eventunauth,
+		corp_id,
+		NULL,
+		instr_code,
+		NULL,
+		NULL
+		FROM CAEVENT where status = 'UU');
+		if (sqlca.sqlcode < 0 )
+		{
+			sprintf(chr_g_log_buff,"T:Could Not Log Alert For Event Intimation\n");
+			CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+		}
+		else
+		{
+			EXEC SQL COMMIT;
+			if (sqlca.sqlcode !=0)
+			{
+				sprintf(chr_g_log_buff,"T:Could Not Commit The Record\n");
+				CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+			}
+		}
+		*/
+		//commented by Sunny
+		sprintf(chr_g_log_buff,"T:Event Intimation exiting with failure\n");
+		CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+		fclose(g_logfile);
+		exit(-1);
+	}
+}
+
+
+int	CA_Proc_EventIntimation(	INTL_ENV_DATA_STRUCT_H	*p_intlenv_data_struct_h,
+						DEBUG_INFO_STRUCT_H			**l_debug_info_ptr)				
+{	struct sqlca sqlca;
+	int	int_result			=	0;
+	int	int_l_noevemsgs		=	0;
+   int   int_l_ismsgagain   = 0;      
+   int   int_l_datecmp_proxy_sys = 0; 
+	char l_cln_master[11] = APL_NULL_STRING;
+	short	i_rowid=0;
+	short i_cln_master=0;
+  
+
+
+	char 	chr_warn_cd_instrunauth[CA_ALERT_CODE_LEN] ={ALERT_INSTR_UAUTH};
+	char 	chr_warn_cd_instrnf[CA_ALERT_CODE_LEN] ={ALERT_INSTR_NOTFND};
+		
+	/*Smita - HDFCCA_009 - Buy Back Event*/
+	char 	chr_warn_cd_DPunauth[CA_ALERT_CODE_LEN] ={ALERT_DP_UAUTH};
+	char 	chr_warn_cd_DPnf[CA_ALERT_CODE_LEN] ={ALERT_DP_NOTFND};
+	char  chr_warn_cd_InvalidCD[CA_ALERT_CODE_LEN]={ALERT_DEPO_INVALID};
+	int   int_p_result = 0;  // AIX -Warnings Removal
+	/*Smita - HDFCCA_009 - Buy Back Event*/
+
+	
+	short  l_cond_cz     = 0;
+	short  l_cond_ru     = 0; 
+        int    int_ru_diff       = 0; 
+   int int_l_resp_no_days   = l_mt_message_sys_params_struct_h.response_days;
+   
+	int int_l_countacc			= 0; 
+   
+   char chr_l_eventint_cutover_dt[APL_DATE_LEN] = APL_NULL_STRING;
+
+	int passFlg = 0; // By Bawa -- 8/14/2008 -- ISKB - 1693
+	int passMstFlg = 0;
+	char chr_boundaryDate[APL_DATE_LEN] = APL_NULL_STRING; // By Bawa -- 8/14/2008 -- ISKB - 1693
+	
+        
+        /* Added by siva.ganapathi for ISKB_3990 on 16-July-2010 -- started*/
+  	char l_base_instr_code[MT_INSTR_CODE_LEN] = APL_NULL_STRING;
+	short i_base_instr_code = 0 ;
+	/* Added by siva.ganapathi for ISKB_3990 on 16-July-2010 -- Ended*/
+
+	EXEC SQL VAR g_ca_caevent_struct_h.h_corp_id is string;
+	EXEC SQL VAR g_ca_caevent_struct_h.h_instr_code is string;
+	EXEC SQL VAR g_ca_caevent_struct_h.h_pymt_dt is string;
+	EXEC SQL VAR chr_g_client is string;
+	EXEC SQL VAR chr_g_restart_data_h is string;
+   
+   EXEC SQL VAR   chr_l_eventint_cutover_dt is string;
+	
+	EXEC SQL SELECT processing_status INTO :chr_g_restart_data_h:g_restart_data_i
+	FROM SYS_BATCHPROC
+	WHERE process_name	=:chr_g_progname
+	AND	proc_init		=:chr_g_key
+	AND	STARTDATE=:chr_g_start_date
+	AND 	status	='started'
+	FOR UPDATE OF processing_status,status;
+	IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"SYS_BATCHPROC",chr_g_progname,chr_g_key)
+		
+         //Retro by Manasi for ISKB_7977-Common Issues Fixes -Start  
+	/* Vamshi IB_5633 */
+	if(g_restart_data_i == -1)
+	strcpy(chr_g_restart_data_h , " ");
+        //Retro by Manasi for ISKB_7977-Common Issues Fixes -End
+   if (APL_FAILURE == CO_Chk_CntryEnabled(  "EVNT_INIT",
+                                          "SND_MT560_ONRESPDT",
+														&l_cond_cz,
+														l_debug_info_ptr ))
+      {
+		  APL_GOBACK_FAIL
+      }
+
+   if(APL_FAILURE == CO_Chk_CntryEnabled(  "EVNT_INIT",
+                                          "EX_REC",
+                                          &g_cond_gr,
+                                          l_debug_info_ptr ))
+      {
+        APL_GOBACK_FAIL
+      } 
+ 
+ EXEC SQL SELECT FIELD_VAL into :chr_l_eventint_cutover_dt
+ FROM     PRO_GSSPLVAL
+ WHERE    MAIN_FUN = 'EVNT_INIT'
+ AND SUB_PROCESS       = 'EVNTINT_CUTOVER_DT'
+ AND NATION = :g_mt_commonsys_params_struct_h.nation_code;
+ 
+ IS_ANY_ORA_ERROR
+ 
+ printf(" :chr_l_eventint_cutover_dt is %s\n",chr_l_eventint_cutover_dt);
+
+if(CO_RtvSysDtTime(chr_g_sys_date_time,l_debug_info_ptr)== APL_FAILURE)		
+	APL_GOBACK_FAIL
+ 
+ /* In this Function for all client Cursor MT_MSGADDRESS_VEW is used instead of MT_MSGADDRESS 
+    ISKB: 656 VaibhavK Kotak 07March2008 */ 
+
+/*Smita - Changed Column Names - HDFCCA_027*/
+/*	ISKB_2071	For BB, Boundary Date change from Issue Open Date to Issue Close Date	*/
+/*Retro from ICICI for filters on Intimation Process - Nitya - Starts*/
+  EXEC SQL DECLARE AeventCur CURSOR FOR
+   SELECT evt.*,rowid FROM CAEVENT evt
+   WHERE  ((status = 'IN' )
+   or (status IN ('SN','RE','RP','PP') and MAKER_DT>=to_date(rtrim(:chr_l_eventint_cutover_dt)) 
+	/* and CA_EVENT!= 'SM' 
+	and CA_EVENT !='OT' */
+	and ca_event not in ('SM','OT','RT')		/** Added for sending evt int for CP RT event **/
+	AND access_stamp < TO_DATE(:chr_g_sys_date_time)) 
+   OR (CA_EVENT = 'SM' AND status IN ('SN') and MAKER_DT >= to_date(rtrim(:chr_l_eventint_cutover_dt)) AND MEETING_DATE >= TO_DATE(:chr_g_sys_date) AND access_stamp < TO_DATE(:chr_g_sys_date_time))
+	OR (CA_EVENT = 'OT' AND status IN ('SN') and MAKER_DT >= to_date(rtrim(:chr_l_eventint_cutover_dt)) AND EFFECTIVE_DATE >= 
+	TO_DATE(:chr_g_sys_date) AND access_stamp < TO_DATE(:chr_g_sys_date_time))
+   OR (CA_EVENT = 'BB' AND status IN ('RA') and MAKER_DT >= to_date(rtrim(:chr_l_eventint_cutover_dt)) AND DEAL_TO_DATE > TO_DATE(:chr_g_sys_date) AND access_stamp < TO_DATE(:chr_g_sys_date_time))
+	OR (CA_EVENT = 'RT' AND MAKER_DT>=to_date(rtrim(:chr_l_eventint_cutover_dt))
+            AND access_stamp < TO_DATE(:chr_g_sys_date_time)
+				AND (status in ('SN','RE','RP','PP') OR (CA_EVENT = 'CP' and exists (select 1 from cachgevent where corp_id = evt.corp_id)))
+				)	/** Added for sending evt int for CP RT event **/
+	)
+	AND CA_EVENT = DECODE(0,:flag_g_event_type,CA_EVENT,:g_event_type)
+			AND INSTR_CODE= DECODE(0,:flag_g_instr_code_t,INSTR_CODE,:g_instr_code_t)
+			AND DECLARE_DT >= DECODE(0,:flag_g_declare_dt,DECLARE_DT,to_date(:g_declare_dt_f,'dd/mm/yyyy hh24:mi:ss'))
+			AND DECLARE_DT <= DECODE(0,:flag_g_declare_dt,DECLARE_DT,to_date(:g_declare_dt_s,'dd/mm/yyyy hh24:mi:ss'))
+   FOR UPDATE OF status
+   ORDER BY corp_id,dateof_payment;
+  /*Retro from ICICI for filters on Intimation Process - Nitya - Ends*/
+	   EXEC SQL OPEN AeventCur;
+		CO_ProcMonitor(g_logfile,"Opened Cursor AeventCur",NULL,NULL);
+
+	
+	   IS_ANY_ORA_ERROR
+
+	sprintf(chr_g_log_buff,"T:Event Intimation successfully started on (%s)\n",
+				chr_g_sys_date_time);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+
+	for(;;)
+	{	
+		int	int_result	=	0;
+		int_g_countacc		=	0;
+		
+		int_l_ismsgagain = 0;      
+		int_l_datecmp_proxy_sys = 0; 
+
+		g_ca_caevent_struct_i.i_corp_id=0;
+		g_ca_caevent_struct_i.i_instr_code=0;
+		g_ca_caevent_struct_i.i_evt_class=0;
+		g_ca_caevent_struct_i.i_decl_date=0;
+		g_ca_caevent_struct_i.i_evt_nbr=0;
+		g_ca_caevent_struct_i.i_priority=0;
+		g_ca_caevent_struct_i.i_preliminary_flag=0;
+		g_ca_caevent_struct_i.i_ca_currency=0;
+		g_ca_caevent_struct_i.i_ex_date=0;
+		g_ca_caevent_struct_i.i_rec_date=0;
+		g_ca_caevent_struct_i.i_pymt_dt=0;
+		g_ca_caevent_struct_i.i_respons_date=0;
+		g_ca_caevent_struct_i.i_expire_date=0;
+		g_ca_caevent_struct_i.i_pp_date=0;
+		g_ca_caevent_struct_i.i_proxy_date=0;
+		g_ca_caevent_struct_i.i_meet_date=0;
+		g_ca_caevent_struct_i.i_start_date=0;
+		g_ca_caevent_struct_i.i_effect_date=0;
+		g_ca_caevent_struct_i.i_proc_oth=0;
+		g_ca_caevent_struct_i.i_op_evt_class=0;
+		g_ca_caevent_struct_i.i_respons_date_openend=0;
+		g_ca_caevent_struct_i.i_expire_date_openend=0;
+		g_ca_caevent_struct_i.i_evt_send_msg_ind=0;
+		g_ca_caevent_struct_i.i_entl_send_msg_ind=0;
+		g_ca_caevent_struct_i.i_pymt_send_msg_ind=0;
+		g_ca_caevent_struct_i.i_earnings=0;
+		g_ca_caevent_struct_i.i_earnings_rt=0;
+		g_ca_caevent_struct_i.i_res_instr_code=0;
+		g_ca_caevent_struct_i.i_new_safek_quantity=0;
+		g_ca_caevent_struct_i.i_old_safek_quantity=0;
+		g_ca_caevent_struct_i.i_disp_of_fract=0;
+		g_ca_caevent_struct_i.i_f_pr=0;
+		g_ca_caevent_struct_i.i_sub_base_quantity=0;
+		g_ca_caevent_struct_i.i_sub_new_quantity=0;
+		g_ca_caevent_struct_i.i_sub_pr=0;
+		g_ca_caevent_struct_i.i_rights_class=0;
+		g_ca_caevent_struct_i.i_new_safek_quantity_rt=0;
+		g_ca_caevent_struct_i.i_contactinfo=0;
+		g_ca_caevent_struct_i.i_checker_dt=0;
+		g_ca_caevent_struct_i.i_checker=0;
+
+		
+		memset(&g_ca_caevent_struct_h,NULL,sizeof(CA_CAEVENT_STRUCT_H));
+		/***memset(&g_ca_caevent_struct_i,NULL,sizeof(CA_CAEVENT_STRUCT_I));**/
+		memset(&chr_g_event_rowid,APL_NULL_CHAR,APL_ROWID_LEN);
+		memset(chr_g_client,APL_NULL_CHAR,(APL_CLIENT_LENGTH));
+
+		     EXEC SQL FETCH AeventCur INTO :g_ca_caevent_struct_h:g_ca_caevent_struct_i,
+												     :chr_g_event_rowid:i_rowid;
+
+		sprintf(chr_g_log_buff,"Fetched event sqlca.sqlcode is :%d:",sqlca.sqlcode);
+		CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+		IS_ANY_ORA_ERROR_CURSOR
+
+		if (sqlca.sqlcode == 1403)
+      {
+            CO_ProcMonitor(g_logfile,"No more Events",NULL,NULL);
+            EXEC SQL CLOSE AeventCur;
+            APL_GOBACK_SUCCESS;
+      }
+		
+		sprintf(chr_g_log_buff,"T:Processing event %s",g_ca_caevent_struct_h.h_corp_id);
+	 	CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+                 //Retro by Manasi for ISKB_7977-Common Issues Fixes -Start
+		strcpy(chr_g_restart_data_h,g_ca_caevent_struct_h.h_corp_id);  /* Vamshi IB_5633*/		
+                //Retro by Manasi for ISKB_7977-Common Issues Fixes -End
+		
+                
+                if (APL_FAILURE == CO_Chk_CntryEnabled(  "EVNT_INIT",
+                                                       "SM_RECDT",
+                                                        &l_cond_ru,
+                                                        l_debug_info_ptr ))
+                {
+                         APL_GOBACK_FAIL
+                }
+                if ((strcmp(g_ca_caevent_struct_h.h_evt_class, "SM") == 0) && (l_cond_ru) && (g_ca_caevent_struct_i.i_rec_date != -1)) 
+                {
+                                int_ru_diff = 0;
+                                
+                                if ( APL_FAILURE == CO_Pro_DateComp(chr_g_sys_date, g_ca_caevent_struct_h.h_rec_date, &int_ru_diff, l_debug_info_ptr))
+                                {
+                                        APL_GOBACK_FAIL
+                                }
+
+                                if (int_ru_diff > 0)
+                                {
+                                        sprintf(chr_g_log_buff,"Skipping SM event : %s. Record chr_date is greater than system chr_date.",g_ca_caevent_struct_h.h_corp_id);
+					CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+                                        continue;
+                                }
+                }  
+			
+	
+               /*Smita - Changes for HDFC Base Version - Changed Fn Name */
+		if ( CA_ChkInstrument(	g_ca_caevent_struct_h.h_instr_code,
+							&l_mt_instrument_struct_h,
+							&int_result,
+							l_debug_info_ptr) == APL_FAILURE)
+		{
+			CO_ProcMonitor(g_logfile,NULL,l_debug_info_ptr,NULL);
+			APL_GOBACK_FAIL
+		}	
+		CO_FreeErrLst(l_debug_info_ptr);
+			
+		if ( int_result == ERR_INSTR_NOTFND )
+		{
+			
+			/*CA_WriteAlert((&l_ca_canotify_struct_h),
+								chr_g_funccode,
+								chr_warn_cd_instrnf,
+								g_ca_caevent_struct_h.h_corp_id,
+								APL_NULL_STRING,
+								g_ca_caevent_struct_h.h_instr_code) */
+								//commented by Sunny
+   		CO_ProcMonitor(g_logfile,"RECORD COMMITTED \n",NULL,NULL);
+			sprintf(chr_g_log_buff,
+			"E:Instrument %s does not exist,skipping event\n",
+												g_ca_caevent_struct_h.h_instr_code);
+			CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+			continue;
+		}	
+		if ( int_result == ERR_UNAUTH_INSTR )
+		{
+			
+			/*CA_WriteAlert((&l_ca_canotify_struct_h),
+								chr_g_funccode,
+								chr_warn_cd_instrunauth,
+								g_ca_caevent_struct_h.h_corp_id,
+								APL_NULL_STRING,
+								g_ca_caevent_struct_h.h_instr_code) */
+								//commented by Sunny
+   		CO_ProcMonitor(g_logfile,"RECORD COMMITTED \n",NULL,NULL);
+			sprintf(chr_g_log_buff,
+			"E:Instrument %s unauthorised ,skipping event\n",
+												l_mt_instrument_struct_h.h_instr_code);
+			CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+			continue;
+		}
+
+		/*Smita - HDFCCA_009 - Check Depo Code and Depository Par Code*/
+      if (strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_BUY_BACK) == 0)
+      {
+			APL_IF_DEBUG
+			{
+				printf("Check Buy Back Details\n");
+				printf("Depo Part Code = |%s|\n",g_ca_caevent_struct_h.h_depo_part_code);
+				printf("Depo Code = |%s|\n",g_ca_caevent_struct_h.h_depo_code);
+			}
+
+/*** AB_481 -Subu - Changed to below . Old code did not pass address of g_ca_caevent_struct_h
+-> if (CA_ChkEventDetails( g_ca_caevent_struct_h ***/
+			if (CA_ChkEventDetails(	&g_ca_caevent_struct_h,
+								       	&int_p_result,
+			       						p_intlenv_data_struct_h,
+				 							l_debug_info_ptr) == APL_FAILURE)
+	  			APL_GOBACK_FAIL 
+      		CO_FreeErrLst(l_debug_info_ptr);
+
+				if ( int_p_result == ERR_DEPO_PART_NOTFND )
+				{
+					/*CA_WriteAlert((	&l_ca_canotify_struct_h),
+											chr_g_funccode,
+											chr_warn_cd_DPnf,
+											g_ca_caevent_struct_h.h_corp_id,
+											APL_NULL_STRING,
+											g_ca_caevent_struct_h.h_instr_code) */
+											//commented by Sunny
+   				CO_ProcMonitor(g_logfile,"RECORD COMMITTED \n",NULL,NULL);
+					sprintf(chr_g_log_buff,"E:E:Depo Part %s does not exist,skipping event |%s|\n",g_ca_caevent_struct_h.h_depo_part_code,g_ca_caevent_struct_h.h_corp_id);
+							
+					CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+					continue;
+			  	}	
+				if ( int_p_result == ERR_DEPO_PART_UNAUTH )
+				{
+					/*CA_WriteAlert((	&l_ca_canotify_struct_h),
+											chr_g_funccode,
+											chr_warn_cd_DPunauth,
+											g_ca_caevent_struct_h.h_corp_id,
+											APL_NULL_STRING,
+											g_ca_caevent_struct_h.h_instr_code) */ 
+											//commented by Sunny
+   				CO_ProcMonitor(g_logfile,"RECORD COMMITTED \n",NULL,NULL);
+					sprintf(chr_g_log_buff,"E:Depo Part %s unauthorised ,skipping event |%s|\n",g_ca_caevent_struct_h.h_depo_part_code,g_ca_caevent_struct_h.h_corp_id);
+					CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+					continue;
+				}
+				if ( int_p_result == ERR_INVALID_CODE)
+				{
+					/*CA_WriteAlert((   &l_ca_canotify_struct_h),
+											chr_g_funccode,
+											chr_warn_cd_InvalidCD,
+											g_ca_caevent_struct_h.h_corp_id,
+											APL_NULL_STRING,
+											g_ca_caevent_struct_h.h_instr_code)*/
+											//commented by Sunny
+						CO_ProcMonitor(g_logfile,"RECORD COMMITTED \n",NULL,NULL);
+					   sprintf(chr_g_log_buff,"E:Depository Code |%s| Invalid,skipping event\n",g_ca_caevent_struct_h.h_depo_code);
+						CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+						continue;
+				}
+		}
+		/*Smita - HDFCCA_009 - Check Depo Code and Depository Par Code*/
+		
+
+		/*Smita - Changes Base Version CA - Changed struct variable name*/
+		if ( CA_RtvInstrEvnt( l_mt_instrument_struct_h.h_instr_type,
+								g_ca_caevent_struct_h.h_evt_class,
+								&q_ca_casecevent_struct_h,
+								l_debug_info_ptr) == APL_FAILURE)
+		{
+			CO_ProcMonitor(g_logfile,NULL,l_debug_info_ptr,NULL);
+			APL_GOBACK_FAIL
+		}	
+		CO_FreeErrLst(l_debug_info_ptr);
+		int_result = 0;
+		if ((l_cond_cz) && (!strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_MEETING)))
+		{
+		
+			if ( APL_FAILURE == CO_Pro_DateComp(chr_g_sys_date,
+														g_ca_caevent_struct_h.h_proxy_date,
+														&int_l_datecmp_proxy_sys,
+														l_debug_info_ptr ) )
+					{
+						APL_GOBACK_FAIL
+					}
+
+			
+
+			int_l_resp_no_days   = l_mt_message_sys_params_struct_h.response_days;
+			
+			EXEC SQL SELECT COUNT(H_DATE) + :int_l_resp_no_days INTO :int_l_resp_no_days FROM MT_HOLIDAY
+              WHERE H_DATE BETWEEN TO_DATE(:chr_g_sys_date) AND TO_DATE(:g_ca_caevent_struct_h.h_proxy_date) AND BANK_IND ='Y';
+
+         IS_ANY_ORA_ERROR
+
+					
+
+			if(int_l_datecmp_proxy_sys==0 || int_l_datecmp_proxy_sys==int_l_resp_no_days)
+			{
+					int_l_ismsgagain=1;
+			}
+		}
+		
+		if (CA_Chk_SubAccountPos(	g_ca_caevent_struct_h.h_instr_code,
+									g_ca_caevent_struct_h.h_evt_class,
+                           q_ca_casecevent_struct_h.h_entitl_base,
+									g_ca_caevent_struct_h.h_evt_stat,
+									g_ca_caevent_struct_h.h_decl_date,
+									g_ca_caevent_struct_h.h_ex_date,
+                 				g_ca_caevent_struct_h.h_rec_date,
+									g_ca_caevent_struct_h.h_proxy_date,
+									g_ca_caevent_struct_h.h_preliminary_flag,
+									int_l_ismsgagain,
+									g_ca_caevent_struct_h.h_corp_id,
+									g_ca_caevent_struct_h.h_attach_corp_id,//Added by siva.ganapathi for ISKB_3629
+									g_ca_caevent_struct_h.h_priority,//Added by siva.ganapathi for ISKB_3629
+									&int_result,
+									&int_l_noevemsgs,
+									g_ca_caevent_struct_h.h_effect_date,
+									g_ca_caevent_struct_h.h_start_date,
+									g_ca_caevent_struct_h.h_dealto_dt, // Added Chirag for ISKB 1034
+									l_debug_info_ptr)== APL_FAILURE)
+		{
+			CO_ProcMonitor(g_logfile,NULL,l_debug_info_ptr,NULL);
+			APL_GOBACK_FAIL
+		}
+
+			
+			memset(chr_msg_param_struct,APL_NULL_CHAR,100);
+			strcpy(chr_msg_param_struct,g_ca_caevent_struct_h.h_corp_id);
+			strcat(chr_msg_param_struct,g_ca_caevent_struct_h.h_access_stamp);
+			strcat(chr_msg_param_struct,MSG_PARAM_STRUCT_SEP);
+			printf("*** *** chr_msg_param_struct is |%s|\n",chr_msg_param_struct);
+			fflush(stdout);
+			
+
+			
+			
+		if(!strcmp(q_ca_casecevent_struct_h.h_evtmsg_all_mstclt,APL_YES_IND) && 
+			strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_MEETING)) 
+		{
+
+
+         /*Smita - Changed Column Names - HDFCCA_027*/
+        /*Changed by siva.ganapathi for ISKB_3374 -- started*/
+         printf("\n Event Instr code is %s ",g_ca_caevent_struct_h.h_instr_code);
+	 fflush(stdout);
+
+         printf("\n attach corp id is %s",g_ca_caevent_struct_h.h_attach_corp_id);
+	 fflush(stdout);
+
+         printf("\n Event corp id is %s",g_ca_caevent_struct_h.h_corp_id);
+         fflush(stdout);
+/*added for Allowing ca for freezed account by Swapnil. isolve no ISKB_2188  */   
+/*changes done in all FILE FOR MT_CLIENT.STATUS!='CA'*/  
+         EXEC SQL DECLARE SendToAllMstCur CURSOR FOR
+             SELECT DISTINCT(CLN_MASTER)
+             FROM  MT_CLIENT
+             WHERE CLN_BRK_ALL != 'B'
+				 AND CLN_MASTER NOT IN ( SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :g_ca_caevent_struct_h.h_corp_id)
+				 AND MT_CLIENT.STATUS!='CA'
+			UNION
+             SELECT CLN_CODE
+             FROM  MT_CLIENT
+             WHERE CLN_BRK_ALL != 'B'
+				 AND CLN_CODE != CLN_MASTER
+   AND EXISTS (SELECT 1 FROM MT_MSGADDRESS_VEW WHERE MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_code AND COMB_MSG='N' AND MSG_IDENT_NO IN ('3'))
+         AND   EXISTS ( SELECT client FROM DL_SAFEK
+                        WHERE instr_code = RTRIM(:g_ca_caevent_struct_h.h_instr_code)
+                        AND   DL_SAFEK.client = MT_CLIENT.CLN_CODE
+                        AND   (safekeep_pos >0 or VAL_REC >0 or VAL_DEL >0
+                           or NVALRECEIVE > 0 or NVALDELIVER > 0 ))
+				 AND CLN_CODE  NOT IN ( SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :g_ca_caevent_struct_h.h_corp_id)
+					 AND MT_CLIENT.STATUS!='CA'
+	     UNION
+	     SELECT CLIENT FROM DL_SAFEK A,MT_CLIENT B 
+	     WHERE INSTR_CODE IN (SELECT INSTR_CODE FROM CAEVENT WHERE CORP_ID =  :g_ca_caevent_struct_h.h_attach_corp_id) 
+	     AND CLIENT NOT IN ( SELECT DISTINCT CLIENT 
+	     FROM DL_SAFEK WHERE INSTR_CODE = :g_ca_caevent_struct_h.h_instr_code) 
+	     AND (A.SAFEKEEP_POS >0 or A.VAL_REC >0 or A.VAL_DEL >0 or A.NVALRECEIVE > 0 or A.NVALDELIVER > 0 )
+	     AND B.CLN_BRK_ALL != 'B' 
+	     AND A.CLIENT = B.CLN_CODE 
+	     AND B.STATUS !='CA' 
+             ORDER BY 1;
+			/*Smita  - HDFCCA_009 - Changed Col Name CLIENT to CLN_CODE */
+         /*Changed by siva.ganapathi for ISKB_3374 -- Ended*/
+         IS_ANY_ORA_ERROR
+
+
+         EXEC SQL OPEN SendToAllMstCur;
+         IS_ANY_ORA_ERROR
+
+			CO_ProcMonitor(g_logfile,"     Opened Cursor SendToAllMstCur",NULL,NULL);
+
+         for(;;)
+         {
+            memset(chr_g_client,NULL,(APL_CLIENT_LENGTH));
+            EXEC SQL FETCH SendToAllMstCur into chr_g_client;
+            IS_ANY_ORA_ERROR_CURSOR
+            
+
+      sprintf(chr_g_log_buff,"          Processing client %s",chr_g_client);
+      CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+
+		// By Bawa --  8/14/2008 -- ISKB 1693 -- start
+		passFlg = 1;
+		passMstFlg = 1;
+
+		printf(" \n --1 -- b4 chr_boundaryDate   |%s|\n",chr_boundaryDate);
+	
+		/*	ISKB_2071	For BB, Boundary date change to issue close date	*/	
+		if (!strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_MEETING))
+			strcpy(chr_boundaryDate,g_ca_caevent_struct_h.h_proxy_date);  
+		else if (!strcmp(g_ca_caevent_struct_h.h_evt_class,"OT"))
+			strcpy(chr_boundaryDate,g_ca_caevent_struct_h.h_effect_date);				
+		else if (!strcmp(g_ca_caevent_struct_h.h_evt_class,"BB"))
+			strcpy(chr_boundaryDate,g_ca_caevent_struct_h.h_dealto_dt);				
+		else 
+			strcpy(chr_boundaryDate,g_ca_caevent_struct_h.h_ex_date); 
+		
+		printf(" \n aftr chr_boundaryDate   |%s|\n",chr_boundaryDate);
+
+		/*	ISKB_2213	Check eligible Sub-client for event intimation	*/
+		EXEC SQL SELECT CLN_MASTER INTO :l_cln_master:i_cln_master
+					FROM MT_CLIENT 
+					WHERE CLN_CODE =: chr_g_client;
+
+		IS_ANY_ORA_ERROR
+
+		if(strcmp(chr_g_client,l_cln_master)!=0)
+		{
+			/*Modified by siva.ganapathi for ISKB_3374 -- started*/
+			if ( APL_FAILURE == getPassForMsg(chr_g_client,
+										g_ca_caevent_struct_h.h_instr_code,
+										chr_boundaryDate,
+										q_ca_casecevent_struct_h.h_entitl_base,
+										g_ca_caevent_struct_h.h_priority,
+										g_ca_caevent_struct_h.h_attach_corp_id,
+										&passFlg,
+										l_debug_info_ptr ) )
+				{
+					APL_GOBACK_FAIL;
+				}
+			/*Modified by siva.ganapathi for ISKB_3374 -- Ended*/
+			printf(" \n AFTER passFlg   |%d|", passFlg);
+		}
+
+		if(passFlg)
+		{
+			// By Bawa --  8/14/2008 -- ISKB 1693 -- End
+			if(CA_Proc_SendMsg(   g_ca_caevent_struct_h.h_corp_id,
+                           g_ca_caevent_struct_h.h_evt_class,
+                           chr_g_client,
+                           l_debug_info_ptr)== APL_FAILURE)
+            {
+               CO_ProcMonitor(g_logfile,NULL,l_debug_info_ptr,NULL);
+               APL_GOBACK_FAIL
+            }
+				
+            CO_FreeErrLst(l_debug_info_ptr);
+		// By Bawa --  8/14/2008 -- ISKB 1693 -- start
+		}
+		else
+		{
+			if (!strcmp(g_ca_caevent_struct_h.h_evt_class,"BB"))
+			{
+			printf(" \n Message is not going to  %s  client because no holdings before the Issue Close Date \n\n",chr_g_client);
+			sprintf(chr_g_log_buff," Message is not going to  %s  client because no holdings before the Issue Close date \n",chr_g_client);
+			}
+			else
+			{
+			printf(" \n Message is not going to  %s  client because no holdings before the ex date \n\n",chr_g_client);
+			sprintf(chr_g_log_buff," Message is not going to  %s  client because no holdings before the ex date \n",chr_g_client);
+			}
+			CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+		}
+		// By Bawa --  8/14/2008 -- ISKB 1693 -- End
+
+				int_g_countacc = int_result;
+         }
+
+			EXEC SQL CLOSE SendToAllMstCur;
+       
+      }
+		else	if (	((!strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_MEETING)) ||
+					(!strcmp(q_ca_casecevent_struct_h.h_evtmsg_all_mstclt,APL_NO_IND)))&&
+					(int_result == 0))
+		{	
+			sprintf(chr_g_log_buff,
+			"E:No Account with Positions for the Event  %s\n", 
+			g_ca_caevent_struct_h.h_corp_id);
+		
+			CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+	
+			if (CA_Mod_EventStat(	g_ca_caevent_struct_h.h_corp_id,
+								g_ca_caevent_struct_h.h_evt_class,
+								g_ca_caevent_struct_h.h_preliminary_flag,
+								g_ca_caevent_struct_h.h_evt_stat,
+								int_result,
+								int_l_noevemsgs,
+								l_debug_info_ptr) == APL_FAILURE)
+			{		
+				CO_ProcMonitor(g_logfile,NULL,l_debug_info_ptr,NULL);
+				APL_GOBACK_FAIL
+			}
+			else
+				CO_FreeErrLst(l_debug_info_ptr);
+         
+/*Added by siva.ganapathi for ISKB_3110 -- Retro from HDFC on 30/11/2009 -- Started*/
+/********************* Bageshri - HDFC Issue Log 388 - 24/10/2008 */
+ 	IF_COND_NOT_EXISTS("MT_INSTR","NXT_INT_DT")
+	{
+		printf("\nInstrument Code is |%s| and Instrument Freq_Code_1 is |%s| and Event Status |%s|\n",l_mt_instrument_struct_h.h_instr_code, l_mt_instrument_struct_h.h_freq_code,g_ca_caevent_struct_h.h_evt_stat );	
+         if(strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_BOND_REDMP)&&
+           (strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_MEETING))&&
+			  (strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_OTH)) && 
+           (!strcmp(g_ca_caevent_struct_h.h_preliminary_flag,APL_NO_IND))&&
+           (!strcmp(g_ca_caevent_struct_h.h_evt_stat,STATUS_RDY_INT))&&
+           (strcmp(l_mt_instrument_struct_h.h_freq_code,APL_FRQENCY_CD_OTHERCASE)))
+//HDFC Prod Issue Fix By Yog - Issue Log 340 - 12/09/2008 - Intrest Dates should not get updated for Freq_Code'X' i.e. 'OTHER'
+          {
+            if (CA_CO_InstrUpd( &g_ca_caevent_struct_h,
+                           &l_mt_instrument_struct_h,
+                           l_debug_info_ptr)== APL_FAILURE)
+              {
+                CO_ProcMonitor(g_logfile,NULL,l_debug_info_ptr,NULL);
+                APL_GOBACK_FAIL
+              }
+          }
+       }
+/*Added by siva.ganapathi for ISKB_3110 -- Retro from HDFC on 30/11/2009 -- Ended*/
+         CO_FreeErrLst(l_debug_info_ptr);
+         //Retro by Manasi for ISKB_7977-Common Issues Fixes -Start
+	/* Vamshi IB_5633 */
+
+	 EXEC SQL UPDATE SYS_BATCHPROC
+		 SET PROCESSING_STATUS = :chr_g_restart_data_h
+		 WHERE PROCESS_NAME      =:chr_g_progname
+		 AND     PROC_INIT               =:chr_g_key
+		 AND     STARTDATE=:chr_g_start_date
+		 AND     STATUS  ='started';
+	 IS_ANY_ORA_ERROR
+         //Retro by Manasi for ISKB_7977-Common Issues Fixes -End
+            EXEC SQL COMMIT WORK;
+            IS_ANY_ORA_ERROR
+
+            CO_ProcMonitor(g_logfile, "Record Committed", NULL, NULL);
+
+   EXEC SQL SELECT processing_status INTO :chr_g_restart_data_h:g_restart_data_i
+   FROM SYS_BATCHPROC
+   WHERE process_name =:chr_g_progname
+   AND   proc_init      =:chr_g_key
+   AND   STARTDATE=:chr_g_start_date
+   AND   status   ='started'
+   FOR UPDATE OF processing_status,status;
+   IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"SYS_BATCHPROC",chr_g_progname,chr_g_key)
+
+      EXEC SQL OPEN AeventCur;
+      CO_ProcMonitor(g_logfile,"Opened Cursor AeventCur",NULL,NULL);
+
+	continue;
+		}
+		else if(((!strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_MEETING)) ||
+					(!strcmp(q_ca_casecevent_struct_h.h_evtmsg_all_mstclt,APL_NO_IND)))&&
+															(int_result > 0))
+		{
+
+		memset(chr_g_client,NULL,(APL_CLIENT_LENGTH));
+
+   
+		 
+		 l_cond_ru = 0;
+		 if (strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_MEETING) == 0)
+		 {
+                 	if (APL_FAILURE == CO_Chk_CntryEnabled(  "EVNT_INIT",
+                                                               "SM_RECDT",
+                                                                &l_cond_ru,
+                                                                l_debug_info_ptr ))
+                	{
+                        	 APL_GOBACK_FAIL
+                	}
+		}
+		if (((!strcmp(g_ca_caevent_struct_h.h_evt_stat,"IN")) ||((!strcmp(g_ca_caevent_struct_h.h_preliminary_flag,APL_YES_IND)) && (int_l_ismsgagain == 0))) && (l_cond_ru == 0))
+		{
+			
+
+/*Smita - Changed Column Names - HDFCCA_027*/
+                       /*Changed by siva.ganapathi for ISKB_3374 -- started*/
+            /*printf("\n before opening the cursor AmstaccCur1");
+                        printf("\n Event Instr code is %s ",g_ca_caevent_struct_h.h_instr_code);
+                        printf("\n attach corp id is %s",g_ca_caevent_struct_h.h_attach_corp_id);
+                        printf("\n Event corp id is %s",g_ca_caevent_struct_h.h_corp_id);
+            printf("\n g_ca_caevent_struct_h.h_evt_class is %s",g_ca_caevent_struct_h.h_evt_class);*/
+			printf("\n The event priority is %d",g_ca_caevent_struct_h.h_priority);
+                        fflush(stdout);
+
+			/*Priority conditions added siva.ganapathi by ISKB_3990 -- started*/
+
+			if (g_ca_caevent_struct_h.h_priority == 1)
+			{	
+			EXEC SQL DECLARE AmstaccCur1 CURSOR FOR
+         SELECT DISTINCT(cln_master)
+         FROM  MT_CLIENT
+         WHERE CLN_BRK_ALL != 'B'
+         AND   EXISTS ( SELECT client FROM DL_SAFEK
+                        WHERE instr_code = RTRIM(:g_ca_caevent_struct_h.h_instr_code)
+                        AND   DL_SAFEK.client = MT_CLIENT.cln_code
+                        AND   (safekeep_pos >0 or VAL_REC >0 or VAL_DEL >0
+                           or NVALRECEIVE > 0 or NVALDELIVER > 0 ))
+			AND cln_master NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :g_ca_caevent_struct_h.h_corp_id)
+			 AND MT_CLIENT.STATUS!='CA'
+			UNION
+         SELECT CLN_CODE
+         FROM  MT_CLIENT
+         WHERE CLN_BRK_ALL != 'B'
+			AND CLN_CODE!=CLN_MASTER
+			AND EXISTS (SELECT 1 FROM MT_MSGADDRESS_VEW WHERE MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_code AND COMB_MSG='N' AND MSG_IDENT_NO IN ('3',decode(:g_ca_caevent_struct_h.h_evt_class,'SM','31')))
+         AND   EXISTS ( SELECT client FROM DL_SAFEK
+                        WHERE instr_code = RTRIM(:g_ca_caevent_struct_h.h_instr_code)
+                        AND   DL_SAFEK.client = MT_CLIENT.cln_code
+                        AND   (safekeep_pos >0 or VAL_REC >0 or VAL_DEL >0
+                           or NVALRECEIVE > 0 or NVALDELIVER > 0 ))
+			AND CLN_CODE NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :g_ca_caevent_struct_h.h_corp_id)
+			AND MT_CLIENT.STATUS!='CA'
+				ORDER BY 1;
+
+			}
+			else
+			{
+			  printf("\n Event Instr code is %s ",g_ca_caevent_struct_h.h_instr_code);
+			  printf("\n attach corp id is %s",g_ca_caevent_struct_h.h_attach_corp_id);
+			  printf("\n Event corp id is %s",g_ca_caevent_struct_h.h_corp_id);
+			  printf("\n g_ca_caevent_struct_h.h_evt_class is %s",g_ca_caevent_struct_h.h_evt_class);
+																
+	           EXEC SQL SELECT INSTR_CODE INTO :l_base_instr_code:i_base_instr_code FROM CAEVENT WHERE CORP_ID = :g_ca_caevent_struct_h.h_attach_corp_id;
+           
+				printf("\n base_instr_code is %s",l_base_instr_code);
+				fflush(stdout);
+			  
+				EXEC SQL DECLARE AmstaccCur1_pr2 CURSOR FOR
+				SELECT DISTINCT(cln_master)
+				FROM  MT_CLIENT
+			    WHERE CLN_BRK_ALL != 'B'
+			    AND   EXISTS ( SELECT client FROM DL_SAFEK
+                    WHERE instr_code = RTRIM(:g_ca_caevent_struct_h.h_instr_code)
+                    AND   DL_SAFEK.client = MT_CLIENT.cln_code
+                    AND   (safekeep_pos >0 or VAL_REC >0 or VAL_DEL >0
+                       or NVALRECEIVE > 0 or NVALDELIVER > 0 ))
+				AND cln_master NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :g_ca_caevent_struct_h.h_corp_id)
+			  	AND MT_CLIENT.STATUS!='CA'
+				UNION
+			    SELECT CLN_CODE
+			    FROM  MT_CLIENT
+			    WHERE CLN_BRK_ALL != 'B'
+				AND CLN_CODE!=CLN_MASTER
+				AND EXISTS (SELECT 1 FROM MT_MSGADDRESS_VEW WHERE MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_code AND 
+								COMB_MSG='N' AND MSG_IDENT_NO IN ('3',decode(:g_ca_caevent_struct_h.h_evt_class,'SM','31')))
+			     AND   EXISTS ( SELECT client FROM DL_SAFEK
+                    WHERE instr_code = RTRIM(:g_ca_caevent_struct_h.h_instr_code)
+                    AND   DL_SAFEK.client = MT_CLIENT.cln_code
+                    AND   (safekeep_pos >0 or VAL_REC >0 or VAL_DEL >0
+                       or NVALRECEIVE > 0 or NVALDELIVER > 0 ))
+				AND CLN_CODE NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :g_ca_caevent_struct_h.h_corp_id)
+				AND MT_CLIENT.STATUS!='CA'
+			UNION 
+			SELECT CLIENT FROM DL_SAFEK A,MT_CLIENT B 
+				WHERE INSTR_CODE = RTRIM(:l_base_instr_code)  
+			AND CLIENT NOT IN ( SELECT DISTINCT CLIENT 
+				FROM DL_SAFEK WHERE INSTR_CODE = RTRIM(:g_ca_caevent_struct_h.h_instr_code) ) 
+			AND (A.safekeep_pos >0 or A.VAL_REC >0 or A.VAL_DEL >0
+                 or A.NVALRECEIVE > 0 or A.NVALDELIVER > 0 )
+			AND B.CLN_BRK_ALL != 'B' 
+			AND A.CLIENT = B.CLN_CODE 
+			AND B.STATUS !='CA' 
+				UNION 
+				SELECT DISTINCT(cln_master)
+				FROM  MT_CLIENT 
+				WHERE CLN_BRK_ALL != 'B' 
+				and EXISTS( SELECT client FROM DL_SAFEK WHERE instr_code = RTRIM(:l_base_instr_code)
+								AND DL_SAFEK.client = MT_CLIENT.cln_code 
+								AND (safekeep_pos >0 or VAL_REC >0 
+										or VAL_DEL >0 or NVALRECEIVE > 0 or NVALDELIVER > 0 )
+							AND CLIENT NOT IN ( SELECT DISTINCT CLIENT FROM DL_SAFEK WHERE 
+														INSTR_CODE = RTRIM(:g_ca_caevent_struct_h.h_instr_code)))
+				AND MT_CLIENT.STATUS!='CA'
+				AND CLN_CODE NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :g_ca_caevent_struct_h.h_corp_id)
+                          ORDER BY 1;
+			}
+			/*Priority conditions added siva.ganapathi by ISKB_3990 -- Ended*/
+         /*Changed by siva.ganapathi for ISKB_3374 -- Ended*/
+
+		}
+		else
+		{
+		if (!strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_MEETING))
+		{
+		    if (l_cond_ru)  
+                    {
+                        if ((strcmp(g_ca_caevent_struct_h.h_rec_date, chr_g_sys_date) == 0) || (!strcmp(g_ca_caevent_struct_h.h_preliminary_flag,APL_YES_IND) && g_ca_caevent_struct_i.i_rec_date == -1))
+                        {
+                             /*Changed by siva.ganapathi for ISKB_3374 -- started*/
+                /*printf("\n before opening the cursor AmstaccCur_RU");
+                             printf("\n Event Instr code is %s ",g_ca_caevent_struct_h.h_instr_code);
+                             printf("\n attach corp id is %s",g_ca_caevent_struct_h.h_attach_corp_id);
+                             printf("\n Event corp id is %s",g_ca_caevent_struct_h.h_corp_id);
+                printf("\n g_ca_caevent_struct_h.h_evt_class is %s",g_ca_caevent_struct_h.h_evt_class);*/
+				/*Priority conditions added siva.ganapathi by ISKB_3990 -- STARTED*/
+
+				printf("\n The event priority is %d",g_ca_caevent_struct_h.h_priority);
+
+                             fflush(stdout);
+
+				if (g_ca_caevent_struct_h.h_priority == 1)
+				{
+                                EXEC SQL DECLARE AmstaccCur_RU CURSOR FOR
+                                SELECT DISTINCT(cln_master)
+                                FROM  MT_CLIENT
+                                WHERE CLN_BRK_ALL != 'B'
+                                AND   EXISTS ( SELECT client FROM DL_SAFEK
+                                WHERE instr_code = RTRIM(:g_ca_caevent_struct_h.h_instr_code)
+                                AND   DL_SAFEK.client = MT_CLIENT.cln_code
+                                AND   (safekeep_pos >0))
+								AND MT_CLIENT.STATUS!='CA'
+                                UNION
+                                SELECT CLN_CODE
+                                FROM  MT_CLIENT
+                                WHERE CLN_BRK_ALL != 'B'
+                                AND CLN_CODE!=CLN_MASTER
+                                AND EXISTS (SELECT 1 FROM MT_MSGADDRESS_VEW WHERE MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_code AND COMB_MSG  = 'N' AND MSG_IDENT_NO IN ('3',decode(:g_ca_caevent_struct_h.h_evt_class,'SM','31')))
+
+
+                                AND   EXISTS ( SELECT client FROM DL_SAFEK
+				WHERE instr_code = RTRIM(:g_ca_caevent_struct_h.h_instr_code)
+
+                                AND   DL_SAFEK.client = MT_CLIENT.cln_code
+
+                                AND   (safekeep_pos >0))
+								AND MT_CLIENT.STATUS!='CA'
+					ORDER BY 1;
+				}
+				else
+				{	
+					 EXEC SQL DECLARE AmstaccCur_RU_pr2 CURSOR FOR
+			         SELECT DISTINCT(cln_master)
+	  				 FROM  MT_CLIENT
+	                 WHERE CLN_BRK_ALL != 'B'
+		             AND   EXISTS ( SELECT client FROM DL_SAFEK
+	                 WHERE instr_code = RTRIM(:g_ca_caevent_struct_h.h_instr_code)
+                     AND   DL_SAFEK.client = MT_CLIENT.cln_code
+	                 AND   (safekeep_pos >0))
+	  				 AND MT_CLIENT.STATUS!='CA'
+	                 UNION
+	                 SELECT CLN_CODE
+	                 FROM  MT_CLIENT
+	                 WHERE CLN_BRK_ALL != 'B'
+	                 AND CLN_CODE!=CLN_MASTER
+	                AND EXISTS (SELECT 1 FROM MT_MSGADDRESS_VEW WHERE MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_code AND COMB_MSG  = 'N' AND MSG_IDENT_NO IN ('3',decode(:g_ca_caevent_struct_h.h_evt_class,'SM','31')))
+	                AND   EXISTS ( SELECT client FROM DL_SAFEK
+					WHERE instr_code = RTRIM(:g_ca_caevent_struct_h.h_instr_code)
+	                AND   DL_SAFEK.client = MT_CLIENT.cln_code
+	                AND   (safekeep_pos >0))
+					AND MT_CLIENT.STATUS!='CA'
+				UNION 
+				SELECT CLIENT FROM DL_SAFEK A,MT_CLIENT B 
+				WHERE INSTR_CODE IN (SELECT INSTR_CODE FROM CAEVENT WHERE CORP_ID =  :g_ca_caevent_struct_h.h_attach_corp_id) 
+				AND CLIENT NOT IN ( SELECT DISTINCT CLIENT 
+				FROM DL_SAFEK WHERE INSTR_CODE = :g_ca_caevent_struct_h.h_instr_code ) 
+				AND A.SAFEKEEP_POS > 0 
+				AND B.CLN_BRK_ALL != 'B' 
+				AND A.CLIENT = B.CLN_CODE 
+				AND B.STATUS !='CA' 
+					UNION 
+		            SELECT DISTINCT(cln_master)
+	  				FROM  MT_CLIENT
+	                WHERE CLN_BRK_ALL != 'B'
+					AND   EXISTS ( SELECT client FROM DL_SAFEK WHERE instr_code = ( SELECT 	
+									INSTR_CODE FROM CAEVENT WHERE CORP_ID = :g_ca_caevent_struct_h.h_attach_corp_id )	
+									AND DL_SAFEK.client = MT_CLIENT.cln_code
+									AND SAFEKEEP_POS > 0 
+									AND CLIENT NOT IN ( SELECT DISTINCT CLIENT 					FROM DL_SAFEK WHERE INSTR_CODE = :g_ca_caevent_struct_h.h_instr_code ))
+			  		AND MT_CLIENT.STATUS!='CA'
+                                ORDER BY 1;
+				}
+                           /*Changed by siva.ganapathi for ISKB_3374 -- Ended*/
+			   /*Priority conditions added siva.ganapathi by ISKB_3990 -- ENDED*/
+                        }
+                        else
+                        {
+                             /*Changed by siva.ganapathi for ISKB_3374 -- started*/
+                /*printf("\n before opening the cursor AmstaccCur_RU_His");
+                             printf("\n Event Instr code is %s ",g_ca_caevent_struct_h.h_instr_code);
+                             printf("\n attach corp id is %s",g_ca_caevent_struct_h.h_attach_corp_id);
+                             printf("\n Event corp id is %s",g_ca_caevent_struct_h.h_corp_id);
+                printf("\n g_ca_caevent_struct_h.h_evt_class is %s",g_ca_caevent_struct_h.h_evt_class);*/
+				/*Priority conditions added siva.ganapathi by ISKB_3990 -- STARTED*/
+
+				printf("\n The event priority is %d",g_ca_caevent_struct_h.h_priority);
+
+                             fflush(stdout);
+                             
+				if (g_ca_caevent_struct_h.h_priority == 1)
+				{	
+                                EXEC SQL DECLARE AmstaccCur_RU_His CURSOR FOR
+                                SELECT DISTINCT(cln_master)
+                                FROM  MT_CLIENT
+                                WHERE CLN_BRK_ALL != 'B'
+                                AND   EXISTS ( SELECT client FROM DL_HISSAFEK
+                                WHERE instr_code = RTRIM(:g_ca_caevent_struct_h.h_instr_code)
+
+                                AND   DL_HISSAFEK.client = MT_CLIENT.CLN_CODE
+                                AND   POSIT_DATE = to_date(:g_ca_caevent_struct_h.h_rec_date)
+
+                                AND   (safekeep_pos >0))
+								AND MT_CLIENT.STATUS!='CA'
+
+                                UNION
+                                SELECT CLN_CODE
+                                FROM  MT_CLIENT
+                                WHERE CLN_BRK_ALL != 'B'
+                                AND CLN_CODE!=CLN_MASTER
+                                AND EXISTS (SELECT 1 FROM MT_MSGADDRESS_VEW WHERE MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_code AND COMB_MSG = 'N' AND MSG_IDENT_NO IN ('3',decode(:g_ca_caevent_struct_h.h_evt_class,'SM','31')))
+
+                                AND   EXISTS ( SELECT client FROM DL_HISSAFEK
+                                WHERE instr_code = RTRIM(:g_ca_caevent_struct_h.h_instr_code)
+
+                                AND   DL_HISSAFEK.client = MT_CLIENT.cln_code
+                                AND   POSIT_DATE = to_date(:g_ca_caevent_struct_h.h_rec_date)
+
+                                AND   (safekeep_pos >0))
+								AND MT_CLIENT.STATUS!='CA'
+                        ORDER BY 1;
+				}
+				else
+				{
+					    EXEC SQL DECLARE AmstaccCur_RU_His_pr2 CURSOR FOR
+		                SELECT DISTINCT(cln_master)
+				        FROM  MT_CLIENT
+		                WHERE CLN_BRK_ALL != 'B'
+		                AND   EXISTS ( SELECT client FROM DL_HISSAFEK
+		                WHERE instr_code = RTRIM(:g_ca_caevent_struct_h.h_instr_code)
+		                AND   DL_HISSAFEK.client = MT_CLIENT.CLN_CODE
+		                AND   POSIT_DATE = to_date(:g_ca_caevent_struct_h.h_rec_date)
+		                AND   (safekeep_pos >0))
+						AND MT_CLIENT.STATUS!='CA'
+				UNION 
+		                SELECT CLN_CODE
+		                FROM  MT_CLIENT
+		                WHERE CLN_BRK_ALL != 'B'
+		                AND CLN_CODE!=CLN_MASTER
+		                AND EXISTS (SELECT 1 FROM MT_MSGADDRESS_VEW WHERE MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_code AND COMB_MSG = 'N' AND MSG_IDENT_NO IN ('3',decode(:g_ca_caevent_struct_h.h_evt_class,'SM','31')))
+		                AND   EXISTS ( SELECT client FROM DL_HISSAFEK
+		                WHERE instr_code = RTRIM(:g_ca_caevent_struct_h.h_instr_code)
+		                AND   DL_HISSAFEK.client = MT_CLIENT.cln_code
+		                AND   POSIT_DATE = to_date(:g_ca_caevent_struct_h.h_rec_date)
+		                AND   (safekeep_pos >0))
+						AND MT_CLIENT.STATUS!='CA'
+						UNION 
+						SELECT CLIENT FROM DL_HISSAFEK A,MT_CLIENT B 
+				WHERE INSTR_CODE IN (SELECT INSTR_CODE FROM CAEVENT WHERE CORP_ID =  :g_ca_caevent_struct_h.h_attach_corp_id) 
+				AND CLIENT NOT IN ( SELECT DISTINCT CLIENT 
+						FROM DL_HISSAFEK WHERE INSTR_CODE = :g_ca_caevent_struct_h.h_instr_code ) 
+				AND A.SAFEKEEP_POS > 0 
+						AND A.POSIT_DATE = to_date(:g_ca_caevent_struct_h.h_rec_date)
+				AND B.CLN_BRK_ALL != 'B' 
+				AND A.CLIENT = B.CLN_CODE 
+				AND B.STATUS !='CA' 
+						UNION 
+		                SELECT DISTINCT(cln_master)
+				        FROM  MT_CLIENT
+		                WHERE CLN_BRK_ALL != 'B'
+						AND   EXISTS ( SELECT client FROM DL_HISSAFEK WHERE instr_code = 
+										( SELECT INSTR_CODE FROM CAEVENT WHERE CORP_ID =    
+											:g_ca_caevent_struct_h.h_attach_corp_id) 
+										AND SAFEKEEP_POS > 0 
+										AND DL_HISSAFEK.client = MT_CLIENT.cln_code
+										AND POSIT_DATE = to_date(:g_ca_caevent_struct_h.h_rec_date)
+										AND CLIENT NOT IN ( SELECT DISTINCT CLIENT 
+										FROM DL_HISSAFEK WHERE INSTR_CODE = :g_ca_caevent_struct_h.h_instr_code )
+									)
+						AND MT_CLIENT.STATUS!='CA'
+                                ORDER BY 1;
+                }             
+                           /*Changed by siva.ganapathi for ISKB_3374 -- Ended*/
+				/*Priority conditions added siva.ganapathi by ISKB_3990 -- ENDED*/
+                        }
+
+                    }
+		    else  
+		{
+			if (int_l_ismsgagain) 
+			{
+                             /*Changed by siva.ganapathi for ISKB_3374 -- started*/
+                 /*printf("\n before opening the cursor AmstaccCur_CZ");
+                             printf("\n Event Instr code is %s ",g_ca_caevent_struct_h.h_instr_code);
+                             printf("\n attach corp id is %s",g_ca_caevent_struct_h.h_attach_corp_id);
+                             printf("\n Event corp id is %s",g_ca_caevent_struct_h.h_corp_id);
+                 printf("\n g_ca_caevent_struct_h.h_evt_class is %s",g_ca_caevent_struct_h.h_evt_class);*/
+
+ 				/*Priority conditions added siva.ganapathi by ISKB_3990 -- STARTED*/
+   				 printf("\n The event priority is %d",g_ca_caevent_struct_h.h_priority);
+
+                             fflush(stdout);
+
+/*Smita - Changed Column Names - HDFCCA_027*/
+
+				if (g_ca_caevent_struct_h.h_priority == 1)
+				{	
+                     EXEC SQL DECLARE AmstaccCur_CZ CURSOR FOR
+							SELECT DISTINCT(cln_master)
+							FROM  MT_CLIENT
+							WHERE CLN_BRK_ALL != 'B'
+							AND   EXISTS ( SELECT client FROM DL_SAFEK
+												WHERE instr_code = RTRIM(:g_ca_caevent_struct_h.h_instr_code)
+												AND   DL_SAFEK.client = MT_CLIENT.cln_code
+                       				 	AND   (safekeep_pos >0 or VAL_REC >0 or VAL_DEL >0
+                          		 		or NVALRECEIVE > 0 or NVALDELIVER > 0 ))
+							AND MT_CLIENT.STATUS!='CA'
+							UNION
+							SELECT CLN_CODE
+							FROM  MT_CLIENT
+							WHERE CLN_BRK_ALL != 'B'
+							AND CLN_CODE!=CLN_MASTER
+							AND EXISTS (SELECT 1 FROM MT_MSGADDRESS_VEW WHERE MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_code AND COMB_MSG='N' AND MSG_IDENT_NO IN ('3',decode(:g_ca_caevent_struct_h.h_evt_class,'SM','31')))
+							AND   EXISTS ( SELECT client FROM DL_SAFEK
+												WHERE instr_code = RTRIM(:g_ca_caevent_struct_h.h_instr_code)
+												AND   DL_SAFEK.client = MT_CLIENT.cln_code
+                       				 	AND   (safekeep_pos >0 or VAL_REC >0 or VAL_DEL >0
+                          		 		or NVALRECEIVE > 0 or NVALDELIVER > 0 ))
+					 AND MT_CLIENT.STATUS!='CA'
+					 ORDER BY 1;
+				}
+				else
+				{
+						EXEC SQL DECLARE AmstaccCur_CZ_pr2 CURSOR FOR
+						SELECT DISTINCT(cln_master)
+						FROM  MT_CLIENT
+						WHERE CLN_BRK_ALL != 'B'
+						AND   EXISTS ( SELECT client FROM DL_SAFEK
+												WHERE instr_code = RTRIM(:g_ca_caevent_struct_h.h_instr_code)
+												AND   DL_SAFEK.client = MT_CLIENT.cln_code
+                       				 	AND   (safekeep_pos >0 or VAL_REC >0 or VAL_DEL >0
+                          		 		or NVALRECEIVE > 0 or NVALDELIVER > 0 ))
+						AND MT_CLIENT.STATUS!='CA'
+						UNION
+						SELECT CLN_CODE
+						FROM  MT_CLIENT
+						WHERE CLN_BRK_ALL != 'B'
+						AND CLN_CODE!=CLN_MASTER
+						AND EXISTS (SELECT 1 FROM MT_MSGADDRESS_VEW WHERE MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_code AND COMB_MSG='N' AND MSG_IDENT_NO IN ('3',decode(:g_ca_caevent_struct_h.h_evt_class,'SM','31')))
+						AND   EXISTS ( SELECT client FROM DL_SAFEK
+												WHERE instr_code = RTRIM(:g_ca_caevent_struct_h.h_instr_code)
+												AND   DL_SAFEK.client = MT_CLIENT.cln_code
+                       	AND   (safekeep_pos >0 or VAL_REC >0 or VAL_DEL >0
+                          		 		or NVALRECEIVE > 0 or NVALDELIVER > 0 ))
+						AND MT_CLIENT.STATUS!='CA'
+					UNION 
+					SELECT CLIENT FROM DL_SAFEK A,MT_CLIENT B 
+					WHERE INSTR_CODE IN (SELECT INSTR_CODE FROM CAEVENT WHERE CORP_ID =  :g_ca_caevent_struct_h.h_attach_corp_id) 
+					AND CLIENT NOT IN ( SELECT DISTINCT CLIENT 
+					FROM DL_SAFEK WHERE INSTR_CODE = :g_ca_caevent_struct_h.h_instr_code ) 
+					AND	(A.safekeep_pos >0 or A.VAL_REC >0 or A.VAL_DEL >0
+                          		 		or A.NVALRECEIVE > 0 or A.NVALDELIVER > 0 )
+					AND B.CLN_BRK_ALL != 'B' 
+					AND A.CLIENT = B.CLN_CODE 
+					AND B.STATUS !='CA' 
+						UNION 
+						SELECT DISTINCT(cln_master)
+						FROM  MT_CLIENT
+						WHERE CLN_BRK_ALL != 'B'
+						AND   EXISTS ( SELECT client FROM DL_SAFEK
+									   WHERE instr_code = (SELECT INSTR_CODE FROM CAEVENT WHERE CORP_ID =  :g_ca_caevent_struct_h.h_attach_corp_id)			AND DL_SAFEK.client = MT_CLIENT.cln_code					
+									   AND (safekeep_pos >0 or VAL_REC >0 or VAL_DEL >0
+                          		 		or NVALRECEIVE > 0 or NVALDELIVER > 0 )
+										AND CLIENT NOT IN ( SELECT DISTINCT CLIENT 
+											FROM DL_SAFEK WHERE INSTR_CODE = :g_ca_caevent_struct_h.h_instr_code )
+									)
+						AND STATUS !='CA' 
+                     ORDER BY 1;
+				  }
+                                   /*Changed by siva.ganapathi for ISKB_3374 -- Ended*/
+					/*Priority conditions added siva.ganapathi by ISKB_3990 -- Ended*/
+				}
+				else
+				{
+							
+                             /*Changed by siva.ganapathi for ISKB_3374 -- started*/
+                     /*printf("\n before opening the cursor AmstaccCur2");
+                             printf("\n Event Instr code is %s ",g_ca_caevent_struct_h.h_instr_code);
+                             printf("\n attach corp id is %s",g_ca_caevent_struct_h.h_attach_corp_id);
+                             printf("\n Event corp id is %s",g_ca_caevent_struct_h.h_corp_id);
+                     printf("\n g_ca_caevent_struct_h.h_evt_class is %s",g_ca_caevent_struct_h.h_evt_class);*/
+
+	 				/*Priority conditions added siva.ganapathi by ISKB_3990 -- Started*/
+
+    				 printf("\n The event priority is %d",g_ca_caevent_struct_h.h_priority);
+
+                             fflush(stdout);
+
+					 if (g_ca_caevent_struct_h.h_priority == 1)
+					 {	
+                     EXEC SQL DECLARE AmstaccCur2 CURSOR FOR
+                     SELECT DISTINCT(cln_master)
+                     FROM  MT_CLIENT
+                     WHERE CLN_BRK_ALL != 'B'
+                     AND   EXISTS ( SELECT client FROM dl_deal
+                                    WHERE instr_code = RTRIM(:g_ca_caevent_struct_h.h_instr_code)
+												and deal_date <= to_date(:g_ca_caevent_struct_h.h_proxy_date)
+                                    and DEAL_STAT NOT IN('UU','DA','DD','DS','DU')
+                                    AND   dl_deal.client = MT_CLIENT.cln_code)
+                     AND cln_master NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :g_ca_caevent_struct_h.h_corp_id )
+					 AND MT_CLIENT.STATUS!='CA'
+							UNION
+                     SELECT CLN_CODE
+                     FROM  MT_CLIENT
+                     WHERE CLN_BRK_ALL != 'B'
+							AND CLN_CODE!=CLN_MASTER
+							AND EXISTS (SELECT 1 FROM MT_MSGADDRESS_VEW WHERE MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_code AND COMB_MSG='N' AND MSG_IDENT_NO IN ('3',decode(:g_ca_caevent_struct_h.h_evt_class,'SM','31')))
+                     AND   EXISTS ( SELECT client FROM dl_deal
+                                    WHERE instr_code = RTRIM(:g_ca_caevent_struct_h.h_instr_code)
+												and deal_date <= to_date(:g_ca_caevent_struct_h.h_proxy_date)
+                                    and DEAL_STAT NOT IN('UU','DA','DD','DS','DU')
+                                    AND   dl_deal.client = MT_CLIENT.cln_code)
+                     AND CLN_CODE NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :g_ca_caevent_struct_h.h_corp_id )
+					 AND MT_CLIENT.STATUS!='CA'
+		                     ORDER BY 1;
+					 }
+					 else
+					 {		
+						    EXEC SQL DECLARE AmstaccCur2_pr2 CURSOR FOR
+	                        SELECT DISTINCT(cln_master)
+		                     FROM  MT_CLIENT
+		                     WHERE CLN_BRK_ALL != 'B'
+		                     AND   EXISTS ( SELECT client FROM dl_deal
+                                    WHERE instr_code = RTRIM(:g_ca_caevent_struct_h.h_instr_code)
+												and deal_date <= to_date(:g_ca_caevent_struct_h.h_proxy_date)
+                                    and DEAL_STAT NOT IN('UU','DA','DD','DS','DU')
+                                    AND   dl_deal.client = MT_CLIENT.cln_code)
+		                     AND cln_master NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :g_ca_caevent_struct_h.h_corp_id )
+							 AND MT_CLIENT.STATUS!='CA'
+							UNION
+		                     SELECT CLN_CODE
+		                     FROM  MT_CLIENT
+		                     WHERE CLN_BRK_ALL != 'B'
+	  						 AND CLN_CODE!=CLN_MASTER
+  							 AND EXISTS (SELECT 1 FROM MT_MSGADDRESS_VEW WHERE MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_code AND COMB_MSG='N' AND MSG_IDENT_NO IN ('3',decode(:g_ca_caevent_struct_h.h_evt_class,'SM','31')))
+		                     AND   EXISTS ( SELECT client FROM dl_deal
+                                    WHERE instr_code = RTRIM(:g_ca_caevent_struct_h.h_instr_code)
+												and deal_date <= to_date(:g_ca_caevent_struct_h.h_proxy_date)
+                                    and DEAL_STAT NOT IN('UU','DA','DD','DS','DU')
+                                    AND   dl_deal.client = MT_CLIENT.cln_code)
+						       AND CLN_CODE NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :g_ca_caevent_struct_h.h_corp_id )
+							 AND MT_CLIENT.STATUS!='CA'
+		     UNION 
+		     SELECT CLIENT FROM DL_SAFEK A,MT_CLIENT B 
+		     WHERE INSTR_CODE IN (SELECT INSTR_CODE FROM CAEVENT WHERE CORP_ID =  :g_ca_caevent_struct_h.h_attach_corp_id) 
+		     AND CLIENT NOT IN ( SELECT DISTINCT CLIENT 
+		     FROM DL_SAFEK WHERE INSTR_CODE = :g_ca_caevent_struct_h.h_instr_code ) 
+		     AND B.CLN_BRK_ALL != 'B' 
+		     AND A.CLIENT = B.CLN_CODE 
+		     AND B.STATUS !='CA' 
+							 UNION
+							 SELECT DISTINCT(cln_master)
+		                     FROM  MT_CLIENT
+		                     WHERE CLN_BRK_ALL != 'B'
+							 AND   EXISTS ( SELECT client FROM dl_deal	
+											WHERE instr_code = (SELECT INSTR_CODE FROM CAEVENT WHERE CORP_ID = :g_ca_caevent_struct_h.h_attach_corp_id)
+											and deal_date <= to_date(:g_ca_caevent_struct_h.h_proxy_date)
+											and DEAL_STAT NOT IN('UU','DA','DD','DS','DU')
+		                                    AND   dl_deal.client = MT_CLIENT.cln_code)
+							 AND cln_master NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :g_ca_caevent_struct_h.h_corp_id )
+							 AND MT_CLIENT.STATUS!='CA'
+                     ORDER BY 1;
+					}
+                     /*Changed by siva.ganapathi for ISKB_3374 -- Ended*/
+	 				/*Priority conditions added siva.ganapathi by ISKB_3990 -- Ended*/
+				}
+			}
+	   } 
+      else if ( (!strcmp(g_ca_caevent_struct_h.h_evt_class,"OP")) && (!strcmp(g_ca_caevent_struct_h.h_op_evt_class,"TO")) )
+         {
+                    /*Changed by siva.ganapathi for ISKB_3374 -- started*/
+               /*printf("\n before opening the cursor AmstaccCur6");
+                    printf("\n Event Instr code is %s ",g_ca_caevent_struct_h.h_instr_code);
+                    printf("\n attach corp id is %s",g_ca_caevent_struct_h.h_attach_corp_id);
+                    printf("\n Event corp id is %s",g_ca_caevent_struct_h.h_corp_id);
+               printf("\n g_ca_caevent_struct_h.h_evt_class is %s",g_ca_caevent_struct_h.h_evt_class);*/
+				
+				/*Priority conditions added siva.ganapathi by ISKB_3990 -- STARTED*/
+
+				printf("\n The event priority is %d",g_ca_caevent_struct_h.h_priority);
+
+                    fflush(stdout);
+
+				if (g_ca_caevent_struct_h.h_priority == 1 )
+				{	
+							EXEC SQL DECLARE AmstaccCur6  CURSOR FOR
+                     SELECT DISTINCT(cln_master)
+                     FROM  MT_CLIENT
+                     WHERE CLN_BRK_ALL != 'B'
+                     AND   EXISTS ( SELECT client FROM DL_SAFEK
+                                 WHERE instr_code = RTRIM(:g_ca_caevent_struct_h.h_instr_code)
+                                 and DL_SAFEK.safekeep_pos>0
+                                 AND   DL_SAFEK.client = MT_CLIENT.cln_code)
+                     AND cln_master NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = rtrim(:g_ca_caevent_struct_h.h_corp_id) )
+					 AND MT_CLIENT.STATUS!='CA'
+                     UNION
+                     SELECT CLN_CODE
+                     FROM  MT_CLIENT
+                     WHERE CLN_BRK_ALL != 'B'
+                     AND CLN_CODE!=CLN_MASTER
+                     AND EXISTS (SELECT 1 FROM MT_MSGADDRESS_VEW WHERE MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_code AND COMB_MSG='N' AND MSG_IDENT_NO IN ('3',decode(:g_ca_caevent_struct_h.h_evt_class,'SM','31')))
+                     AND   EXISTS ( SELECT client FROM DL_SAFEK
+                                 WHERE instr_code = RTRIM(:g_ca_caevent_struct_h.h_instr_code)
+                                 and DL_SAFEK.safekeep_pos>0
+                                 AND   DL_SAFEK.client = MT_CLIENT.cln_code)
+                     AND CLN_CODE NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = rtrim(:g_ca_caevent_struct_h.h_corp_id) )
+					 AND MT_CLIENT.STATUS!='CA'
+                     ORDER BY 1;
+				}
+				else
+				{
+					EXEC SQL DECLARE AmstaccCur6_pr2  CURSOR FOR
+                     SELECT DISTINCT(cln_master)
+                     FROM  MT_CLIENT
+                     WHERE CLN_BRK_ALL != 'B'
+                     AND   EXISTS ( SELECT client FROM DL_SAFEK
+                                 WHERE instr_code = RTRIM(:g_ca_caevent_struct_h.h_instr_code)
+                                 and DL_SAFEK.safekeep_pos>0
+                                 AND   DL_SAFEK.client = MT_CLIENT.cln_code)
+                     AND cln_master NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = rtrim(:g_ca_caevent_struct_h.h_corp_id) )
+					 AND MT_CLIENT.STATUS!='CA'
+                     UNION
+                     SELECT CLN_CODE
+                     FROM  MT_CLIENT
+                     WHERE CLN_BRK_ALL != 'B'
+                     AND CLN_CODE!=CLN_MASTER
+                     AND EXISTS (SELECT 1 FROM MT_MSGADDRESS_VEW WHERE MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_code AND COMB_MSG='N' AND MSG_IDENT_NO IN ('3',decode(:g_ca_caevent_struct_h.h_evt_class,'SM','31')))
+                     AND   EXISTS ( SELECT client FROM DL_SAFEK
+                                 WHERE instr_code = RTRIM(:g_ca_caevent_struct_h.h_instr_code)
+                                 and DL_SAFEK.safekeep_pos>0
+                                 AND   DL_SAFEK.client = MT_CLIENT.cln_code)
+                     AND CLN_CODE NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = rtrim(:g_ca_caevent_struct_h.h_corp_id) )
+					 AND MT_CLIENT.STATUS!='CA'
+		    UNION 
+		    SELECT CLIENT FROM DL_SAFEK A,MT_CLIENT B 
+		    WHERE INSTR_CODE IN (SELECT INSTR_CODE FROM CAEVENT WHERE CORP_ID =  :g_ca_caevent_struct_h.h_attach_corp_id) 
+		    AND CLIENT NOT IN ( SELECT DISTINCT CLIENT 
+		    FROM DL_SAFEK WHERE INSTR_CODE = :g_ca_caevent_struct_h.h_instr_code ) 
+		    AND A.SAFEKEEP_POS > 0
+		    AND B.CLN_BRK_ALL != 'B' 
+		    AND A.CLIENT = B.CLN_CODE 
+		    AND B.STATUS !='CA' 
+					UNION
+					SELECT DISTINCT(cln_master)
+                    FROM  MT_CLIENT
+                    WHERE CLN_BRK_ALL != 'B'
+                    AND   EXISTS ( 
+									SELECT client FROM DL_SAFEK
+                                    WHERE instr_code = (SELECT INSTR_CODE FROM CAEVENT WHERE CORP_ID =  :g_ca_caevent_struct_h.h_attach_corp_id)
+                                    and DL_SAFEK.safekeep_pos>0
+                                    AND DL_SAFEK.client = MT_CLIENT.cln_code
+	   							    AND CLIENT NOT IN ( SELECT DISTINCT CLIENT 
+								      FROM DL_SAFEK WHERE INSTR_CODE = :g_ca_caevent_struct_h.h_instr_code ) 
+								 )
+                    AND cln_master NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = rtrim(:g_ca_caevent_struct_h.h_corp_id) )
+					AND MT_CLIENT.STATUS!='CA'
+                     ORDER BY 1;
+				}
+                     /*Changed by siva.ganapathi for ISKB_3374 -- Ended*/
+  				/*Priority conditions added siva.ganapathi by ISKB_3990 -- STARTED*/
+
+         }
+		else if ( (!strcmp(q_ca_casecevent_struct_h.h_entitl_base,ENTL_BASE_DL)) && (g_cond_gr))
+				{
+                                   /*Changed by siva.ganapathi for ISKB_3374 -- started*/
+                                   printf("\n before opening the cursor AmstaccCur3");
+             /*printf("\n Event Instr code is %s ",g_ca_caevent_struct_h.h_instr_code);
+                                   printf("\n attach corp id is %s",g_ca_caevent_struct_h.h_attach_corp_id);
+                                   printf("\n Event corp id is %s",g_ca_caevent_struct_h.h_corp_id);
+             printf("\n g_ca_caevent_struct_h.h_evt_class is %s",g_ca_caevent_struct_h.h_evt_class);*/
+			
+			/*Priority conditions added siva.ganapathi by ISKB_3990 -- STARTED*/
+
+			 printf("\n The event priority is %d",g_ca_caevent_struct_h.h_priority);
+                                   fflush(stdout);
+
+			  if (g_ca_caevent_struct_h.h_priority == 1)
+			  {		
+							EXEC SQL DECLARE AmstaccCur3 CURSOR FOR
+							SELECT DISTINCT(cln_master)
+							FROM 	MT_CLIENT
+							WHERE CLN_BRK_ALL != 'B'
+					      AND   EXISTS ( SELECT client FROM dl_deal
+               				      WHERE instr_code = RTRIM(:g_ca_caevent_struct_h.h_instr_code)
+											and deal_date <= to_date(decode(:g_ca_caevent_struct_h.h_evt_class,'OT',
+													rtrim(:g_ca_caevent_struct_h.h_effect_date),rtrim(:g_ca_caevent_struct_h.h_rec_date)))
+                     				and DEAL_STAT NOT IN('UU','DA','DD','DS','DU')
+                     				AND   dl_deal.client = MT_CLIENT.cln_code)
+          			  	AND cln_master NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = rtrim(:g_ca_caevent_struct_h.h_corp_id) )
+						AND MT_CLIENT.STATUS!='CA'
+							UNION
+							SELECT CLN_CODE
+							FROM 	MT_CLIENT
+							WHERE CLN_BRK_ALL != 'B'
+							AND CLN_CODE!=CLN_MASTER
+							AND EXISTS (SELECT 1 FROM MT_MSGADDRESS_VEW WHERE MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_code AND COMB_MSG='N' AND MSG_IDENT_NO IN ('3',decode(:g_ca_caevent_struct_h.h_evt_class,'SM','31')))
+					      AND   EXISTS ( SELECT client FROM dl_deal
+               				      WHERE instr_code = RTRIM(:g_ca_caevent_struct_h.h_instr_code)
+											and deal_date <= to_date(decode(:g_ca_caevent_struct_h.h_evt_class,'OT',
+													rtrim(:g_ca_caevent_struct_h.h_effect_date),rtrim(:g_ca_caevent_struct_h.h_rec_date)))
+                     				and DEAL_STAT NOT IN('UU','DA','DD','DS','DU')
+                     				AND   dl_deal.client = MT_CLIENT.cln_code)
+          			  	AND CLN_CODE NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = rtrim(:g_ca_caevent_struct_h.h_corp_id) )
+						AND MT_CLIENT.STATUS!='CA'
+					ORDER BY 1;
+			  }
+			  else
+			  {
+					EXEC SQL DECLARE AmstaccCur3_pr2 CURSOR FOR
+					SELECT DISTINCT(cln_master)
+					FROM 	MT_CLIENT
+					WHERE CLN_BRK_ALL != 'B'
+					AND   EXISTS ( SELECT client FROM dl_deal
+               				      WHERE instr_code = RTRIM(:g_ca_caevent_struct_h.h_instr_code)
+											and deal_date <= to_date(decode(:g_ca_caevent_struct_h.h_evt_class,'OT',
+													rtrim(:g_ca_caevent_struct_h.h_effect_date),rtrim(:g_ca_caevent_struct_h.h_rec_date)))
+                     				and DEAL_STAT NOT IN('UU','DA','DD','DS','DU')
+                     				AND   dl_deal.client = MT_CLIENT.cln_code)
+          			AND cln_master NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = rtrim(:g_ca_caevent_struct_h.h_corp_id) )
+					AND MT_CLIENT.STATUS!='CA'
+					UNION
+					SELECT CLN_CODE
+					FROM 	MT_CLIENT
+					WHERE CLN_BRK_ALL != 'B'
+					AND CLN_CODE!=CLN_MASTER
+					AND EXISTS (SELECT 1 FROM MT_MSGADDRESS_VEW WHERE MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_code AND COMB_MSG='N' AND MSG_IDENT_NO IN ('3',decode(:g_ca_caevent_struct_h.h_evt_class,'SM','31')))
+					AND   EXISTS ( SELECT client FROM dl_deal
+               				      WHERE instr_code = RTRIM(:g_ca_caevent_struct_h.h_instr_code)
+											and deal_date <= to_date(decode(:g_ca_caevent_struct_h.h_evt_class,'OT',
+													rtrim(:g_ca_caevent_struct_h.h_effect_date),rtrim(:g_ca_caevent_struct_h.h_rec_date)))
+                     				and DEAL_STAT NOT IN('UU','DA','DD','DS','DU')
+                     				AND   dl_deal.client = MT_CLIENT.cln_code)
+          			AND CLN_CODE NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = rtrim(:g_ca_caevent_struct_h.h_corp_id) )
+					AND MT_CLIENT.STATUS!='CA'
+						UNION 
+   					    SELECT CLIENT FROM DL_SAFEK A,MT_CLIENT B 
+   					    WHERE INSTR_CODE IN (SELECT INSTR_CODE FROM CAEVENT WHERE CORP_ID =  :g_ca_caevent_struct_h.h_attach_corp_id) 
+						AND CLIENT NOT IN ( SELECT DISTINCT CLIENT 
+						FROM DL_SAFEK WHERE INSTR_CODE = :g_ca_caevent_struct_h.h_instr_code ) 
+						AND B.CLN_BRK_ALL != 'B' 
+						AND A.CLIENT = B.CLN_CODE 
+						AND B.STATUS !='CA' 
+					UNION 
+					SELECT DISTINCT(cln_master)
+					FROM 	MT_CLIENT
+					WHERE CLN_BRK_ALL != 'B'
+					AND   EXISTS ( SELECT client FROM dl_deal
+               				      WHERE instr_code = (SELECT INSTR_CODE FROM CAEVENT WHERE CORP_ID =  :g_ca_caevent_struct_h.h_attach_corp_id) 
+									and deal_date <= to_date(decode(:g_ca_caevent_struct_h.h_evt_class,'OT',
+													rtrim(:g_ca_caevent_struct_h.h_effect_date),rtrim(:g_ca_caevent_struct_h.h_rec_date)))
+                     				and DEAL_STAT NOT IN('UU','DA','DD','DS','DU')
+                     				AND   dl_deal.client = MT_CLIENT.cln_code)
+          			AND cln_master NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = rtrim(:g_ca_caevent_struct_h.h_corp_id) )
+					AND MT_CLIENT.STATUS!='CA'
+							ORDER BY 1;
+			    }
+                     /*Changed by siva.ganapathi for ISKB_3374 -- Ended*/
+	 			/*Priority conditions added siva.ganapathi by ISKB_3990 -- STARTED*/
+
+            }
+		else if ( (strcmp(g_ca_caevent_struct_h.h_evt_class,"OP")) && (!strcmp(q_ca_casecevent_struct_h.h_entitl_base,ENTL_BASE_DL)) )
+				{
+                                   /*Changed by siva.ganapathi for ISKB_3374 -- started*/
+             /*printf("\n before opening the cursor AmstaccCur4");
+                                   printf("\n Event Instr code is %s ",g_ca_caevent_struct_h.h_instr_code);
+                                   printf("\n attach corp id is %s",g_ca_caevent_struct_h.h_attach_corp_id);
+                                   printf("\n Event corp id is %s",g_ca_caevent_struct_h.h_corp_id);
+             printf("\n g_ca_caevent_struct_h.h_evt_class is %s",g_ca_caevent_struct_h.h_evt_class);*/
+			/*Priority conditions added siva.ganapathi by ISKB_3990 -- STARTED*/
+			
+			 printf("\n The event priority is %d",g_ca_caevent_struct_h.h_priority);
+                                   fflush(stdout);
+
+/* Below cursor chng by Chirag 09042008 for BB event issue close dt needs to be consider instead of ex-date ISKB 1034*/
+			if (g_ca_caevent_struct_h.h_priority == 1 )
+			{	
+							EXEC SQL DECLARE AmstaccCur4 CURSOR FOR
+							SELECT DISTINCT(cln_master)
+							FROM 	MT_CLIENT
+							WHERE CLN_BRK_ALL != 'B'
+					      AND   EXISTS ( SELECT client FROM dl_deal
+               				      WHERE instr_code = RTRIM(:g_ca_caevent_struct_h.h_instr_code)
+											and deal_date <= to_date(decode(:g_ca_caevent_struct_h.h_evt_class,'OT',
+													rtrim(:g_ca_caevent_struct_h.h_effect_date),'BB',rtrim(:g_ca_caevent_struct_h.h_dealto_dt),rtrim(:g_ca_caevent_struct_h.h_ex_date)))
+                     				and DEAL_STAT NOT IN('UU','DA','DD','DS','DU')
+                     				AND   dl_deal.client = MT_CLIENT.cln_code)
+          			  	AND cln_master NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = rtrim(:g_ca_caevent_struct_h.h_corp_id) )
+						AND MT_CLIENT.STATUS!='CA'
+							UNION
+							SELECT CLN_CODE
+							FROM 	MT_CLIENT
+							WHERE CLN_BRK_ALL != 'B'
+							AND CLN_CODE!=cln_master
+							AND EXISTS (SELECT 1 FROM MT_MSGADDRESS_VEW WHERE MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_code AND COMB_MSG='N' AND MSG_IDENT_NO IN ('3',decode(:g_ca_caevent_struct_h.h_evt_class,'SM','31')))
+					      AND   EXISTS ( SELECT client FROM dl_deal
+               				      WHERE instr_code = RTRIM(:g_ca_caevent_struct_h.h_instr_code)
+											and deal_date <= to_date(decode(:g_ca_caevent_struct_h.h_evt_class,'OT',
+													rtrim(:g_ca_caevent_struct_h.h_effect_date),'BB',rtrim(:g_ca_caevent_struct_h.h_dealto_dt),rtrim(:g_ca_caevent_struct_h.h_ex_date)))
+                     				and DEAL_STAT NOT IN('UU','DA','DD','DS','DU')
+                     				AND   dl_deal.client = MT_CLIENT.cln_code)
+          			  	AND CLN_CODE NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = rtrim(:g_ca_caevent_struct_h.h_corp_id) )
+						AND MT_CLIENT.STATUS!='CA'
+				ORDER BY 1;
+			}
+			else
+			{	
+				EXEC SQL DECLARE AmstaccCur4_pr2 CURSOR FOR
+				SELECT DISTINCT(cln_master)
+				FROM 	MT_CLIENT
+				WHERE CLN_BRK_ALL != 'B'
+				AND   EXISTS ( SELECT client FROM dl_deal
+               				      WHERE instr_code = RTRIM(:g_ca_caevent_struct_h.h_instr_code)
+											and deal_date <= to_date(decode(:g_ca_caevent_struct_h.h_evt_class,'OT',
+													rtrim(:g_ca_caevent_struct_h.h_effect_date),'BB',rtrim(:g_ca_caevent_struct_h.h_dealto_dt),rtrim(:g_ca_caevent_struct_h.h_ex_date)))
+                     				and DEAL_STAT NOT IN('UU','DA','DD','DS','DU')
+                     				AND   dl_deal.client = MT_CLIENT.cln_code)
+          		AND cln_master NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = rtrim(:g_ca_caevent_struct_h.h_corp_id) )
+				AND MT_CLIENT.STATUS!='CA'
+				UNION
+				SELECT CLN_CODE
+				FROM 	MT_CLIENT
+				WHERE CLN_BRK_ALL != 'B'
+				AND CLN_CODE!=cln_master
+				AND EXISTS (SELECT 1 FROM MT_MSGADDRESS_VEW WHERE MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_code AND COMB_MSG='N' AND MSG_IDENT_NO IN ('3',decode(:g_ca_caevent_struct_h.h_evt_class,'SM','31')))
+				AND   EXISTS ( SELECT client FROM dl_deal
+               				      WHERE instr_code = RTRIM(:g_ca_caevent_struct_h.h_instr_code)
+											and deal_date <= to_date(decode(:g_ca_caevent_struct_h.h_evt_class,'OT',
+													rtrim(:g_ca_caevent_struct_h.h_effect_date),'BB',rtrim(:g_ca_caevent_struct_h.h_dealto_dt),rtrim(:g_ca_caevent_struct_h.h_ex_date)))
+                     				and DEAL_STAT NOT IN('UU','DA','DD','DS','DU')
+                     				AND   dl_deal.client = MT_CLIENT.cln_code)
+          		AND CLN_CODE NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = rtrim(:g_ca_caevent_struct_h.h_corp_id) )
+				AND MT_CLIENT.STATUS!='CA'
+						UNION 
+   					    SELECT CLIENT FROM DL_SAFEK A,MT_CLIENT B 
+   					    WHERE INSTR_CODE IN (SELECT INSTR_CODE FROM CAEVENT WHERE CORP_ID =  :g_ca_caevent_struct_h.h_attach_corp_id) 
+						AND CLIENT NOT IN ( SELECT DISTINCT CLIENT 
+						FROM DL_SAFEK WHERE INSTR_CODE = :g_ca_caevent_struct_h.h_instr_code ) 
+						AND B.CLN_BRK_ALL != 'B' 
+						AND A.CLIENT = B.CLN_CODE 
+						AND B.STATUS !='CA' 
+				UNION 
+				SELECT DISTINCT(cln_master)
+				FROM 	MT_CLIENT
+				WHERE CLN_BRK_ALL != 'B'
+				AND   EXISTS ( SELECT client FROM dl_deal
+               				      WHERE instr_code = (SELECT INSTR_CODE FROM CAEVENT WHERE CORP_ID =  :g_ca_caevent_struct_h.h_attach_corp_id) 
+											and deal_date <= to_date(decode(:g_ca_caevent_struct_h.h_evt_class,'OT',
+													rtrim(:g_ca_caevent_struct_h.h_effect_date),'BB',rtrim(:g_ca_caevent_struct_h.h_dealto_dt),rtrim(:g_ca_caevent_struct_h.h_ex_date)))
+                     				and DEAL_STAT NOT IN('UU','DA','DD','DS','DU')
+                     				AND   dl_deal.client = MT_CLIENT.cln_code)
+          		AND cln_master NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = rtrim(:g_ca_caevent_struct_h.h_corp_id) )
+				AND MT_CLIENT.STATUS!='CA'
+							ORDER BY 1;
+			}
+			/*Priority conditions added siva.ganapathi by ISKB_3990 -- STARTED*/
+                     /*Changed by siva.ganapathi for ISKB_3374 -- Ended*/
+            }
+        else
+				{
+                                   /*Changed by siva.ganapathi for ISKB_3374 -- started*/
+            /* printf("\n before opening the cursor AmstaccCur5");
+                                   printf("\n Event Instr code is %s ",g_ca_caevent_struct_h.h_instr_code);
+                                   printf("\n attach corp id is %s",g_ca_caevent_struct_h.h_attach_corp_id);
+                                   printf("\n Event corp id is %s",g_ca_caevent_struct_h.h_corp_id);
+            printf("\n g_ca_caevent_struct_h.h_evt_class is %s",g_ca_caevent_struct_h.h_evt_class);*/
+
+			/*Priority conditions added siva.ganapathi by ISKB_3990 -- STARTED*/
+			
+			 printf("\n The event priority is %d",g_ca_caevent_struct_h.h_priority);
+                                   fflush(stdout);
+
+			 if (g_ca_caevent_struct_h.h_priority ==1 )
+			 {	
+            EXEC SQL DECLARE AmstaccCur5 CURSOR FOR
+                     SELECT DISTINCT(cln_master)
+                     FROM  MT_CLIENT
+                     WHERE CLN_BRK_ALL != 'B'
+                     AND   EXISTS ( SELECT client FROM dl_deal
+                     WHERE instr_code = RTRIM(:g_ca_caevent_struct_h.h_instr_code)
+                     AND   INSTRUMENT_DT >= to_date(rtrim(:g_ca_caevent_struct_h.h_decl_date))
+                     AND   INSTRUMENT_DT <= to_date(decode(:g_ca_caevent_struct_h.h_evt_class,'OT',
+										rtrim(:g_ca_caevent_struct_h.h_effect_date), rtrim(:g_ca_caevent_struct_h.h_rec_date)))
+                     AND   DEAL_STAT  NOT IN('UU','DA','DD','DS','DU')
+                     AND   dl_deal.client = MT_CLIENT.cln_code)
+                     AND   cln_master NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = rtrim(:g_ca_caevent_struct_h.h_corp_id) ) 
+					 AND MT_CLIENT.STATUS!='CA'
+							UNION
+                     SELECT CLN_CODE
+                     FROM  MT_CLIENT
+                     WHERE CLN_BRK_ALL != 'B'
+							AND CLN_CODE!=CLN_MASTER
+							AND EXISTS (SELECT 1 FROM MT_MSGADDRESS_VEW WHERE MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_code AND COMB_MSG='N' AND MSG_IDENT_NO IN ('3',decode(:g_ca_caevent_struct_h.h_evt_class,'SM','31')))
+                     AND   EXISTS ( SELECT client FROM dl_deal
+                     WHERE instr_code = RTRIM(:g_ca_caevent_struct_h.h_instr_code)
+                     AND   INSTRUMENT_DT >= to_date(rtrim(:g_ca_caevent_struct_h.h_decl_date))
+							AND   INSTRUMENT_DT <= to_date(decode(:g_ca_caevent_struct_h.h_evt_class,'OT',
+                              rtrim(:g_ca_caevent_struct_h.h_effect_date), rtrim(:g_ca_caevent_struct_h.h_rec_date)))
+                     AND   DEAL_STAT  NOT IN('UU','DA','DD','DS','DU')
+                     AND   dl_deal.client = MT_CLIENT.cln_code)
+                     AND   cln_code NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = rtrim(:g_ca_caevent_struct_h.h_corp_id) ) 
+					 AND MT_CLIENT.STATUS!='CA'
+					ORDER BY 1;
+			 }
+			 else
+			 {
+					EXEC SQL DECLARE AmstaccCur5_pr2 CURSOR FOR
+                     SELECT DISTINCT(cln_master)
+                     FROM  MT_CLIENT
+                     WHERE CLN_BRK_ALL != 'B'
+                     AND   EXISTS ( SELECT client FROM dl_deal
+                     WHERE instr_code = RTRIM(:g_ca_caevent_struct_h.h_instr_code)
+                     AND   INSTRUMENT_DT >= to_date(rtrim(:g_ca_caevent_struct_h.h_decl_date))
+                     AND   INSTRUMENT_DT <= to_date(decode(:g_ca_caevent_struct_h.h_evt_class,'OT',
+										rtrim(:g_ca_caevent_struct_h.h_effect_date), rtrim(:g_ca_caevent_struct_h.h_rec_date)))
+                     AND   DEAL_STAT  NOT IN('UU','DA','DD','DS','DU')
+                     AND   dl_deal.client = MT_CLIENT.cln_code)
+                     AND   cln_master NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = rtrim(:g_ca_caevent_struct_h.h_corp_id) ) 
+					 AND MT_CLIENT.STATUS!='CA'
+					 UNION
+                     SELECT CLN_CODE
+                     FROM  MT_CLIENT
+                     WHERE CLN_BRK_ALL != 'B'
+							AND CLN_CODE!=CLN_MASTER
+							AND EXISTS (SELECT 1 FROM MT_MSGADDRESS_VEW WHERE MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_code AND COMB_MSG='N' AND MSG_IDENT_NO IN ('3',decode(:g_ca_caevent_struct_h.h_evt_class,'SM','31')))
+                     AND   EXISTS ( SELECT client FROM dl_deal
+                     WHERE instr_code = RTRIM(:g_ca_caevent_struct_h.h_instr_code)
+                     AND   INSTRUMENT_DT >= to_date(rtrim(:g_ca_caevent_struct_h.h_decl_date))
+							AND   INSTRUMENT_DT <= to_date(decode(:g_ca_caevent_struct_h.h_evt_class,'OT',
+                              rtrim(:g_ca_caevent_struct_h.h_effect_date), rtrim(:g_ca_caevent_struct_h.h_rec_date)))
+                     AND   DEAL_STAT  NOT IN('UU','DA','DD','DS','DU')
+                     AND   dl_deal.client = MT_CLIENT.cln_code)
+                     AND   cln_code NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = rtrim(:g_ca_caevent_struct_h.h_corp_id) ) 
+					 AND MT_CLIENT.STATUS!='CA'
+		     UNION 
+   		     SELECT CLIENT FROM DL_SAFEK A,MT_CLIENT B 
+   		     WHERE INSTR_CODE IN (SELECT INSTR_CODE FROM CAEVENT WHERE CORP_ID =  :g_ca_caevent_struct_h.h_attach_corp_id) 
+		     AND CLIENT NOT IN ( SELECT DISTINCT CLIENT 
+		     FROM DL_SAFEK WHERE INSTR_CODE = :g_ca_caevent_struct_h.h_instr_code ) 
+		     AND B.CLN_BRK_ALL != 'B' 
+		     AND A.CLIENT = B.CLN_CODE 
+		     AND B.STATUS !='CA' 
+					 UNION 
+                     SELECT DISTINCT(cln_master)
+                     FROM  MT_CLIENT
+                     WHERE CLN_BRK_ALL != 'B'
+                     AND   EXISTS ( SELECT client FROM dl_deal
+                     WHERE instr_code = (SELECT INSTR_CODE FROM CAEVENT WHERE CORP_ID =  :g_ca_caevent_struct_h.h_attach_corp_id)
+                     AND   INSTRUMENT_DT >= to_date(rtrim(:g_ca_caevent_struct_h.h_decl_date))
+                     AND   INSTRUMENT_DT <= to_date(decode(:g_ca_caevent_struct_h.h_evt_class,'OT',
+										rtrim(:g_ca_caevent_struct_h.h_effect_date), rtrim(:g_ca_caevent_struct_h.h_rec_date)))
+                     AND   DEAL_STAT  NOT IN('UU','DA','DD','DS','DU')
+                     AND   dl_deal.client = MT_CLIENT.cln_code)
+                     AND   cln_master NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = rtrim(:g_ca_caevent_struct_h.h_corp_id) ) 
+					 AND MT_CLIENT.STATUS!='CA'
+			 ORDER BY 1;
+				}
+                     /*Changed by siva.ganapathi for ISKB_3374 -- Ended*/
+				/*Priority conditions added siva.ganapathi by ISKB_3990 -- Ended*/
+            }
+		}
+
+	         IS_ANY_ORA_ERROR
+
+   /*Priority condittions added by siva.ganapathi for ISKB_3990 -- started*/
+      if (((!strcmp(g_ca_caevent_struct_h.h_evt_stat,"IN")) ||((!strcmp(g_ca_caevent_struct_h.h_preliminary_flag,APL_YES_IND)) && (int_l_ismsgagain == 0))) && (l_cond_ru == 0))  
+		{
+			if (g_ca_caevent_struct_h.h_priority == 1)
+			{
+			EXEC SQL OPEN AmstaccCur1;
+			CO_ProcMonitor(g_logfile,"     Opened Cursor AmstaccCur1",NULL,NULL);
+		}
+		else
+		{
+				EXEC SQL OPEN AmstaccCur1_pr2;
+				CO_ProcMonitor(g_logfile,"     Opened Cursor AmstaccCur1_pr2",NULL,NULL);
+			}
+		}
+		else
+		{
+				if (!strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_MEETING)) 
+				{
+				   if (l_cond_ru)
+                                   {
+                                        if ((strcmp(g_ca_caevent_struct_h.h_rec_date, chr_g_sys_date) == 0) || (!strcmp(g_ca_caevent_struct_h.h_preliminary_flag,APL_YES_IND) && g_ca_caevent_struct_i.i_rec_date == -1))
+					{
+							if (g_ca_caevent_struct_h.h_priority == 1)
+							{
+                                                EXEC SQL OPEN AmstaccCur_RU;
+                                                CO_ProcMonitor(g_logfile,"     Opened Cursor AmstaccCur_RU",NULL,NULL);
+                                        }
+                                        else
+                                        {
+								EXEC SQL OPEN AmstaccCur_RU_pr2;
+	                             CO_ProcMonitor(g_logfile,"     Opened Cursor AmstaccCur_RU_pr2",NULL,NULL);
+							}
+                         }
+                         else
+                         {	
+							 if (g_ca_caevent_struct_h.h_priority == 1)
+							 {	
+                                                EXEC SQL OPEN AmstaccCur_RU_His;
+                                                CO_ProcMonitor(g_logfile,"     Opened Cursor AmstaccCur_RU_His",NULL,NULL);
+                                        }
+							 else
+							 {	
+								 EXEC SQL OPEN AmstaccCur_RU_His_pr2;
+	                             CO_ProcMonitor(g_logfile,"     Opened Cursor AmstaccCur_RU_His_pr2",NULL,NULL);	
+							 }
+                         }
+                                   }
+				   else  
+				{
+							if (int_l_ismsgagain) 
+							{
+								if (g_ca_caevent_struct_h.h_priority == 1)
+								{	
+								EXEC SQL OPEN AmstaccCur_CZ;
+								CO_ProcMonitor(g_logfile,"     Opened Cursor AmstaccCur_CZ",NULL,NULL);
+							}
+							else  
+							{
+									EXEC SQL OPEN AmstaccCur_CZ_pr2;
+  									CO_ProcMonitor(g_logfile,"     Opened Cursor AmstaccCur_CZ_pr2",NULL,NULL);
+								}
+							}
+							else  
+							{	
+								if (g_ca_caevent_struct_h.h_priority == 1)
+								{	
+								EXEC SQL OPEN AmstaccCur2;
+								CO_ProcMonitor(g_logfile,"     Opened Cursor AmstaccCur2",NULL,NULL);
+							}
+								else
+								{
+									EXEC SQL OPEN AmstaccCur2_pr2;
+									CO_ProcMonitor(g_logfile,"     Opened Cursor AmstaccCur2_pr2",NULL,NULL);
+								}
+							}
+					}
+				}
+      		else if ( (!strcmp(g_ca_caevent_struct_h.h_evt_class,"OP")) && (!strcmp(g_ca_caevent_struct_h.h_op_evt_class,"TO")) )
+				{
+					if (g_ca_caevent_struct_h.h_priority == 1)
+					{	
+					 EXEC SQL OPEN AmstaccCur6;
+					CO_ProcMonitor(g_logfile,"     Opened Cursor AmstaccCur6",NULL,NULL);
+				}
+					else
+					{	
+						EXEC SQL OPEN AmstaccCur6_pr2;
+   						CO_ProcMonitor(g_logfile,"     Opened Cursor AmstaccCur6_pr2",NULL,NULL);
+					}
+
+				}
+				else if ( (!strcmp(q_ca_casecevent_struct_h.h_entitl_base,ENTL_BASE_DL)) && (g_cond_gr))
+				{
+					if (g_ca_caevent_struct_h.h_priority == 1)
+					{	
+					EXEC SQL OPEN AmstaccCur3;
+					CO_ProcMonitor(g_logfile,"     Opened Cursor AmstaccCur3",NULL,NULL);
+				}
+					else
+					{
+						EXEC SQL OPEN AmstaccCur3_pr2;
+						CO_ProcMonitor(g_logfile,"     Opened Cursor AmstaccCur3_pr2",NULL,NULL);
+					}
+				}
+				else if ( (strcmp(g_ca_caevent_struct_h.h_evt_class,"OP")) && (!strcmp(q_ca_casecevent_struct_h.h_entitl_base,ENTL_BASE_DL)) )
+				{
+					if (g_ca_caevent_struct_h.h_priority == 1)
+					{
+					EXEC SQL OPEN AmstaccCur4;
+					CO_ProcMonitor(g_logfile,"     Opened Cursor AmstaccCur4",NULL,NULL);
+				}
+				else
+				{
+						EXEC SQL OPEN AmstaccCur4_pr2;
+						CO_ProcMonitor(g_logfile,"     Opened Cursor AmstaccCur4_pr2",NULL,NULL);
+					}
+				}
+				else
+				{	
+					if (g_ca_caevent_struct_h.h_priority == 1)
+					{
+					EXEC SQL OPEN AmstaccCur5;
+					CO_ProcMonitor(g_logfile,"     Opened Cursor AmstaccCur5",NULL,NULL);
+				}
+					else
+					{
+						EXEC SQL OPEN AmstaccCur5_pr2;
+						CO_ProcMonitor(g_logfile,"     Opened Cursor AmstaccCur5_pr2",NULL,NULL);
+		}
+				}
+		}
+	/*Priority condittions added by siva.ganapathi for ISKB_3990 -- Ended*/						
+
+			IS_ANY_ORA_ERROR
+			
+			for(;;)
+			{
+
+				memset(chr_g_client,NULL,(APL_CLIENT_LENGTH));
+
+
+   	/*Priority condittions added by siva.ganapathi for ISKB_3990 -- STARTED*/						
+      if (((!strcmp(g_ca_caevent_struct_h.h_evt_stat,"IN")) ||((!strcmp(g_ca_caevent_struct_h.h_preliminary_flag,APL_YES_IND)) && (int_l_ismsgagain == 0))) && (l_cond_ru == 0)) 
+      {
+			if (g_ca_caevent_struct_h.h_priority == 1)
+			{
+         EXEC SQL FETCH AmstaccCur1 into chr_g_client;
+				 fflush(stdout);	 
+			}
+			else
+		    {	
+				 EXEC SQL FETCH AmstaccCur1_pr2 into chr_g_client;
+				 fflush(stdout);	 
+			}
+      }
+      else
+      {
+	    if (!strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_MEETING)) 
+	    {
+		if (l_cond_ru)	
+                {
+                     if ((strcmp(g_ca_caevent_struct_h.h_rec_date, chr_g_sys_date) == 0) || (!strcmp(g_ca_caevent_struct_h.h_preliminary_flag,APL_YES_IND) && g_ca_caevent_struct_i.i_rec_date == -1))
+                     {
+                        if (g_ca_caevent_struct_h.h_priority == 1)
+						 {
+                        EXEC SQL FETCH AmstaccCur_RU into chr_g_client;
+                     }
+                     else
+                     {
+							 EXEC SQL FETCH AmstaccCur_RU_pr2 into chr_g_client;
+						 }
+                     }
+                     else
+                     {	
+						 if (g_ca_caevent_struct_h.h_priority == 1)
+						 {
+                        EXEC SQL FETCH AmstaccCur_RU_His into chr_g_client;
+                     }
+						 else
+						 {
+							EXEC SQL FETCH AmstaccCur_RU_His_pr2 into chr_g_client;
+						 }
+                     }
+                }  
+                else  
+            {
+                     if (int_l_ismsgagain) 
+                     {
+						 if (g_ca_caevent_struct_h.h_priority == 1)
+						 {
+                        EXEC SQL FETCH AmstaccCur_CZ into chr_g_client;
+                     }
+                     else
+                     {
+							   EXEC SQL FETCH AmstaccCur_CZ_pr2 into chr_g_client;
+						 }
+                     }
+                     else
+                     {		
+ 						 if (g_ca_caevent_struct_h.h_priority == 1)
+						 {
+                        EXEC SQL FETCH AmstaccCur2 into chr_g_client;
+                     }
+						 else
+						 {
+							EXEC SQL FETCH AmstaccCur2_pr2 into chr_g_client;
+						 }
+                     }
+               }
+	    }
+            else if ( (!strcmp(g_ca_caevent_struct_h.h_evt_class,"OP")) && (!strcmp(g_ca_caevent_struct_h.h_op_evt_class,"TO")) )
+				{
+				if (g_ca_caevent_struct_h.h_priority == 1)
+				{
+					EXEC SQL FETCH AmstaccCur6 into chr_g_client;
+				}
+				else
+				{
+					EXEC SQL FETCH AmstaccCur6_pr2 into chr_g_client;
+				}
+				
+		}
+            else if ( (!strcmp(q_ca_casecevent_struct_h.h_entitl_base,ENTL_BASE_DL)) && (g_cond_gr))
+            {
+				if (g_ca_caevent_struct_h.h_priority == 1)
+				{
+               EXEC SQL FETCH AmstaccCur3 into chr_g_client;
+            }
+				else
+				{
+					EXEC SQL FETCH AmstaccCur3_pr2 into chr_g_client;					
+				}
+        }
+       else if ( (strcmp(g_ca_caevent_struct_h.h_evt_class,"OP")) && (!strcmp(q_ca_casecevent_struct_h.h_entitl_base,ENTL_BASE_DL )) )
+       {
+		   		if (g_ca_caevent_struct_h.h_priority == 1)
+            {
+               EXEC SQL FETCH AmstaccCur4 into chr_g_client;
+            }
+            else
+            {
+	               EXEC SQL FETCH AmstaccCur4_pr2 into chr_g_client;
+                }
+       }
+       else
+       {	
+				if (g_ca_caevent_struct_h.h_priority == 1)
+				{
+               EXEC SQL FETCH AmstaccCur5 into chr_g_client;
+				}
+				else
+	   		    {
+	               EXEC SQL FETCH AmstaccCur5_pr2 into chr_g_client;
+				}
+		}
+	}
+	/*Priority condittions added by siva.ganapathi for ISKB_3990 -- Ended*/						
+
+				 IS_ANY_ORA_ERROR_CURSOR
+	
+	  sprintf(chr_g_log_buff,"          Processing client %s",chr_g_client);
+      CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+
+			// By Bawa --  8/14/2008 -- ISKB 1693 -- start
+			passFlg = 1;
+			passMstFlg = 1;
+
+			printf(" \n -- 2 -- b4 chr_boundaryDate   |%s|\n",chr_boundaryDate);
+			
+		/*	ISKB_2071	For BB, Boundary date change to issue close date	*/	
+			if (!strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_MEETING))
+				strcpy(chr_boundaryDate,g_ca_caevent_struct_h.h_proxy_date);  
+			else if (!strcmp(g_ca_caevent_struct_h.h_evt_class,"OT"))
+				strcpy(chr_boundaryDate,g_ca_caevent_struct_h.h_effect_date);				
+			else if (!strcmp(g_ca_caevent_struct_h.h_evt_class,"BB"))
+				strcpy(chr_boundaryDate,g_ca_caevent_struct_h.h_dealto_dt);				
+			else 
+				strcpy(chr_boundaryDate,g_ca_caevent_struct_h.h_ex_date); 
+			
+			printf(" \n aftr chr_boundaryDate   |%s|\n",chr_boundaryDate);
+
+			/*Modified by siva.ganapathi for ISKB_3374 -- started*/
+			if ( APL_FAILURE == getPassForMsg(chr_g_client,
+											g_ca_caevent_struct_h.h_instr_code,
+											chr_boundaryDate,
+											q_ca_casecevent_struct_h.h_entitl_base,
+				                            g_ca_caevent_struct_h.h_priority,
+											g_ca_caevent_struct_h.h_attach_corp_id,
+											&passFlg,
+											l_debug_info_ptr ) )
+					{
+						APL_GOBACK_FAIL;
+					}
+			/*Modified by siva.ganapathi for ISKB_3374 -- Ended*/
+
+			printf(" \n AFTER passFlg   |%d|", passFlg);
+
+			/*	ISKB_2213	Check eligible Sub-client for event intimation	*/
+			EXEC SQL SELECT CLN_MASTER INTO :l_cln_master:i_cln_master
+						FROM MT_CLIENT 
+						WHERE CLN_CODE =: chr_g_client;
+
+			IS_ANY_ORA_ERROR
+
+			if(strcmp(chr_g_client,l_cln_master)==0)
+			{
+				printf("Check Eligible Sub-client of Given Master |%s|\n",l_cln_master);
+				/*Modified by siva.ganapathi for ISKB-3374 -- started*/
+				if ( APL_FAILURE == chkEligSubAcct(chr_g_client,
+											g_ca_caevent_struct_h.h_instr_code,
+											chr_boundaryDate,
+											q_ca_casecevent_struct_h.h_entitl_base,
+											g_ca_caevent_struct_h.h_priority,
+											g_ca_caevent_struct_h.h_attach_corp_id,
+											&passMstFlg,
+											l_debug_info_ptr ) )
+					{
+						APL_GOBACK_FAIL;
+					}
+				/*Modified by siva.ganapathi for ISKB-3374 -- Ended*/
+				printf(" \n AFTER passFlg   |%d|", passMstFlg);
+			}
+
+			if((passFlg)||(!strcmp(chr_g_client,l_cln_master)&&(passMstFlg)))
+			{
+			// By Bawa --  8/14/2008 -- ISKB-1693 -- End
+				if(CA_Proc_SendMsg(	g_ca_caevent_struct_h.h_corp_id,	
+									g_ca_caevent_struct_h.h_evt_class,
+									chr_g_client,
+									l_debug_info_ptr)== APL_FAILURE)
+				{				
+					fflush(g_logfile);
+					CO_ProcMonitor(g_logfile,NULL,l_debug_info_ptr,NULL);
+					APL_GOBACK_FAIL
+				}
+
+				CO_FreeErrLst(l_debug_info_ptr);
+			// By Bawa --  8/14/2008 -- ISKB 1693 -- start
+			}
+			else
+			{
+				if (!strcmp(g_ca_caevent_struct_h.h_evt_class,"BB"))
+				{
+					printf(" \n Message is not going to  %s  client because no holdings before the Issue Close Date \n\n",chr_g_client);
+					sprintf(chr_g_log_buff," Message is not going to  %s  client because no holdings before the Issue Close date \n",chr_g_client);
+				}
+				else
+				{
+				printf(" \n Message is not going for %s client because no holdings before the ex date \n\n",chr_g_client);
+				sprintf(chr_g_log_buff," Message is not going to this  %s  client because no holdings before the ex date \n",chr_g_client);
+				}
+				CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+			}
+			// By Bawa --  8/14/2008 -- ISKB-1693 -- End
+
+				memset(chr_g_client,NULL,(APL_CLIENT_LENGTH));
+			}
+			memset(chr_g_client,NULL,(APL_CLIENT_LENGTH));
+			int_g_countacc = int_result;
+
+
+   	/*Priority condittions added by siva.ganapathi for ISKB_3990 -- Started*/						
+   
+      if (((!strcmp(g_ca_caevent_struct_h.h_evt_stat,"IN")) ||((!strcmp(g_ca_caevent_struct_h.h_preliminary_flag,APL_YES_IND)) && (int_l_ismsgagain == 0))) && (l_cond_ru == 0))
+      {
+		 if (g_ca_caevent_struct_h.h_priority == 1)
+		 {	
+         EXEC SQL CLOSE AmstaccCur1;
+      }
+      else
+      {
+			 	EXEC SQL CLOSE AmstaccCur1_pr2;
+		 }
+      }
+      else
+      {
+	    if (!strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_MEETING)) 
+	    {
+		if (l_cond_ru)
+                {
+                     if ((strcmp(g_ca_caevent_struct_h.h_rec_date, chr_g_sys_date) == 0) || (!strcmp(g_ca_caevent_struct_h.h_preliminary_flag,APL_YES_IND) && g_ca_caevent_struct_i.i_rec_date == -1))
+                     {
+						if (g_ca_caevent_struct_h.h_priority == 1)
+						 {
+                        EXEC SQL CLOSE AmstaccCur_RU;
+                     }
+                     else
+                     {
+							EXEC SQL CLOSE AmstaccCur_RU_pr2;	
+						 }
+                     }
+                     else
+                     {	
+						 if (g_ca_caevent_struct_h.h_priority == 1)
+						 {
+                        EXEC SQL CLOSE AmstaccCur_RU_His;
+                     }
+						 else
+						 {
+							 EXEC SQL CLOSE AmstaccCur_RU_His_pr2;
+						 }
+                     }
+                }	
+                else 
+            {
+                     if  (int_l_ismsgagain) 
+                     {
+						if (g_ca_caevent_struct_h.h_priority == 1)
+						{
+                        EXEC SQL CLOSE AmstaccCur_CZ;
+                     }
+                     else
+                     {
+							EXEC SQL CLOSE AmstaccCur_CZ_pr2;
+						 }	 
+                     }
+                     else
+                     {	
+						if (g_ca_caevent_struct_h.h_priority == 1)
+						{
+                        EXEC SQL CLOSE AmstaccCur2;
+                     }
+						else
+						 {
+	                        EXEC SQL CLOSE AmstaccCur2_pr2;								
+						 }
+                     }
+            }
+	    }
+            else if ( (!strcmp(g_ca_caevent_struct_h.h_evt_class,"OP")) && (!strcmp(g_ca_caevent_struct_h.h_op_evt_class,"TO")) )
+				{
+			 if (g_ca_caevent_struct_h.h_priority == 1)
+			 {	
+					EXEC SQL CLOSE AmstaccCur6;
+				}
+			 else
+			 {
+ 				EXEC SQL CLOSE AmstaccCur6_pr2;
+			 }
+   		  }
+            else if ( (!strcmp(q_ca_casecevent_struct_h.h_entitl_base,ENTL_BASE_DL)) && (g_cond_gr))
+            {
+			 if (g_ca_caevent_struct_h.h_priority == 1)
+			 {
+               EXEC SQL CLOSE AmstaccCur3;
+            }
+			 else
+			  {	
+				 EXEC SQL CLOSE AmstaccCur3_pr2;	 
+			  }
+          }
+          else if ( (strcmp(g_ca_caevent_struct_h.h_evt_class,"OP")) && (!strcmp(q_ca_casecevent_struct_h.h_entitl_base,ENTL_BASE_DL )) )
+          {		
+			 if (g_ca_caevent_struct_h.h_priority == 1)
+            {
+               EXEC SQL CLOSE AmstaccCur4;
+            }
+            else
+            {
+				   EXEC SQL CLOSE AmstaccCur4_pr2;
+			 }
+          }
+          else
+          {	
+			  if (g_ca_caevent_struct_h.h_priority == 1)
+			  {
+               EXEC SQL CLOSE AmstaccCur5;
+				}
+			  else
+			  {	
+					 EXEC SQL CLOSE AmstaccCur5_pr2;
+			  }	 
+		}
+		}
+	/*Priority condittions added by siva.ganapathi for ISKB_3990 -- Ended*/						
+
+         IS_ANY_ORA_ERROR
+
+		}
+
+		
+			
+		if (CA_Mod_EventStat(	g_ca_caevent_struct_h.h_corp_id,	
+							g_ca_caevent_struct_h.h_evt_class,
+							g_ca_caevent_struct_h.h_preliminary_flag,
+							g_ca_caevent_struct_h.h_evt_stat,
+							int_g_countacc,
+							int_l_noevemsgs,
+							l_debug_info_ptr) == APL_FAILURE)
+		{				
+			CO_ProcMonitor(g_logfile,NULL,l_debug_info_ptr,NULL);
+			APL_GOBACK_FAIL
+		}	
+		CO_FreeErrLst(l_debug_info_ptr);
+		
+        /*Added by siva.ganapathi for ISKB_3110 -- Retro from HDFC on 30/11/2009 -- Started*/	
+        /********************* Bageshri - HDFC Issue Log 388 - 24/10/2008 */
+ 	IF_COND_NOT_EXISTS("MT_INSTR","NXT_INT_DT")
+	{
+		printf("\nInstrument Code is |%s| and Instrument Freq_Code_1 is |%s| and Event Status |%s|\n",l_mt_instrument_struct_h.h_instr_code,l_mt_instrument_struct_h.h_freq_code,g_ca_caevent_struct_h.h_evt_stat );	
+      if(strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_BOND_REDMP)&&
+         (strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_MEETING))&&
+			(strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_OTH)) && 
+         (!strcmp(g_ca_caevent_struct_h.h_preliminary_flag,APL_NO_IND))&&
+         (!strcmp(g_ca_caevent_struct_h.h_evt_stat,STATUS_RDY_INT))&&
+         (strcmp(l_mt_instrument_struct_h.h_freq_code,APL_FRQENCY_CD_OTHERCASE)))
+         /*HDFC Prod Issue Fix By Yog - Issue Log 340 - 12/09/2008 - Intrest Dates should not get updated for Freq_Code'X' i.e. 'OTHER'*/
+		{
+			if (CA_CO_InstrUpd(	&g_ca_caevent_struct_h,
+								&l_mt_instrument_struct_h,
+								l_debug_info_ptr)== APL_FAILURE)
+			{				
+				CO_ProcMonitor(g_logfile,NULL,l_debug_info_ptr,NULL);
+				APL_GOBACK_FAIL
+			}
+			CO_FreeErrLst(l_debug_info_ptr);
+		}
+	}	
+        /*Added by siva.ganapathi for ISKB_3110 -- Retro from HDFC on 30/11/2009 -- Ended*/
+
+            //Retro by Manasi for ISKB_7977-Common Issues Fixes - Start
+         /* Vamshi IB_5633 */
+
+	 EXEC SQL UPDATE SYS_BATCHPROC
+		 SET PROCESSING_STATUS = :chr_g_restart_data_h
+		 WHERE PROCESS_NAME      =:chr_g_progname
+		 AND     PROC_INIT               =:chr_g_key
+		 AND     STARTDATE=:chr_g_start_date
+		 AND     STATUS  ='started';
+	 IS_ANY_ORA_ERROR
+         //Retro by Manasi for ISKB_7977-Common Issues Fixes - End
+            EXEC SQL COMMIT WORK;
+            IS_ANY_ORA_ERROR
+
+            CO_ProcMonitor(g_logfile, "Record Committed", NULL, NULL);
+
+   EXEC SQL SELECT processing_status INTO :chr_g_restart_data_h:g_restart_data_i
+   FROM SYS_BATCHPROC
+   WHERE process_name =:chr_g_progname
+   AND   proc_init      =:chr_g_key
+   AND   STARTDATE=:chr_g_start_date
+   AND   status   ='started'
+   FOR UPDATE OF processing_status,status;
+   IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"SYS_BATCHPROC",chr_g_progname,chr_g_key)
+
+      EXEC SQL OPEN AeventCur;
+      CO_ProcMonitor(g_logfile,"Opened Cursor AeventCur",NULL,NULL);
+
+
+      IS_ANY_ORA_ERROR
+
+	}
+    EXEC SQL CLOSE AeventCur;
+
+	APL_GOBACK_SUCCESS
+	RETURN_SUCCESS:
+	{
+		return (APL_SUCCESS);
+	}
+	RETURN_FAILURE:
+	{
+		return (APL_FAILURE);
+	}
+}
+
+static int	CA_Proc_SendMsg(char				*chr_p_ca_id,
+							char				*p_ce_typ,
+							char				*chr_p_client,
+							DEBUG_INFO_STRUCT_H	**l_debug_info_ptr)
+	
+{	
+	struct sqlca sqlca;
+
+/** Added By YOG For Event Intimation Message for Positions > 0 -- START **/
+
+	memset(l_entl_basis_93B,APL_NULL_CHAR,2);
+
+	double  h_safekeep_pos;	
+	int counter=0;
+	char l_cln_master[11] = APL_NULL_STRING;
+	short i_cln_master = 0;	
+
+	/*Added by siva.ganapathi for ISKB_3374 -- started*/
+	int h_prioriry = 0 ;
+	short i_prioriry = 0 ;
+	char h_attach_corp_id[CA_CORP_ID_LEN] = APL_NULL_STRING;
+	short i_attach_corp_id = 0 ;
+	/*Added by siva.ganapathi for ISKB_3374 -- Ended*/
+			EXEC SQL SELECT instr_type into :l_inst_typ
+						FROM  MT_INSTRUMENT
+						WHERE instr_code = (select instr_code from caevent where corp_id = :chr_p_ca_id);
+
+			IS_ANY_ORA_ERROR;
+
+
+			EXEC SQL SELECT ENTITL_BASE  INTO l_entl_basis_93B
+								 FROM CASECEVENT where CA_EVENT = :p_ce_typ and
+								 INSTR_TYPE = :l_inst_typ;
+
+			IS_ANY_ORA_ERROR;
+		
+
+			/*Added by siva.ganapathi for ISKB_3374 -- started*/
+			EXEC SQL SELECT PRIORITY, ATTACH_CORP_ID
+					 INTO :h_prioriry:i_prioriry,:h_attach_corp_id:i_attach_corp_id
+				     FROM CAEVENT
+				     WHERE CORP_ID = :chr_p_ca_id ; 
+
+			IS_ANY_ORA_ERROR;
+			
+			printf("\n priority %d and attach corp id %s for corp_id is %s",h_prioriry,h_attach_corp_id,chr_p_ca_id);
+			fflush(stdout);
+			/*Added by siva.ganapathi for ISKB_3374 -- End*/
+
+			if (strcmp(l_entl_basis_93B,"T")==0)
+			{
+				 EXEC SQL SELECT     NVL(SUM(safekeep_pos),0)
+										   +  NVL(SUM(NVALRECEIVE),0)
+											-  NVL(SUM(NVALDELIVER),0)
+											+  NVL(SUM(VAL_REC),0)
+											-  NVL(SUM(VAL_DEL),0)
+											+  NVL(SUM(DP_REC),0)
+											-  NVL(SUM(DP_DEL),0) into :h_total_safek_93B
+										FROM DL_SAFEK
+										WHERE  instr_code = (select instr_code from caevent where corp_id = :chr_p_ca_id) 
+										AND    client = :chr_p_client;
+				IS_ANY_ORA_ERROR
+				 /*Added by siva.ganapathi for ISKB_3374 -- started*/
+				fprintf(g_logfile,"*********************************************************************\n");
+                        	fprintf(g_logfile,"Event Id : |%s| Client : |%s| Safek : |%lf| \n",chr_p_ca_id,chr_p_client,h_total_safek_93B);
+				if (h_prioriry == 2 && h_total_safek_93B == 0 )
+				{
+					 EXEC SQL SELECT     NVL(SUM(safekeep_pos),0)
+										   +  NVL(SUM(NVALRECEIVE),0)
+											-  NVL(SUM(NVALDELIVER),0)
+											+  NVL(SUM(VAL_REC),0)
+											-  NVL(SUM(VAL_DEL),0)
+											+  NVL(SUM(DP_REC),0)
+											-  NVL(SUM(DP_DEL),0) into :h_total_safek_93B
+										FROM DL_SAFEK
+										WHERE  instr_code = (select instr_code from caevent where corp_id = :h_attach_corp_id) 
+										AND    client = :chr_p_client;
+					IS_ANY_ORA_ERROR					
+                                          fprintf(g_logfile,"There is no holdings for the instr_code of event %s \n",chr_p_ca_id);
+	 				fprintf(g_logfile,"Holdings for the attached event |%s| client |%s| Safek |%lf| \n",h_attach_corp_id,chr_p_client,h_total_safek_93B);
+				}
+	                          fprintf(g_logfile,"*********************************************************************\n");
+				/*Added by siva.ganapathi for ISKB_3374 -- Ended*/
+			}
+			else if (strcmp(l_entl_basis_93B,"S")==0)
+			{
+				EXEC SQL SELECT     NVL(SUM(safekeep_pos),0)
+									into :h_total_safek_93B
+									FROM DL_SAFEK
+									WHERE  instr_code = (select instr_code from caevent where corp_id = :chr_p_ca_id) 
+									AND   client = :chr_p_client;
+
+				IS_ANY_ORA_ERROR
+				 /*Added by siva.ganapathi for ISKB_3374 -- started*/			
+				fprintf(g_logfile,"*********************************************************************\n");
+				fprintf(g_logfile,"Event Id : |%s| Client : |%s| Safek : |%lf| \n",chr_p_ca_id,chr_p_client,h_total_safek_93B);
+				if (h_prioriry == 2 && h_total_safek_93B == 0 )
+				{
+					EXEC SQL SELECT     NVL(SUM(safekeep_pos),0)
+					     				into :h_total_safek_93B
+										FROM DL_SAFEK
+										WHERE  instr_code = (select instr_code from caevent where corp_id = :h_attach_corp_id) 
+										AND   client = :chr_p_client;
+						IS_ANY_ORA_ERROR
+                                        fprintf(g_logfile,"\n There is no holdings for the instr_code of event %s",chr_p_ca_id);
+					fprintf(g_logfile,"\n The holdings for the attached event instr code %s for client |%s| is |%lf|",h_attach_corp_id,chr_p_client,h_total_safek_93B);
+				}
+			   fprintf(g_logfile,"*********************************************************************\n");
+			   /*Added by siva.ganapathi for ISKB_3374 -- Ended*/
+			}
+
+
+		/* Chirag Send Message to Master if its holding is 0 but any of its subaccount is having position > 0 */
+			EXEC SQL SELECT CLN_MASTER INTO :l_cln_master:i_cln_master
+						FROM MT_CLIENT 
+						WHERE CLN_CODE =: chr_p_client;
+
+			IS_ANY_ORA_ERROR
+
+			if(!strcmp(l_cln_master,chr_p_client) && h_total_safek_93B <= 0)
+			{
+				if(chkSubAcctHoldings(chr_p_client,
+											chr_p_ca_id,	
+											l_debug_info_ptr) == APL_FAILURE)
+				APL_GOBACK_FAIL	
+			}
+			else
+			{
+				Alert("Holdings |%lf| found for one of sub account for Master |%s|\n",h_total_safek_93B,chr_p_client);
+			}
+		/* Chirag Send Message to Master if any of its subaccount is having position > 0 */
+
+
+/** Added By YOG For Event Intimation Message for Positions > 0 -- END **/
+    /*Commented by siva.ganapathi for ISKB_3374  -- started  */
+	/*fprintf(g_logfile,"*********************************************************************\n");
+	fprintf(g_logfile,"Event Id : |%s| Client : |%s| Safek : |%lf| \n",chr_p_ca_id,chr_p_client,h_total_safek_93B);
+	fprintf(g_logfile,"*********************************************************************\n");*/
+	/*Commented by siva.ganapathi for ISKB_3374  -- Ended*/
+	
+	if((strcmp(g_ca_caevent_struct_h.h_evt_send_msg_ind,APL_NO_IND)) && (h_total_safek_93B > 0 )) 
+		
+		/** (h_total_safek_93B > 0 condition added by yog **/
+	{
+		
+		if((!strcmp(p_ce_typ,EVT_MEETING)))
+		{
+			if	(GBDbInsIMSGENT(		MSG_NO_EVT_INT_MEETING,	
+											chr_p_ca_id,
+											chr_p_client,
+											APL_YES_FLAG,
+											chr_msg_param_struct,	
+											l_debug_info_ptr) == APL_FAILURE) 
+				APL_GOBACK_FAIL
+		}
+		else if(!strcmp(p_ce_typ,EVT_OFFER) || !strcmp(p_ce_typ,"BB") )
+		{
+			if	(GBDbInsIMSGENT(		MSG_NO_EVT_INT_OP,	
+											chr_p_ca_id,
+											chr_p_client,
+											APL_YES_FLAG,
+											chr_msg_param_struct,	
+											l_debug_info_ptr) == APL_FAILURE) 
+				APL_GOBACK_FAIL
+		}
+	   else if((!strcmp(p_ce_typ,EVT_OTH )))	
+		{
+         if (GBDbInsIMSGENT(     MSG_NO_EVT_INT_OT, 
+											chr_p_ca_id,
+                                 chr_p_client,
+                                 APL_YES_FLAG,
+                                 chr_msg_param_struct,
+                                 l_debug_info_ptr) == APL_FAILURE)
+            APL_GOBACK_FAIL 
+      }
+		else
+		{
+			
+			if	(GBDbInsIMSGENT(		MSG_NO_EVT_INT_OTHERS,	
+											chr_p_ca_id,
+											chr_p_client,
+											APL_YES_FLAG,
+											chr_msg_param_struct,
+											l_debug_info_ptr) == APL_FAILURE)
+				APL_GOBACK_FAIL
+		}
+
+   
+
+            EXEC SQL INSERT INTO CA_EVENTMESGSEND
+              VALUES (:chr_p_ca_id,:chr_p_client);
+            IS_ANY_ORA_ERROR
+	}
+	
+	APL_GOBACK_SUCCESS
+	RETURN_SUCCESS:
+	{
+		return (APL_SUCCESS);
+	}
+	RETURN_FAILURE:
+	{
+		return (APL_FAILURE);
+	}
+}
+
+static int	CA_Chk_SubAccountPos( 	char				*p_instr_code,
+										char           *p_event_type,
+                              char           *p_entl_basis,
+										char				*p_evnt_stat,
+										char				*p_decl_date,
+										char				*p_ex_date,
+                              char           *p_rec_dt, 
+										char				*p_proxy_dt,
+										char           *p_prelim_ind,
+										int				p_ismsgagain, 
+										char				*chr_p_ca_id,
+										char *chr_p_attch_ca_id, //added by siva.ganapathi for ISKB_3629
+										int h_evt_priority,//added by siva.ganapathi for ISKB_3629
+										int				*int_p_result,
+										int				*p_noevemsgs,
+										char				*p_effect_dt,
+										char				*p_start_dt,
+										char				*p_issue_cls_dt, // Added Chirag for ISKB 1034
+										DEBUG_INFO_STRUCT_H	**l_debug_info_ptr)
+	
+{	
+	struct sqlca sqlca;	
+	int int_h_count = 0;
+	short l_cond_ru = 0;  
+	int int_h_count1 = 0;
+	*int_p_result = 0;
+
+	/*Added by siva.ganapathi for ISKB_3629 -- started*/
+
+	char l_base_instr_code[MT_INSTR_CODE_LEN] = APL_NULL_STRING;
+	short i_base_instr_code = 0 ;
+
+	EXEC SQL SELECT INSTR_CODE 
+			 INTO :l_base_instr_code:i_base_instr_code
+			 FROM CAEVENT
+			 WHERE CORP_ID = :chr_p_attch_ca_id ;
+
+	IS_ANY_ORA_ERROR
+
+	/*Added by siva.ganapathi for ISKB_3629 -- Ended*/
+	
+        if (APL_FAILURE == CO_Chk_CntryEnabled(  "EVNT_INIT",
+                                               "SM_RECDT",
+                                                &l_cond_ru,
+                                                l_debug_info_ptr ))
+        {
+                 APL_GOBACK_FAIL
+        }
+
+ 
+	if (p_ismsgagain == 1)
+	{
+    CO_ProcMonitor(g_logfile,"Loop 1",NULL,NULL);
+		printf("entered int_first loop priority is %d \n",h_evt_priority);
+		fflush(stdout);
+	   /*Smita - Changed Column Names for MT_Client as per the database - HDFCCA_027*/
+
+		/*Modified by siva.ganapathi for ISKB_3629 -- started*/
+
+		if (h_evt_priority == 1 )
+		{
+			EXEC SQL SELECT NVL( COUNT (DISTINCT(cln_master)),0) into :int_h_count
+			FROM  MT_CLIENT
+			WHERE CLN_BRK_ALL != 'B'
+			AND   EXISTS ( SELECT client FROM DL_SAFEK
+						   WHERE instr_code = RTRIM(:p_instr_code)
+						   AND   DL_SAFEK.client = MT_CLIENT.cln_code
+						   AND   (safekeep_pos >0 or VAL_REC >0 or VAL_DEL >0
+								   or NVALRECEIVE > 0 or NVALDELIVER > 0 ));
+
+			IS_ANY_ORA_ERROR
+
+			EXEC SQL SELECT NVL( COUNT (CLN_CODE),0) into :int_h_count1
+			FROM  MT_CLIENT
+			WHERE CLN_BRK_ALL != 'B'
+			AND CLN_CODE!=CLN_MASTER
+			AND EXISTS (SELECT 1 FROM MT_MSGADDRESS_VEW WHERE MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_code AND COMB_MSG='N' AND MSG_IDENT_NO IN ('3'))
+			AND   EXISTS ( SELECT client FROM DL_SAFEK
+						   WHERE instr_code = RTRIM(:p_instr_code)
+						   AND   DL_SAFEK.client = MT_CLIENT.cln_code
+						   AND   (safekeep_pos >0 or VAL_REC >0 or VAL_DEL >0
+								   or NVALRECEIVE > 0 or NVALDELIVER > 0 ));
+
+			IS_ANY_ORA_ERROR
+
+		   *int_p_result= int_h_count+int_h_count1;
+
+			int_h_count  = 0;
+			int_h_count1 = 0;
+
+			 
+
+			EXEC SQL SELECT NVL( COUNT (DISTINCT(cln_master)),0) into :int_h_count
+			FROM  MT_CLIENT
+			WHERE CLN_BRK_ALL != 'B' AND CHECKER is not NULL
+			AND   EXISTS ( SELECT client FROM DL_SAFEK
+						   WHERE instr_code = RTRIM(:p_instr_code)
+						   AND   DL_SAFEK.client = MT_CLIENT.cln_code
+						   AND   (safekeep_pos >0 or VAL_REC >0 or VAL_DEL >0
+								   or NVALRECEIVE > 0 or NVALDELIVER > 0 ))
+			AND   EXISTS ( SELECT * FROM MT_MSGADDRESS_VEW WHERE
+						   MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_master and MSG_IDENT_NO='3' );
+			IS_ANY_ORA_ERROR
+			 *p_noevemsgs= int_h_count;
+		}
+		else if (h_evt_priority == 2 )
+		{
+			EXEC SQL SELECT NVL( COUNT (DISTINCT(cln_master)),0) into :int_h_count
+			FROM  MT_CLIENT
+			WHERE CLN_BRK_ALL != 'B'
+			AND   EXISTS ( SELECT client FROM DL_SAFEK
+						  /* WHERE instr_code = RTRIM(:p_instr_code)*/
+						   WHERE instr_code IN (:p_instr_code,:l_base_instr_code)
+						   AND   DL_SAFEK.client = MT_CLIENT.cln_code
+						   AND   (safekeep_pos >0 or VAL_REC >0 or VAL_DEL >0
+								   or NVALRECEIVE > 0 or NVALDELIVER > 0 ));
+
+			IS_ANY_ORA_ERROR
+
+			/*	EXEC SQL SELECT NVL(COUNT(CLN_CODE),0) into :int_h_count1 */
+			EXEC SQL SELECT NVL( COUNT (DISTINCT(CLN_CODE)),0) into :int_h_count1
+			FROM  MT_CLIENT
+			WHERE CLN_BRK_ALL != 'B'
+			AND CLN_CODE!=CLN_MASTER
+			AND EXISTS (SELECT 1 FROM MT_MSGADDRESS_VEW WHERE MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_code AND COMB_MSG='N' AND MSG_IDENT_NO IN ('3'))
+			AND   EXISTS ( SELECT client FROM DL_SAFEK
+						   /*WHERE instr_code = RTRIM(:p_instr_code)*/
+						   WHERE instr_code IN (:p_instr_code,:l_base_instr_code)
+						   AND   DL_SAFEK.client = MT_CLIENT.cln_code
+						   AND   (safekeep_pos >0 or VAL_REC >0 or VAL_DEL >0
+								   or NVALRECEIVE > 0 or NVALDELIVER > 0 ));
+
+			IS_ANY_ORA_ERROR
+
+		   *int_p_result= int_h_count+int_h_count1;
+
+			int_h_count  = 0;
+			int_h_count1 = 0; 
+
+			EXEC SQL SELECT NVL( COUNT (DISTINCT(cln_master)),0) into :int_h_count
+			FROM  MT_CLIENT
+			WHERE CLN_BRK_ALL != 'B' AND CHECKER is not NULL
+			AND   EXISTS ( SELECT client FROM DL_SAFEK
+						   /*WHERE instr_code = RTRIM(:p_instr_code)*/
+						   WHERE instr_code IN (:p_instr_code,:l_base_instr_code)
+						   AND   DL_SAFEK.client = MT_CLIENT.cln_code
+						   AND   (safekeep_pos >0 or VAL_REC >0 or VAL_DEL >0
+								   or NVALRECEIVE > 0 or NVALDELIVER > 0 ))
+			AND   EXISTS ( SELECT * FROM MT_MSGADDRESS_VEW WHERE
+						   MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_master and MSG_IDENT_NO='3' );
+
+			IS_ANY_ORA_ERROR
+			 *p_noevemsgs= int_h_count;
+		}
+		/*Modified by siva.ganapathi for ISKB_3629 -- Ended*/
+
+	}
+	else if ((!strcmp(p_event_type,EVT_MEETING)) && (l_cond_ru))
+    {
+          if ((strcmp(p_rec_dt, chr_g_sys_date) == 0) || (!strcmp(p_prelim_ind,"Y") && g_ca_caevent_struct_i.i_rec_date == -1))
+
+          {
+				/*Modified by siva.ganapathi for ISKB_3629 -- started*/
+				printf("\n In if loop of event meeting case priority is %d ", h_evt_priority );
+				fflush(stdout);
+				if (h_evt_priority == 1)
+				{	
+                        EXEC SQL SELECT NVL( COUNT (DISTINCT(cln_master)),0) into :int_h_count
+                        FROM  MT_CLIENT
+                        WHERE CLN_BRK_ALL != 'B'
+                        AND   EXISTS ( SELECT client FROM DL_SAFEK
+                        WHERE instr_code = RTRIM(:p_instr_code)
+                        AND   DL_SAFEK.client = MT_CLIENT.cln_code
+                        AND   (safekeep_pos >0))
+
+                        AND cln_master NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :chr_p_ca_id );
+
+                        IS_ANY_ORA_ERROR
+
+                        EXEC SQL SELECT NVL( COUNT (CLN_CODE),0) into :int_h_count1
+                        FROM  MT_CLIENT
+                        WHERE CLN_BRK_ALL != 'B'
+                        AND CLN_CODE!=CLN_MASTER
+                        AND EXISTS (SELECT 1 FROM MT_MSGADDRESS_VEW WHERE MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_code AND COMB_MSG='N' AND  MSG_IDENT_NO IN ('3',decode(:g_ca_caevent_struct_h.h_evt_class,'SM','31')))
+						AND   EXISTS ( SELECT client FROM DL_SAFEK
+                        WHERE instr_code = RTRIM(:p_instr_code)
+                        AND   DL_SAFEK.client = MT_CLIENT.cln_code
+                        AND   (safekeep_pos >0))
+
+                        AND cln_code NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :chr_p_ca_id );
+                        IS_ANY_ORA_ERROR
+
+                        *int_p_result= int_h_count+int_h_count1;
+
+                         int_h_count  = 0;
+                         int_h_count1 = 0;
+
+                         EXEC SQL SELECT NVL( COUNT (DISTINCT(cln_master)),0) into :int_h_count
+                         FROM  MT_CLIENT
+                         WHERE CLN_BRK_ALL != 'B' AND CHECKER is not NULL
+                         AND   EXISTS ( SELECT client FROM DL_SAFEK
+                         WHERE instr_code = RTRIM(:p_instr_code)
+                         AND   DL_SAFEK.client = MT_CLIENT.cln_code
+                         AND   (safekeep_pos >0))
+
+                         AND   EXISTS ( SELECT * FROM MT_MSGADDRESS_VEW WHERE
+                         MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_master and MSG_IDENT_NO='3' )
+                         AND cln_master NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :chr_p_ca_id );
+                         IS_ANY_ORA_ERROR
+
+                         *p_noevemsgs= int_h_count;
+                }
+				else if (h_evt_priority == 2)
+				{				
+				        EXEC SQL SELECT NVL( COUNT (DISTINCT(cln_master)),0) into :int_h_count
+                        FROM  MT_CLIENT
+                        WHERE CLN_BRK_ALL != 'B'
+                        AND   EXISTS ( SELECT client FROM DL_SAFEK
+						/*WHERE instr_code = RTRIM(:p_instr_code)*/
+				        WHERE instr_code IN (:p_instr_code,:l_base_instr_code)
+                        AND   DL_SAFEK.client = MT_CLIENT.cln_code
+                        AND   (safekeep_pos >0))
+
+                        AND cln_master NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :chr_p_ca_id );
+
+                        IS_ANY_ORA_ERROR
+						
+						/*	EXEC SQL SELECT NVL(COUNT(CLN_CODE),0) into :int_h_count1 */
+						EXEC SQL SELECT NVL( COUNT (DISTINCT(CLN_CODE)),0) into :int_h_count1
+                        FROM  MT_CLIENT
+                        WHERE CLN_BRK_ALL != 'B'
+                        AND CLN_CODE!=CLN_MASTER
+                        AND EXISTS (SELECT 1 FROM MT_MSGADDRESS_VEW WHERE MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_code AND COMB_MSG='N' AND  MSG_IDENT_NO IN ('3',decode(:g_ca_caevent_struct_h.h_evt_class,'SM','31')))
+						AND   EXISTS ( SELECT client FROM DL_SAFEK
+						/*WHERE instr_code = RTRIM(:p_instr_code)*/
+				        WHERE instr_code IN (:p_instr_code,:l_base_instr_code)
+                        AND   DL_SAFEK.client = MT_CLIENT.cln_code
+                        AND   (safekeep_pos >0))
+
+                        AND cln_code NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :chr_p_ca_id );
+                        IS_ANY_ORA_ERROR
+
+                        *int_p_result= int_h_count+int_h_count1;
+
+                         int_h_count  = 0;
+                         int_h_count1 = 0;
+
+                         EXEC SQL SELECT NVL( COUNT (DISTINCT(cln_master)),0) into :int_h_count
+                         FROM  MT_CLIENT
+                         WHERE CLN_BRK_ALL != 'B' AND CHECKER is not NULL
+                         AND   EXISTS ( SELECT client FROM DL_SAFEK
+						/*WHERE instr_code = RTRIM(:p_instr_code)*/
+				        WHERE instr_code IN (:p_instr_code,:l_base_instr_code)
+                         AND   DL_SAFEK.client = MT_CLIENT.cln_code
+                         AND   (safekeep_pos >0))
+
+                         AND   EXISTS ( SELECT * FROM MT_MSGADDRESS_VEW WHERE
+                         MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_master and MSG_IDENT_NO='3' )
+                         AND cln_master NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :chr_p_ca_id );
+                         IS_ANY_ORA_ERROR
+                         *p_noevemsgs= int_h_count;
+				   /*Modified by siva.ganapathi for ISKB_3629 -- Ended*/
+			}
+		}
+		else
+        {
+			printf("\n In else loop of event meeting case priority is %d ", h_evt_priority );
+			fflush(stdout);
+			/*Modified by siva.ganapathi for ISKB_3629 -- started*/
+			if ( h_evt_priority == 1 )
+			{	
+                        EXEC SQL SELECT NVL( COUNT (DISTINCT(cln_master)),0) into :int_h_count
+                        FROM  MT_CLIENT
+                        WHERE CLN_BRK_ALL != 'B'
+                        AND   EXISTS ( SELECT client FROM DL_HISSAFEK
+                        WHERE instr_code = RTRIM(:p_instr_code)
+                        AND   DL_HISSAFEK.client = MT_CLIENT.cln_code
+                        AND   (safekeep_pos >0)
+                        AND   POSIT_DATE = to_date(:p_rec_dt))
+                        AND cln_master NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :chr_p_ca_id );
+
+                        IS_ANY_ORA_ERROR
+
+                        EXEC SQL SELECT NVL( COUNT (CLN_CODE),0) into :int_h_count1
+                        FROM  MT_CLIENT
+                        WHERE CLN_BRK_ALL != 'B'
+                        AND CLN_CODE!=CLN_MASTER
+
+                        AND EXISTS (SELECT 1 FROM MT_MSGADDRESS_VEW WHERE MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_code AND COMB_MSG='N' AND MSG_IDENT_NO IN ('3',decode(:g_ca_caevent_struct_h.h_evt_class,'SM','31')))
+			AND   EXISTS ( SELECT client FROM DL_HISSAFEK
+                        WHERE instr_code = RTRIM(:p_instr_code)
+                        AND   DL_HISSAFEK.client = MT_CLIENT.cln_code
+                        AND   (safekeep_pos >0)
+                        AND   POSIT_DATE = to_date(:p_rec_dt))
+                        AND cln_code NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :chr_p_ca_id );
+                        IS_ANY_ORA_ERROR
+
+                        *int_p_result= int_h_count+int_h_count1;
+
+                         int_h_count  = 0;
+                         int_h_count1 = 0;
+
+                         EXEC SQL SELECT NVL( COUNT (DISTINCT(cln_master)),0) into :int_h_count
+                         FROM  MT_CLIENT
+                         WHERE CLN_BRK_ALL != 'B' AND CHECKER is not NULL
+                         AND   EXISTS ( SELECT client FROM DL_HISSAFEK
+                         WHERE instr_code = RTRIM(:p_instr_code)
+                         AND   DL_HISSAFEK.client = MT_CLIENT.cln_code
+                         AND   (safekeep_pos >0)
+                         AND   POSIT_DATE = to_date(:p_rec_dt))
+                         AND   EXISTS ( SELECT * FROM MT_MSGADDRESS_VEW WHERE
+                         MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_master and MSG_IDENT_NO='3' )
+                         AND cln_master NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :chr_p_ca_id );
+                         IS_ANY_ORA_ERROR
+
+                         *p_noevemsgs= int_h_count;
+			}
+			else if ( h_evt_priority == 2 )
+			{
+                        EXEC SQL SELECT NVL( COUNT (DISTINCT(cln_master)),0) into :int_h_count
+                        FROM  MT_CLIENT
+                        WHERE CLN_BRK_ALL != 'B'
+                        AND   EXISTS ( SELECT client FROM DL_HISSAFEK
+						/*WHERE instr_code = RTRIM(:p_instr_code)*/
+				        WHERE instr_code IN (:p_instr_code,:l_base_instr_code)
+                        AND   DL_HISSAFEK.client = MT_CLIENT.cln_code
+                        AND   (safekeep_pos >0)
+                        AND   POSIT_DATE = to_date(:p_rec_dt))
+                        AND cln_master NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :chr_p_ca_id );
+                        IS_ANY_ORA_ERROR
+
+						/*	EXEC SQL SELECT NVL(COUNT(CLN_CODE),0) into :int_h_count1 */ 
+						EXEC SQL SELECT NVL( COUNT (DISTINCT(CLN_CODE)),0) into :int_h_count1
+						FROM  MT_CLIENT
+                        WHERE CLN_BRK_ALL != 'B'
+                        AND CLN_CODE!=CLN_MASTER
+                        AND EXISTS (SELECT 1 FROM MT_MSGADDRESS_VEW WHERE MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_code AND COMB_MSG='N' AND MSG_IDENT_NO IN ('3',decode(:g_ca_caevent_struct_h.h_evt_class,'SM','31')))
+						AND   EXISTS ( SELECT client FROM DL_HISSAFEK
+						/*WHERE instr_code = RTRIM(:p_instr_code)*/
+				        WHERE instr_code IN (:p_instr_code,:l_base_instr_code)
+                        AND   DL_HISSAFEK.client = MT_CLIENT.cln_code
+                        AND   (safekeep_pos >0)
+                        AND   POSIT_DATE = to_date(:p_rec_dt))
+                        AND cln_code NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :chr_p_ca_id );
+                        IS_ANY_ORA_ERROR
+
+                        *int_p_result= int_h_count+int_h_count1;
+                         int_h_count  = 0;
+                         int_h_count1 = 0;
+
+                         EXEC SQL SELECT NVL( COUNT (DISTINCT(cln_master)),0) into :int_h_count
+                         FROM  MT_CLIENT
+                         WHERE CLN_BRK_ALL != 'B' AND CHECKER is not NULL
+                         AND   EXISTS ( SELECT client FROM DL_HISSAFEK
+						 /*WHERE instr_code = RTRIM(:p_instr_code)*/
+					     WHERE instr_code IN (:p_instr_code,:l_base_instr_code)
+                         AND   DL_HISSAFEK.client = MT_CLIENT.cln_code
+                         AND   (safekeep_pos >0)
+                         AND   POSIT_DATE = to_date(:p_rec_dt))
+                         AND   EXISTS ( SELECT * FROM MT_MSGADDRESS_VEW WHERE
+                         MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_master and MSG_IDENT_NO='3' )
+                         AND cln_master NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :chr_p_ca_id );
+                         IS_ANY_ORA_ERROR
+                         *p_noevemsgs= int_h_count;
+			}
+			/*Modified by siva.ganapathi for ISKB_3629 -- started*/
+       }
+    }  
+	else if ((!strcmp(p_evnt_stat,"IN"))|| (!strcmp(p_prelim_ind,"Y")) )
+	{
+    CO_ProcMonitor(g_logfile,"Loop 2",NULL,NULL);
+		printf("entered second loop priority is %d \n",h_evt_priority);
+		fflush(stdout);
+
+		/*Modified by siva.ganapathi for ISKB_3629 -- started*/
+		if (h_evt_priority == 1)
+		{	
+
+			EXEC SQL SELECT NVL( COUNT (DISTINCT(cln_master)),0) into :int_h_count
+			FROM  MT_CLIENT
+			WHERE CLN_BRK_ALL != 'B'
+			AND   EXISTS ( SELECT client FROM DL_SAFEK
+						   WHERE instr_code = RTRIM(:p_instr_code)
+						   AND   DL_SAFEK.client = MT_CLIENT.cln_code
+						   AND   (safekeep_pos >0 or VAL_REC >0 or VAL_DEL >0
+									or NVALRECEIVE > 0 or NVALDELIVER > 0 ))
+			AND cln_master NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :chr_p_ca_id );
+
+			IS_ANY_ORA_ERROR
+
+			EXEC SQL SELECT NVL( COUNT (CLN_CODE),0) into :int_h_count1
+			FROM  MT_CLIENT
+			WHERE CLN_BRK_ALL != 'B'
+			AND CLN_CODE!=CLN_MASTER
+		   AND EXISTS (SELECT 1 FROM MT_MSGADDRESS_VEW WHERE MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_code AND COMB_MSG='N' AND MSG_IDENT_NO IN ('3'))
+			AND   EXISTS ( SELECT client FROM DL_SAFEK
+						   WHERE instr_code = RTRIM(:p_instr_code)
+						   AND   DL_SAFEK.client = MT_CLIENT.cln_code
+						   AND   (safekeep_pos >0 or VAL_REC >0 or VAL_DEL >0
+									or NVALRECEIVE > 0 or NVALDELIVER > 0 ))
+			 AND cln_code NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :chr_p_ca_id );
+			IS_ANY_ORA_ERROR
+
+			 *int_p_result= int_h_count+int_h_count1;
+
+			 int_h_count  = 0;
+			 int_h_count1 = 0;
+
+			EXEC SQL SELECT NVL( COUNT (DISTINCT(cln_master)),0) into :int_h_count
+			FROM  MT_CLIENT
+			WHERE CLN_BRK_ALL != 'B' AND CHECKER is not NULL
+			AND   EXISTS ( SELECT client FROM DL_SAFEK
+						   WHERE instr_code = RTRIM(:p_instr_code)
+						   AND   DL_SAFEK.client = MT_CLIENT.cln_code
+						   AND   (safekeep_pos >0 or VAL_REC >0 or VAL_DEL >0
+									or NVALRECEIVE > 0 or NVALDELIVER > 0 ))
+			AND   EXISTS ( SELECT * FROM MT_MSGADDRESS_VEW WHERE
+						   MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_code and MSG_IDENT_NO='3' )
+			 AND cln_master NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :chr_p_ca_id );
+			IS_ANY_ORA_ERROR
+
+			*p_noevemsgs= int_h_count;
+	    }
+		else if(h_evt_priority == 2)
+		{
+			EXEC SQL SELECT NVL( COUNT (DISTINCT(cln_master)),0) into :int_h_count
+			FROM  MT_CLIENT
+			WHERE CLN_BRK_ALL != 'B'
+			AND   EXISTS ( SELECT client FROM DL_SAFEK
+						   /*WHERE instr_code = RTRIM(:p_instr_code)*/
+						   WHERE instr_code IN (:p_instr_code,:l_base_instr_code)
+						   AND   DL_SAFEK.client = MT_CLIENT.cln_code
+						   AND   (safekeep_pos >0 or VAL_REC >0 or VAL_DEL >0
+									or NVALRECEIVE > 0 or NVALDELIVER > 0 ))
+			AND cln_master NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :chr_p_ca_id );
+			IS_ANY_ORA_ERROR
+
+			/*	EXEC SQL SELECT NVL(COUNT(CLN_CODE),0) into :int_h_count1 */ 
+			EXEC SQL SELECT NVL( COUNT (DISTINCT(CLN_CODE)),0) into :int_h_count1
+			FROM  MT_CLIENT
+			WHERE CLN_BRK_ALL != 'B'
+			AND CLN_CODE!=CLN_MASTER
+		   AND EXISTS (SELECT 1 FROM MT_MSGADDRESS_VEW WHERE MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_code AND COMB_MSG='N' AND MSG_IDENT_NO IN ('3'))
+			AND   EXISTS ( SELECT client FROM DL_SAFEK
+						   /*WHERE instr_code = RTRIM(:p_instr_code)*/
+						   WHERE instr_code IN (:p_instr_code,:l_base_instr_code)
+						   AND   DL_SAFEK.client = MT_CLIENT.cln_code
+						   AND   (safekeep_pos >0 or VAL_REC >0 or VAL_DEL >0
+									or NVALRECEIVE > 0 or NVALDELIVER > 0 ))
+			 AND cln_code NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :chr_p_ca_id );
+			IS_ANY_ORA_ERROR
+
+			 *int_p_result= int_h_count+int_h_count1;
+			 int_h_count  = 0;
+			 int_h_count1 = 0;
+
+			EXEC SQL SELECT NVL( COUNT (DISTINCT(cln_master)),0) into :int_h_count
+			FROM  MT_CLIENT
+			WHERE CLN_BRK_ALL != 'B' AND CHECKER is not NULL
+			AND   EXISTS ( SELECT client FROM DL_SAFEK
+						   /*WHERE instr_code = RTRIM(:p_instr_code)*/
+						   WHERE instr_code IN (:p_instr_code,:l_base_instr_code)
+						   AND   DL_SAFEK.client = MT_CLIENT.cln_code
+						   AND   (safekeep_pos >0 or VAL_REC >0 or VAL_DEL >0
+									or NVALRECEIVE > 0 or NVALDELIVER > 0 ))
+			AND   EXISTS ( SELECT * FROM MT_MSGADDRESS_VEW WHERE
+						   MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_code and MSG_IDENT_NO='3' )
+			 AND cln_master NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :chr_p_ca_id );
+			IS_ANY_ORA_ERROR
+			*p_noevemsgs= int_h_count;
+		}
+		/*Modified by siva.ganapathi for ISKB_3629 -- Ended*/
+	}  
+    
+	else if (!strcmp(p_event_type,EVT_MEETING))
+	{
+    CO_ProcMonitor(g_logfile,"Loop 3",NULL,NULL);
+		printf("entered third loop priority is %d \n",h_evt_priority);
+
+		/*Modified by siva.ganapathi for ISKB_3629 -- started*/
+
+		if(h_evt_priority == 1)
+		{
+			 EXEC SQL SELECT NVL( COUNT (DISTINCT(cln_master)),0) into :int_h_count
+						 FROM  MT_CLIENT
+						 WHERE CLN_BRK_ALL != 'B'
+						 AND   EXISTS ( SELECT client FROM dl_deal
+						 WHERE instr_code = RTRIM(:p_instr_code)
+						 and deal_date <= to_date(:p_proxy_dt)
+						 and DEAL_STAT NOT IN('UU','DA','DD','DS','DU')
+						 AND   dl_deal.client = MT_CLIENT.cln_code)
+						 AND cln_master NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :chr_p_ca_id );
+
+				 IS_ANY_ORA_ERROR
+
+				EXEC SQL SELECT NVL( COUNT (CLN_CODE),0) into :int_h_count1
+				FROM  MT_CLIENT
+				WHERE CLN_BRK_ALL != 'B'
+				AND CLN_CODE!=CLN_MASTER
+				AND EXISTS (SELECT 1 FROM MT_MSGADDRESS_VEW WHERE MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_code AND COMB_MSG='N' AND MSG_IDENT_NO IN ('3',decode(:g_ca_caevent_struct_h.h_evt_class,'SM','31')))
+						 AND   EXISTS ( SELECT client FROM dl_deal
+						 WHERE instr_code = RTRIM(:p_instr_code)
+						 and deal_date <= to_date(:p_proxy_dt)
+						 and DEAL_STAT NOT IN('UU','DA','DD','DS','DU')
+						 AND   dl_deal.client = MT_CLIENT.CLN_CODE)
+						 AND CLN_CODE NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :chr_p_ca_id );
+				 IS_ANY_ORA_ERROR
+
+			*int_p_result= int_h_count+int_h_count1;
+
+			 int_h_count  = 0;
+			 int_h_count1  = 0;
+			  
+			 EXEC SQL SELECT NVL( COUNT (DISTINCT(cln_master)),0) into :int_h_count
+			 FROM  MT_CLIENT
+			 WHERE CLN_BRK_ALL != 'B' AND CHECKER is not NULL
+			 AND   EXISTS (  SELECT client FROM dl_deal
+						   WHERE instr_code = RTRIM(:p_instr_code)
+								 and deal_date <= to_date(:p_proxy_dt)
+								  and DEAL_STAT NOT IN ('UU','DA','DD','DS','DU')
+							AND   dl_deal.client = MT_CLIENT.cln_code)
+			 AND   EXISTS ( SELECT * FROM MT_MSGADDRESS_VEW WHERE
+							MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_master and MSG_IDENT_NO='3' )
+			  AND cln_master NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :chr_p_ca_id ); 
+			  
+			 IS_ANY_ORA_ERROR
+
+			 *p_noevemsgs= int_h_count;
+		}
+		else if(h_evt_priority == 2)
+		{
+			 EXEC SQL SELECT NVL( COUNT (DISTINCT(cln_master)),0) into :int_h_count
+						 FROM  MT_CLIENT
+						 WHERE CLN_BRK_ALL != 'B'
+						 AND   EXISTS ( SELECT client FROM dl_deal
+						 /*WHERE instr_code = RTRIM(:p_instr_code)*/
+						 WHERE instr_code IN (:p_instr_code,:l_base_instr_code)
+						 and deal_date <= to_date(:p_proxy_dt)
+						 and DEAL_STAT NOT IN('UU','DA','DD','DS','DU')
+						 AND   dl_deal.client = MT_CLIENT.cln_code)
+						 AND cln_master NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :chr_p_ca_id );
+
+				 IS_ANY_ORA_ERROR
+
+				/*	EXEC SQL SELECT NVL(COUNT(CLN_CODE),0) into :int_h_count1 */ 
+				EXEC SQL SELECT NVL( COUNT (DISTINCT(CLN_CODE)),0) into :int_h_count1
+				FROM  MT_CLIENT
+				WHERE CLN_BRK_ALL != 'B'
+				AND CLN_CODE!=CLN_MASTER
+				AND EXISTS (SELECT 1 FROM MT_MSGADDRESS_VEW WHERE MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_code AND COMB_MSG='N' AND MSG_IDENT_NO IN ('3',decode(:g_ca_caevent_struct_h.h_evt_class,'SM','31')))
+						 AND   EXISTS ( SELECT client FROM dl_deal
+						 /*WHERE instr_code = RTRIM(:p_instr_code)*/
+						 WHERE instr_code IN (:p_instr_code,:l_base_instr_code)
+						 and deal_date <= to_date(:p_proxy_dt)
+						 and DEAL_STAT NOT IN('UU','DA','DD','DS','DU')
+						 AND   dl_deal.client = MT_CLIENT.CLN_CODE)
+						 AND CLN_CODE NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :chr_p_ca_id );
+				 IS_ANY_ORA_ERROR
+
+			*int_p_result= int_h_count+int_h_count1;
+
+			 int_h_count  = 0;
+			 int_h_count1  = 0;
+			  
+			 EXEC SQL SELECT NVL( COUNT (DISTINCT(cln_master)),0) into :int_h_count
+			 FROM  MT_CLIENT
+			 WHERE CLN_BRK_ALL != 'B' AND CHECKER is not NULL
+			 AND   EXISTS (  SELECT client FROM dl_deal
+							 /*WHERE instr_code = RTRIM(:p_instr_code)*/
+							  WHERE instr_code IN (:p_instr_code,:l_base_instr_code)
+								 and deal_date <= to_date(:p_proxy_dt)
+								  and DEAL_STAT NOT IN ('UU','DA','DD','DS','DU')
+							AND   dl_deal.client = MT_CLIENT.cln_code)
+			 AND   EXISTS ( SELECT * FROM MT_MSGADDRESS_VEW WHERE
+							MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_master and MSG_IDENT_NO='3' )
+			  AND cln_master NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :chr_p_ca_id ); 
+			  
+			 IS_ANY_ORA_ERROR
+
+			 *p_noevemsgs= int_h_count;
+		}
+		/*Modified by siva.ganapathi for ISKB_3629 -- Ended*/
+
+  	}
+   else if ( (!strcmp(g_ca_caevent_struct_h.h_evt_class,"OP")) && (!strcmp(g_ca_caevent_struct_h.h_op_evt_class,"TO")) )
+	{
+            
+		printf("entered fourth loop priority is %d \n",h_evt_priority);
+    CO_ProcMonitor(g_logfile,"Loop 4",NULL,NULL);
+    
+		/*Modified by siva.ganapathi for ISKB_3629 -- started*/
+		if ( h_evt_priority == 1)
+		{	
+			EXEC SQL SELECT NVL( COUNT (DISTINCT(cln_master)),0) into :int_h_count
+            FROM  MT_CLIENT
+            WHERE CLN_BRK_ALL != 'B'
+            AND   EXISTS ( SELECT client FROM DL_SAFEK
+                            WHERE instr_code = RTRIM(:p_instr_code)
+			AND   DL_SAFEK.client = MT_CLIENT.cln_code
+			and DL_SAFEK.safekeep_pos>0)
+                            AND cln_master NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :chr_p_ca_id );
+
+            IS_ANY_ORA_ERROR
+			
+			EXEC SQL SELECT NVL( COUNT (CLN_CODE),0) into :int_h_count1
+            FROM  MT_CLIENT
+            WHERE CLN_BRK_ALL != 'B'
+            AND CLN_CODE!=CLN_MASTER
+			AND EXISTS (SELECT 1 FROM MT_MSGADDRESS_VEW WHERE MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_code AND COMB_MSG='N' AND MSG_IDENT_NO IN ('3'))
+            AND   EXISTS ( SELECT client FROM DL_SAFEK
+                            WHERE instr_code = RTRIM(:p_instr_code)
+			AND   DL_SAFEK.client = MT_CLIENT.cln_code
+			and DL_SAFEK.safekeep_pos>0)
+            AND CLN_CODE NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :chr_p_ca_id );
+            IS_ANY_ORA_ERROR
+
+             *int_p_result= int_h_count+int_h_count1;
+
+              int_h_count  = 0;
+              int_h_count1  = 0;
+
+			EXEC SQL SELECT NVL( COUNT (DISTINCT(cln_master)),0) into :int_h_count
+            FROM  MT_CLIENT
+            WHERE CLN_BRK_ALL != 'B' AND CHECKER is not NULL
+              AND   EXISTS (  SELECT client FROM DL_SAFEK
+                            WHERE instr_code = RTRIM(:p_instr_code)
+			 AND   DL_SAFEK.client = MT_CLIENT.cln_code
+			 and DL_SAFEK.safekeep_pos>0)
+                            AND   EXISTS ( SELECT * FROM MT_MSGADDRESS_VEW WHERE
+                            MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_code and MSG_IDENT_NO='3' )
+                            AND cln_master NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :chr_p_ca_id );
+
+               IS_ANY_ORA_ERROR
+               *p_noevemsgs= int_h_count;
+		}
+        else if (h_evt_priority == 2)
+        {
+    			EXEC SQL SELECT NVL( COUNT (DISTINCT(cln_master)),0) into :int_h_count
+             FROM  MT_CLIENT
+             WHERE CLN_BRK_ALL != 'B'
+             AND   EXISTS ( SELECT client FROM DL_SAFEK
+                            /*WHERE instr_code = RTRIM(:p_instr_code)*/
+						   WHERE instr_code IN (:p_instr_code,:l_base_instr_code)
+			    AND   DL_SAFEK.client = MT_CLIENT.cln_code
+			    and DL_SAFEK.safekeep_pos>0)
+                            AND cln_master NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :chr_p_ca_id );
+              IS_ANY_ORA_ERROR		
+
+			/*	EXEC SQL SELECT NVL(COUNT(CLN_CODE),0) into :int_h_count1 */ 
+			EXEC SQL SELECT NVL( COUNT (DISTINCT(CLN_CODE)),0) into :int_h_count1
+             FROM  MT_CLIENT
+             WHERE CLN_BRK_ALL != 'B'
+	         AND CLN_CODE!=CLN_MASTER
+			  AND EXISTS (SELECT 1 FROM MT_MSGADDRESS_VEW WHERE MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_code AND COMB_MSG='N' AND MSG_IDENT_NO IN ('3'))
+             AND   EXISTS ( SELECT client FROM DL_SAFEK
+		 				   /*WHERE instr_code = RTRIM(:p_instr_code)*/
+						   WHERE instr_code IN (:p_instr_code,:l_base_instr_code)
+			    AND   DL_SAFEK.client = MT_CLIENT.cln_code
+			    and DL_SAFEK.safekeep_pos>0)
+                            AND CLN_CODE NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :chr_p_ca_id );
+              IS_ANY_ORA_ERROR
+
+             *int_p_result= int_h_count+int_h_count1;
+              int_h_count  = 0;
+              int_h_count1  = 0;
+
+				EXEC SQL SELECT NVL( COUNT (DISTINCT(cln_master)),0) into :int_h_count
+              FROM  MT_CLIENT
+              WHERE CLN_BRK_ALL != 'B' AND CHECKER is not NULL
+              AND   EXISTS (  SELECT client FROM DL_SAFEK
+                 			  /*WHERE instr_code = RTRIM(:p_instr_code)*/
+							   WHERE instr_code IN (:p_instr_code,:l_base_instr_code)
+			    AND   DL_SAFEK.client = MT_CLIENT.cln_code
+			    and DL_SAFEK.safekeep_pos>0)
+                            AND   EXISTS ( SELECT * FROM MT_MSGADDRESS_VEW WHERE
+                            MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_code and MSG_IDENT_NO='3' )
+                            AND cln_master NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :chr_p_ca_id );
+               IS_ANY_ORA_ERROR
+               *p_noevemsgs= int_h_count;
+		}
+		/*Modified by siva.ganapathi for ISKB_3629 -- Ended*/
+   }
+   else if  ((!strcmp(p_entl_basis,ENTL_BASE_DL )) && (g_cond_gr))
+   {
+    CO_ProcMonitor(g_logfile,"Loop 5",NULL,NULL);
+		printf("entered five loop priority is %d \n",h_evt_priority );
+
+		/*Modified by siva.ganapathi for ISKB_3629 -- started*/
+
+		if (h_evt_priority ==1 )
+		{			
+			 EXEC SQL SELECT NVL( COUNT (DISTINCT(cln_master)),0) into :int_h_count
+    		 FROM  MT_CLIENT
+             WHERE CLN_BRK_ALL != 'B'
+             AND   EXISTS ( SELECT client FROM dl_deal
+                            WHERE instr_code = RTRIM(:p_instr_code)
+									 and deal_date <= to_date(decode(:g_ca_caevent_struct_h.h_evt_class,'OT',rtrim(:p_effect_dt),rtrim(:p_rec_dt)))
+                            and DEAL_STAT  NOT IN('UU','DA','DD','DS','DU')
+                            AND   dl_deal.client = MT_CLIENT.cln_code)
+                            AND cln_master NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :chr_p_ca_id );
+
+				  IS_ANY_ORA_ERROR
+
+			 EXEC SQL SELECT NVL( COUNT (CLN_CODE),0) into :int_h_count1
+    		 FROM  MT_CLIENT
+             WHERE CLN_BRK_ALL != 'B'
+			 AND CLN_CODE!=CLN_MASTER
+			 AND EXISTS (SELECT 1 FROM MT_MSGADDRESS_VEW WHERE MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_code AND COMB_MSG='N' AND MSG_IDENT_NO IN ('3'))
+             AND   EXISTS ( SELECT client FROM dl_deal
+                            WHERE instr_code = RTRIM(:p_instr_code)
+									 and deal_date <= to_date(decode(:g_ca_caevent_struct_h.h_evt_class,'OT',rtrim(:p_effect_dt),rtrim(:p_rec_dt)))
+                            and DEAL_STAT  NOT IN('UU','DA','DD','DS','DU')
+                            AND   dl_deal.client = MT_CLIENT.cln_code)
+                            AND MT_CLIENT.cln_code NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :chr_p_ca_id );
+				  IS_ANY_ORA_ERROR
+
+  	     		 *int_p_result= int_h_count+int_h_count1;
+
+ 			     int_h_count  = 0;
+ 			     int_h_count1 = 0;
+
+ 	   	     EXEC SQL SELECT NVL( COUNT (DISTINCT(cln_master)),0) into :int_h_count
+        	 FROM  MT_CLIENT
+             WHERE CLN_BRK_ALL != 'B' AND CHECKER is not NULL
+             AND   EXISTS (  SELECT client FROM dl_deal
+             			       WHERE instr_code = RTRIM(:p_instr_code)
+									 and deal_date <= to_date(decode(:g_ca_caevent_struct_h.h_evt_class,'OT',rtrim(:p_effect_dt),rtrim(:p_rec_dt)))
+                            and DEAL_STAT NOT IN('UU','DA','DD','DS','DU')
+                            AND   dl_deal.client = MT_CLIENT.cln_code)
+                            AND   EXISTS ( SELECT * FROM MT_MSGADDRESS_VEW WHERE
+                            MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_code and MSG_IDENT_NO='3' )
+      							 AND cln_master NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :chr_p_ca_id );
+
+               IS_ANY_ORA_ERROR
+               *p_noevemsgs= int_h_count; 
+		}
+		else if (h_evt_priority == 2)
+		{
+			 EXEC SQL SELECT NVL( COUNT (DISTINCT(cln_master)),0) into :int_h_count
+			 FROM  MT_CLIENT
+			 WHERE CLN_BRK_ALL != 'B'
+			 AND   EXISTS ( SELECT client FROM dl_deal
+								/*WHERE instr_code = RTRIM(:p_instr_code)*/
+							   WHERE instr_code IN (:p_instr_code,:l_base_instr_code)
+										 and deal_date <= to_date(decode(:g_ca_caevent_struct_h.h_evt_class,'OT',rtrim(:p_effect_dt),rtrim(:p_rec_dt)))
+								and DEAL_STAT  NOT IN('UU','DA','DD','DS','DU')
+								AND   dl_deal.client = MT_CLIENT.cln_code)
+								AND cln_master NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :chr_p_ca_id );
+
+					  IS_ANY_ORA_ERROR
+
+				/*	EXEC SQL SELECT NVL(COUNT(CLN_CODE),0) into :int_h_count1 */ 
+				EXEC SQL SELECT NVL( COUNT (DISTINCT(CLN_CODE)),0) into :int_h_count1
+				FROM  MT_CLIENT
+				WHERE CLN_BRK_ALL != 'B'
+				AND CLN_CODE!=CLN_MASTER
+				AND EXISTS (SELECT 1 FROM MT_MSGADDRESS_VEW WHERE MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_code AND COMB_MSG='N' AND MSG_IDENT_NO IN ('3'))
+				AND   EXISTS ( SELECT client FROM dl_deal
+							   /*WHERE instr_code = RTRIM(:p_instr_code)*/
+							   WHERE instr_code IN (:p_instr_code,:l_base_instr_code)
+										 and deal_date <= to_date(decode(:g_ca_caevent_struct_h.h_evt_class,'OT',rtrim(:p_effect_dt),rtrim(:p_rec_dt)))
+								and DEAL_STAT  NOT IN('UU','DA','DD','DS','DU')
+								AND   dl_deal.client = MT_CLIENT.cln_code)
+								AND MT_CLIENT.cln_code NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :chr_p_ca_id );
+					  IS_ANY_ORA_ERROR
+
+					 *int_p_result= int_h_count+int_h_count1;
+
+					 int_h_count  = 0;
+					 int_h_count1 = 0;
+
+			   EXEC SQL SELECT NVL( COUNT (DISTINCT(cln_master)),0) into :int_h_count
+			   FROM  MT_CLIENT
+			   WHERE CLN_BRK_ALL != 'B' AND CHECKER is not NULL
+			   AND   EXISTS (  SELECT client FROM dl_deal
+								   /*WHERE instr_code = RTRIM(:p_instr_code)*/
+								   WHERE instr_code IN (:p_instr_code,:l_base_instr_code)
+										 and deal_date <= to_date(decode(:g_ca_caevent_struct_h.h_evt_class,'OT',rtrim(:p_effect_dt),rtrim(:p_rec_dt)))
+								and DEAL_STAT NOT IN('UU','DA','DD','DS','DU')
+								AND   dl_deal.client = MT_CLIENT.cln_code)
+								AND   EXISTS ( SELECT * FROM MT_MSGADDRESS_VEW WHERE
+								MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_code and MSG_IDENT_NO='3' )
+									 AND cln_master NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :chr_p_ca_id );
+
+			   IS_ANY_ORA_ERROR
+			   *p_noevemsgs= int_h_count; 
+		}
+
+		/*Modified by siva.ganapathi for ISKB_3629 -- Ended*/
+	}
+
+   else if( (strcmp(g_ca_caevent_struct_h.h_evt_class,"OP")) && (!strcmp(p_entl_basis,ENTL_BASE_DL )))
+   { 
+    CO_ProcMonitor(g_logfile,"Loop 6",NULL,NULL);
+	printf("entered six loop priority is %d \n",h_evt_priority);
+
+/* Below cursors chng by Chirag 09042008 for BB event issue close dt needs to be consider instead of ex-date ISKB 1034*/
+
+	/*Queries Modified by siva.ganapathi for ISKB_3629 -- started*/
+
+		if (h_evt_priority == 1)
+		{	
+			  EXEC SQL SELECT NVL( COUNT (DISTINCT(cln_master)),0) into :int_h_count
+             FROM  MT_CLIENT
+             WHERE CLN_BRK_ALL != 'B'
+             AND   EXISTS ( SELECT client FROM dl_deal
+                            WHERE instr_code = RTRIM(:p_instr_code)
+									 and deal_date <= to_date(decode(:g_ca_caevent_struct_h.h_evt_class,'OT',rtrim(:p_effect_dt),'BB',rtrim(:p_issue_cls_dt),rtrim(:p_ex_date)))
+                            and DEAL_STAT  NOT IN('UU','DA','DD','DS','DU')
+                            AND   dl_deal.client = MT_CLIENT.cln_code)
+                            AND cln_master NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :chr_p_ca_id );
+	
+			IS_ANY_ORA_ERROR
+
+ 			 EXEC SQL SELECT NVL( COUNT (CLN_CODE),0) into :int_h_count1
+       		 FROM  MT_CLIENT
+      		 WHERE CLN_BRK_ALL != 'B'
+			 AND CLN_CODE!=CLN_MASTER
+			 AND EXISTS (SELECT 1 FROM MT_MSGADDRESS_VEW WHERE MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_code AND COMB_MSG='N' AND MSG_IDENT_NO IN ('3'))
+      		 AND   EXISTS ( SELECT client FROM dl_deal
+             	             WHERE instr_code = RTRIM(:p_instr_code)
+										and deal_date <= to_date(decode(:g_ca_caevent_struct_h.h_evt_class,'OT',rtrim(:p_effect_dt),'BB',rtrim(:p_issue_cls_dt),rtrim(:p_ex_date)))
+                  		    and DEAL_STAT  NOT IN('UU','DA','DD','DS','DU')
+                     		 AND   dl_deal.client = MT_CLIENT.cln_code)
+                    		    AND MT_CLIENT.cln_code NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :chr_p_ca_id );
+		    IS_ANY_ORA_ERROR
+
+	      *int_p_result= int_h_count+int_h_count1;
+
+		  int_h_count  = 0;
+
+		    EXEC SQL SELECT NVL( COUNT (DISTINCT(cln_master)),0) into :int_h_count
+             FROM  MT_CLIENT
+             WHERE CLN_BRK_ALL != 'B' AND CHECKER is not NULL
+             AND   EXISTS (  SELECT client FROM dl_deal
+                             WHERE instr_code = RTRIM(:p_instr_code)
+										and deal_date <= to_date(decode(:g_ca_caevent_struct_h.h_evt_class,'OT',rtrim(:p_effect_dt),'BB',rtrim(:p_issue_cls_dt),rtrim(:p_ex_date)))
+                             and DEAL_STAT  NOT IN('UU','DA','DD','DS','DU')
+                             AND   dl_deal.client = MT_CLIENT.cln_code)
+              AND   EXISTS ( SELECT * FROM MT_MSGADDRESS_VEW WHERE
+                             MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_code and MSG_IDENT_NO='3' ) 
+		        AND cln_master NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :chr_p_ca_id );
+
+		   IS_ANY_ORA_ERROR
+
+		  *p_noevemsgs= int_h_count;
+	    }
+		else if (h_evt_priority == 2)
+		{
+		    EXEC SQL SELECT NVL( COUNT (DISTINCT(cln_master)),0) into :int_h_count
+             FROM  MT_CLIENT
+             WHERE CLN_BRK_ALL != 'B'
+             AND   EXISTS ( SELECT client FROM dl_deal
+             /*WHERE instr_code = RTRIM(:p_instr_code)*/
+			 WHERE instr_code IN (:p_instr_code,:l_base_instr_code)
+									 and deal_date <= to_date(decode(:g_ca_caevent_struct_h.h_evt_class,'OT',rtrim(:p_effect_dt),'BB',rtrim(:p_issue_cls_dt),rtrim(:p_ex_date)))
+                            and DEAL_STAT  NOT IN('UU','DA','DD','DS','DU')
+                            AND   dl_deal.client = MT_CLIENT.cln_code)
+                            AND cln_master NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :chr_p_ca_id );
+
+		   IS_ANY_ORA_ERROR
+
+			/*	EXEC SQL SELECT NVL(COUNT(CLN_CODE),0) into :int_h_count1 */ 
+				EXEC SQL SELECT NVL( COUNT (DISTINCT(CLN_CODE)),0) into :int_h_count1
+	       		 FROM  MT_CLIENT
+	      		 WHERE CLN_BRK_ALL != 'B'
+				 AND CLN_CODE!=CLN_MASTER
+				AND EXISTS (SELECT 1 FROM MT_MSGADDRESS_VEW WHERE MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_code AND COMB_MSG='N' AND MSG_IDENT_NO IN ('3'))
+	    		 AND   EXISTS ( SELECT client FROM dl_deal
+	        				   /*WHERE instr_code = RTRIM(:p_instr_code)*/
+						   WHERE instr_code IN (:p_instr_code,:l_base_instr_code)
+										and deal_date <= to_date(decode(:g_ca_caevent_struct_h.h_evt_class,'OT',rtrim(:p_effect_dt),'BB',rtrim(:p_issue_cls_dt),rtrim(:p_ex_date)))
+                  		    and DEAL_STAT  NOT IN('UU','DA','DD','DS','DU')
+                     		 AND   dl_deal.client = MT_CLIENT.cln_code)
+                    		    AND MT_CLIENT.cln_code NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :chr_p_ca_id );
+			  IS_ANY_ORA_ERROR
+
+		      *int_p_result= int_h_count+int_h_count1;
+
+		      int_h_count  = 0;
+		
+			    EXEC SQL SELECT NVL( COUNT (DISTINCT(cln_master)),0) into :int_h_count
+		        FROM  MT_CLIENT
+		         WHERE CLN_BRK_ALL != 'B' AND CHECKER is not NULL
+		         AND   EXISTS (  SELECT client FROM dl_deal
+		 				   /*WHERE instr_code = RTRIM(:p_instr_code)*/
+						   WHERE instr_code IN (:p_instr_code,:l_base_instr_code)
+										and deal_date <= to_date(decode(:g_ca_caevent_struct_h.h_evt_class,'OT',rtrim(:p_effect_dt),'BB',rtrim(:p_issue_cls_dt),rtrim(:p_ex_date)))
+                             and DEAL_STAT  NOT IN('UU','DA','DD','DS','DU')
+                             AND   dl_deal.client = MT_CLIENT.cln_code)
+	           AND   EXISTS ( SELECT * FROM MT_MSGADDRESS_VEW WHERE
+                             MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_code and MSG_IDENT_NO='3' ) 
+		        AND cln_master NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :chr_p_ca_id );
+	
+			 IS_ANY_ORA_ERROR
+
+      *p_noevemsgs= int_h_count;
+	}
+	/*Modified by siva.ganapathi for ISKB_3629 -- Ended*/
+   }
+   else
+   {
+    CO_ProcMonitor(g_logfile,"Loop 7",NULL,NULL);
+	printf("entered seven loop priotity is %d \n",h_evt_priority);
+	
+		/*Modified by siva.ganapathi for ISKB_3629 -- started*/	
+		if (h_evt_priority == 1 )
+		{
+			  EXEC SQL SELECT NVL( COUNT (DISTINCT(cln_master)),0) into :int_h_count
+			  FROM  MT_CLIENT
+			  WHERE CLN_BRK_ALL != 'B'
+			  AND   EXISTS ( SELECT client FROM dl_deal
+							 WHERE instr_code = RTRIM(:p_instr_code)
+							 AND   INSTRUMENT_DT >= to_date(:p_decl_date)
+									AND INSTRUMENT_DT <= to_date(decode(:g_ca_caevent_struct_h.h_evt_class,'OT',rtrim(:p_effect_dt),rtrim(:p_rec_dt)))
+							 AND DEAL_STAT NOT IN('UU','DA','DD','DS','DU')
+							 AND   dl_deal.client = MT_CLIENT.cln_code) 
+				AND cln_master NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :chr_p_ca_id ); 
+			  
+			  IS_ANY_ORA_ERROR
+
+			  EXEC SQL SELECT NVL( COUNT (CLN_CODE),0) into :int_h_count1
+			  FROM  MT_CLIENT
+			  WHERE CLN_BRK_ALL != 'B'
+			  AND CLN_CODE!=CLN_MASTER
+   		      AND EXISTS (SELECT 1 FROM MT_MSGADDRESS_VEW WHERE MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_code AND COMB_MSG='N' AND MSG_IDENT_NO IN ('3'))
+			  AND   EXISTS ( SELECT client FROM dl_deal
+							 WHERE instr_code = RTRIM(:p_instr_code)
+							 AND   INSTRUMENT_DT >= to_date(:p_decl_date)
+									AND INSTRUMENT_DT <= to_date(decode(:g_ca_caevent_struct_h.h_evt_class,'OT',rtrim(:p_effect_dt),rtrim(:p_rec_dt)))
+							 AND DEAL_STAT NOT IN('UU','DA','DD','DS','DU')
+							 AND   dl_deal.client = MT_CLIENT.cln_code) 
+				AND CLN_CODE NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :chr_p_ca_id ); 
+			  IS_ANY_ORA_ERROR
+
+			  *int_p_result= int_h_count+int_h_count1;
+
+			  int_h_count  = 0;
+			  int_h_count1  = 0;
+
+			  EXEC SQL SELECT NVL( COUNT (DISTINCT(cln_master)),0) into :int_h_count
+			  FROM  MT_CLIENT
+			  WHERE CLN_BRK_ALL != 'B' AND CHECKER is not NULL
+			  AND   EXISTS ( SELECT client FROM dl_deal
+							 WHERE instr_code = RTRIM(:p_instr_code)
+							 AND   INSTRUMENT_DT >= to_date(:p_decl_date)
+									AND INSTRUMENT_DT <= to_date(decode(:g_ca_caevent_struct_h.h_evt_class,'OT',rtrim(:p_effect_dt),rtrim(:p_rec_dt)))
+							 AND DEAL_STAT NOT IN('UU','DA','DD','DS','DU')
+									AND   dl_deal.client = MT_CLIENT.cln_code)
+			  AND   EXISTS ( SELECT * FROM MT_MSGADDRESS_VEW WHERE
+							 MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_code and MSG_IDENT_NO='3' )
+			  AND cln_master NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :chr_p_ca_id ); 
+			  IS_ANY_ORA_ERROR
+			  *p_noevemsgs= int_h_count;
+		}
+		else if (h_evt_priority == 2 )
+		{
+				  EXEC SQL SELECT NVL( COUNT (DISTINCT(cln_master)),0) into :int_h_count
+				  FROM  MT_CLIENT
+				  WHERE CLN_BRK_ALL != 'B'
+				  AND   EXISTS ( SELECT client FROM dl_deal
+				  /*WHERE instr_code = RTRIM(:p_instr_code)*/
+				  WHERE instr_code IN (:p_instr_code,:l_base_instr_code)
+				  AND   INSTRUMENT_DT >= to_date(:p_decl_date)
+										AND INSTRUMENT_DT <= to_date(decode(:g_ca_caevent_struct_h.h_evt_class,'OT',rtrim(:p_effect_dt),rtrim(:p_rec_dt)))
+				  AND DEAL_STAT NOT IN('UU','DA','DD','DS','DU')
+				  AND   dl_deal.client = MT_CLIENT.cln_code) 
+				  AND cln_master NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :chr_p_ca_id ); 			  
+				  IS_ANY_ORA_ERROR
+				  /*	EXEC SQL SELECT NVL(COUNT(CLN_CODE),0) into :int_h_count1 */ 
+				  EXEC SQL SELECT NVL( COUNT (DISTINCT(CLN_CODE)),0) into :int_h_count1
+				  FROM  MT_CLIENT
+				  WHERE CLN_BRK_ALL != 'B'
+				  AND CLN_CODE!=CLN_MASTER
+				   AND EXISTS (SELECT 1 FROM MT_MSGADDRESS_VEW WHERE MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_code AND COMB_MSG='N' AND MSG_IDENT_NO IN ('3'))
+				  AND   EXISTS ( SELECT client FROM dl_deal
+								 /*WHERE instr_code = RTRIM(:p_instr_code)*/
+								 WHERE instr_code IN (:p_instr_code,:l_base_instr_code)
+								 AND   INSTRUMENT_DT >= to_date(:p_decl_date)
+										AND INSTRUMENT_DT <= to_date(decode(:g_ca_caevent_struct_h.h_evt_class,'OT',rtrim(:p_effect_dt),rtrim(:p_rec_dt)))
+								 AND DEAL_STAT NOT IN('UU','DA','DD','DS','DU')
+								 AND   dl_deal.client = MT_CLIENT.cln_code) 
+					AND CLN_CODE NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :chr_p_ca_id ); 
+				  IS_ANY_ORA_ERROR
+				  *int_p_result= int_h_count+int_h_count1;
+				  int_h_count  = 0;
+				  int_h_count1  = 0;
+				  EXEC SQL SELECT NVL( COUNT (DISTINCT(cln_master)),0) into :int_h_count
+				  FROM  MT_CLIENT
+				  WHERE CLN_BRK_ALL != 'B' AND CHECKER is not NULL
+				  AND   EXISTS ( SELECT client FROM dl_deal
+								 /*WHERE instr_code = RTRIM(:p_instr_code)*/
+								 WHERE instr_code IN (:p_instr_code,:l_base_instr_code)
+								 AND   INSTRUMENT_DT >= to_date(:p_decl_date)
+										AND INSTRUMENT_DT <= to_date(decode(:g_ca_caevent_struct_h.h_evt_class,'OT',rtrim(:p_effect_dt),rtrim(:p_rec_dt)))
+								 AND DEAL_STAT NOT IN('UU','DA','DD','DS','DU')
+										AND   dl_deal.client = MT_CLIENT.cln_code)
+				  AND   EXISTS ( SELECT * FROM MT_MSGADDRESS_VEW WHERE
+								 MT_MSGADDRESS_VEW.CLN_CODE = MT_CLIENT.cln_code and MSG_IDENT_NO='3' )
+				  AND cln_master NOT IN (SELECT client FROM CA_EVENTMESGSEND WHERE corp_id = :chr_p_ca_id ); 		
+				  IS_ANY_ORA_ERROR
+				  *p_noevemsgs= int_h_count;
+		  }
+			/*Queries  by siva.ganapathi for ISKB_3629 -- Ended*/
+   }
+
+    CO_ProcMonitor(g_logfile,"After Loop",NULL,NULL);
+
+         sprintf(chr_g_log_buff,"The chr_value of int_p_result |%d|\n",(*int_p_result));
+         CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+         sprintf(chr_g_log_buff,"The chr_value of p_noevemsgs |%d|\n",(*p_noevemsgs));
+         CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+
+      APL_GOBACK_SUCCESS
+      RETURN_SUCCESS:
+      {
+         return (APL_SUCCESS);
+      }
+      RETURN_FAILURE:
+      {
+         return (APL_FAILURE);
+      }
+}
+
+static int  CA_Mod_EventStat(char           *chr_p_ca_id,
+                     char           *p_ce_typ,
+                     char           *p_prelim_ind,
+							char           *p_evnt_stat, 
+                     int             p_countacs,
+                     int             p_noevemsgs,
+                     DEBUG_INFO_STRUCT_H   **l_debug_info_ptr)
+{
+   struct sqlca sqlca;
+   char chr_h_event_status[APL_STATUS_LEN];
+	
+	if((!strcmp(p_evnt_stat,STATUS_RDY_INT)) || (!strcmp(p_evnt_stat,STATUS_MSG_SENT)))
+		{
+   	
+   	if(!strcmp(p_ce_typ,EVT_MEETING) || (!strcmp(p_prelim_ind,APL_YES_IND)) || (!strcmp(p_ce_typ,EVT_OTH)))
+   	   strcpy(chr_h_event_status,STATUS_MSG_SENT);
+   	else
+	{
+	   
+
+	   if(((strcmp(p_ce_typ,EVT_OFFER) == 0) && (strcmp(g_ca_caevent_struct_h.h_op_evt_class,"TO") == 0))|| ((strcmp(p_ce_typ,"RD")==0) && (strcmp(g_ca_caevent_struct_h.h_op_evt_class,"PO")==0)))
+		strcpy(chr_h_event_status,STATUS_RDY_PYMT); 
+		else if((strcmp(p_ce_typ,"NS") == 0) || (strcmp(p_ce_typ,"BB") == 0))
+		strcpy(chr_h_event_status,"RA");
+	   else
+     	        strcpy(chr_h_event_status,STATUS_RDY_ENTL);
+	}
+
+/*Smita - Changed Column Names - HDFCCA_027*/
+	   EXEC SQL UPDATE CAEVENT
+	   SET   status   =  :chr_h_event_status,
+ 	   EVT_CLT_CNT          =  :p_countacs,
+	   EVT_MSG_COUNT         =  (EVT_MSG_COUNT + :p_noevemsgs),
+	   PROCESSED_DATE           =  :chr_g_sys_date,
+ 	   access_stamp      =  :chr_g_sys_date_time
+   	WHERE corp_id       =  :g_ca_caevent_struct_h.h_corp_id; 
+
+		sprintf(chr_g_log_buff,"Updated event sqlca.sqlcode is :%d:",sqlca.sqlcode);
+		CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+ 
+   	IS_ANY_ORA_ERROR
+		}
+      else
+      {
+      EXEC SQL UPDATE CAEVENT
+      SET
+      access_stamp      =  :chr_g_sys_date_time
+      WHERE corp_id       =  :g_ca_caevent_struct_h.h_corp_id;
+
+      sprintf(chr_g_log_buff,"Updated event sqlca.sqlcode is :%d:",sqlca.sqlcode);
+      CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+
+      IS_ANY_ORA_ERROR
+
+      }
+
+   	APL_GOBACK_SUCCESS
+   RETURN_SUCCESS:
+   {
+      return (APL_SUCCESS);
+   }
+   RETURN_FAILURE:
+   {
+      return (APL_FAILURE);
+   }
+}
+/* Chirag 19-01-2007 */
+int chkSubAcctHoldings(char *p_cln_master,
+								char *chr_p_ca_id,	
+								DEBUG_INFO_STRUCT_H   **l_debug_info_ptr) 
+{
+   struct sqlca sqlca;
+	char l_cln_subAcc[11] = APL_NULL_STRING;
+	short l_cln_subAcc_i = 0;
+
+   /* Added by siva.ganapathi for ISKB_3990 -- started*/
+	
+	int h_evt_priority = 0;
+	short i_evt_priority = 0;
+	char l_attach_corp_id[CA_CORP_ID_LEN] = APL_NULL_STRING;
+   short i_attach_corp_id = 0;
+	
+   memset(l_attach_corp_id,APL_NULL_CHAR,CA_CORP_ID_LEN);
+
+	EXEC SQL SELECT PRIORITY,ATTACH_CORP_ID
+				INTO :h_evt_priority:i_evt_priority,:l_attach_corp_id:i_attach_corp_id
+				FROM CAEVENT 
+				WHERE CORP_ID = :chr_p_ca_id;
+
+   printf("\n event priority is %d and attch corp_id is %s",h_evt_priority,l_attach_corp_id);
+	fflush(stdout);
+
+	IS_ANY_ORA_ERROR
+   /* Added by siva.ganapathi for ISKB_3990 -- Ended*/
+	
+	Alert("Enter in chkSubAcctHoldings function with Master |%s| Entitle Basis |%s|\n",p_cln_master,l_entl_basis_93B);
+
+	EXEC SQL DECLARE sel_subAcc_cur CURSOR FOR
+   SELECT CLN_CODE
+	FROM MT_CLIENT
+	WHERE CLN_MASTER =: p_cln_master AND CLN_CODE <> :p_cln_master
+	AND STATUS !='CA'  
+	ORDER BY CLN_CODE;
+
+	IS_ANY_ORA_ERROR
+
+	EXEC SQL OPEN sel_subAcc_cur;
+   IS_ANY_ORA_ERROR	
+
+	for(;;)
+	{
+		EXEC SQL FETCH sel_subAcc_cur INTO :l_cln_subAcc:l_cln_subAcc_i;
+      Alert("sqlca.sqlcode |%d| \n",sqlca.sqlcode);
+      IS_ANY_ORA_ERROR
+
+      if(sqlca.sqlcode == 1403)
+		{
+			EXEC SQL CLOSE sel_subAcc_cur;
+      	break;
+		}
+	/*Priority condittions added by siva.ganapathi for ISKB_3990 -- Started*/						
+			if (strcmp(l_entl_basis_93B,"T")==0)
+			{
+				if(h_evt_priority==1)
+				{
+				 EXEC SQL SELECT     NVL(SUM(safekeep_pos),0)
+										   +  NVL(SUM(NVALRECEIVE),0)
+											-  NVL(SUM(NVALDELIVER),0)
+											+  NVL(SUM(VAL_REC),0)
+											-  NVL(SUM(VAL_DEL),0)
+											+  NVL(SUM(DP_REC),0)
+											-  NVL(SUM(DP_DEL),0) into :h_total_safek_93B
+										FROM DL_SAFEK
+										WHERE  instr_code = (select instr_code from caevent where corp_id = :chr_p_ca_id) 
+										AND    client = :l_cln_subAcc;
+				IS_ANY_ORA_ERROR
+				}
+				else
+				{
+					 EXEC SQL SELECT     NVL(SUM(safekeep_pos),0)
+					 							+  NVL(SUM(NVALRECEIVE),0)
+												 -  NVL(SUM(NVALDELIVER),0)
+												 +  NVL(SUM(VAL_REC),0)
+												 -  NVL(SUM(VAL_DEL),0)
+												 +  NVL(SUM(DP_REC),0)
+												 -  NVL(SUM(DP_DEL),0) into :h_total_safek_93B
+												 FROM DL_SAFEK
+												 WHERE  instr_code IN ( select instr_code from caevent
+												 								where corp_id IN (:chr_p_ca_id,:l_attach_corp_id)) 
+												 AND    client = :l_cln_subAcc;
+						 IS_ANY_ORA_ERROR
+				}
+			}
+			else if (strcmp(l_entl_basis_93B,"S")==0)
+			{
+				if(h_evt_priority==1)
+				{
+				EXEC SQL SELECT     NVL(SUM(safekeep_pos),0)
+									into :h_total_safek_93B
+									FROM DL_SAFEK
+									WHERE  instr_code = (select instr_code from caevent where corp_id = :chr_p_ca_id) 
+									AND   client = :l_cln_subAcc;
+
+				IS_ANY_ORA_ERROR
+				}	
+				else
+				{
+					EXEC SQL SELECT     NVL(SUM(safekeep_pos),0)
+								into :h_total_safek_93B
+								FROM DL_SAFEK
+								WHERE  instr_code IN ( select instr_code from caevent
+																where corp_id IN (:chr_p_ca_id,:l_attach_corp_id))
+								AND    client = :l_cln_subAcc;
+					IS_ANY_ORA_ERROR
+				}
+			}
+
+			if(h_total_safek_93B > 0)
+			{
+				EXEC SQL CLOSE sel_subAcc_cur;	
+				break;
+			}
+
+	}
+	/*Priority condittions added by siva.ganapathi for ISKB_3990 -- Ended*/						
+
+   	APL_GOBACK_SUCCESS
+   RETURN_SUCCESS:
+   {
+      return (APL_SUCCESS);
+   }
+   RETURN_FAILURE:
+   {
+      return (APL_FAILURE);
+   }
+}
+/* Chirag 19-01-2007 */
+
+
+/* By Bawa -- 8/13/2008 -- 
+	This function will set int_p_passFlg to 0 when qty of trade for which trde date is greater than ex date, 
+	is greater than safek qty. */
+/*Modified  by siva.ganapathi for ISKB_3374 */
+int getPassForMsg(char* chr_p_client,char* chr_p_instrument,char* chr_p_ex_date,char* chr_p_entitl_base,int h_evt_priority,char* h_atch_corp_id,int *int_p_passFlg,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+    double dbl_h_sum_trd_dealQty = 0;
+	short i_sum_trdQty = 0;
+	double dbl_h_sum_trd_safekQty = 0;
+	short i_sum_sfkQty = 0;
+
+	/*Added by siva.ganapathi for ISKB_3374 -- started*/
+
+	char h_atch_evt_instr_cd[MT_INSTR_CODE_LEN] = APL_NULL_STRING;
+	short i_atch_evt_instr_cd = 0;
+    struct sqlca sqlca;
+
+	/*Added by siva.ganapathi for ISKB_3374 -- Ended*/
+	printf("\n Entering getPassForMsg() \n");
+	printf("\n ** client   |%s|", chr_p_client);
+	printf("\n ** instrument   |%s|", chr_p_instrument);
+	printf("\n ** ex_date   |%s|", chr_p_ex_date);
+	printf("\n ** entitl_base   |%s|", chr_p_entitl_base);
+	printf("\n ** passFlg   |%d|", *int_p_passFlg);
+
+	/*Modified by siva.ganapathi for ISKB_3374 -- started*/
+
+	printf("\n event proority is   |%d|", h_evt_priority);
+	printf("\n attach corp id is |%s|", h_atch_corp_id);
+	fflush(stdout);
+
+	EXEC SQL BEGIN DECLARE SECTION ; 
+	EXEC SQL VAR h_atch_evt_instr_cd IS STRING;
+	EXEC SQL END DECLARE SECTION ; 
+
+  if(h_evt_priority == 1)
+  {  
+	printf("\n In the loop of priority 1");
+	fflush(stdout);
+
+	if (!strcmp(chr_p_entitl_base,ENTL_BASE_DL)) // its traded basis 
+	{
+		printf("\n **  **   ENTL_BASE_DL   |%s|",ENTL_BASE_DL);
+		// consider all trades with all statsu with sales - and purchase +
+
+		EXEC SQL SELECT NVL(SUM(DECODE(deal_cd,'2',QTY,'4',QTY,'1',-QTY,'3',-QTY)),0)
+			INTO  :dbl_h_sum_trd_dealQty:i_sum_trdQty
+			FROM  DL_DEAL
+			WHERE client  = :chr_p_client
+			   AND   instr_code   = :chr_p_instrument
+			   AND   deal_date >= (TO_DATE(:chr_p_ex_date)) 
+			   AND   DEAL_STAT not in ('DU','DA','DS');
+		IS_ANY_ORA_ERROR 
+
+		printf("\n dbl_h_sum_trd_dealQty   |%lf|", dbl_h_sum_trd_dealQty);
+
+	   // --- Get safekeep positions based on client code and instrument code with position type ('FREE') with formul '(SAFEKEEP + valRec + nvalRec + DPREC) - (valDEL + nvalDel + dpDel)'
+
+		/*	ISKB_2071	Addition of NVL for safek Qty and Removal Block Type condition	*/
+	   EXEC SQL SELECT NVL(SUM(NVL((SAFEKEEP_POS + NVALRECEIVE + VAL_REC + DP_REC),0) - NVL((NVALDELIVER +
+VAL_DEL + DP_DEL),0)),0) as  deal_qty
+		   INTO :dbl_h_sum_trd_safekQty:i_sum_sfkQty
+		   FROM DL_SAFEK
+			WHERE /*	BLOCK_TYPE  = 'FREE' AND 	*/
+			  /* LOCATION_CD IN ('NSDL','CSDL','VAUL') AND Commented by JC */
+			  CLIENT = :chr_p_client AND 
+			  INSTR_CODE = :chr_p_instrument ;
+		IS_ANY_ORA_ERROR 
+
+		printf("\n dbl_h_sum_trd_safekQty   |%lf| \n", dbl_h_sum_trd_safekQty);
+
+		if ( dbl_h_sum_trd_dealQty  >= dbl_h_sum_trd_safekQty )
+		{
+			*int_p_passFlg = 0;
+		}
+		else
+		{
+			*int_p_passFlg = 1;
+		}
+	}
+	else if (!strcmp(chr_p_entitl_base,ENTL_BASE_SETL)) // its entitl basis
+	{
+		printf("\n ** **   ENTL_BASE_SETL   |%s|",ENTL_BASE_SETL);
+
+		EXEC SQL SELECT NVL(SUM(DECODE(deal_cd,'2',QTY,'4',QTY,'1',-QTY,'3',-QTY)),0)
+			INTO  :dbl_h_sum_trd_dealQty:i_sum_trdQty
+			FROM  DL_DEAL
+			WHERE client  = :chr_p_client
+			   AND   instr_code   = :chr_p_instrument
+			   AND   deal_date >= (TO_DATE(:chr_p_ex_date)) 
+			   AND   DEAL_STAT in ('CS','SS');
+		IS_ANY_ORA_ERROR 
+
+		printf("\n dbl_h_sum_trd_dealQty   |%lf|", dbl_h_sum_trd_dealQty);
+
+	   // --- Get safekeep positions based on client code and instrument code with position type ('FREE') with formul '(SAFEKEEP + valRec + nvalRec + DPREC) - (valDEL + nvalDel + dpDel)'
+
+		/*	ISKB_2071	Addition of NVL for safek Qty	and Removal Block Type condition	*/
+		EXEC SQL SELECT NVL(SUM(SAFEKEEP_POS),0) INTO :dbl_h_sum_trd_safekQty:i_sum_sfkQty
+			FROM DL_SAFEK
+			WHERE /*	BLOCK_TYPE  = 'FREE' AND */
+			  /* LOCATION_CD IN ('NSDL','CSDL','VAUL') AND Commented by JC */
+			  CLIENT = :chr_p_client AND 
+			  INSTR_CODE = :chr_p_instrument ;
+		IS_ANY_ORA_ERROR 
+
+		printf("\n dbl_h_sum_trd_safekQty   |%lf| \n", dbl_h_sum_trd_safekQty);
+
+		if (dbl_h_sum_trd_dealQty >= dbl_h_sum_trd_safekQty)
+		{
+			*int_p_passFlg = 0;
+		}
+		else
+		{
+			*int_p_passFlg = 1;
+		}
+	}
+  }
+  else if (h_evt_priority == 2 )
+  {
+	printf("\n In the loop of priority 2");
+	fflush(stdout);
+	
+	EXEC SQL SELECT INSTR_CODE INTO :h_atch_evt_instr_cd:i_atch_evt_instr_cd
+		     FROM CAEVENT 
+			 WHERE CORP_ID = :h_atch_corp_id  ;
+	
+	printf("\n attach event instr code is %s indicator is %d sqlerror is %d",h_atch_evt_instr_cd,i_atch_evt_instr_cd,sqlca.sqlcode);
+	fflush(stdout);
+	
+	IS_ANY_ORA_ERROR 
+
+	if (!strcmp(chr_p_entitl_base,ENTL_BASE_DL)) // its traded basis 
+	{
+		printf("\n for priority 2 **  **   ENTL_BASE_DL   |%s|",ENTL_BASE_DL);
+		// consider all trades with all statsu with sales - and purchase +
+
+		EXEC SQL SELECT NVL(SUM(DECODE(deal_cd,'2',QTY,'4',QTY,'1',-QTY,'3',-QTY)),0)
+			INTO  :dbl_h_sum_trd_dealQty:i_sum_trdQty
+			FROM  DL_DEAL
+			WHERE client  = :chr_p_client
+			   AND   instr_code IN ( :chr_p_instrument ,:h_atch_evt_instr_cd)
+			   AND   deal_date >= (TO_DATE(:chr_p_ex_date)) 
+			   AND   DEAL_STAT not in ('DU','DA','DS');
+		IS_ANY_ORA_ERROR 
+
+		printf("\n for priority 2 dbl_h_sum_trd_dealQty   |%lf|", dbl_h_sum_trd_dealQty);
+
+	   // --- Get safekeep positions based on client code and instrument code with position type ('FREE') with formul '(SAFEKEEP + valRec + nvalRec + DPREC) - (valDEL + nvalDel + dpDel)'
+
+		/*	ISKB_2071	Addition of NVL for safek Qty and Removal Block Type condition	*/
+	   EXEC SQL SELECT NVL(SUM(NVL((SAFEKEEP_POS + NVALRECEIVE + VAL_REC + DP_REC),0) - NVL((NVALDELIVER +
+VAL_DEL + DP_DEL),0)),0) as  deal_qty
+		   INTO :dbl_h_sum_trd_safekQty:i_sum_sfkQty
+		   FROM DL_SAFEK
+			WHERE /*	BLOCK_TYPE  = 'FREE' AND 	*/
+			  /* LOCATION_CD IN ('NSDL','CSDL','VAUL') AND Commented by JC */
+			  CLIENT = :chr_p_client AND 
+			  INSTR_CODE IN (:chr_p_instrument,:h_atch_evt_instr_cd) ;
+		IS_ANY_ORA_ERROR 
+
+		printf("\n for priority 2 dbl_h_sum_trd_safekQty   |%lf| \n", dbl_h_sum_trd_safekQty);
+
+		if ( dbl_h_sum_trd_dealQty  >= dbl_h_sum_trd_safekQty )
+		{
+			*int_p_passFlg = 0;
+		}
+		else
+		{
+			*int_p_passFlg = 1;
+		}
+	}
+	else if (!strcmp(chr_p_entitl_base,ENTL_BASE_SETL)) // its entitl basis
+	{
+		printf("\n for priority 2 ** **   ENTL_BASE_SETL   |%s|",ENTL_BASE_SETL);
+
+		EXEC SQL SELECT NVL(SUM(DECODE(deal_cd,'2',QTY,'4',QTY,'1',-QTY,'3',-QTY)),0)
+			INTO  :dbl_h_sum_trd_dealQty:i_sum_trdQty
+			FROM  DL_DEAL
+			WHERE client  = :chr_p_client
+			   AND   instr_code IN (:chr_p_instrument,:h_atch_evt_instr_cd)
+			   AND   deal_date >= (TO_DATE(:chr_p_ex_date)) 
+			   AND   DEAL_STAT in ('CS','SS');
+		IS_ANY_ORA_ERROR 
+
+		printf("\n for priority 2 else loop dbl_h_sum_trd_dealQty   |%lf|", dbl_h_sum_trd_dealQty);
+
+	   // --- Get safekeep positions based on client code and instrument code with position type ('FREE') with formul '(SAFEKEEP + valRec + nvalRec + DPREC) - (valDEL + nvalDel + dpDel)'
+
+		/*	ISKB_2071	Addition of NVL for safek Qty	and Removal Block Type condition	*/
+		EXEC SQL SELECT NVL(SUM(SAFEKEEP_POS),0) INTO :dbl_h_sum_trd_safekQty:i_sum_sfkQty
+			FROM DL_SAFEK
+			WHERE /*	BLOCK_TYPE  = 'FREE' AND */
+			  /* LOCATION_CD IN ('NSDL','CSDL','VAUL') AND Commented by JC */
+			  CLIENT = :chr_p_client AND 
+			  INSTR_CODE IN (:chr_p_instrument,:h_atch_evt_instr_cd);
+
+		IS_ANY_ORA_ERROR 
+
+		printf("\nfor priority 2 else loop dbl_h_sum_trd_safekQty   |%lf| \n", dbl_h_sum_trd_safekQty);
+
+		if (dbl_h_sum_trd_dealQty >= dbl_h_sum_trd_safekQty)
+		{
+			*int_p_passFlg = 0;
+		}
+		else
+		{
+			*int_p_passFlg = 1;
+		}
+	}
+  }
+
+	printf("\n ** After passFlg   |%d|", *int_p_passFlg);
+	fflush(stdout);
+
+	APL_GOBACK_SUCCESS
+   
+	RETURN_SUCCESS:
+	printf("\n Leaving getPassForMsg() with success \n");
+     return (APL_SUCCESS);
+   
+   RETURN_FAILURE:
+   	printf("\n Leaving getPassForMsg() with failure \n");
+	return (APL_FAILURE);
+ }
+
+/*	ISKB_2213	Check eligible Sub-client for event intimation	*/
+/*Changed by siva.ganapathi for ISKB_3374 -- started*/
+int chkEligSubAcct(char *p_cln_master,
+								char* chr_p_instrument,	
+								char* chr_boundaryDate,
+								char* chr_p_entitl_base,
+								int p_evt_priority,
+								char* chr_evt_atch_corp_id,
+								int *int_p_passFlag,
+								DEBUG_INFO_STRUCT_H   **l_debug_info_ptr) 
+{
+   struct sqlca sqlca;
+	char l_cln_subAcc[11] = APL_NULL_STRING;
+	short l_cln_subAcc_i = 	0;
+	int l_int_passFlag	=	0;/*ISKB_2486 changing the Flag value to '0'as an old event was picked where Master with No Sub Account condition*/
+	double h_cln_safek	=	0;
+
+	Alert("Enter in chkEligSubAcct function with Master |%s| Instrument |%s|\n",p_cln_master,chr_p_instrument);
+
+	sqlca.sqlcode = 0;	
+
+	EXEC SQL DECLARE sel_subcln_cur CURSOR FOR
+   SELECT CLN_CODE
+	FROM MT_CLIENT
+	WHERE CLN_MASTER =: p_cln_master AND CLN_CODE <> :p_cln_master
+	AND STATUS !='CA'  
+	ORDER BY CLN_CODE;
+
+   Alert("sqlca.sqlcode |%d| \n",sqlca.sqlcode);
+	IS_ANY_ORA_ERROR
+
+	EXEC SQL OPEN sel_subcln_cur;
+   IS_ANY_ORA_ERROR	
+
+	for(;;)
+	{
+		EXEC SQL FETCH sel_subcln_cur INTO :l_cln_subAcc:l_cln_subAcc_i;
+      Alert("sqlca.sqlcode |%d| \n",sqlca.sqlcode);
+      IS_ANY_ORA_ERROR
+
+      if(sqlca.sqlcode == 1403)
+		{
+			EXEC SQL CLOSE sel_subcln_cur;
+      	break;
+		}
+                /*Modified by siva.ganapathi for ISKB_3374--started*/
+		if ( APL_FAILURE == getPassForMsg(l_cln_subAcc,
+									chr_p_instrument,
+									chr_boundaryDate,
+									chr_p_entitl_base,
+									p_evt_priority,
+									chr_evt_atch_corp_id,
+									&l_int_passFlag,
+									l_debug_info_ptr ) )
+		{
+			APL_GOBACK_FAIL;
+		}
+                /*Modified by siva.ganapathi for ISKB_3374--Ended*/
+		printf(" \n AFTER passFlg   |%d|", l_int_passFlag);
+		if(l_int_passFlag == 1)
+		{
+			EXEC SQL CLOSE sel_subcln_cur;	
+			break;
+		}
+
+	}
+
+	*int_p_passFlag	=	l_int_passFlag;
+	printf("\n ** After passFlg |%d| for sub-client |%s|", *int_p_passFlag,l_cln_subAcc);
+
+   APL_GOBACK_SUCCESS
+   RETURN_SUCCESS:
+   {
+      return (APL_SUCCESS);
+   }
+   RETURN_FAILURE:
+   {
+      return (APL_FAILURE);
+   }
+}
+/*Changed by siva.ganapathi for ISKB_3374 -- Ended*/

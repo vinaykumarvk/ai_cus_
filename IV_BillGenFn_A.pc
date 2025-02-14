@@ -1,0 +1,2010 @@
+/*
+ *   COPYRIGHT NOTICE
+ *   
+ *   Copyright 2005 Polaris Software Lab Limited. All rights reserved.
+ *   
+ *   These materials are confidential and proprietary to
+ *   Polaris Software Lab Limited and no part of these materials should
+ *   be reproduced, published, transmitted or distributed in any form or
+ *   by any means, electronic, mechanical, photocopying, recording or
+ *   otherwise, or stored in any information storage or retrieval system
+ *   of any nature nor should the materials be disclosed to third parties
+ *   or used in any other manner for which this is not authorized, without
+ *   the prior express written authorization of Polaris Software Lab Limited.
+ */
+/*******************************************************************************
+ *  
+ *    Module Name         :         Billing Module 
+ *    
+ *    File Name           :         IV_BillGenFn_A.pc
+ *    
+ *    
+ *                Version Control Block
+ *     
+ *    Date        Version     Author              Description     RFS No.
+ *   ---------   --------  ---------------  ----------------------------------
+ *   08-Dec-2010  1.0.1.7   Siva Ganapathi	  Changes done for ISKB_2470 -- safekeeping charges of NAV based client
+ *
+ *******************************************************************************/
+
+#include "stdio_64.h"
+#include "IV_Control_A.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+
+
+char chr_regen_flg;
+char chr_g_bl_upto_dt[APL_DATE_LEN];
+char chr_g_bl_prv_dt[APL_DATE_LEN];
+char chr_g_bl_proc_dt[APL_DATE_LEN];
+char chr_g_bl_sys_dt[APL_DATE_LEN];
+char chr_g_def_fee_acc[APL_CLIENT_LENGTH];
+char chr_g_bl_gen;
+char chr_g_bill_dep[4];
+char chr_g_bl_ccycode[APL_CCYCODE_LEN];
+char chr_g_fee_ccycode[APL_CCYCODE_LEN];        
+double g_exchg_rt_fee_bl=1.0; 
+int int_g_ccy_decimallen = 0; 
+int int_g_blccy_decimallen =0;
+char chr_g_country[APL_CTRY_CODE_LEN];
+char chr_g_dom_ccy[APL_CCYCODE_LEN];
+char chr_g_cb_code[APL_CLIENT_LENGTH];
+char chr_g_restart_client[APL_CLIENT_LENGTH];
+long g_late_txn_days=0;
+int  int_bl_err_level  = 0;
+int  int_bl_err_tot  = 0;
+int int_g_diff = 0;
+SYS_IVCONTROLPARAM_STRUCT g_sys_ivcontrolparam_struct;
+SYS_BATCHPROC_STRUCT_H l_sys_batchproc_struct_hb;
+SYS_BATCHPROC_STRUCT_I  l_sys_batchproc_struct_i;
+char chr_g_batch_in_proc_rowid[APL_ROWID_LEN];
+short int_i_batch_in_proc_rowid=0;
+int int_g_viber_condexists = 0; 
+
+#ifdef BILLDEBUG
+   extern FILE *TestRep;
+#endif
+
+int IV_Proc_CalculateBills(char **p_argv,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+
+	char h_dl_client[APL_CLIENT_LENGTH],chr_h_bl_upto_dt[APL_DATE_LEN],chr_err_buffer[KEY_LENGTH];
+	char chr_h_def_fee_acc[APL_CLIENT_LENGTH],chr_h_bl_gen,h_nation[APL_CTRY_CODE_LEN];
+	long h_late_txn_days=0;
+	IV_CLIENTSETUP_STRUCT l_iv_clt_setup_struct;
+	I_IV_CLIENTSETUP_STRUCT l_i_iv_clientsetup_struct;
+	char chr_h_restart_client[APL_CLIENT_LENGTH], chr_h_update_restart[APL_RESTARTDATA_LENGTH];
+	char chr_h_stat_info_buffer[71];
+   	int *int_p_retstat = NULL;       
+
+	/*double l_cond_exists = 0; */  /* HDFCIV_004 Rohit Variable declaration for IF_COND_NOT_EXISTS */
+	
+	EXEC SQL VAR h_dl_client IS STRING;
+	EXEC SQL VAR chr_h_restart_client IS STRING;
+	EXEC SQL VAR chr_h_update_restart IS STRING;
+	EXEC SQL VAR chr_h_def_fee_acc IS STRING;
+	EXEC SQL VAR chr_h_bl_upto_dt IS STRING;
+	EXEC SQL VAR h_nation IS STRING;
+	EXEC SQL VAR l_iv_clt_setup_struct.client IS STRING;
+	EXEC SQL VAR l_iv_clt_setup_struct.b_ccycd IS STRING;
+	EXEC SQL VAR l_iv_clt_setup_struct.fees_ccy IS STRING;      
+	EXEC SQL VAR l_iv_clt_setup_struct.default_feeclt IS STRING;
+	EXEC SQL VAR chr_h_stat_info_buffer IS STRING;
+
+	EXEC SQL VAR l_sys_batchproc_struct_hb.process_name IS STRING;
+	EXEC SQL VAR l_sys_batchproc_struct_hb.proc_init IS STRING;
+	EXEC SQL VAR l_sys_batchproc_struct_hb.status_ind IS STRING;
+	EXEC SQL VAR l_sys_batchproc_struct_hb.processing_status IS STRING;
+
+	struct sqlca sqlca;
+
+	EXEC SQL END DECLARE SECTION;
+
+	int int_retstat=0,i=0;
+	int int_is_bill_cur_open = 0;
+	int int_is_selclients_cur_open = 0;
+	int int_l_commitcounter = 0; 
+	char chr_l_client_a[APL_CLIENT_LENGTH],chr_l_date_time[APL_DATE_LEN];
+	char *chr_pass_str=NULL, *chr_acct_pass_str=NULL, *chr_pass_param=NULL;
+	char *k;
+	char chr_init_restart_data[APL_RESTARTDATA_LENGTH];
+	char *chr_respoint;
+	char chr_l_restart_phase[2];
+	char chr_l_restart_client[APL_CLIENT_LENGTH];
+	short l_viber_condexists = 0; 
+	short l_eu_condexists = 0;
+
+        /*Added by siva.ganapathi for ISKB_2470 on 07-Dec-2010 -- started*/
+
+	int l_ae_pass_count = 0;
+	short i_ae_pass_count = 0;
+	char l_ae_pass_flag[2] = APL_NULL_STRING;
+
+	/*Added by siva.ganapathi for ISKB_2470 on 07-Dec-2010 -- Ended*/
+
+	sqlca.sqlcode = 0;
+
+	chr_respoint = (char *)calloc(APL_RESTARTDATA_LENGTH,sizeof(char));
+	APL_MALLOC_FAIL(chr_respoint);
+	chr_pass_str = (char *)calloc(strlen(p_argv[9]),sizeof(char));
+	APL_MALLOC_FAIL(chr_pass_str);
+	chr_acct_pass_str = (char *)calloc(strlen(p_argv[9]),sizeof(char));
+	APL_MALLOC_FAIL(chr_acct_pass_str); 
+	chr_pass_param = (char *)calloc(strlen(p_argv[9]),sizeof(char));
+	APL_MALLOC_FAIL(chr_pass_param);
+	
+ 	k = (char *)calloc(IV_PASS_PARAM_LEN,sizeof(char));
+ 	int_p_retstat = (int *)calloc(1,sizeof(int));			
+ 	memset(int_p_retstat,'\0',1);
+ 	*int_p_retstat = IV_SUCCESS;
+
+	memset(chr_h_bl_upto_dt,'\0',APL_DATE_LEN);
+	memset(chr_g_bl_upto_dt,'\0',APL_DATE_LEN);
+	memset(chr_g_bl_prv_dt,'\0',APL_DATE_LEN);
+	memset(chr_g_bl_proc_dt,'\0',APL_DATE_LEN);
+	memset(chr_g_def_fee_acc,'\0',APL_CLIENT_LENGTH);
+	memset(chr_g_bill_dep,'\0',4);
+	memset(chr_g_bl_ccycode,'\0',APL_CCYCODE_LEN);
+	memset(chr_g_fee_ccycode,'\0',APL_CCYCODE_LEN);         
+	memset(chr_g_country,'\0',APL_CTRY_CODE_LEN);
+	memset(chr_g_cb_code,'\0',APL_CLIENT_LENGTH);
+	memset(chr_l_client_a,'\0',APL_CLIENT_LENGTH);
+	memset(h_dl_client,'\0',APL_CLIENT_LENGTH);
+	memset(chr_h_restart_client,'\0',APL_CLIENT_LENGTH);
+	memset(chr_l_restart_client,'\0',APL_CLIENT_LENGTH);
+	memset(chr_l_restart_phase,'\0',2);
+	memset(chr_h_update_restart,'\0',APL_CLIENT_LENGTH);
+	memset(h_nation,'\0',APL_CTRY_CODE_LEN);
+	memset(chr_h_def_fee_acc,'\0',APL_CLIENT_LENGTH);
+	memset(chr_h_bl_upto_dt,'\0',APL_DATE_LEN);
+	memset(chr_l_date_time,'\0',APL_DATE_LEN);
+	memset(chr_init_restart_data,APL_NULL_CHAR,APL_RESTARTDATA_LENGTH);
+	memset(chr_h_stat_info_buffer, APL_NULL_CHAR, 71);
+	memset(chr_pass_param,APL_NULL_CHAR,strlen(p_argv[9])); 	/* pj */
+
+	if(APL_FAILURE == CO_RtvSysParams(l_debug_info_ptr))
+		APL_GOBACK_FAIL
+
+	strcpy(chr_g_bill_dep,l_invoice_systemparam_struct_h.b_basis);
+	g_late_txn_days = l_invoice_systemparam_struct_h.late_dl_days_a;
+	strcpy(chr_g_cb_code,l_mt_core_sys_params_struct_h.custody_clt_cd);
+
+	strcpy(chr_g_dom_ccy,g_mt_commonsys_params_struct_h.dom_ccy);
+	strcpy(chr_g_country,g_mt_commonsys_params_struct_h.nation_code);
+
+	APL_IF_DEBUG
+	{
+   		CO_ProcMonitor(APL_OUT_FILE,"Batch table SYS_BATCHPROC locking in progress",NULL,NULL);
+	}
+
+	memset(chr_g_batch_in_proc_rowid,APL_NULL_CHAR,APL_ROWID_LEN);
+	strcpy(l_sys_batchproc_struct_hb.process_name, p_argv[0]);
+	strcpy(l_sys_batchproc_struct_hb.proc_init, p_argv[1]);
+	strcpy(l_sys_batchproc_struct_hb.start_dt, p_argv[2]);
+	strcpy(l_sys_batchproc_struct_hb.status_ind, "started");
+
+
+	EXEC SQL SELECT ROWID, STATUS, PROCESSING_STATUS
+	INTO :chr_g_batch_in_proc_rowid:int_i_batch_in_proc_rowid,
+		  :l_sys_batchproc_struct_hb.status_ind:l_sys_batchproc_struct_i.i_status_ind,
+		  :l_sys_batchproc_struct_hb.processing_status:l_sys_batchproc_struct_i.i_restart_info
+   	FROM SYS_BATCHPROC
+	WHERE ((PROCESS_NAME = :l_sys_batchproc_struct_hb.process_name) AND
+			(STARTDATE = :l_sys_batchproc_struct_hb.start_dt) AND
+			(STATUS = :l_sys_batchproc_struct_hb.status_ind))
+   	FOR UPDATE OF STATUS, PROCESSING_STATUS;
+
+	if ( sqlca.sqlcode < 0 )
+	{
+		int_retstat = IV_CRITCAL_ERROR_IND;	
+
+		CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, ltoa(sqlca.sqlcode),
+		    APL_NULL_STRING, APL_NULL_STRING,
+		    __LINE__, __FILE__);
+   	
+		CO_ProcMonitor(TechRep,"Could not lock Batch in Proc Row\n",NULL,NULL);
+
+		APL_GOBACK_FAIL
+	}
+
+	if ( l_sys_batchproc_struct_i.i_restart_info == -1 )
+	{
+		strcpy(l_sys_batchproc_struct_hb.processing_status, " ");
+		memset(chr_l_restart_phase, APL_NULL_CHAR, 2); 
+	}
+	else
+	{
+		strcpy(chr_init_restart_data,l_sys_batchproc_struct_hb.processing_status);
+		strcpy(chr_l_restart_phase,strtok_r(chr_init_restart_data,";",&chr_respoint));
+		/* Fix */
+		if (chr_respoint != NULL)
+		strcpy(chr_l_restart_client,strtok_r(NULL,";",&chr_respoint));
+	}
+
+	if (strlen(chr_l_restart_phase) == 0) 
+	{
+		strcpy(chr_l_restart_phase,"A");
+		strcpy(chr_l_restart_client," ");
+		strcpy(chr_h_restart_client," ");
+		strcpy(chr_g_restart_client," ");
+	}
+	else
+	{
+		if (strlen(chr_l_restart_client) == 0)
+		{
+			strcpy(chr_h_restart_client," ");
+			strcpy(chr_g_restart_client," ");
+		}
+		else
+		{
+			strcpy(chr_h_restart_client,chr_l_restart_client);
+			strcpy(chr_g_restart_client,chr_l_restart_client);
+		}
+	} 
+
+
+	APL_IF_DEBUG
+	{
+   		CO_ProcMonitor(APL_OUT_FILE,"Bill Generation started",NULL,NULL);
+	}
+
+	memset(g_sys_ivcontrolparam_struct.b_prev_date, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(g_sys_ivcontrolparam_struct.b_upto_date, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(g_sys_ivcontrolparam_struct.b_processdt, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(g_sys_ivcontrolparam_struct.b_dlv_date, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(g_sys_ivcontrolparam_struct.last_dlv_date, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(g_sys_ivcontrolparam_struct.archival_dt, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(g_sys_ivcontrolparam_struct.last_rpt_date, APL_NULL_CHAR, APL_DATE_LEN);
+
+	g_sys_ivcontrolparam_struct.generate_ind = NULL;
+	g_sys_ivcontrolparam_struct.b_gen_ind = NULL;
+	g_sys_ivcontrolparam_struct.ae_ind = NULL;
+
+	int_retstat = IV_SUCCESS;
+
+	if(APL_FAILURE == IV_Rtv_IVCNTLPARAM(&g_sys_ivcontrolparam_struct,&int_retstat,l_debug_info_ptr))
+	{
+		if(int_retstat != IV_COLUMN_NULL_ERR)
+		{
+			fprintf(fp,"Error : Billing control parameters not found\n");
+			fflush(fp);
+			int_bl_err_level = 1;
+			if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+			{
+				CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+				CO_FreeErrLst(l_debug_info_ptr);
+			}
+			APL_GOBACK_FAIL
+		}
+	}
+
+	
+
+	strcpy(chr_h_bl_upto_dt,g_sys_ivcontrolparam_struct.b_upto_date);
+	strcpy(chr_g_bl_proc_dt,g_sys_ivcontrolparam_struct.b_processdt);
+	strcpy(chr_g_bl_prv_dt,g_sys_ivcontrolparam_struct.b_prev_date);
+	strcpy(chr_g_bl_upto_dt,chr_h_bl_upto_dt);
+	strcpy(chr_g_bl_sys_dt,p_argv[2]);
+
+	int_g_diff = 0;
+
+	printf("Current Billing Date is |%s|\n",chr_g_bl_sys_dt);
+
+	if(APL_SUCCESS == CO_Pro_DateComp(g_sys_ivcontrolparam_struct.b_processdt,
+	    				p_argv[2],&int_g_diff,l_debug_info_ptr))
+	{
+		if(int_g_diff < 0)
+		{
+			fprintf(fp,"Bill Generation not due today\n");
+			fflush(fp);
+			
+			EXEC SQL UPDATE SYS_BATCHPROC 
+						SET STATUS = 'completed',
+    						 STAT_DET = 'BILL GENERATION NOT DUE TODAY'
+				      WHERE 
+							 rowid = :chr_g_batch_in_proc_rowid; 
+							
+			APL_GOBACK_SUCCESS; 
+		
+		}
+	}
+
+	int_g_diff = 0;
+
+	if(APL_SUCCESS == CO_Pro_DateComp(g_sys_ivcontrolparam_struct.b_prev_date,
+	    				g_sys_ivcontrolparam_struct.b_upto_date,
+					&int_g_diff,l_debug_info_ptr))
+	{
+		if(int_g_diff < 0)
+		{
+			fprintf(fp,"Previous Billing date not set correctly\n");
+			fflush(fp);
+			APL_GOBACK_FAIL
+		}
+	}
+
+	
+
+	if(g_sys_ivcontrolparam_struct.ae_ind == 'Y')
+	{
+		fprintf(fp,"Accounting entries already generated\n");
+		fflush(fp);
+		APL_GOBACK_FAIL
+	}
+
+	/* Changes by Bageshri for Provisional Bill Reset Functionality */
+	if(g_sys_ivcontrolparam_struct.b_gen_ind  == 'Y')
+	{
+		fprintf(fp,"Provisional Bill already generated. Please reset provisional bill generation first.\n");
+		fflush(fp);
+		APL_GOBACK_FAIL
+	}
+
+	strcpy(chr_pass_str,p_argv[9]);
+	chr_pass_param = strtok_r(chr_pass_str,",",&k);
+	
+	if( !strlen(chr_pass_param) )
+	{
+		fprintf(fp,"Error in generation flag passed to bill generation\n");
+		fflush(fp);
+		APL_GOBACK_FAIL
+	}
+
+	chr_regen_flg = chr_pass_param[0];
+
+	if(chr_regen_flg == 'N' && g_sys_ivcontrolparam_struct.generate_ind == 'Y')
+	{
+		fprintf(fp, "Bills Already Generated. Please Regenerate.\n");
+		fflush(fp);
+		APL_GOBACK_FAIL
+	}
+	
+	if ((chr_regen_flg == 'Y'|| chr_regen_flg == 'R') && g_sys_ivcontrolparam_struct.generate_ind == 'N')
+	{
+		fprintf(fp, "Bills Already Delivered.\n");
+		fflush(fp);
+		APL_GOBACK_FAIL
+	}
+	
+	/* HDFCIV_004 Just extra check so that reset don't happen when bills are delivered */
+	if (chr_regen_flg == 'S' && g_sys_ivcontrolparam_struct.generate_ind == 'N')
+	{
+		fprintf(fp, "Bills Already Delivered.\n");
+		fflush(fp);
+		APL_GOBACK_FAIL
+	}
+
+		/* HDFCIV_004  PJ Function called to reset bills generated */
+			if (chr_regen_flg == 'S' && g_sys_ivcontrolparam_struct.generate_ind == 'Y' )
+			{
+				/*Added by siva.ganapathi for ISKB_2470 on 07-Dec-2010 -- started*/
+
+				if ( g_sys_ivcontrolparam_struct.ae_ind == 'U' )
+				{	  
+					  fprintf(fp,"Accounting entries are generated and passed for few clients \n");
+					  fprintf(fp,"Cannot reset the Bill generation  \n");
+					  printf("Accounting entries are generated and passed for few clients \n");
+					  printf("Cannot reset the Bill generation \n");
+					  fflush(fp);
+					  fflush(stdout);
+						
+						EXEC SQL UPDATE SYS_BATCHPROC
+							  SET status = 'completed',
+									STAT_DET = 'Cannot Reset Bills'
+											  WHERE rowid = :chr_g_batch_in_proc_rowid;
+
+						if ( sqlca.sqlcode < 0 )
+						{
+							  int_retstat = IV_CRITCAL_ERROR_IND;
+							  CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, ltoa(sqlca.sqlcode),
+												APL_NULL_STRING, APL_NULL_STRING,__LINE__, __FILE__);
+
+							  printf("\n In first loop sql error during updation of sys_batchproc is %d",sqlca.sqlcode);
+							  fflush(stdout);
+							  CO_ProcMonitor(TechRep,"Could not Update Row in table SYS_BATCHPROC\n",NULL,NULL);
+							  APL_GOBACK_FAIL
+						}
+						  EXEC SQL COMMIT;
+
+						  APL_GOBACK_SUCCESS
+				 }
+				
+				if ( g_sys_ivcontrolparam_struct.ae_ind == 'G' || g_sys_ivcontrolparam_struct.ae_ind == 'N'  )
+				{
+					EXEC SQL SELECT COUNT(*) INTO :l_ae_pass_count:i_ae_pass_count
+							 FROM PRO_ACCTENT
+							 WHERE VAL_DATE = 		to_char(to_date(:g_sys_ivcontrolparam_struct.b_upto_date,'DD/MM/YYYY hh24:mi:ss'),'YYYYMMDD')
+							 AND MODULE_IND='B'
+						     AND STATUS = 'P';
+
+					printf("\n l_ae_pass_count is %d and indicator is %d ",l_ae_pass_count,sqlca.sqlcode);
+
+					
+					if ( l_ae_pass_count > 0)
+					{
+					  fprintf(fp,"Accounting entries are generated and passed for few clients \n");
+					  fprintf(fp,"Cannot reset the Bill generation  \n");
+					  printf("Accounting entries are generated and passed for few clients \n");
+					  printf("Cannot reset the Bill generation \n");
+					  fflush(fp);
+					  fflush(stdout);
+
+						EXEC SQL UPDATE SYS_BATCHPROC
+							  SET status = 'completed',
+							  STAT_DET = 'Cannot Reset Bills'
+							  WHERE rowid = :chr_g_batch_in_proc_rowid;
+
+						if ( sqlca.sqlcode < 0 )
+						{
+							  int_retstat = IV_CRITCAL_ERROR_IND;
+							  CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, ltoa(sqlca.sqlcode),
+												APL_NULL_STRING, APL_NULL_STRING,__LINE__, __FILE__);
+
+							  printf("\n In second loop sql error during updation of sys_batchproc is %d",sqlca.sqlcode);
+							  fflush(stdout);
+							  CO_ProcMonitor(TechRep,"Could not Update Row in table SYS_BATCHPROC\n",NULL,NULL);
+							  APL_GOBACK_FAIL
+						}
+						  EXEC SQL COMMIT;
+
+						  APL_GOBACK_SUCCESS
+
+					  APL_GOBACK_SUCCESS
+					}
+				}	
+
+				/*Added by siva.ganapathi for ISKB_2470 on 07-Dec-2010 -- Ended*/
+
+				int_retstat = IV_SUCCESS;
+				if(APL_FAILURE  == IV_ResetBillGeneration(&chr_h_bl_upto_dt, 
+									&int_retstat,
+									l_debug_info_ptr))
+				{
+					int_bl_err_level = 1;
+					if(int_retstat == IV_CRITCAL_ERROR_IND)
+					{
+						if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+						{
+							CO_ProcMonitor(TechRep,"Error in resetting bills generated",l_debug_info_ptr,NULL);
+							CO_FreeErrLst(l_debug_info_ptr);
+						}
+					}
+					APL_GOBACK_FAIL
+				}
+				
+				/* shailesh Retrofit from HDFC 30-05-2008 -- START */
+
+				printf("\n upadting SYS_BATCHPROC ---------------");
+
+				EXEC SQL UPDATE SYS_BATCHPROC
+						  SET status = 'completed',
+								STAT_DET = 'BILL RESET COMPLETED'
+										  WHERE rowid = :chr_g_batch_in_proc_rowid;
+
+				if ( sqlca.sqlcode < 0 )
+				{
+						  int_retstat = IV_CRITCAL_ERROR_IND;
+
+
+						  CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, ltoa(sqlca.sqlcode),
+												APL_NULL_STRING, APL_NULL_STRING,__LINE__, __FILE__);
+
+						  CO_ProcMonitor(TechRep,"Could not Update Row in table SYS_BATCHPROC\n",NULL,NULL);
+
+						  APL_GOBACK_FAIL
+				}
+
+				EXEC SQL COMMIT;
+
+				if ( sqlca.sqlcode < 0 )
+				{
+						  int_retstat = IV_CRITCAL_ERROR_IND;
+
+
+						  CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, ltoa(sqlca.sqlcode),
+												APL_NULL_STRING, APL_NULL_STRING,__LINE__, __FILE__);
+
+						  CO_ProcMonitor(TechRep,"Could not Commit\n",NULL,NULL);
+
+						  APL_GOBACK_FAIL
+				}	
+				printf("\ncommit done for SYS_BATCHPROC ---------------");
+
+				/* shailesh Retrofit from HDFC 30-05-2008 -- END*/
+
+				/* Since this activity don't require any fee check and etc we return back from here */
+				APL_GOBACK_SUCCESS
+			}
+        
+        l_viber_condexists = 0;
+
+        
+        if( CO_Chk_CntryEnabled( "BILL_GEN",
+                               "VERWITH_CHECK",
+                               &l_viber_condexists,
+                               l_debug_info_ptr
+                               ) == APL_FAILURE )
+        {
+                APL_GOBACK_FAIL
+        }
+
+        int_g_viber_condexists = l_viber_condexists; 
+
+  
+       if( CO_Chk_CntryEnabled( "VAT_REGULATION",
+                                "EU_AND_TR_REGULATION",
+                                &l_eu_condexists,
+                                l_debug_info_ptr
+                                ) == APL_FAILURE )
+       {
+              APL_GOBACK_FAIL
+       }
+ 
+
+
+	int_retstat = IV_SUCCESS;
+	if(APL_FAILURE  == IV_Chk_Fee(&int_retstat,l_debug_info_ptr))
+	{
+		int_bl_err_level = 1;
+		if(int_retstat == IV_CRITCAL_ERROR_IND)
+		{
+			if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+			{
+				CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+				CO_FreeErrLst(l_debug_info_ptr);
+			}
+		}
+	}
+	
+	int_retstat = IV_SUCCESS;
+	if(APL_FAILURE  == IV_Chk_FeeParam(&int_retstat,l_debug_info_ptr))
+	{
+		int_bl_err_level = 1;
+		if(int_retstat == IV_CRITCAL_ERROR_IND)
+		{
+			if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+			{
+				CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+				CO_FreeErrLst(l_debug_info_ptr);
+			}
+		}
+	}
+	
+	int_retstat = IV_SUCCESS;
+	if(APL_FAILURE == IV_Chk_MktPrc(&int_retstat,l_debug_info_ptr))
+	{
+		int_bl_err_level = 1;
+		if(int_retstat == IV_CRITCAL_ERROR_IND)
+		{
+			if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+			{
+				CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+				CO_FreeErrLst(l_debug_info_ptr);
+			}
+		}
+	}
+	
+	int_retstat = IV_SUCCESS;
+	if(APL_FAILURE == IV_Chk_OthSrv(&int_retstat,l_debug_info_ptr))
+	{
+		int_bl_err_level = 1;
+		if(int_retstat == IV_CRITCAL_ERROR_IND)
+		{
+			if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+			{
+				CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+				CO_FreeErrLst(l_debug_info_ptr);
+			}
+		}
+	}
+	
+	int_retstat = IV_SUCCESS;
+	if(APL_FAILURE == IV_Chk_CcySetup(&int_retstat,l_debug_info_ptr))
+	{
+		int_bl_err_level = 1;
+		if(int_retstat == IV_CRITCAL_ERROR_IND)
+		{
+			if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+			{
+				CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+				CO_FreeErrLst(l_debug_info_ptr);
+			}
+		}
+	}
+
+	
+
+	int_retstat = IV_SUCCESS;
+	if(APL_FAILURE == IV_Chk_Pymt(&int_retstat,l_debug_info_ptr))
+	{
+		int_bl_err_level = 1;
+		if(int_retstat == IV_CRITCAL_ERROR_IND)
+		{
+			if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+			{
+				CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+				CO_FreeErrLst(l_debug_info_ptr);
+			}
+		}
+	}
+
+	/* HDFCIV_004 Rohit No Admin charges for India specific */
+	int_retstat = IV_SUCCESS;
+	IF_COND_NOT_EXISTS("ADMIN_CHARGE","NO_TXN_ADMIN")
+	{
+   		if(APL_FAILURE == IV_Chk_TxnAdmFeeCcy(&int_retstat,l_debug_info_ptr))
+   		{
+      			int_bl_err_level = 1;
+      			if(int_retstat == IV_CRITCAL_ERROR_IND)
+      			{
+         			if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+         			{
+            				CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+            				CO_FreeErrLst(l_debug_info_ptr);
+         			}
+      			}
+   		}
+	}
+
+  
+   	int_retstat = IV_SUCCESS;
+   	if(l_eu_condexists != 0 )
+   	{
+     		if(APL_FAILURE == IV_Chk_Footnote(&int_retstat,l_debug_info_ptr))
+     		{
+         		fprintf(fp,"Error : Checking in information retstat is |%d|",int_retstat);
+         		fflush(fp);
+         		int_bl_err_level = 1;
+         		*int_p_retstat = int_retstat;
+         		if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+         		{
+             			CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+             			CO_FreeErrLst(l_debug_info_ptr);
+         		}
+     		}
+   	}
+ 
+	
+ 	if(k == (char *)NULL)
+		strcpy(chr_pass_param, APL_NULL_STRING);
+	else
+ 		chr_pass_param = strtok_r(NULL,";",&k);
+ 
+ 	
+	if (chr_pass_param == (char *)NULL)
+	{
+		chr_pass_param = (char *)calloc(strlen(p_argv[9]),sizeof(char));
+		APL_MALLOC_FAIL(chr_pass_param);
+		memset(chr_pass_param,APL_NULL_CHAR, strlen(p_argv[9]));
+		strcpy(chr_pass_param, APL_NULL_STRING);
+ 	}
+	
+	
+	if (strlen(chr_pass_param)) 
+		strcpy(chr_acct_pass_str,chr_pass_param);
+	
+
+	
+	if( !strlen(chr_pass_param) )
+	{
+		int_retstat = IV_SUCCESS;
+		if(APL_FAILURE == IV_Chk_FeeSetup(chr_pass_param,&int_retstat,l_debug_info_ptr,chr_regen_flg))
+		{
+			int_bl_err_level = 1;
+			if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+			{
+				CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+				CO_FreeErrLst(l_debug_info_ptr);
+			}
+		}
+		
+		if(int_bl_err_level == 1)
+		{
+			APL_GOBACK_FAIL
+		}
+	}
+
+
+
+	switch (chr_l_restart_phase[0]) 
+	{
+		case INDIVIDUAL_BILLS:
+			printf("In case INDIVIDUAL_BILLS\n");
+			fprintf(fp,"*********** INDIVIDUAL_BILLS ******************\n");
+			if (chr_regen_flg == 'N') 
+			{
+				/*	ISKB_2316	Reset Sequence for Bill Detail Print	*/
+				EXEC SQL UPDATE PRO_GSEQNUM
+				SET last_usednum =	seq_start 
+				where sequence_name = 'IV_PRINT_NO_SEQ';
+
+				IS_ANY_ORA_ERROR;
+				printf("Reset Sequence of IV_PRINT_NO_SEQ SqlCode |%d|\n",sqlca.sqlcode);
+
+				EXEC SQL DECLARE bill_cur CURSOR FOR
+				SELECT  a.*
+				FROM IV_CLIENTSETUP a, MT_CLIENT b
+				WHERE a.CLIENT = b.CLN_CODE AND
+						a.STAT_IND = 'A' AND
+						a.DATE_OF_INPUT <=  :chr_h_bl_upto_dt AND
+						a.CLIENT != :chr_g_cb_code AND
+						b.STATUS NOT IN ('CA','CU')AND 
+						a.CLIENT > :chr_h_restart_client
+				ORDER BY a.CLIENT;
+
+				EXEC SQL OPEN bill_cur;
+
+				if(sqlca.sqlcode < 0)
+				
+				{
+					fprintf(TechRep,"Error in accessing table IV_CLIENTSETUP.\n");
+					fflush(TechRep);
+				}
+
+				IS_ANY_ORA_ERROR;
+
+				int_is_bill_cur_open = 1;
+
+				for( ; ; )
+				{
+					int_bl_err_level = 0;
+					
+					memset(&l_iv_clt_setup_struct, NULL, sizeof(IV_CLIENTSETUP_STRUCT));
+                                        memset(&l_i_iv_clientsetup_struct, NULL, sizeof(I_IV_CLIENTSETUP_STRUCT));
+
+					EXEC SQL FETCH bill_cur INTO :l_iv_clt_setup_struct:l_i_iv_clientsetup_struct;
+
+					if ( sqlca.sqlcode < 0 )
+					{
+						int_retstat = IV_CRITCAL_ERROR_IND;
+
+						int_bl_err_level = 1;
+						CO_ProcMonitor(TechRep, "Failed to fetch from the cursor for client.\n", NULL, NULL);
+					}
+
+					if( APL_ZERO_RESULT_SET )
+						break;
+
+					printf("Client to Bill |%s|\n",l_iv_clt_setup_struct.client);
+					chr_g_bl_gen = l_iv_clt_setup_struct.b_gen_ind;
+					strcpy(chr_g_bl_ccycode,l_iv_clt_setup_struct.b_ccycd);
+					strcpy(chr_g_fee_ccycode,l_iv_clt_setup_struct.fees_ccy);   
+					strcpy(h_dl_client,l_iv_clt_setup_struct.client);
+					
+					strcpy(chr_l_client_a, h_dl_client);
+
+					if(l_i_iv_clientsetup_struct.i_def_fee_clt == -1)
+						strcpy(l_iv_clt_setup_struct.default_feeclt," ");
+					
+					strcpy(chr_g_def_fee_acc,l_iv_clt_setup_struct.default_feeclt);
+
+					if(l_i_iv_clientsetup_struct.i_lstdlosamount == -1)
+						l_iv_clt_setup_struct.last_lost_amt = 0;
+
+					if(l_i_iv_clientsetup_struct.i_tot_os_amount == -1)
+						l_iv_clt_setup_struct.total_osamount = 0;
+
+               
+					int_g_ccy_decimallen =RNDDEC;
+               
+					int_g_blccy_decimallen = RNDDEC;
+			 
+ 					 
+   				 	g_exchg_rt_fee_bl = 1.0;      
+   				 	int_retstat = IV_SUCCESS;
+
+   			    		if(APL_FAILURE == IV_Rtv_ExchRate(chr_g_fee_ccycode,chr_g_bl_ccycode,
+							chr_g_bl_upto_dt,&g_exchg_rt_fee_bl, 
+							&int_retstat,l_debug_info_ptr))
+   					{
+      						fprintf(fp,"Error : Exchange Rate not found for currency %s %s\n",chr_g_fee_ccycode,chr_g_bl_ccycode);
+      						fflush(fp);
+      					
+						int_bl_err_level = 1;
+	      					*int_p_retstat = int_retstat;
+      						
+						if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+      						{
+         						CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+         						CO_FreeErrLst(l_debug_info_ptr);
+      						}
+   					}
+					
+					#ifdef BILLDEBUG 
+   
+   		        		fprintf(TestRep, "Exchange Rate Between Fee Currency and Billing Currency for client %s is %lf\n",h_dl_client, g_exchg_rt_fee_bl);
+      		     			fflush(TestRep);
+   
+       	      				#endif 
+   				
+					
+					int_retstat = IV_SUCCESS;
+					if(APL_FAILURE == IV_Proc_GenerateBill(h_dl_client,&int_retstat,
+										l_debug_info_ptr))
+					{
+						if(int_retstat == IV_CRITCAL_ERROR_IND)
+						{
+							if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+							{
+								CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+								CO_FreeErrLst(l_debug_info_ptr);
+							}
+
+							fprintf(TechRep,"Fatal errors found in calculation of bill for Individual Bills.\n");
+							fflush(TechRep);
+						}
+					}
+					
+					int_retstat = IV_SUCCESS;
+					if(APL_FAILURE == IV_Proc_MinFeeAdjust('I',h_dl_client, &int_retstat,
+										l_debug_info_ptr))
+					{
+						if(int_retstat == IV_CRITCAL_ERROR_IND)
+						{
+							fprintf(TechRep,"Fatal errors found in calculation of bill for Min. Fee Adj.\n");
+							fflush(TechRep);
+						}
+					}
+										/*Added by shruthi for ISKB_1737 start*/
+				int_retstat = IV_SUCCESS;
+					if(APL_FAILURE == IV_Proc_AnnMinFeeAdjust(l_iv_clt_setup_struct,&chr_h_bl_upto_dt, &int_retstat,
+												l_debug_info_ptr))
+					{Alert("Calling IV_Proc_AnnMinFeeAdjust fn");
+								if(int_retstat == IV_CRITCAL_ERROR_IND)
+						{
+									fprintf(TechRep,"Fatal errors found in calculation of bill for Min. Fee Adj.\n");
+									fflush(TechRep);
+						}
+					}
+					
+					/*Added by shruthi for ISKB_1737 end*/
+					if(int_bl_err_level == 1)
+					{
+						fprintf(fp,"Errors found in calculation of bill. Please regenerate bill for client %s\n", h_dl_client);
+						fflush(fp);
+						int_bl_err_tot = 1;
+					}
+					
+					
+					int_l_commitcounter++; 
+
+					if ( !(int_l_commitcounter % COMMIT_COUNT_F) )
+					{
+
+						sprintf(chr_h_update_restart, "%c", INDIVIDUAL_BILLS);
+						strcat(chr_h_update_restart, ";");
+						strcat(chr_h_update_restart, chr_l_client_a);
+
+						sprintf(chr_h_stat_info_buffer, "INDIVIDUAL BILLS GENERATED FOR %d ACCOUNTS",int_l_commitcounter);
+
+						EXEC SQL UPDATE SYS_BATCHPROC 
+								SET PROCESSING_STATUS = :chr_h_update_restart,
+									STAT_DET = :chr_h_stat_info_buffer
+								WHERE ROWID = :chr_g_batch_in_proc_rowid;
+
+						if ( sqlca.sqlcode < 0 )
+						{
+							int_retstat = IV_CRITCAL_ERROR_IND;
+	
+
+							CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, ltoa(sqlca.sqlcode),
+								 APL_NULL_STRING, APL_NULL_STRING,__LINE__, __FILE__);
+						
+							CO_ProcMonitor(TechRep,"Could not Update Batch in Proc Row\n",NULL,NULL);
+
+							APL_GOBACK_FAIL 
+						}
+
+						EXEC SQL COMMIT;
+
+						if ( sqlca.sqlcode < 0 )
+						{
+							int_retstat = IV_CRITCAL_ERROR_IND;
+
+							CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, ltoa(sqlca.sqlcode),
+							 APL_NULL_STRING, APL_NULL_STRING,__LINE__, __FILE__);
+						
+							CO_ProcMonitor(TechRep,"Could not Commit\n",NULL,NULL);
+
+							APL_GOBACK_FAIL 
+						}
+
+						EXEC SQL SELECT ROWID, STATUS, PROCESSING_STATUS
+							 INTO :chr_g_batch_in_proc_rowid:int_i_batch_in_proc_rowid,
+							  :l_sys_batchproc_struct_hb.status_ind:l_sys_batchproc_struct_i.i_status_ind,
+							  :l_sys_batchproc_struct_hb.processing_status:l_sys_batchproc_struct_i.i_restart_info
+						FROM SYS_BATCHPROC
+						WHERE ((PROCESS_NAME = :l_sys_batchproc_struct_hb.process_name) AND
+								(STARTDATE = :l_sys_batchproc_struct_hb.start_dt) AND
+								(STATUS = :l_sys_batchproc_struct_hb.status_ind))
+						FOR UPDATE OF STATUS, PROCESSING_STATUS;
+
+						if ( sqlca.sqlcode < 0 )
+						{
+							int_retstat = IV_CRITCAL_ERROR_IND;
+
+							CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, 
+									ltoa(sqlca.sqlcode),
+								 	APL_NULL_STRING, APL_NULL_STRING,
+								 	__LINE__, __FILE__);
+							
+							CO_ProcMonitor(TechRep,"Could not lock Batch in Proc Row\n",NULL,NULL);
+
+							APL_GOBACK_FAIL
+						}
+
+						if ( l_sys_batchproc_struct_i.i_restart_info == -1 )
+						{
+							strcpy(l_sys_batchproc_struct_hb.processing_status, APL_NULL_STRING);
+						}
+						else
+						{
+							strcpy(chr_init_restart_data,l_sys_batchproc_struct_hb.processing_status);
+						}
+					}
+				}
+
+				EXEC SQL CLOSE bill_cur;
+				int_is_bill_cur_open = 0;
+				
+				sprintf(chr_h_update_restart, "%c", INDIVIDUAL_BILLS); 
+				strcat(chr_h_update_restart, ";");
+				strcat(chr_h_update_restart, chr_l_client_a);
+
+				EXEC SQL UPDATE SYS_BATCHPROC 
+						SET PROCESSING_STATUS = :chr_h_update_restart,
+							STAT_DET = 'INDIVIDUAL BILLS GENERATED'
+						WHERE ROWID = :chr_g_batch_in_proc_rowid;
+
+				if ( sqlca.sqlcode < 0 )
+				{
+					int_retstat = IV_CRITCAL_ERROR_IND;
+
+
+					CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, ltoa(sqlca.sqlcode),
+						 APL_NULL_STRING, APL_NULL_STRING,__LINE__, __FILE__);
+						
+					CO_ProcMonitor(TechRep,"Could not Update Batch in Proc Row\n",NULL,NULL);
+
+					APL_GOBACK_FAIL 
+				}
+
+				EXEC SQL COMMIT;
+
+
+				if ( sqlca.sqlcode < 0 )
+				{
+					int_retstat = IV_CRITCAL_ERROR_IND;
+
+					CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, ltoa(sqlca.sqlcode),
+						 APL_NULL_STRING, APL_NULL_STRING,__LINE__, __FILE__);
+						
+					CO_ProcMonitor(TechRep,"Could not Commit\n",NULL,NULL);
+
+					APL_GOBACK_FAIL 
+				}
+			
+				EXEC SQL SELECT ROWID, STATUS, PROCESSING_STATUS
+				INTO :chr_g_batch_in_proc_rowid:int_i_batch_in_proc_rowid,
+					  :l_sys_batchproc_struct_hb.status_ind:l_sys_batchproc_struct_i.i_status_ind,
+					  :l_sys_batchproc_struct_hb.processing_status:l_sys_batchproc_struct_i.i_restart_info
+				FROM SYS_BATCHPROC
+				WHERE ((PROCESS_NAME = :l_sys_batchproc_struct_hb.process_name) AND
+						(STARTDATE = :l_sys_batchproc_struct_hb.start_dt) AND
+						(STATUS = :l_sys_batchproc_struct_hb.status_ind))
+				FOR UPDATE OF STATUS, PROCESSING_STATUS;
+
+				if ( sqlca.sqlcode < 0 )
+				{
+					int_retstat = IV_CRITCAL_ERROR_IND;				
+
+
+					CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, ltoa(sqlca.sqlcode),
+					 APL_NULL_STRING, APL_NULL_STRING,__LINE__, __FILE__);
+							
+					CO_ProcMonitor(TechRep,"Could not lock Batch in Proc Row\n",NULL,NULL);
+
+					APL_GOBACK_FAIL
+				}
+
+				if ( l_sys_batchproc_struct_i.i_restart_info == -1 )
+				{
+					strcpy(l_sys_batchproc_struct_hb.processing_status, APL_NULL_STRING);
+				}
+				else
+				{
+					strcpy(chr_init_restart_data,l_sys_batchproc_struct_hb.processing_status);
+				}
+				
+				if(int_bl_err_level == 1)
+				{
+					int_bl_err_tot = 1;
+				}
+			}
+			else  
+			{
+				if(chr_pass_param != (char *)NULL)
+				{
+					if(strlen(chr_pass_param) != 0)
+					{
+						while(strlen(chr_pass_param) != 0)
+						{
+							strcpy(h_dl_client,chr_pass_param);
+							int_retstat = IV_SUCCESS;
+							if(APL_FAILURE == IV_Chk_FeeSetup(h_dl_client,
+									&int_retstat,l_debug_info_ptr,
+									chr_regen_flg))
+							{
+								int_bl_err_level = 1;
+								if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+								{
+									CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+									CO_FreeErrLst(l_debug_info_ptr);
+								}
+							}
+							
+ 							if(k == (char *)NULL)
+								strcpy(chr_pass_param, APL_NULL_STRING);
+							else
+								chr_pass_param = strtok_r(NULL,";",&k);
+							
+							strcat(chr_acct_pass_str,";");
+							if(chr_pass_param == (char *)NULL)
+								break;
+							strcat(chr_acct_pass_str,chr_pass_param);
+						}
+					}
+				}	
+				
+				if(int_bl_err_level == 1)
+				{
+					APL_GOBACK_FAIL
+				}
+				
+
+				EXEC SQL DECLARE selaccounts_cur CURSOR FOR 
+				SELECT CLIENT 
+				FROM IV_SELCLIENT 
+				WHERE CLIENT > :chr_h_restart_client
+				ORDER BY CLIENT;
+
+				EXEC SQL OPEN selaccounts_cur;
+				
+				if(sqlca.sqlcode < 0)
+				
+				{
+					int_retstat = IV_CRITCAL_ERROR_IND;
+					fprintf(TechRep,"Error in accessing table IV_SELCLIENT.\n");
+					fflush(TechRep);
+				}
+
+				IS_ANY_ORA_ERROR;
+
+				int_is_selclients_cur_open = 1;
+
+				for( ; ; )
+				{
+					int_bl_err_level = 0; 
+					memset(h_dl_client, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+
+					EXEC SQL FETCH selaccounts_cur 
+					INTO :h_dl_client;
+					if ( sqlca.sqlcode < 0 )
+					{
+						int_retstat = IV_CRITCAL_ERROR_IND;
+						int_bl_err_level = 1;
+						CO_ProcMonitor(TechRep, "Failed to fetch from the cursor for client.\n", NULL, NULL);
+					}
+
+					IS_ANY_ORA_ERROR
+
+					if( APL_ZERO_RESULT_SET )
+						break;
+
+					strcpy(chr_l_client_a, h_dl_client);
+
+          
+
+          				memset(&l_iv_clt_setup_struct, NULL, sizeof(IV_CLIENTSETUP_STRUCT));
+          				memset(&l_i_iv_clientsetup_struct, NULL, sizeof(I_IV_CLIENTSETUP_STRUCT));
+
+					EXEC SQL SELECT  a.*
+					INTO :l_iv_clt_setup_struct:l_i_iv_clientsetup_struct
+					FROM IV_CLIENTSETUP a, MT_CLIENT b
+					WHERE a.CLIENT = b.CLN_CODE AND
+							a.STAT_IND = 'A' AND
+							a.DATE_OF_INPUT <=  :chr_h_bl_upto_dt AND
+							a.CLIENT != :chr_g_cb_code AND
+							b.STATUS NOT IN ('CA','CU')AND 
+							a.CLIENT = :h_dl_client;
+
+					if ( sqlca.sqlcode < 0 )
+					{
+						int_retstat = IV_CRITCAL_ERROR_IND;
+						int_bl_err_level = 1;
+						CO_ProcMonitor(TechRep, "Failed to get Account Information for client.\n", NULL, NULL);
+						continue;
+					}
+
+					if( APL_ZERO_RESULT_SET )
+					{
+						int_retstat = IV_NO_DATA_FOUND_ERR;
+						int_bl_err_level = 1;
+						CO_ProcMonitor(TechRep, "Failed to get Account Information for client.\n", NULL, NULL);
+						continue;
+					}	
+
+
+					chr_g_bl_gen = l_iv_clt_setup_struct.b_gen_ind;
+					strcpy(chr_g_bl_ccycode,l_iv_clt_setup_struct.b_ccycd);
+					strcpy(chr_g_fee_ccycode,l_iv_clt_setup_struct.fees_ccy);  
+					strcpy(h_dl_client,l_iv_clt_setup_struct.client);
+
+					if(l_i_iv_clientsetup_struct.i_def_fee_clt == -1)
+						strcpy(l_iv_clt_setup_struct.default_feeclt," ");
+					
+					strcpy(chr_g_def_fee_acc,l_iv_clt_setup_struct.default_feeclt);
+
+					if(l_i_iv_clientsetup_struct.i_lstdlosamount == -1)
+						l_iv_clt_setup_struct.last_lost_amt = 0;
+
+					if(l_i_iv_clientsetup_struct.i_tot_os_amount == -1)
+						l_iv_clt_setup_struct.total_osamount = 0;
+
+			           	
+                
+					int_g_ccy_decimallen = RNDDEC;
+                     
+					int_g_blccy_decimallen = RNDDEC;
+
+				   
+                			g_exchg_rt_fee_bl = 1.0;
+                			
+					int_retstat = IV_SUCCESS;
+                			if(APL_FAILURE == IV_Rtv_ExchRate(chr_g_fee_ccycode,chr_g_bl_ccycode,
+									chr_g_bl_upto_dt,&g_exchg_rt_fee_bl, 
+									&int_retstat,l_debug_info_ptr))
+               				{
+                  				fprintf(fp,"Error : Exchange Rate not found for currency %s %s\n",chr_g_fee_ccycode,chr_g_bl_ccycode);
+                  				fflush(fp);
+                  				int_bl_err_level = 1;
+                  				*int_p_retstat = int_retstat;
+                  				
+						if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+                     				{
+                        				CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+                        				CO_FreeErrLst(l_debug_info_ptr);
+                     				}
+               				}
+               				
+					#ifdef BILLDEBUG 
+
+                 				fprintf(TestRep, "Exchange Rate Between Fee Currency and Billing Currency for client %s is %lf\n",h_dl_client, g_exchg_rt_fee_bl);
+                 			fflush(TestRep);
+
+               				#endif 
+               
+					/*Added by siva.ganapathi for ISKB_2470 on 07-Dec-2010 -- started*/
+
+					EXEC SQL SELECT COUNT(*) INTO :l_ae_pass_count:i_ae_pass_count
+					 FROM PRO_ACCTENT
+					 WHERE VAL_DATE = to_char(to_date(:chr_h_bl_upto_dt,'DD/MM/YYYY hh24:mi:ss'),'YYYYMMDD')
+					 AND STATUS = 'P';					
+					printf("\n sqlerror when fetching the details from PRO_ACCTENT is %d value is %d indicator is %d",sqlca.sqlcode,l_ae_pass_count,i_ae_pass_count);
+					
+					fflush(stdout);
+
+					IS_ANY_ORA_ERROR
+
+					if (l_ae_pass_count == 0)
+					{
+				                  	int_retstat = IV_SUCCESS;
+					                if(APL_FAILURE == IV_Proc_DelBillDet(h_dl_client,'I',&int_retstat,
+									l_debug_info_ptr))
+					                {
+						             int_bl_err_level = 1;
+						             if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+						             {
+							         CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+							         CO_FreeErrLst(l_debug_info_ptr);
+						              }
+					                 }
+					}
+
+					/*Added by siva.ganapathi for ISKB_2470 on 07-Dec-2010 -- Ended*/
+					
+					int_retstat = IV_SUCCESS;
+					if(APL_FAILURE == IV_Proc_GenerateBill(h_dl_client,&int_retstat,
+										l_debug_info_ptr))
+					{
+						if(int_retstat == IV_CRITCAL_ERROR_IND)
+						{
+							if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+							{
+								CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+								CO_FreeErrLst(l_debug_info_ptr);
+							}
+
+							fprintf(TechRep,"Fatal errors found in calculation of bill for GenerateBills.\n");
+							fflush(fp);
+						}
+					}
+					
+					if(int_bl_err_level == 1)
+					{
+						fprintf(fp,"Errors found in calculation of bill. Please regenerate bill for client %s\n", h_dl_client);
+						fflush(fp);
+						int_bl_err_tot = 1;
+					}
+
+					int_retstat = IV_SUCCESS;
+					if(APL_FAILURE == IV_Proc_MinFeeAdjust('I',h_dl_client, 
+								&int_retstat,l_debug_info_ptr))
+					{
+						if(int_retstat == IV_CRITCAL_ERROR_IND)
+						{
+							fprintf(TechRep,"Fatal errors found in calculation of bill for Ind. Min. Fee.\n");
+							fflush(TechRep);
+						}
+					}
+					
+					 
+					/*Added by shruthi for ISKB_1737 start*/
+                                           int_retstat = IV_SUCCESS;
+						Alert("ann_min_chrg |%lf|",l_iv_clt_setup_struct.ann_min_chrg);
+						Alert("ann_fee_month |%s|",l_iv_clt_setup_struct.ann_fee_month);
+							if(APL_FAILURE == IV_Proc_AnnMinFeeAdjust(l_iv_clt_setup_struct,chr_h_bl_upto_dt, &int_retstat,l_debug_info_ptr))
+							{ 
+								Alert("Calling IV_Proc_AnnMinFeeAdjust fn");
+								if(int_retstat == IV_CRITCAL_ERROR_IND)
+								{
+									fprintf(TechRep,"Fatal errors found in calculation of bill for Min. Fee Adj.\n");
+									fflush(TechRep);
+								}
+							}
+					
+					/*Added by shruthi for ISKB_1737 end*/
+					
+					if(int_bl_err_level == 1)
+					{
+						int_bl_err_tot = 1;
+					}
+
+					int_l_commitcounter++; 
+
+					if ( !(int_l_commitcounter % COMMIT_COUNT_F) )
+					{
+						sprintf(chr_h_update_restart, "%c", INDIVIDUAL_BILLS);
+						strcat(chr_h_update_restart, ";");
+						strcat(chr_h_update_restart, chr_l_client_a);
+
+						sprintf(chr_h_stat_info_buffer, "REGENERATED BILLS FOR %d ACCOUNTS", int_l_commitcounter);
+
+						EXEC SQL UPDATE SYS_BATCHPROC 
+								SET PROCESSING_STATUS = :chr_h_update_restart,
+									STAT_DET = :chr_h_stat_info_buffer
+								WHERE ROWID = :chr_g_batch_in_proc_rowid;
+
+						if ( sqlca.sqlcode < 0 )
+						{
+							int_retstat = IV_CRITCAL_ERROR_IND;
+
+
+							CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, ltoa(sqlca.sqlcode),
+								 APL_NULL_STRING, APL_NULL_STRING,__LINE__, __FILE__);
+						
+							CO_ProcMonitor(TechRep,"Could not Update Batch in Proc Row\n",NULL,NULL);
+
+							APL_GOBACK_FAIL
+						}
+	
+						EXEC SQL COMMIT;
+
+						if ( sqlca.sqlcode < 0 )
+						{
+							int_retstat = IV_CRITCAL_ERROR_IND;
+
+
+							CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, ltoa(sqlca.sqlcode),
+								 APL_NULL_STRING, APL_NULL_STRING,__LINE__, __FILE__);
+						
+							CO_ProcMonitor(TechRep,"Could not Commit\n",NULL,NULL);
+
+							APL_GOBACK_FAIL
+						}
+
+						EXEC SQL SELECT ROWID, STATUS, PROCESSING_STATUS
+						INTO :chr_g_batch_in_proc_rowid:int_i_batch_in_proc_rowid,
+							  :l_sys_batchproc_struct_hb.status_ind:l_sys_batchproc_struct_i.i_status_ind,
+							  :l_sys_batchproc_struct_hb.processing_status:l_sys_batchproc_struct_i.i_restart_info
+						FROM SYS_BATCHPROC
+						WHERE ((PROCESS_NAME = :l_sys_batchproc_struct_hb.process_name) AND
+								(STARTDATE = :l_sys_batchproc_struct_hb.start_dt) AND
+								(STATUS = :l_sys_batchproc_struct_hb.status_ind))
+						FOR UPDATE OF STATUS, PROCESSING_STATUS;
+
+						if ( sqlca.sqlcode < 0 )
+						{
+							int_retstat = IV_CRITCAL_ERROR_IND;
+				
+							CO_ProcMonitor(TechRep,"Could not lock Batch in Proc Row\n",NULL,NULL);
+						}
+
+						IS_ANY_ORA_ERROR
+
+						if ( l_sys_batchproc_struct_i.i_restart_info == -1 )
+						{
+							strcpy(l_sys_batchproc_struct_hb.processing_status, APL_NULL_STRING);
+						}
+						else
+						{
+							strcpy(chr_init_restart_data,l_sys_batchproc_struct_hb.processing_status);
+						}
+					}
+				}
+
+				EXEC SQL CLOSE selaccounts_cur;
+				int_is_selclients_cur_open = 0;
+			
+				if(int_bl_err_level == 1)
+				{
+					int_bl_err_tot = 1;
+				}
+				
+				sprintf(chr_h_update_restart, "%c", INDIVIDUAL_BILLS); 
+				strcat(chr_h_update_restart, ";");
+				strcat(chr_h_update_restart, chr_l_client_a);
+
+				EXEC SQL UPDATE SYS_BATCHPROC 
+						SET PROCESSING_STATUS = :chr_h_update_restart,
+							STAT_DET = 'INDIVIDUAL BILLS REGENERATED'
+						WHERE ROWID = :chr_g_batch_in_proc_rowid;
+
+				if ( sqlca.sqlcode < 0 )
+				{
+					int_retstat = IV_CRITCAL_ERROR_IND;
+
+
+					CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, ltoa(sqlca.sqlcode),
+						 APL_NULL_STRING, APL_NULL_STRING,__LINE__, __FILE__);
+						
+					CO_ProcMonitor(TechRep,"Could not Update Batch in Proc Row\n",NULL,NULL);
+
+					APL_GOBACK_FAIL
+				}
+
+				EXEC SQL COMMIT;
+
+				if ( sqlca.sqlcode < 0 )
+				{
+					int_retstat = IV_CRITCAL_ERROR_IND;
+
+
+					CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, ltoa(sqlca.sqlcode),
+						 APL_NULL_STRING, APL_NULL_STRING,__LINE__, __FILE__);
+						
+					CO_ProcMonitor(TechRep,"Could not Commit\n",NULL,NULL);
+
+					APL_GOBACK_FAIL
+				}
+
+				EXEC SQL SELECT ROWID, STATUS, PROCESSING_STATUS
+				INTO :chr_g_batch_in_proc_rowid:int_i_batch_in_proc_rowid,
+					  :l_sys_batchproc_struct_hb.status_ind:l_sys_batchproc_struct_i.i_status_ind,
+					  :l_sys_batchproc_struct_hb.processing_status:l_sys_batchproc_struct_i.i_restart_info
+				FROM SYS_BATCHPROC
+				WHERE ((PROCESS_NAME = :l_sys_batchproc_struct_hb.process_name) AND
+						(STARTDATE = :l_sys_batchproc_struct_hb.start_dt) AND
+						(STATUS = :l_sys_batchproc_struct_hb.status_ind))
+				FOR UPDATE OF STATUS, PROCESSING_STATUS;
+
+				if ( sqlca.sqlcode < 0 )
+				{
+				int_retstat = IV_CRITCAL_ERROR_IND;
+				
+
+					CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, ltoa(sqlca.sqlcode),
+					 APL_NULL_STRING, APL_NULL_STRING,__LINE__, __FILE__);
+							
+					CO_ProcMonitor(TechRep,"Could not lock Batch in Proc Row\n",NULL,NULL);
+
+					APL_GOBACK_FAIL
+				}
+
+				if ( l_sys_batchproc_struct_i.i_restart_info == -1 )
+				{
+					strcpy(l_sys_batchproc_struct_hb.processing_status, APL_NULL_STRING);
+				}
+				else
+				{
+					strcpy(chr_init_restart_data,l_sys_batchproc_struct_hb.processing_status);
+				}
+			}
+			
+			/*Added by siva.ganapathi for ISKB_2470 on 07-Dec-2010 -- Started*/
+			if (l_ae_pass_count == 0)
+			{
+	              		int_retstat = IV_SUCCESS;
+		            	if(APL_FAILURE == IV_Proc_DelBillDet(APL_NULL_STRING,'C',&int_retstat,l_debug_info_ptr))
+			        {
+				      int_bl_err_level = 1;
+				      if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+				      {
+					     CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+					     CO_FreeErrLst(l_debug_info_ptr);
+				       }
+			         }
+
+			}
+			/*Added by siva.ganapathi for ISKB_2470 on 07-Dec-2010  -- Ended*/
+			if(int_bl_err_level == 1)
+			{
+				int_bl_err_tot = 1;
+			}
+
+			sprintf(chr_h_update_restart, "%c",CONSOLE_POS_IND);
+			strcat(chr_h_update_restart, ";");
+
+			EXEC SQL UPDATE SYS_BATCHPROC 
+				SET PROCESSING_STATUS = :chr_h_update_restart,
+					STAT_DET =  'CONSOLIDATING SAFEK'
+				WHERE ROWID = :chr_g_batch_in_proc_rowid;
+
+			if ( sqlca.sqlcode < 0 )
+			{
+				int_retstat = IV_CRITCAL_ERROR_IND;
+
+
+				CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, ltoa(sqlca.sqlcode),
+				 APL_NULL_STRING, APL_NULL_STRING,__LINE__, __FILE__);
+						
+				CO_ProcMonitor(TechRep,"Could not Update Batch in Proc Row\n",NULL,NULL);
+
+				APL_GOBACK_FAIL
+			}
+
+			EXEC SQL COMMIT;
+
+			if ( sqlca.sqlcode < 0 )
+			{
+				int_retstat = IV_CRITCAL_ERROR_IND;
+
+
+				CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, ltoa(sqlca.sqlcode),
+				 APL_NULL_STRING, APL_NULL_STRING,__LINE__, __FILE__);
+						
+				CO_ProcMonitor(TechRep,"Could not Commit\n",NULL,NULL);
+
+				APL_GOBACK_FAIL
+			}
+
+			EXEC SQL SELECT ROWID, STATUS, PROCESSING_STATUS
+			INTO :chr_g_batch_in_proc_rowid:int_i_batch_in_proc_rowid,
+				  :l_sys_batchproc_struct_hb.status_ind:l_sys_batchproc_struct_i.i_status_ind,
+				  :l_sys_batchproc_struct_hb.processing_status:l_sys_batchproc_struct_i.i_restart_info
+			FROM SYS_BATCHPROC
+			WHERE ((PROCESS_NAME = :l_sys_batchproc_struct_hb.process_name) AND
+					(STARTDATE = :l_sys_batchproc_struct_hb.start_dt) AND
+					(STATUS = :l_sys_batchproc_struct_hb.status_ind))
+			FOR UPDATE OF STATUS, PROCESSING_STATUS;
+
+			if ( sqlca.sqlcode < 0 )
+			{
+				int_retstat = IV_CRITCAL_ERROR_IND;
+				
+
+				CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, ltoa(sqlca.sqlcode),
+				 APL_NULL_STRING, APL_NULL_STRING,__LINE__, __FILE__);
+							
+				CO_ProcMonitor(TechRep,"Could not lock Batch in Proc Row\n",NULL,NULL);
+
+				APL_GOBACK_FAIL
+			}
+
+			if ( l_sys_batchproc_struct_i.i_restart_info == -1 )
+			{
+				strcpy(l_sys_batchproc_struct_hb.processing_status, APL_NULL_STRING);
+			}
+			else
+			{
+				strcpy(chr_init_restart_data,l_sys_batchproc_struct_hb.processing_status);
+			}
+
+			memset(chr_h_restart_client, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+			memset(chr_g_restart_client, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+			strcpy(chr_h_restart_client, " ");
+			strcpy(chr_g_restart_client, " ");
+		  
+		  
+		case CONSOLE_POS_IND:	
+			printf("In case CONSOLE_POS_IND\n");
+			fprintf(fp,"***************** CONSOLE_POS_IND **************************\n");
+			
+			int_retstat = IV_SUCCESS;
+			if(APL_FAILURE == IV_Mod_ConIVACCTSAFEK(&int_retstat,l_debug_info_ptr))
+			{	
+				fprintf(fp,"Error in accessing table IV_CLIENTHOLDING.\n");
+				fflush(fp);
+				int_bl_err_level = 1;
+				if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+				{
+					CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+					CO_FreeErrLst(l_debug_info_ptr);
+				}
+			}
+
+			if(int_bl_err_level == 1)
+			{
+				int_bl_err_tot = 1;
+			}
+			
+			sprintf(chr_h_update_restart, "%c",CONSOLE_BILL_IND); 
+			strcat(chr_h_update_restart, ";");
+
+			EXEC SQL UPDATE SYS_BATCHPROC
+				SET PROCESSING_STATUS = :chr_h_update_restart,
+					STAT_DET = 'CONSOLIDATING BILLS'
+				WHERE ROWID = :chr_g_batch_in_proc_rowid;
+
+			if ( sqlca.sqlcode < 0 )
+			{
+				int_retstat = IV_CRITCAL_ERROR_IND;
+
+
+				CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, ltoa(sqlca.sqlcode),
+				 APL_NULL_STRING, APL_NULL_STRING,__LINE__, __FILE__);
+						
+				CO_ProcMonitor(TechRep,"Could not Update Batch in Proc Row\n",NULL,NULL);
+
+				APL_GOBACK_FAIL
+			}
+
+			EXEC SQL COMMIT;
+
+			if ( sqlca.sqlcode < 0 )
+			{
+				int_retstat = IV_CRITCAL_ERROR_IND;
+
+
+				CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, ltoa(sqlca.sqlcode),
+				 APL_NULL_STRING, APL_NULL_STRING,__LINE__, __FILE__);
+						
+				CO_ProcMonitor(TechRep,"Could not Commit\n",NULL,NULL);
+
+				APL_GOBACK_FAIL
+			}
+
+			EXEC SQL SELECT ROWID, STATUS, PROCESSING_STATUS
+			INTO :chr_g_batch_in_proc_rowid:int_i_batch_in_proc_rowid,
+				  :l_sys_batchproc_struct_hb.status_ind:l_sys_batchproc_struct_i.i_status_ind,
+				  :l_sys_batchproc_struct_hb.processing_status:l_sys_batchproc_struct_i.i_restart_info
+			FROM SYS_BATCHPROC
+			WHERE ((PROCESS_NAME = :l_sys_batchproc_struct_hb.process_name) AND
+					(STARTDATE = :l_sys_batchproc_struct_hb.start_dt) AND
+					(STATUS = :l_sys_batchproc_struct_hb.status_ind))
+			FOR UPDATE OF STATUS, PROCESSING_STATUS;
+
+			if ( sqlca.sqlcode < 0 )
+			{
+				int_retstat = IV_CRITCAL_ERROR_IND;
+				
+
+				CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, ltoa(sqlca.sqlcode),
+				 APL_NULL_STRING, APL_NULL_STRING,__LINE__, __FILE__);
+						
+				CO_ProcMonitor(TechRep,"Could not lock Row in table SYS_BATCHPROC\n",NULL,NULL);
+
+				APL_GOBACK_FAIL
+			}
+
+			if ( l_sys_batchproc_struct_i.i_restart_info == -1 )
+			{
+				strcpy(l_sys_batchproc_struct_hb.processing_status, APL_NULL_STRING);
+			}
+			else
+			{
+				strcpy(chr_init_restart_data,l_sys_batchproc_struct_hb.processing_status);
+			}
+
+			memset(chr_h_restart_client, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+			memset(chr_g_restart_client, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+			strcpy(chr_h_restart_client, " ");
+			strcpy(chr_g_restart_client, " ");
+		
+		case CONSOLE_BILL_IND:
+			printf("In case CONSOLE_BILL_IND\n");
+			fprintf(fp,"**************** CONSOLE_BILL_IND *********************\n");
+			
+			int_retstat = IV_SUCCESS;
+			if(APL_FAILURE == IV_Proc_ConsolidatedCharges(&int_retstat,l_debug_info_ptr))
+			{
+				if(int_retstat == IV_CRITCAL_ERROR_IND)
+				{
+					fprintf(TechRep,"Fatal errors found in calculation of bill for Consolidation.\n");
+					fflush(TechRep);
+
+					if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+					{
+						CO_ProcMonitor(TechRep,APL_NULL_STRING,l_debug_info_ptr,NULL);
+						CO_FreeErrLst(l_debug_info_ptr);
+					}
+				}
+			}
+			
+			if(int_bl_err_level == 1)
+			{
+				int_bl_err_tot = 1;
+			}
+			
+			sprintf(chr_h_update_restart, "%c",CONSOLE_MINFEE_IND); 
+			strcat(chr_h_update_restart, ";");
+
+			EXEC SQL UPDATE SYS_BATCHPROC
+				SET PROCESSING_STATUS = :chr_h_update_restart,
+					STAT_DET = 'GENERATING MINIMUM FEE ADJUSTMENTS'
+				WHERE ROWID = :chr_g_batch_in_proc_rowid;
+
+			if ( sqlca.sqlcode < 0 )
+			{
+				int_retstat = IV_CRITCAL_ERROR_IND;
+
+
+				CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, ltoa(sqlca.sqlcode),
+				 APL_NULL_STRING, APL_NULL_STRING,__LINE__, __FILE__);
+						
+				CO_ProcMonitor(TechRep,"Could not Update Row in table SYS_BATCHPROC\n",NULL,NULL);
+
+				APL_GOBACK_FAIL
+			}
+
+			EXEC SQL COMMIT;
+
+			if ( sqlca.sqlcode < 0 )
+			{
+				int_retstat = IV_CRITCAL_ERROR_IND;
+
+
+				CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, ltoa(sqlca.sqlcode),
+				 APL_NULL_STRING, APL_NULL_STRING,__LINE__, __FILE__);
+						
+				CO_ProcMonitor(TechRep,"Could not Commit\n",NULL,NULL);
+
+				APL_GOBACK_FAIL
+			}
+
+			EXEC SQL SELECT ROWID, STATUS, PROCESSING_STATUS
+			INTO :chr_g_batch_in_proc_rowid:int_i_batch_in_proc_rowid,
+				  :l_sys_batchproc_struct_hb.status_ind:l_sys_batchproc_struct_i.i_status_ind,
+				  :l_sys_batchproc_struct_hb.processing_status:l_sys_batchproc_struct_i.i_restart_info
+			FROM SYS_BATCHPROC
+			WHERE ((PROCESS_NAME = :l_sys_batchproc_struct_hb.process_name) AND
+					(STARTDATE = :l_sys_batchproc_struct_hb.start_dt) AND
+					(STATUS = :l_sys_batchproc_struct_hb.status_ind))
+			FOR UPDATE OF STATUS, PROCESSING_STATUS;
+
+			if ( sqlca.sqlcode < 0 )
+			{
+				int_retstat = IV_CRITCAL_ERROR_IND;
+
+
+				CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, ltoa(sqlca.sqlcode),
+				 APL_NULL_STRING, APL_NULL_STRING,__LINE__, __FILE__);
+						
+				CO_ProcMonitor(TechRep,"Could not lock Row in table SYS_BATCHPROC\n",NULL,NULL);
+
+				APL_GOBACK_FAIL
+			}
+
+			if ( l_sys_batchproc_struct_i.i_restart_info == -1 )
+			{
+				strcpy(l_sys_batchproc_struct_hb.processing_status, APL_NULL_STRING);
+			}
+			else
+			{
+				strcpy(chr_init_restart_data,l_sys_batchproc_struct_hb.processing_status);
+			}
+
+			memset(chr_h_restart_client, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+			memset(chr_g_restart_client, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+			strcpy(chr_h_restart_client, " ");
+			strcpy(chr_g_restart_client, " ");
+		
+		case CONSOLE_MINFEE_IND:
+			printf("In case CONSOLE_MINFEE_IND\n");
+			fprintf(fp,"*************** CONSOLE_MINFEE_IND *************************\n");
+
+			int_retstat = IV_SUCCESS;
+			if(APL_FAILURE == IV_Proc_MinFeeAdjust('C',APL_NULL_STRING, &int_retstat,l_debug_info_ptr))
+			{
+				if(int_retstat == IV_CRITCAL_ERROR_IND)
+				{
+					fprintf(TechRep,"Fatal errors found in calculation of bill for Consolidate Min. Fee.\n");
+					fflush(TechRep);
+				}
+			}
+			
+			if(int_bl_err_level == 1)
+			{
+				int_bl_err_tot = 1;
+			}
+
+			memset(chr_h_restart_client, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+			memset(chr_g_restart_client, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+			strcpy(chr_h_restart_client, " ");
+			strcpy(chr_g_restart_client, " ");
+		
+		default:
+			printf("\n****************** Inside IV_Proc_CalculateBills inside default int_bl_err_level=:%d:",int_bl_err_level);
+			break;
+	}
+
+	
+
+	int_retstat = IV_SUCCESS;
+	if(APL_FAILURE == IV_Mod_DelSelaAccounts(&int_retstat, l_debug_info_ptr)) 
+	{
+		fprintf(fp,"Error in deleting table IV_SELCLIENT\n");
+		fflush(fp);
+		APL_GOBACK_FAIL
+	}
+
+	int_retstat = IV_SUCCESS;
+	if(APL_FAILURE == IV_Mod_GenIVCNTLPARM(&int_retstat,l_debug_info_ptr))
+	{
+		fprintf(fp,"Error in updating table SYS_IVCONTROLPARAM\n");
+		fflush(fp);
+		APL_GOBACK_FAIL
+	}
+
+	if(int_bl_err_level == 1)
+	{
+		int_bl_err_tot = 1;
+	}
+	
+
+	EXEC SQL UPDATE SYS_BATCHPROC 
+	SET status = 'completed',
+		STAT_DET = 'BILL GENERATION COMPLETED'
+	WHERE rowid = :chr_g_batch_in_proc_rowid;
+
+	if ( sqlca.sqlcode < 0 )
+	{
+		int_retstat = IV_CRITCAL_ERROR_IND;
+
+
+		CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, ltoa(sqlca.sqlcode),
+				 APL_NULL_STRING, APL_NULL_STRING,__LINE__, __FILE__);
+						
+		CO_ProcMonitor(TechRep,"Could not Update Row in table SYS_BATCHPROC\n",NULL,NULL);
+
+		APL_GOBACK_FAIL
+	}
+
+	EXEC SQL COMMIT WORK;
+
+	if ( sqlca.sqlcode < 0 )
+	{
+		int_retstat = IV_CRITCAL_ERROR_IND;
+
+
+		CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, ltoa(sqlca.sqlcode),
+			 APL_NULL_STRING, APL_NULL_STRING,__LINE__, __FILE__);
+						
+		CO_ProcMonitor(TechRep,"Could not Commit\n",NULL,NULL);
+
+		APL_GOBACK_FAIL
+	}
+
+	if(int_bl_err_tot == 1)
+	{
+		APL_GOBACK_FAIL
+	}
+	else
+	{
+		APL_GOBACK_SUCCESS
+	}
+
+RETURN_SUCCESS:
+
+	if(int_is_bill_cur_open == 1)
+	{
+		EXEC SQL CLOSE bill_cur;
+	}
+	
+	if(int_is_selclients_cur_open == 1)
+	{
+		EXEC SQL CLOSE selaccounts_cur;
+	}
+
+	APL_FREE(chr_pass_str);
+	APL_FREE(chr_acct_pass_str);
+
+	return APL_SUCCESS;
+
+RETURN_FAILURE:
+
+	if(int_is_selclients_cur_open == 1)
+	{
+		EXEC SQL CLOSE selaccounts_cur;
+	}
+	
+	if(int_is_bill_cur_open == 1)
+	{
+		EXEC SQL CLOSE bill_cur;
+	}
+
+	APL_FREE(chr_pass_str);
+	APL_FREE(chr_acct_pass_str);
+
+	return APL_FAILURE;
+
+}
+
+int IV_Rtv_ExchRate(char *p_oldccy,char *p_newccy,char *p_dt,double *p_exchrate,
+		 int *int_p_retstat,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	double l_ae_rate=0;
+	int int_retstat = 0;
+	IV_EXCHANGERATE_STRUCT l_iv_exchangerate_structc;
+
+	*int_p_retstat = IV_SUCCESS;
+
+	if(chr_regen_flg == 'Y')
+	{
+		if(APL_FAILURE == IV_Rtv_IVEXCHRT(p_dt,p_newccy,p_oldccy,&l_iv_exchangerate_structc,
+					&int_retstat,l_debug_info_ptr))
+		{
+			*int_p_retstat = int_retstat;
+			APL_GOBACK_FAIL
+		}
+		else
+			*p_exchrate = l_iv_exchangerate_structc.exchg_rt;
+	}
+	else
+	{
+		Alert("Calling IV_Rtv_IVEXCHRT for %s %s %s",p_dt,p_newccy,p_oldccy);
+		fflush(stdout);
+		if(APL_FAILURE == IV_Rtv_IVEXCHRT(p_dt,p_newccy,p_oldccy,
+						&l_iv_exchangerate_structc,&int_retstat,l_debug_info_ptr))
+		{
+			if(int_retstat == IV_NO_DATA_FOUND_ERR)
+			{
+				
+				if(APL_FAILURE == ConvToFxFn_GR(p_oldccy,p_newccy,chr_g_dom_ccy,
+							p_dt,&l_ae_rate,&int_retstat,l_debug_info_ptr))
+				{
+					*int_p_retstat = int_retstat;
+					APL_GOBACK_FAIL
+				}
+				else
+				{
+					*p_exchrate = l_ae_rate;
+
+					if(APL_FAILURE == IV_Mod_IVEXCHRTNew(p_dt,p_oldccy,p_newccy,
+								l_ae_rate,&int_retstat,l_debug_info_ptr))
+						IS_ANY_ORA_ERROR;
+				}
+			}
+			else
+			{
+				*int_p_retstat = int_retstat;
+				APL_GOBACK_FAIL
+			}
+		}
+		else
+			*p_exchrate = l_iv_exchangerate_structc.exchg_rt;
+	}
+
+	*int_p_retstat = IV_SUCCESS;
+	APL_GOBACK_SUCCESS
+
+RETURN_SUCCESS:
+	return APL_SUCCESS;
+
+RETURN_FAILURE:
+	return APL_FAILURE;
+}
+
+/* HDFCIV_004 PJ */
+int IV_ResetBillGeneration( char *pdate, int *int_p_retstat,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+		fprintf(fp, "Resetting Bills.\n");
+		fflush(fp);
+		
+		EXEC SQL DELETE FROM IV_SERVICE_CHRG WHERE DATEOF_BILLING = :pdate;
+		printf("SQL Code |%d|\n",sqlca.sqlcode);
+		fflush(stdout);
+		IS_ANY_ORA_ERROR
+		EXEC SQL DELETE FROM IV_DEAL WHERE DATEOF_BILLING = :pdate;
+		printf("SQL Code |%d|\n",sqlca.sqlcode);
+		fflush(stdout);
+		IS_ANY_ORA_ERROR
+		EXEC SQL DELETE FROM IV_CLIENTHOLDING WHERE DATEOF_BILLING = :pdate;
+		printf("SQL Code |%d|\n",sqlca.sqlcode);
+		fflush(stdout);
+		IS_ANY_ORA_ERROR
+		/*	Remove Exchange Rate for Billing Period	*/
+		EXEC SQL DELETE FROM IV_EXCHANGERATE WHERE DATEOF_BILLING = :pdate;/*modified by shruthi kumbla ISKB_1737*/
+		printf("SQL Code |%d|\n",sqlca.sqlcode);
+		fflush(stdout);
+		IS_ANY_ORA_ERROR
+		EXEC SQL DELETE FROM IV_DEAL_FEE WHERE DATEOF_BILLING = :pdate;
+		printf("SQL Code |%d|\n",sqlca.sqlcode);
+		fflush(stdout);
+		IS_ANY_ORA_ERROR
+		EXEC SQL DELETE FROM IVDLYSAFEK WHERE BILL_DT = :pdate;
+		printf("SQL Code |%d|\n",sqlca.sqlcode);
+		fflush(stdout);
+		IS_ANY_ORA_ERROR
+		EXEC SQL UPDATE DL_DEAL SET DATEOFBILLING=NULL, COMM_AMT = '0' where DATEOFBILLING = :pdate;
+		printf("SQL Code |%d|\n",sqlca.sqlcode);
+		fflush(stdout);
+		IS_ANY_ORA_ERROR
+		EXEC SQL UPDATE DL_HISDEAL SET DATEOFBILLING=NULL, COMM_AMT = '0' WHERE DATEOFBILLING = :pdate;
+		printf("SQL Code |%d|\n",sqlca.sqlcode);
+		fflush(stdout);
+		IS_ANY_ORA_ERROR
+		EXEC SQL UPDATE SYS_IVCONTROLPARAM SET Generate_ind='N';
+		printf("SQL Code |%d|\n",sqlca.sqlcode);
+		fflush(stdout);
+		IS_ANY_ORA_ERROR
+		
+		/****** Custody Bill Print : Vinay Kalaskar ****************************/
+
+		EXEC SQL DELETE FROM IV_CUST_PRINT WHERE BILLING_DT = :pdate;
+		printf("SQL Code |%d|\n",sqlca.sqlcode);
+		fflush(stdout);
+		IS_ANY_ORA_ERROR
+
+		/***********************************************************************/
+		
+		/****** Added by siva.ganapathi for Annexures ****************************/
+	
+		EXEC SQL DELETE FROM IV_DEAL_OTHFEE WHERE DATEOF_BILLING = :pdate;
+		printf("SQL Code when deleting records in IV_DEAL_OTHFEE |%d|\n",sqlca.sqlcode);
+		fflush(stdout);
+		IS_ANY_ORA_ERROR
+
+		/************************************************************************/
+
+		/****** Added by siva.ganapathi for ISKB_2323 ****************************/
+		EXEC SQL DELETE FROM IV_CACHEQUE WHERE DATEOF_BILLING = :pdate;
+		printf("SQL Code when deleting records in IV_CACHEQUE |%d|\n",sqlca.sqlcode);
+		fflush(stdout);
+		IS_ANY_ORA_ERROR
+		/************************************************************************/
+		/****** Added by shruthi kumbla for ISKB_1737 ****************************/
+		EXEC SQL DELETE FROM IV_PLSECURITY WHERE PRO_FIRST_BILLDATE = :pdate;
+		printf("SQL Code when deleting records in IV_PLSECURITY |%d|\n",sqlca.sqlcode);
+		fflush(stdout);
+		IS_ANY_ORA_ERROR
+		/************************************************************************/
+
+		/****** Added by RAHUL for deleting CUSTODY_TREPS_CHARGES tabel****************************/
+		EXEC SQL DELETE FROM CUSTODY_TREPS_CHARGES WHERE DATEOFBILLING = :pdate;
+		printf("SQL Code when deleting records in CUSTODY_TREPS_CHARGES |%d|\n",sqlca.sqlcode);
+		fflush(stdout);
+		IS_ANY_ORA_ERROR
+		/************************************************************************/
+
+		EXEC SQL COMMIT WORK;		
+		printf("SQL Code |%d|\n",sqlca.sqlcode);
+		fflush(stdout);
+
+		fprintf(fp, "Reset Done succussfully.\n");
+		fflush(fp);
+	*int_p_retstat = IV_SUCCESS;
+	APL_GOBACK_SUCCESS
+
+RETURN_SUCCESS:
+	return APL_SUCCESS;
+
+RETURN_FAILURE:
+	return APL_FAILURE;
+	
+}
+

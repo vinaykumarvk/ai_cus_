@@ -1,0 +1,678 @@
+/*
+ *    COPYRIGHT NOTICE
+ *
+ *   Copyright 2005 Polaris Software Lab Limited. All rights reserved.
+ *
+ *   These materials are confidential and proprietary to
+ *    Polaris Software Lab Limited and no part of these materials should
+ *    be reproduced, published, transmitted or distributed in any form or
+ *    by any means, electronic, mechanical, photocopying, recording or
+ *    otherwise, or stored in any information storage or retrieval system
+ *    of any nature nor should the materials be disclosed to third parties
+ *    or used in any other manner for which this is not authorized, without
+ *    the prior express written authorization of Polaris Software Lab Limited.
+ */
+/*******************************************************************************
+ *
+ * Module Name         :         Settlement
+ *
+ * File Name           :         BulkDealAuth.pc
+ *
+ * Description         :
+ *
+ *            Version Control Block
+ *
+ * Date        Version          Author              Description         RFS No.
+ * ---------   --------  ---------------------  ------------------  --------------
+ * 15/10/2007   1.0       Kalyan Chakravarthy        New File
+ * 15/06/2009   1.1             Naren V         Program is modified
+ *                                              to get the DB login
+ *                                              details in preceden
+ *                                              ce order first from
+ *                                              config file, and if
+ *                                              unavailable,   then
+ *                                              a  decrypted  value
+ *                                              from  an  encrypted
+ *                                              file by calling the
+ *                                              remote application.
+ * *****************************************************************************/
+
+
+/*#include "Intellect_Common.h"
+#include "BT_Common.h"
+#include "CO_IndStructdef.h"
+#include "CO_Commdef.h" */
+#include "WI_Interface.h"
+char dbdesc[] = "custody";
+
+
+
+/********** Web Custody Single Login Changes : Vinay Kalaskar *********/
+
+char g_custody_web_ind[2];
+#define WEB_INDICATOR  "W"
+
+/**********************************************************************/
+
+
+EXEC SQL INCLUDE SQLCA.H;
+
+char chr_l_sys_date[APL_DATE_LEN] = APL_NULL_STRING;
+
+int main(int argc,char **argv)
+{
+
+	/********** Web Custody Single Login Changes : Vinay Kalaskar *********/
+
+	char *chr_webdata;
+	/* Variable length chaged for Kotak UAT issue as the total column length is 8000(proc_data+proc_data1)
+	char g_proc_data[4001] = APL_NULL_STRING;
+	char p_web_data[4001] = APL_NULL_STRING;*/
+	char g_proc_data[8001] = APL_NULL_STRING;
+	char p_web_data[8001] = APL_NULL_STRING;
+
+	/**********************************************************************/
+
+	FILE *bauth_log = NULL;
+	FILE *brep_log = NULL;
+
+	printf("\n\t********* Entered main of WI_BulkAuth.pc *********\n");
+	FILE *l_initfile = NULL;
+
+	printf("Entered BulkDealAuth.pc \n");
+
+	//DEBUG_INFO_STRUCT_H *l_debug_info_ptr = (DEBUG_INFO_STRUCT_H *) NULL;
+	DEBUG_INFO_STRUCT_H     **l_debug_info_ptr  =  NULL, *l_debug_info_struct=NULL ; // AIX - Warnings removal
+
+	INTL_ENV_DATA_STRUCT_H l_intl_env_data_h;
+
+	char l_temp_processing_status[51] = APL_NULL_STRING;
+	short i_temp_processing_status = -1;
+
+	char l_initfile_path[PATH_LENGTH] = APL_NULL_STRING;
+	struct sqlca sqlca;
+	int int_retval = 0;
+	int bacount = 0;
+
+	l_debug_info_ptr = &l_debug_info_struct;
+
+	/* char chr_uname[APL_USERID_LEN] = APL_NULL_STRING; * Commented for Web Intellect Encryption - Decryption Changes - Naren V */
+	char chr_uname[APL_USERID_LEN+20] = APL_NULL_STRING; /* Increased the size of User Id for Web Intellect Encryption - Decryption Changes - NarenV */
+	char chr_custody_id_b[APL_USERID_LEN] = APL_NULL_STRING;
+	/* char chr_passwd[APL_USERID_LEN] = APL_NULL_STRING; * Commented for Web Intellect Encryption - Decryption Changes - Naren V */
+	char chr_passwd[APL_PASSWD_LEN] = APL_NULL_STRING; /* Added for Web Intellect Encryption - Decryption Changes - Naren V */
+	char updstring[8001] = APL_NULL_STRING;
+	/* Increased the size of User Id for Web Intellect Encryption - Decryption Changes - NarenV */
+	char chr_cust_uname[APL_USERID_LEN+20],chr_cust_passwd[APL_PASSWD_LEN];
+	char kargv[5001];
+
+	EXEC SQL BEGIN DECLARE SECTION;
+	int int_l_count = 0;
+	EXEC SQL VAR chr_l_sys_date IS STRING;
+	EXEC SQL VAR chr_uname IS STRING;
+	EXEC SQL VAR chr_passwd IS STRING;
+	EXEC SQL END DECLARE SECTION;
+
+	memset(&l_intl_env_data_h, NULL, sizeof(INTL_ENV_DATA_STRUCT_H));
+   	strcpy(l_intl_env_data_h.usr, argv[3]);
+   	strcpy(l_intl_env_data_h.h_mode, argv[4]);
+   	strcpy(l_intl_env_data_h.processtion, argv[5]);
+   	strcpy(l_intl_env_data_h.auth_req, argv[6]);
+   	strcpy(l_intl_env_data_h.subprocess, argv[7]);
+   	strcpy(l_intl_env_data_h.h_process, argv[8]);
+
+
+	/********** Web Custody Single Login Changes : Vinay Kalaskar *********/
+
+	strcpy(g_proc_data,argv[9]);
+	
+	printf("\n\n=== Displaying PROC_DATA ====== :|%s|\n",g_proc_data);
+	fflush(stdout);
+
+    strcpy(p_web_data,strtok_r(g_proc_data,WEB_INDICATOR,&chr_webdata));
+
+	if(chr_webdata != NULL)
+	{
+		strcpy(g_custody_web_ind,"W");
+	    printf("=== System Running As Web : |%s|\n\n",g_custody_web_ind);
+	}
+    else
+	{
+		strcpy(g_custody_web_ind,"C");
+	    printf("=== System Running As Custody : |%s|\n\n",g_custody_web_ind);
+	}
+
+
+	/**********************************************************************/
+
+
+	strcpy(l_initfile_path,getenv("INTL_ROOT_PATH"));
+	strcat(l_initfile_path,"intl_sun.cfg");
+	if ( ( l_initfile = fopen(l_initfile_path,"r") ) == NULL)
+	{
+		APL_GOBACK_FAIL
+	}
+	sqlca.sqlcode = 0;
+	//APL_FETCH_DB_LOGIN_DETAILS(l_initfile, chr_custody_id_b, chr_uname, chr_passwd, APL_OUT_FILE, &l_debug_info_ptr)
+
+        /* if ( CO_ReadToken(l_initfile,"WEB_INTL_DB_USR",chr_uname,l_debug_info_ptr) == APL_FAILURE)
+        {
+                printf("KS --- Could not find DB username \n EXITING \n FAILED IN INSTRUCTION AUTH");
+                APL_GOBACK_FAIL
+        }
+        if ( CO_ReadToken(l_initfile,"WEB_INTL_DB_PWD",chr_passwd,l_debug_info_ptr) == APL_FAILURE)
+        {
+                printf("KS --- Could not find DB password \n EXITING \n FAILED IN INSTRUCTION AUTH");
+                APL_GOBACK_FAIL
+        }
+        if ( CO_ReadToken(l_initfile,"INTL_DB_USR",chr_cust_uname,l_debug_info_ptr) == APL_FAILURE)
+        {
+                printf("KS --- Could not find DB username \n EXITING \n FAILED IN INSTRUCTION AUTH");
+                APL_GOBACK_FAIL
+        }
+        if ( CO_ReadToken(l_initfile,"INTL_DB_PWD",chr_cust_passwd,l_debug_info_ptr) == APL_FAILURE)
+        {
+                printf("KS --- Could not find DB password \n EXITING \n FAILED IN INSTRUCTION AUTH");
+                APL_GOBACK_FAIL
+        } *** Commented for Web Intellect Encryption - Decryption Changes **** Naren V */
+
+       
+        /** Web Intellect Encryption - Decryption Changes - Start - Naren V **/
+
+        /* Calling Web Custody Login Details */
+        //APL_FETCH_DB_LOGIN_DETAILS(l_initfile, "W", chr_uname, chr_passwd , APL_OUT_FILE , &l_debug_info_ptr)
+        APL_FETCH_DB_LOGIN_DETAILS(l_initfile, "W", chr_uname, chr_passwd , APL_OUT_FILE , l_debug_info_ptr)
+
+        if ( !strlen(chr_uname) )
+        {
+                CO_ProcMonitor(APL_OUT_FILE,"\n Could not find Web DB username \n EXITING \n FAILED IN INSTRUCTION AUTH",NULL,&l_intl_env_data_h);
+                APL_GOBACK_FAIL
+        }
+
+        if ( !strlen(chr_passwd) )
+        {
+                CO_ProcMonitor(APL_OUT_FILE,"\n Could not find Web DB password \n EXITING \n FAILED IN INSTRUCTION AUTH",NULL,&l_intl_env_data_h);
+                APL_GOBACK_FAIL
+        }
+
+        /* Calling Int Custody Login Details */
+        //APL_FETCH_DB_LOGIN_DETAILS(l_initfile, "I", chr_cust_uname, chr_cust_passwd , APL_OUT_FILE , &l_debug_info_ptr)
+        APL_FETCH_DB_LOGIN_DETAILS(l_initfile, "I", chr_cust_uname, chr_cust_passwd , APL_OUT_FILE , l_debug_info_ptr)
+        if ( !strlen(chr_cust_uname) )
+        {
+                CO_ProcMonitor(APL_OUT_FILE,"\n Could not find Int Cust DB username \n EXITING \n FAILED IN INSTRUCTION AUTH",NULL,&l_intl_env_data_h);
+                APL_GOBACK_FAIL
+        }
+
+        if ( !strlen(chr_cust_passwd) )
+        {
+                CO_ProcMonitor(APL_OUT_FILE,"\n Could not find Int Cust DB password \n EXITING \n FAILED IN INSTRUCTION AUTH",NULL,&l_intl_env_data_h);
+                APL_GOBACK_FAIL
+        }
+        /** Web Intellect Encryption - Decryption Changes - End   - Naren V **/
+
+
+	printf("\t********* Connecting to Web Database .........\n");
+	//printf("\t********* [%s] \t [%s] .........\n", chr_uname, chr_passwd);
+ /*	printf("\t********* [%s] \n", chr_uname); * Commented for Web Intellect Encryption - Decryption Changes - Naren V */
+	
+	EXEC SQL CONNECT :chr_uname IDENTIFIED BY :chr_passwd;
+
+	IS_ANY_ORA_ERROR
+	printf("\t********* argv[0] |%s| argv[1] |%s| argv[2] |%s| \n",argv[0],argv[1],argv[2]);
+
+	printf("\t********* Connecting to Custody Database .........\n");
+	//printf("\t********* [%s] \t [%s] .........\n", chr_uname, chr_passwd);
+ /*	printf("\t********* [%s] .........\n", chr_cust_uname); * Commented for Web Intellect Encryption - Decryption Changes - Naren V */
+	
+	EXEC SQL AT :dbdesc CONNECT :chr_cust_uname IDENTIFIED BY :chr_cust_passwd;
+
+	printf("sqlca.sqlcode is [%d]\n",sqlca.sqlcode);
+
+	IS_ANY_ORA_ERROR
+	printf("\t********* argv[0] |%s| argv[1] |%s| argv[2] |%s| \n",argv[0],argv[1],argv[2]);
+
+	if (APL_FAILURE == CO_Rtv_RptFileName( "DL_Auth",
+						APL_LOGFILE_DESC,
+						100,
+						argv[5],
+						argv,
+						&bauth_log,
+						l_debug_info_ptr ))
+	{
+		APL_GOBACK_FAIL
+	}
+
+	if (APL_FAILURE == CO_Rtv_RptFileName( "Blk_Ath",
+						"User Log",
+						100,
+						argv[5],
+						argv,
+						&brep_log,
+						l_debug_info_ptr ))
+	{
+		APL_GOBACK_FAIL
+	}
+
+	printf("\t*********Entering SYS_BATCHPROC for update\n");
+	EXEC SQL 
+	SELECT PROCESSING_STATUS into :l_temp_processing_status:i_temp_processing_status
+	FROM SYS_BATCHPROC
+	WHERE PROCESS_NAME=:argv[0]
+		AND PROC_INIT=:argv[1]
+		AND STARTDATE=:argv[2]
+		AND STATUS='started'
+	FOR UPDATE OF PROCESSING_STATUS,STATUS;
+	IS_ANY_ORA_ERROR
+
+	if(APL_ZERO_RESULT_SET)
+	{
+		CO_ProcMonitor(bauth_log,"E:No entry in batch_in_proc\n",NULL,NULL);
+		APL_GOBACK_FAIL
+	}
+
+	if (APL_FAILURE == CO_RtvSysParams(l_debug_info_ptr))
+	{
+		CO_ProcMonitor(bauth_log, "Error In Getting System Parameters", NULL, NULL);
+		CO_Proc_RptClose(bauth_log, l_debug_info_ptr);
+		APL_GOBACK_FAIL
+	}
+
+	fflush(stdout);
+
+	CO_ProcMonitor(bauth_log,"Start Processing\n",l_debug_info_ptr,&l_intl_env_data_h);
+
+	printf("\t********* Param string recd is [%s]\n", argv[9]);
+	fflush(stdout);
+	fprintf(brep_log,"==================================================================================================\n");
+	fprintf(brep_log,"%-10s %-20s %-30s %-15s %s\n","Sr No.","Client code","Reference no.","Status","Reason for failure");
+	fprintf(brep_log,"==================================================================================================\n");
+
+	printf("COMMENTED BOSSSSSSSSSS>............................ IAM SORRY ......... UNABLE TO DO THIS \n");
+	fflush(stdout);
+	printf(" Going to change the Status of the records sent from FE \n");
+	fflush(stdout);
+
+
+	xxstrcpy(kargv,argv[9]);
+	printf("KS -- Returned string is [%s]\n",kargv);
+	fflush(stdout);
+	printf("Mode is |%s|\n",l_intl_env_data_h.h_mode);
+	fflush(stdout);
+
+	//sprintf(updstring,"UPDATE WI_DEAL SET DEAL_STAT='RA' WHERE CLIENT||';'||IDENTIY_NO||';'||TO_CHAR(ACCESS_STAMP,'DD/MM/YYYY HH24:MI:SS')||';' in (''''||REPLACE('%s','|',''',''')||'''')",kargv);
+	//sprintf(updstring,"UPDATE WI_DEAL SET DEAL_STAT='BA' WHERE DEAL_STAT='UU' AND CLIENT||';'||IDENTIY_NO||';' in (%s)",kargv);
+	if (!strcmp(l_intl_env_data_h.h_mode,"AUT"))
+	{
+			printf("the auth mode entered is %s",l_intl_env_data_h.h_mode);
+	fflush(stdout);
+	sprintf(updstring,"UPDATE WI_DEAL SET DEAL_STAT='BA' WHERE DEAL_STAT='UU' AND CLIENT||';'||IDENTIY_NO||';'||TO_CHAR(ACCESS_STAMP,'DD/MM/YYYY HH24:MI:SS')||';' in (%s)",kargv);
+	}
+	else
+	{
+			
+			printf("the delete mode entered is %s",l_intl_env_data_h.h_mode);
+	fflush(stdout);
+			sprintf(updstring,"UPDATE WI_DEAL SET DEAL_STAT='BD' WHERE DEAL_STAT='UU' AND CLIENT||';'||IDENTIY_NO||';'||TO_CHAR(ACCESS_STAMP,'DD/MM/YYYY HH24:MI:SS')||';' in (%s)",kargv);
+	}
+
+	printf("KS -------------- done \n[%s]\n",updstring);
+	fflush(stdout);
+	fprintf(bauth_log,"KS -------------- done \n[%s]\n",updstring);
+
+	EXEC SQL EXECUTE IMMEDIATE :updstring;
+	printf("KS----------sqlcode[%d]\n",sqlca.sqlcode);
+	fflush(stdout);
+	printf("KS--------- No. Of records updated is [%d]\n",sqlca.sqlerrd[2]);
+	fflush(stdout);
+	fprintf(bauth_log,"KS Update Statement executed with sqlcode [%d]\n",sqlca.sqlcode);
+	EXEC SQL COMMIT;
+	fprintf(bauth_log,"KS Commit Statement executed with sqlcode [%d]\n",sqlca.sqlcode);
+	fflush(stdout);
+	
+			
+/*
+	if(sqlca.sqlcode != 0)
+	{
+		printf("KS -- FAILED TO UPDATE [%d] [%s] \n",sqlca.sqlcode, sqlca.sqlerrm.sqlerrmc);
+	}
+
+*/
+	
+	int_retval = WI_Bulk_Auth(argv[9], &l_intl_env_data_h, bauth_log, brep_log, l_debug_info_ptr);
+
+	if(int_retval == APL_FAILURE)
+	{
+		CO_ProcMonitor(bauth_log,"Returned unsucessfully from WI_Bulk_Auth\n",l_debug_info_ptr,&l_intl_env_data_h);
+		printf("Returned unsucessfully from WI_Bulk_Auth\n");
+	}
+
+	printf("Finished processing, But check whether any record still exits with status BA\n");
+	fflush(stdout);
+	fprintf(bauth_log,"Finished processing, Checking whether any record still exits with status BA\n");
+
+	EXEC SQL SELECT COUNT(*) INTO :bacount FROM WI_DEAL WHERE DEAL_STAT='BA';
+	printf("sqlca.sqlcode...[%d].. count[%d]\n",sqlca.sqlcode,bacount);
+	fflush(stdout);
+	
+	if(bacount == 0)
+	{
+		CO_ProcMonitor(bauth_log,"No un-processed records Found\nFinished Processing .....",l_debug_info_ptr,&l_intl_env_data_h);
+		printf("Yahooooooooo .. No un processed records Found\nFinished Processing .....\n");  //AIX - Warnings Removal
+	}
+	else
+	{
+		printf("BOSS,Please check .. there are still some unprocessed records.. \ncheck if other instance of this exe is running...");
+	fflush(stdout);
+		CO_ProcMonitor(bauth_log,"Please check .. there are still some unprocessed records...\n check if other instance of this exe ...",l_debug_info_ptr,&l_intl_env_data_h);
+		bacount=0;
+		EXEC SQL SELECT COUNT(*) INTO :bacount FROM SYS_BATCHPROC WHERE PROCESS_NAME=:argv[0] AND PROC_INIT=:argv[1] AND STATUS='started' AND PROC_ENDFLG='N';
+		
+		if(bacount>1)
+		{
+			printf("Cheerss..........other instance of this exe is running ...\n");
+		}
+		else if (bacount==1)
+		{
+			printf("BOSSS-------- Real problem.... Verify the logs and find out the issue....... :-)\n");
+			printf("Updating the records back to UU\n");
+			fprintf(bauth_log,"Updating the records that are in BA status back to UU");
+			EXEC SQL UPDATE WI_DEAL SET DEAL_STAT='UU' WHERE DEAL_STAT='BA';
+			if(sqlca.sqlcode != 0 )
+			{
+				printf("Even Updation failed , sqlcode [%d] \n",sqlca.sqlcode);
+			}
+			else
+			{
+				printf("The output of count query is [%d]\n",bacount);
+				printf("Updated [%d] records which are in 'BA' Status..\n",sqlca.sqlerrd[2]);
+			}
+		}
+
+	}
+
+
+	fprintf(brep_log,"==================================================================================================\n");
+	RETURN_SUCCESS :
+
+	printf("KS __ GOING TO COMMIT\n");
+	fflush(stdout);
+	EXEC SQL UPDATE SYS_BATCHPROC
+	SET  status = 'completed'
+	WHERE PROCESS_NAME=:argv[0]
+	AND   PROC_INIT=:argv[1]
+	AND   STARTDATE=:argv[2]
+	AND   STATUS='started';
+
+	EXEC SQL COMMIT WORK RELEASE;
+	//EXEC SQL AT :dbdesc COMMIT WORK RELEASE;
+	CO_ProcMonitor(bauth_log,"Successfully Exiting the program Web Deal Bulk Authorization",l_debug_info_ptr,&l_intl_env_data_h);
+	CO_Proc_RptClose(bauth_log, l_debug_info_ptr);
+	CO_Proc_RptClose(brep_log, l_debug_info_ptr);
+	printf("Successfully Exiting the program Web Deal Bulk Authorization\n");
+	fflush(stdout);
+	fclose(l_initfile);
+	free(l_debug_info_ptr);
+	free(&l_intl_env_data_h);
+	exit(APL_SUCCESS);
+
+
+	RETURN_FAILURE :
+	EXEC SQL COMMIT WORK RELEASE;
+	//EXEC SQL AT :dbdesc COMMIT WORK RELEASE;
+	fprintf(bauth_log,"Unsuccessfully Exiting the program Web Deal Bulk Authorization\n");
+	fclose(l_initfile);
+	CO_Proc_RptClose(bauth_log, l_debug_info_ptr);
+	CO_Proc_RptClose(brep_log, l_debug_info_ptr);
+	printf("Unsuccessfully Exiting the program Web Deal Bulk Authorization\n");
+	exit(APL_FAILURE);
+
+}
+
+
+int WI_Bulk_Auth(char *p_param_str,INTL_ENV_DATA_STRUCT_H *p_intl_envdatastruct_h,FILE *bauth_log,FILE *brep_log,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	printf("\n\t********* Entered function WI_Bulk_Auth *********\n");
+	fflush(stdout);
+
+        INTL_ENV_DATA_STRUCT_H l_intl_env_data_h;
+
+	WI_DEAL_STRUCT_H *l_wi_deal_struct_h;
+	WI_DEAL_STRUCT_I *l_wi_deal_struct_i;
+
+
+	char **temp;
+	char **temp1;
+	char l_errstring[4001];
+	char chr_sys_access_stamp[APL_DATE_LEN] = APL_NULL_STRING;
+	//char l_auth_record[100][100];
+	char l_client[13] = APL_NULL_STRING;
+        char l_identiy_no[20] = APL_NULL_STRING;
+	char l_access_stamp[APL_DATE_LEN] = APL_NULL_STRING;
+
+	int i = 0;
+        int l_int_num = 0;
+        int l_int_num1 = 0;
+
+	l_wi_deal_struct_h =  (WI_DEAL_STRUCT_H *)calloc(1,sizeof(WI_DEAL_STRUCT_H));
+	APL_MALLOC_FAIL(l_wi_deal_struct_h);
+	memset(l_wi_deal_struct_h,NULL,sizeof(WI_DEAL_STRUCT_H));
+
+	l_wi_deal_struct_i=(WI_DEAL_STRUCT_I*)calloc(1,sizeof(WI_DEAL_STRUCT_I));
+	APL_MALLOC_FAIL(l_wi_deal_struct_i)
+
+	memset(l_wi_deal_struct_i,0,sizeof(WI_DEAL_STRUCT_I));
+
+	// Retrieve the system date & time in string - chr_sys_access_stamp
+        if(CO_RtvMachDtTime(chr_sys_access_stamp, l_debug_info_ptr) != APL_SUCCESS)
+        {
+        	APL_GOBACK_FAIL
+        }
+	printf("Retrieved sys date = |%s|\n", chr_sys_access_stamp);
+	fflush(stdout);
+
+	printf("\t********* Splitting the main param string [%s]\n", p_param_str);
+	fflush(stdout);
+	fprintf(bauth_log,"Main Param String : [%s]\n", p_param_str);
+	if(APL_FAILURE == CO_SplitStr(p_param_str, '|', &l_int_num, &temp))
+	{
+	CO_ProcMonitor(bauth_log,"Failure from first CO_SplitStr with seperator as |",l_debug_info_ptr,NULL);
+		APL_GOBACK_FAIL
+	}
+
+	printf("Number of arguments for pipe seperator = |%d|\n", l_int_num);
+	fflush(stdout);
+	fprintf(bauth_log,"Number of records to be Authorized : [%d]\n", l_int_num);
+
+/*
+	for(i=0; i<l_int_num; i++)
+	{
+		strcpy(l_auth_record[i], temp[i]);
+		printf("temp[%d] -- l_auth_record[%d] -- |%s|\n", i, i, l_auth_record[i]);
+	}
+
+*/
+
+	for(i=0; i<l_int_num; i++)
+	{
+		EXEC SQL SAVEPOINT start_process;
+		printf("\t********* in the Auth for loop\n");
+		fflush(stdout);
+		//printf("l_auth_record[%d] -- |%s|\n", i, l_auth_record[i]);
+		printf("Record %d to be authorized -- [%s]\n", i+1, temp[i]);
+		fflush(stdout);
+		fprintf(bauth_log,"Record %d to be authorized -- [%s]\n", i+1, temp[i]);
+		memset(l_wi_deal_struct_h,NULL,sizeof(WI_DEAL_STRUCT_H));
+
+		if(APL_FAILURE == CO_SplitStr(temp[i], ';', &l_int_num1, &temp1))
+		{
+			CO_ProcMonitor(bauth_log,"Failure from first CO_SplitStr",l_debug_info_ptr,NULL);
+			APL_GOBACK_FAIL
+		}
+
+		printf("Number of arguments for semi colon seperator = |%d|\n", l_int_num1);
+		fflush(stdout);
+		fprintf(bauth_log,"Number of arguments for semi colon seperator = |%d|\n", l_int_num1);
+
+		fflush(stdout);
+		
+		if(l_int_num1==3)
+		{
+			strcpy(l_client, temp1[0]);
+			strcpy(l_identiy_no, temp1[1]);
+			strcpy(l_access_stamp, temp1[2]);
+		}
+		else
+		{
+			printf("Incorrect parameters....... fail this record...\n");
+		fflush(stdout);
+			fprintf(bauth_log,"Incorrect parameters....... failed this record...\n");
+			continue;
+		}
+		
+		printf("l_client 	-- |%s|\n", l_client);
+		fflush(stdout);
+		printf("l_identiy_no 	-- |%s|\n", l_identiy_no);
+		fflush(stdout);
+		printf("l_access_stamp 	-- |%s|\n", l_access_stamp);
+		fflush(stdout);
+
+		// Fetching the Record along with access stamp from WI_DEAL 
+		EXEC SQL
+		SELECT * into :l_wi_deal_struct_h:l_wi_deal_struct_i
+		FROM	WI_DEAL
+		WHERE	CLIENT = :l_client
+			AND IDENTIY_NO = :l_identiy_no FOR UPDATE;
+		//IS_ANY_ORA_ERROR // Avoid using this .......... Instead write your own code 
+
+		if(sqlca.sqlcode == 1403)
+		{
+			printf("Hellllloooooooo.......... No records found for the given client and refernce no.\n");
+			fprintf(bauth_log,"No records found for the given client[%s] and refernce no.[%s]\n",l_client,l_identiy_no);
+			fprintf(brep_log,"%-10d %-20s %-30s %-15s %s\n",i+1,l_client,l_identiy_no,"FAILURE","Record Not Found");
+			continue;
+		}
+		else if (sqlca.sqlcode != 0)
+		{
+			printf("Sorry... statement was executed with error ...[%d]\n",sqlca.sqlcode);
+			fprintf(bauth_log,"Error [%d]was returned while fetching record for client[%s] and refernce no.[%s]\n",sqlca.sqlcode,l_client,l_identiy_no);
+			fprintf(brep_log,"%-10d %-20s %-30s %-15s %s\n",i+1,l_client,l_identiy_no,"FAILURE","Unable to process the record");
+			continue;
+		}
+
+
+		printf("Access stamp sent in FE. is 	  -- [%s]\n", l_access_stamp);
+		fflush(stdout);
+		printf("Access stamp sent in Table. is 	  -- [%s]\n", l_wi_deal_struct_h->h_access_stamp);
+		fflush(stdout);
+		fprintf(bauth_log,"Access stamp sent in FE. is 	  -- [%s]\n", l_access_stamp);
+		fprintf(bauth_log,"Access stamp sent in Table. is 	  -- [%s]\n", l_wi_deal_struct_h->h_access_stamp);
+
+		// If this access stamp does not match with the access stamp sent, then reject it
+		if(strcmp(l_wi_deal_struct_h->h_access_stamp, l_access_stamp)!=0)
+		{
+			printf("Access stamp does not match.....here u need to write to a user log\n");
+		fflush(stdout);
+
+			fprintf(brep_log,"%-10d %-20s %-30s %-15s %s\n",i+1,l_wi_deal_struct_h->h_client,l_wi_deal_struct_h->h_identiy_no,"FAILURE","Record has been modified. Please check again");
+			fprintf(bauth_log,"Access stamp did not match ..... Failing the record \n");
+			continue;
+		}
+
+		printf("Calling the wrapper to Authorize .............. Hold ur breath!!!!\n");
+		fflush(stdout);
+
+
+		if((WI_DEAL_FUN(l_wi_deal_struct_h,
+                           p_intl_envdatastruct_h,
+                           l_debug_info_ptr) == APL_SUCCESS) && (CHECK_EXISTANCE_OF_ERROR))
+         	{
+			printf("Ufffffffff........... Returned from WI_DEAL_FUN Successfully ... here u need to write to the user log saying the record updation is successful\n");
+		fflush(stdout);
+			fprintf(brep_log,"%-10d %-20s %-30s %-15s %s\n",i+1,l_wi_deal_struct_h->h_client,l_wi_deal_struct_h->h_identiy_no,"SUCCESS"," ");
+			EXEC SQL COMMIT;
+			printf("sqlca.sqlcode in after COMMIT [%d]\n",sqlca.sqlcode);
+		}
+		else
+		{
+			EXEC SQL ROLLBACK TO SAVEPOINT start_process;
+			printf("Here try to get the failure reason and write into a log\n");
+			memset(l_errstring,APL_NULL_CHAR,sizeof(l_errstring));
+			CO_Rtv_Error(l_debug_info_ptr,l_errstring);
+			printf("Oh ..................Failed in WI_DEAL_FUN... here u need to write to the user log saying the record updation failed\n");
+			fprintf(brep_log,"%-10d %-20s %-30s %-15s %s\n",i+1,l_wi_deal_struct_h->h_client,l_wi_deal_struct_h->h_identiy_no,"FAILURE",l_errstring);
+
+			fprintf(bauth_log,"Now We need to change back the status of the record from BA to UU");
+			EXEC SQL UPDATE WI_DEAL SET DEAL_STAT='UU' WHERE DEAL_STAT='BA' AND CLIENT=:l_wi_deal_struct_h->h_client AND IDENTIY_NO=:l_wi_deal_struct_h->h_identiy_no;
+			if(sqlca.sqlcode != 0)
+			{
+				printf("Voilaaaaaaaa........ Even Updation of status from BA to UU Failed ...\n");
+				fprintf(bauth_log,"Updation of status from BA to UU Failed for [%s] [%s]\n",l_wi_deal_struct_h->h_client,l_wi_deal_struct_h->h_identiy_no);
+			}
+		}
+		
+		fprintf(bauth_log,"Processed this record .... Now going for next record\n");
+		fflush(stdout);
+		fflush(bauth_log);
+		fflush(brep_log);
+
+	}
+
+	EXEC SQL COMMIT;
+	IS_ANY_ORA_ERROR
+
+	APL_FREE(l_wi_deal_struct_h);
+
+	RETURN_SUCCESS  :
+	{
+		fprintf(bauth_log,"Success from function WI_Bulk_Auth \n");
+		CO_FreeErrLst(l_debug_info_ptr);
+		fflush(bauth_log);
+		return(APL_SUCCESS);
+	}
+
+	RETURN_FAILURE  :
+	{
+		fprintf(bauth_log,"Failure from function WI_Bulk_Auth -- ORA -- [%d]\n",sqlca.sqlcode);
+		CO_FreeErrLst(l_debug_info_ptr);
+		fflush(bauth_log);
+		return(APL_FAILURE);
+	}
+}
+int xxstrcpy(char *kargv,char *arv)
+{
+	char **temp=NULL;
+	int l_int_num=0;
+	int i=0;
+
+	strcpy(kargv,"'");
+	
+
+        if(APL_FAILURE == CO_SplitStr(arv, '|', &l_int_num, &temp))
+        {
+        printf("In xxstrcpy --Failure from first CO_SplitStr with seperator as |\n");
+                APL_GOBACK_FAIL
+        }
+
+	printf("ks --no of strings found is [%d]\n",l_int_num);
+	
+	for(i=0;i<l_int_num;i++)
+	{
+		//printf("KS -- the value of string is [%s]\n",kargv);
+		strcat(kargv,temp[i]);
+		strcat(kargv,"','");
+	}
+	strcat(kargv," '");
+
+	RETURN_SUCCESS  :
+	{
+	return(APL_SUCCESS);
+	}
+	RETURN_FAILURE  :
+	{
+	return(APL_FAILURE);
+	}
+}  
+		
+

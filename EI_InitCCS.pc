@@ -1,0 +1,566 @@
+
+
+
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+
+
+
+
+#include "CO_HostStructdef.h"
+
+#define FILENAME_LEN_A				80
+#define  APL_FAILCODE_LEN 3
+
+EXEC SQL INCLUDE sqlca;
+
+int DL_Pro_CCSConv(FILE *p_ptr_log_file,INTL_ENV_DATA_STRUCT_H *p_intl_env_data_struct_h_d,DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+//main(int argc,char **argv)
+int main(int argc,char **argv)//Changes done for AIX Migration
+{
+	DEBUG_INFO_STRUCT_H			*l_debug_info_ptr = NULL;
+	FILE						*l_ptr_ini_file = NULL;
+	FILE						*l_ptr_log_file = NULL;
+	INTL_ENV_DATA_STRUCT_H	l_intl_envdatastruct_h;
+	char						chr_l_inifile[FILENAME_LEN_A]   = APL_NULL_STRING;
+	char						chr_uname[APL_USERID_LEN]   = APL_NULL_STRING;
+	char						chr_passwd[APL_PASSWD_LEN]  = APL_NULL_STRING;
+	char						chr_custody_id_b[APL_USERID_LEN]  = APL_NULL_STRING;
+	int						int_l_flg = 0;
+	int						int_retval = 0;
+	char						chr_l_buf[BUFFER_LEN] = APL_NULL_STRING;
+	struct sqlca			sqlca;
+
+	memset(&l_intl_envdatastruct_h,NULL,sizeof(INTL_ENV_DATA_STRUCT_H));
+	
+	sqlca.sqlcode = 0;
+
+	
+	strcpy(l_intl_envdatastruct_h.usr, argv[3]);
+	strcpy(l_intl_envdatastruct_h.h_mode, argv[4]);
+	strcpy(l_intl_envdatastruct_h.processtion, argv[5]);
+	strcpy(l_intl_envdatastruct_h.auth_req, argv[6]);
+	strcpy(l_intl_envdatastruct_h.subprocess, argv[7]);
+	strcpy(l_intl_envdatastruct_h.h_process, argv[8]);
+	
+	strcpy(chr_l_inifile,getenv("INTL_ROOT_PATH"));
+	strcat(chr_l_inifile,"intl_sun.cfg");
+
+	if ((l_ptr_ini_file = fopen(chr_l_inifile,"r")) == NULL)
+		exit(-1);
+	
+	APL_FETCH_DB_LOGIN_DETAILS(l_ptr_ini_file,chr_custody_id_b,chr_uname,chr_passwd,APL_OUT_FILE,&l_debug_info_ptr)
+	
+	
+	
+	if (CO_Con_Db(chr_uname,chr_passwd,&l_debug_info_ptr) != APL_SUCCESS)
+		APL_GOBACK_FAIL
+
+	
+
+	int_retval = CO_Rtv_RptFileName("3t",APL_LOGFILE_DESC,100,argv[5],argv,&l_ptr_log_file,&l_debug_info_ptr);
+
+	if (int_retval != APL_SUCCESS)
+	{
+		EXEC SQL ROLLBACK WORK RELEASE;
+		APL_GOBACK_FAIL
+	}
+
+	
+
+	EXEC SQL COMMIT WORK;
+	
+	if (sqlca.sqlcode != 0)
+	{
+		CO_Proc_RptClose(l_ptr_log_file,&l_debug_info_ptr);
+
+		EXEC SQL ROLLBACK WORK RELEASE;
+		APL_GOBACK_FAIL
+	}
+	
+	memset(chr_l_buf,APL_NULL_CHAR,BUFFER_LEN);
+	sprintf(chr_l_buf,"CCS Conversion Program");
+	CO_ProcMonitor(l_ptr_log_file,chr_l_buf,NULL,NULL);
+
+	CO_ProcMonitor(l_ptr_log_file,"_________________________\n",NULL,NULL);
+	
+	CO_ProcMonitor(l_ptr_log_file,"Work Committed after chr_logfile creation \n",NULL,&l_intl_envdatastruct_h);
+
+	
+
+	if (CO_RtvSysParams(&l_debug_info_ptr) != APL_SUCCESS)
+	{
+		CO_ProcMonitor(l_ptr_log_file,"Unable to get system parameters - Rollback done \n",NULL,&l_intl_envdatastruct_h);
+		
+		CO_Proc_RptClose(l_ptr_log_file,&l_debug_info_ptr);
+		
+		EXEC SQL ROLLBACK WORK RELEASE;
+		
+		APL_GOBACK_FAIL	
+	}
+
+	
+	 
+	int_retval = CO_Pro_LocRec(argv,l_ptr_log_file,&l_debug_info_ptr);
+
+	if (int_retval != APL_SUCCESS)
+	{
+		CO_ProcMonitor(l_ptr_log_file,"Unable to lock BATCH_IN_PROC record - Rollback done \n",NULL,&l_intl_envdatastruct_h);
+		
+		CO_Proc_RptClose(l_ptr_log_file,&l_debug_info_ptr);
+
+		EXEC SQL ROLLBACK WORK RELEASE;
+		
+		APL_GOBACK_FAIL
+	}
+
+	
+
+		int_retval = DL_Pro_CCSConv(l_ptr_log_file,&l_intl_envdatastruct_h,&l_debug_info_ptr);
+
+	if (int_retval != APL_SUCCESS)
+	{
+		int_l_flg = 1;
+
+	   CO_Mod_Batch_Status(argv,l_ptr_log_file,&l_debug_info_ptr,int_l_flg);
+		
+		if (CO_ChkErr(l_debug_info_ptr) == APL_SUCCESS)
+		{
+			
+			CO_ProcMonitor(l_ptr_log_file,APL_NULL_STRING,&l_debug_info_ptr,&l_intl_envdatastruct_h);
+			CO_FreeErrLst(&l_debug_info_ptr);
+		}
+
+		CO_ProcMonitor(l_ptr_log_file,"FAILURE from CCS Conversion program \n",NULL,&l_intl_envdatastruct_h);
+
+		
+		CO_Proc_RptClose(l_ptr_log_file,&l_debug_info_ptr);
+
+		APL_GOBACK_FAIL	
+	}
+	else
+	{
+		int_l_flg = 0;
+
+		CO_Mod_Batch_Status(argv,l_ptr_log_file,&l_debug_info_ptr,int_l_flg);
+
+		if (CO_ChkErr(l_debug_info_ptr) == APL_SUCCESS)
+		{
+			
+			CO_ProcMonitor(l_ptr_log_file,APL_NULL_STRING,&l_debug_info_ptr,&l_intl_envdatastruct_h);
+			CO_FreeErrLst(&l_debug_info_ptr);
+		}
+
+		CO_ProcMonitor(l_ptr_log_file,"SUCCESS from CCS conversion program \n",NULL,&l_intl_envdatastruct_h);
+
+		
+		CO_Proc_RptClose(l_ptr_log_file,&l_debug_info_ptr);
+
+		APL_GOBACK_SUCCESS
+	}
+
+	RETURN_SUCCESS	:
+	{
+		fclose(l_ptr_ini_file);
+	   exit(0);
+	}
+
+	RETURN_FAILURE	:
+	{
+		fclose(l_ptr_ini_file);
+  		exit(-1);
+	}
+}
+
+
+
+int DL_Pro_CCSConv( FILE 						*p_ptr_log_file,
+					INTL_ENV_DATA_STRUCT_H 	*p_intl_env_data_struct_h_d,
+					DEBUG_INFO_STRUCT_H 			**l_debug_info_ptr)
+{
+	struct sqlca 		  		sqlca;
+
+	char 	chr_l_rowid_A[APL_ROWID_LEN] = APL_NULL_STRING;
+	char 	l_temp_locncd[5] = APL_NULL_STRING;
+	int   int_p_ccseligibility_flg = 0;
+	int	int_l_ccseligfail_flg = 0;
+	short	i_ora_rowid = 0;
+	char chr_l_buf[BUFFER_LEN]                = APL_NULL_STRING;
+
+	char	chr_l_h_client_a[APL_CLIENT_LENGTH]	= APL_NULL_STRING;
+	char	chr_l_h_refno_A[APL_TXNREFNO_LEN]	= APL_NULL_STRING;
+	char	chr_l_h_origrefno[APL_TXNREFNO_LEN]	= APL_NULL_STRING;
+	char  chr_l_h_trade_status[APL_STATUS_LEN]       = APL_NULL_STRING;
+	char  chr_l_h_orig_trade_status[APL_STATUS_LEN]       = APL_NULL_STRING;
+	char	int_l_h_failcode[APL_FAILCODE_LEN]	= APL_NULL_STRING;
+	char	chr_l_h_failnote[36]	= APL_NULL_STRING;
+	char	int_l_h_subfailcode[APL_FAILCODE_LEN]= APL_NULL_STRING;
+	char	chr_l_h_ccsmsgtyp[APL_STATUS_LEN]	=	APL_NULL_STRING;
+	char  chr_h_system_date[APL_DATE_LEN];
+	char	chr_buffer[KEY_LENGTH]	=	APL_NULL_STRING;
+	int	int_l_daemonstatus = 0;
+
+	short l_i_account		= 0;
+	short l_i_refno		= 0;
+	short l_i_origrefno		= 0;
+	short l_i_trade_status     = 0;
+	short l_i_orig_trade_status     = 0;
+	short l_i_failcode   = 0;
+	short l_i_subfailcode   = 0;
+	short l_i_failnote   = 0;
+
+	sqlca.sqlcode = 0;
+
+	EXEC SQL VAR chr_l_h_client_a                      IS STRING;
+	EXEC SQL VAR chr_l_h_refno_A                        IS STRING;
+	EXEC SQL VAR chr_l_h_origrefno                    IS STRING;
+	EXEC SQL VAR chr_l_h_trade_status                 IS STRING;
+	EXEC SQL VAR chr_l_h_orig_trade_status            IS STRING;
+	EXEC SQL VAR int_l_h_failcode							 IS STRING;
+	EXEC SQL VAR chr_l_h_failnote							 IS STRING;
+	EXEC SQL VAR int_l_h_subfailcode						 IS STRING;
+	EXEC SQL VAR chr_l_h_ccsmsgtyp                    IS STRING;
+	
+	CO_ProcMonitor(p_ptr_log_file,"Entered processtion DL_Pro_CCSConv \n",NULL,p_intl_env_data_struct_h_d);
+
+	if (strcmp(g_mt_commonsys_params_struct_h.ccs_ind,"Y") == 0)
+	{
+		 CO_ProcMonitor(APL_OUT_FILE,"CCS is already installed\n",NULL,p_intl_env_data_struct_h_d);
+		 CO_ProcMonitor(p_ptr_log_file,"CCS is already installed\n",NULL,p_intl_env_data_struct_h_d);
+		 APL_GOBACK_SUCCESS;
+	} 
+
+	
+         sqlca.sqlcode = 0;
+         EXEC SQL SELECT status INTO :int_l_daemonstatus FROM PRO_DAEMON_STATUS WHERE PROC_NAME = 'Trd_Server';
+         if(sqlca.sqlcode < 0)
+         {
+				memset(chr_buffer,APL_NULL_CHAR,KEY_LENGTH);
+            ltoa_r(sqlca.sqlcode,chr_buffer,KEY_LENGTH-1);
+            CO_InsertErr(l_debug_info_ptr,DB_ERR_NO,chr_buffer,
+            APL_NULL_STRING,APL_NULL_STRING,
+                   __LINE__,__FILE__);
+            printf("Database Query failed with sqlcode %d\n",sqlca.sqlcode);
+            APL_GOBACK_FAIL
+         }
+         if (int_l_daemonstatus != 0)                  
+         {
+            CO_ProcMonitor(APL_OUT_FILE,"TRADE SERVER IS ONLINE. CANNOT EXECUTE RE-SYN...\n",NULL,NULL);
+		 		CO_ProcMonitor(p_ptr_log_file,"TRADE SERVER IS ONLINE. CANNOT EXECUTE RE-SYN...\n",NULL,p_intl_env_data_struct_h_d);
+				APL_GOBACK_FAIL
+			}
+
+	
+	if (!strlen(g_mt_commonsys_params_struct_h.office_for_booking))
+	{
+		 CO_ProcMonitor(APL_OUT_FILE,"Booing Office in Common System Params not set.\n",NULL,p_intl_env_data_struct_h_d);
+		 CO_ProcMonitor(p_ptr_log_file,"Booing Office in Common System Params not set.\n",NULL,p_intl_env_data_struct_h_d);
+		 APL_GOBACK_SUCCESS;
+	}
+ 
+	EXEC SQL SELECT location_cd into :l_temp_locncd FROM MT_LOCATION where depo is null and rownum < 2;
+	IS_ANY_ORA_ERROR
+
+	if (sqlca.sqlcode != 1403)
+	{
+		 CO_ProcMonitor(APL_OUT_FILE,"Depository not update for some Locations.\n",NULL,p_intl_env_data_struct_h_d);
+		 CO_ProcMonitor(p_ptr_log_file,"Depository not update for some Locations.\n",NULL,p_intl_env_data_struct_h_d);
+		 APL_GOBACK_SUCCESS;
+	}
+
+	
+	EXEC SQL UPDATE MT_COMMON_SYS_PARAMS
+   SET      ccs_ind = 'R'; 
+
+   IS_ANY_ORA_ERROR
+
+   EXEC SQL DECLARE CTradeCur CURSOR FOR
+	SELECT CLIENT,IDENTIY_NO,DEAL_STAT,failreason_cd,ORIG_REFNO,sub_fail_cd,fail_det
+	FROM  DL_DEAL ORDER BY CLIENT,IDENTIY_NO;
+
+   IS_ANY_ORA_ERROR
+
+   EXEC SQL OPEN CTradeCur;
+
+   IS_ANY_ORA_ERROR
+
+	EXEC SQL DELETE FROM DL_CCSPENDTXN WHERE msg_class not in ('XS','XD');
+	
+	IS_ANY_ORA_ERROR
+
+	
+	strcpy(chr_l_h_ccsmsgtyp,MS_CCS_II);
+	
+	if (	DL_Mod_CCSPendDL(APL_NULL_STRING,
+								"00000000000",
+								chr_l_h_ccsmsgtyp,
+								APL_NULL_STRING,APL_NULL_STRING,APL_NULL_STRING,
+								l_debug_info_ptr) == APL_FAILURE	)
+	{
+		 CO_ProcMonitor(APL_OUT_FILE,"Failure from DbUpdCCSPendTxnFn", NULL, p_intl_env_data_struct_h_d);
+		 APL_GOBACK_FAIL;
+	} 
+
+   for(;;)
+   {
+      int_p_ccseligibility_flg = 0;
+
+		memset(chr_l_h_client_a,APL_NULL_CHAR,APL_CLIENT_LENGTH);
+		memset(chr_l_h_refno_A,APL_NULL_CHAR,APL_TXNREFNO_LEN);
+		memset(chr_l_h_origrefno,APL_NULL_CHAR,APL_TXNREFNO_LEN);
+		memset( chr_l_h_trade_status,APL_NULL_CHAR,APL_STATUS_LEN);
+		memset( chr_l_h_orig_trade_status,APL_NULL_CHAR,APL_STATUS_LEN);
+		memset(int_l_h_failcode,APL_NULL_CHAR,APL_FAILCODE_LEN);
+		memset(chr_l_h_failnote,APL_NULL_CHAR,36);
+		memset(chr_l_h_ccsmsgtyp,APL_NULL_CHAR,APL_STATUS_LEN);
+		memset(int_l_h_subfailcode,APL_NULL_CHAR,APL_FAILCODE_LEN);
+
+      EXEC SQL FETCH CTradeCur
+      INTO  :chr_l_h_client_a:l_i_account,
+				:chr_l_h_refno_A:l_i_refno,
+				:chr_l_h_trade_status:l_i_trade_status,
+				:int_l_h_failcode:l_i_failcode,
+				:chr_l_h_origrefno:l_i_origrefno,
+				:int_l_h_subfailcode:l_i_subfailcode,
+				:chr_l_h_failnote:l_i_failnote;
+
+      IS_ANY_ORA_ERROR
+
+      if (APL_ZERO_RESULT_SET)
+         break;
+
+    	memset(chr_l_buf,NULL,BUFFER_LEN);
+    	sprintf(  chr_l_buf,
+              "The Account is : %s and Refno is : %s",
+               chr_l_h_client_a,chr_l_h_refno_A);
+    	CO_ProcMonitor(   p_ptr_log_file,
+                  chr_l_buf,
+                  NULL,
+                  NULL );
+
+      if (APL_FAILURE == DL_Chk_CCSEligible( chr_l_h_client_a,
+                               chr_l_h_refno_A,
+                               &int_p_ccseligibility_flg,
+										 MS_CCS_XX,
+                               l_debug_info_ptr
+                               ) )
+      {
+          CO_ProcMonitor(APL_OUT_FILE,"Failure from CCS_CheckEligibility", NULL, p_intl_env_data_struct_h_d);
+          APL_GOBACK_FAIL;
+      }
+
+		if (!int_p_ccseligibility_flg)
+		{
+			continue;
+		}
+
+		if	(strcmp(chr_l_h_trade_status, STATUS_AUTH ) == 0)  
+		{
+			if (strlen(int_l_h_failcode) > 0)
+			{
+               int_l_ccseligfail_flg = 0;
+               if (APL_FAILURE == DL_Chk_DLFailCd(int_l_h_failcode,&int_l_ccseligfail_flg,l_debug_info_ptr))
+               {
+                  APL_GOBACK_FAIL
+               }
+               if (int_l_ccseligfail_flg)
+               {
+						strcpy(chr_l_h_ccsmsgtyp,MS_CCS_IF);
+					}
+					else
+					{
+						strcpy(chr_l_h_ccsmsgtyp,MS_CCS_IP);
+					}
+			}
+			else
+			{
+				strcpy(chr_l_h_ccsmsgtyp,MS_CCS_IP);
+			}
+		}
+		else if	((strcmp(chr_l_h_trade_status, STATUS_SMI_DELUAUTH ) == 0)|| (strcmp(chr_l_h_trade_status, "SA" ) == 0)
+				|| (strcmp(chr_l_h_trade_status, STATUS_SMI_DELAUTH ) == 0) || (strcmp(chr_l_h_trade_status, "SU" ) == 0) 
+				|| (strcmp(chr_l_h_trade_status, APL_STATUS_CD ) == 0) || (strcmp(chr_l_h_trade_status, APL_STATUS_CQ ) == 0) || (strcmp(chr_l_h_trade_status, APL_STATUS_MANUNAUTH ) == 0) )
+		{
+			strcpy(chr_l_h_ccsmsgtyp,MS_CCS_IP);
+		}
+		else if	(strcmp(chr_l_h_trade_status, STATUS_CONF ) == 0)
+		{
+			strcpy(chr_l_h_ccsmsgtyp,MS_CCS_IC);
+		}
+		else if	(strcmp(chr_l_h_trade_status, STATUS_SETL ) == 0)
+		{
+			
+
+			if (strcmp(chr_l_h_refno_A,chr_l_h_origrefno)!=0)
+			{
+				EXEC SQL SELECT DEAL_STAT INTO :chr_l_h_orig_trade_status:l_i_orig_trade_status
+							FROM DL_DEAL WHERE CLIENT = :chr_l_h_client_a AND
+													IDENTIY_NO = :chr_l_h_origrefno;
+				IS_ANY_ORA_ERROR
+
+				if (sqlca.sqlcode != 1403)
+				{
+					if (strcmp(chr_l_h_orig_trade_status,STATUS_SETL)!=0)
+					{  
+						strcpy(chr_l_h_ccsmsgtyp,"XP");
+					}
+				}
+
+						
+			} 
+		}
+		else
+		{
+			
+    		memset(chr_l_buf,NULL,BUFFER_LEN);
+    		sprintf(  chr_l_buf,
+              "Trade Status : %s. No Init msg sent\n",
+               chr_l_h_trade_status);
+    		CO_ProcMonitor(   p_ptr_log_file,
+                  chr_l_buf,
+                  NULL,
+                  NULL );
+
+			continue;
+		}
+		
+
+		if (strlen(chr_l_h_ccsmsgtyp)>0)
+		{
+    		memset(chr_l_buf,NULL,BUFFER_LEN);
+    		sprintf(  chr_l_buf,
+              "The CCS Msg Type is : %s\n",
+               chr_l_h_ccsmsgtyp);
+    		CO_ProcMonitor(   p_ptr_log_file,
+                  chr_l_buf,
+                  NULL,
+                  NULL );
+
+		if (strcmp(chr_l_h_ccsmsgtyp,MS_CCS_IF)==0)
+		{
+			if (	DL_Mod_CCSPendDL(chr_l_h_client_a,
+									chr_l_h_refno_A,
+									chr_l_h_ccsmsgtyp,
+									int_l_h_failcode,int_l_h_subfailcode,chr_l_h_failnote,
+									l_debug_info_ptr) == APL_FAILURE	)
+			{
+			 	CO_ProcMonitor(APL_OUT_FILE,"Failure from DbUpdCCSPendTxnFn", NULL, p_intl_env_data_struct_h_d);
+			 	APL_GOBACK_FAIL;
+			}
+		}
+		else
+		{
+	
+			if (	DL_Mod_CCSPendDL(chr_l_h_client_a,
+									chr_l_h_refno_A,
+									chr_l_h_ccsmsgtyp,
+									APL_NULL_STRING,APL_NULL_STRING,APL_NULL_STRING,
+									l_debug_info_ptr) == APL_FAILURE	)
+			{
+			 	CO_ProcMonitor(APL_OUT_FILE,"Failure from DbUpdCCSPendTxnFn", NULL, p_intl_env_data_struct_h_d);
+			 	APL_GOBACK_FAIL;
+			}
+		}
+		}
+
+		if ((strcmp(chr_l_h_trade_status, APL_STATUS_CD ) == 0) || (strcmp(chr_l_h_trade_status, APL_STATUS_CQ ) == 0))
+		{
+			
+			strcpy(chr_l_h_ccsmsgtyp,MS_CCS_X3);
+    		memset(chr_l_buf,NULL,BUFFER_LEN);
+    		sprintf(  chr_l_buf,
+              "The CCS Msg Type is : %s\n",
+               chr_l_h_ccsmsgtyp);
+    		CO_ProcMonitor(   p_ptr_log_file,
+                  chr_l_buf,
+                  NULL,
+                  NULL );
+
+	
+			if (	DL_Mod_CCSPendDL(chr_l_h_client_a,
+									chr_l_h_refno_A,
+									chr_l_h_ccsmsgtyp,
+									APL_NULL_STRING,APL_NULL_STRING,APL_NULL_STRING,
+									l_debug_info_ptr) == APL_FAILURE	)
+			{
+			 	CO_ProcMonitor(APL_OUT_FILE,"Failure from DbUpdCCSPendTxnFn", NULL, p_intl_env_data_struct_h_d);
+			 	APL_GOBACK_FAIL;
+			}
+			
+		}
+	}
+
+	
+
+	
+	memset(chr_h_system_date,APL_NULL_CHAR,APL_DATE_LEN);
+   if (APL_FAILURE == CO_RtvSysDtTime(chr_h_system_date,
+                                           l_debug_info_ptr) )
+   {
+      fprintf(APL_OUT_FILE,"failed To get System Date\n");
+      APL_GOBACK_FAIL
+   }
+
+	EXEC SQL  INSERT INTO DL_CCSPENDTXN  ( MSG_CLASS , IDENTITY, TLC_DEAL_TYPE, DEAL_CODE, CLIENT, MASTER_CLT,
+  										CLNT_IDENT, BRK, INSTR_CODE, QTY, CURRENCY_CD, AMT, SIGNATURE, GL_CLT, DEAL_DATE, SETL_DATE,
+  										EXP_SETLDATE, LOCATION_CD, MKRT_DL_CLASS, CP_CLT, FAILREASON_CD, SUB_FAIL_CD, FAIL_DET,
+  										FAILREASON_INDEX, NARRATIVE, ACTUAL_SETLDT, PROCESSDT, ACCESS_STAMP, STATUS, IDEN_NO )
+							SELECT decode(MSG_CLASS,'XS','IS','XD','IX','X3','T3','XP','SC') , IDENTITY, TLC_DEAL_TYPE, 
+										DEAL_CODE, CLIENT, MASTER_CLT,
+										CLNT_IDENT, BRK, INSTR_CODE, QTY, CURRENCY_CD, AMT, SIGNATURE, GL_CLT, DEAL_DATE, SETL_DATE,
+  										EXP_SETLDATE, LOCATION_CD, MKRT_DL_CLASS, CP_CLT, FAILREASON_CD, SUB_FAIL_CD, FAIL_DET,
+  										FAILREASON_INDEX, NARRATIVE, ACTUAL_SETLDT, PROCESSDT, :chr_h_system_date, 'P', 
+										CCSMSGSEQ.NEXTVAL 
+										FROM DL_CCSPENDTXN WHERE MSG_CLASS IN ('XS','XD','X3','XP') AND STATUS = 'X';
+	IS_ANY_ORA_ERROR
+
+	
+	EXEC SQL DELETE DL_CCSPENDTXN WHERE MSG_CLASS IN ('XS','XD','X3','XP') AND STATUS = 'X';
+	IS_ANY_ORA_ERROR
+	
+	
+	strcpy(chr_l_h_ccsmsgtyp,MS_CCS_II);
+	
+	if (	DL_Mod_CCSPendDL(APL_NULL_STRING,
+								"99999999999",
+								chr_l_h_ccsmsgtyp,
+								APL_NULL_STRING,APL_NULL_STRING,APL_NULL_STRING,
+								l_debug_info_ptr) == APL_FAILURE	)
+	{
+		 CO_ProcMonitor(APL_OUT_FILE,"Failure from DbUpdCCSPendTxnFn", NULL, p_intl_env_data_struct_h_d);
+		 APL_GOBACK_FAIL;
+	} 
+
+	EXEC SQL UPDATE MT_COMMON_SYS_PARAMS
+	SET		ccs_ind = 'Y'; 
+
+	IS_ANY_ORA_ERROR
+
+	EXEC SQL CLOSE CTradeCur;
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS :
+	{
+		CO_ProcMonitor(p_ptr_log_file,"Leaving processtion DL_Pro_CCSConv successfully\n",NULL,p_intl_env_data_struct_h_d);
+		return(APL_SUCCESS);
+	}
+
+	RETURN_FAILURE :
+	{
+		CO_ProcMonitor(p_ptr_log_file,"Leaving processtion DL_Pro_CCSConv with failure\n",NULL,p_intl_env_data_struct_h_d);
+		return(APL_FAILURE);
+	}
+}
+

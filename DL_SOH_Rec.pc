@@ -1,0 +1,345 @@
+/*
+**    COPYRIGHT NOTICE
+**
+**   Copyright 2005 Polaris Software Lab Limited. All rights reserved.
+**
+**   These materials are confidential and proprietary to
+**    Polaris Software Lab Limited and no part of these materials should
+**    be reproduced, published, transmitted or distributed in any form or
+**    by any means, electronic, mechanical, photocopying, recording or
+**    otherwise, or stored in any information storage or retrieval system
+**    of any nature nor should the materials be disclosed to third parties
+**    or used in any other manner for which this is not authorized, without
+**    the prior express written authorization of Polaris Software Lab Limited.
+**/
+/*********************************************************************
+**
+** Module Name         :      DEAL PROCESSING
+**
+** File Name           :      DL_SOH_rec.pc
+**
+** Description         :      DEAL HOLDING RECONCILATION
+**
+**
+**
+**            Version Control Block
+**
+** Date        Version     Author           Description        RFS No.
+** ---------   --------  ---------------  ------------------   ---------
+** 15/09/2006	  1.0     Amol Kulkarni
+**************************************************************************/
+
+#include "stdio_64.h"
+#include "Intellect_Common.h"
+#include "Intellect_Interface.h"
+#include "DL_Interface.h"
+#include "BT_Common.h"
+#include "Intellect_Error.h"
+#include "CO_IndStructdef.h"
+
+#define DATA_FIELD_SEPRTR ''
+#define DATA_VALUE_SEPRTR ''
+
+EXEC SQL INCLUDE SQLCA.H;
+
+main(int argc,char **argv)
+{		 
+	/***********		 Variable Declaration Section		 **********/
+	DEBUG_INFO_STRUCT_H **l_debug_info_ptr = (DEBUG_INFO_STRUCT_H **) NULL;
+	l_debug_info_ptr = (DEBUG_INFO_STRUCT_H **)calloc(1,sizeof(DEBUG_INFO_STRUCT_H *)); 
+	int l_int_num = 0;		 
+	char  **temp = ( char **)NULL;
+	FILE *l_logfile = (FILE *)NULL;
+	
+	char l_comment[501]=APL_NULL_STRING;
+	char l_dp_id[5];
+	char l_upl_date[APL_DATE_LEN];
+	char l_row_id[APL_ROWID_LEN]=APL_NULL_STRING;
+	char l_soh_row_id[APL_ROWID_LEN]=APL_NULL_STRING;
+	char l_cln_dp_code[21]=APL_NULL_STRING;
+	char l_instr_isin[13]=APL_NULL_STRING;
+	char l_block_type[2]=APL_NULL_STRING;
+	char l_status[3]=APL_NULL_STRING;
+	char l_soh_status[3]=APL_NULL_STRING;
+	double l_ben_acc_pos;
+
+	/* Variable Declaration*/		 
+	HISSAFEK_STRUCT_H *l_dl_safek=NULL;
+	HISSAFEK_STRUCT_I *l_dl_safek_ind=NULL;
+
+	/***********		 Data Base Connention		 **********/
+	if(CO_Get_DBConnect(l_debug_info_ptr) == APL_FAILURE)
+	{
+		APL_GOBACK_FAIL
+	}
+
+	/*********** Processing INPUT PARAMETERS START	**********/
+	if (APL_FAILURE == CO_Rtv_RptFileName( "7g",
+		APL_LOGFILE_DESC,
+		100,
+		argv[5],
+		argv,
+		&l_logfile,
+		l_debug_info_ptr ) ) 
+	{
+		CO_ProcMonitor(l_logfile, "Failure from CO RTY:", NULL, NULL);
+		APL_GOBACK_FAIL
+	} 
+
+	if(BT_Status_Update(argv[0],
+		argv[1],
+		argv[2],
+		APL_STARTED_STATUS,
+		l_debug_info_ptr) ==APL_FAILURE)
+	{
+		APL_GOBACK_FAIL
+	}
+
+	if(APL_FAILURE == CO_SplitStr(argv[9],
+		'|',
+		&l_int_num,&temp))
+	{
+		CO_ProcMonitor(l_logfile, "Failure from StrSplitFn", NULL, NULL);
+		APL_GOBACK_FAIL
+	}
+
+	if(sqlca.sqlcode)
+	{
+		APL_GOBACK_FAIL
+	}
+	
+	/*Calloc*/
+	l_dl_safek=(HISSAFEK_STRUCT_H *)calloc(1,sizeof(HISSAFEK_STRUCT_H));		 
+	l_dl_safek_ind=(HISSAFEK_STRUCT_I *)calloc(1,sizeof(HISSAFEK_STRUCT_I));		 
+	
+	/*MemSet*/
+	memset(l_dl_safek, NULL, sizeof(HISSAFEK_STRUCT_H));
+	memset(l_dl_safek_ind, NULL, sizeof(HISSAFEK_STRUCT_I));
+
+	if (!strlen(temp[0]))
+	{
+		fprintf(l_logfile,"\n\tReconciliation Date Msiing!!!!!!!!!\n");
+		CO_ProcMonitor(l_logfile, "Mandatory Data Missing : Reconciliation Date", NULL, NULL);
+		APL_GOBACK_FAIL
+	}
+
+	if (!strlen(temp[1]))
+	{
+		fprintf(l_logfile,"\n\tDepository ID Msiing!!!!!!!!!\n");
+		CO_ProcMonitor(l_logfile, "Mandatory Data Missing : Depository ID", NULL, NULL);
+		APL_GOBACK_FAIL
+	}
+
+	if(strcmp(temp[0],APL_NULL_STRING) == 0)
+		strcpy(l_upl_date,"%");
+	else
+		strcpy(l_upl_date, temp[0]);
+
+	if(strcmp(temp[1],APL_NULL_STRING) == 0)
+		strcpy(l_dp_id,"%");
+	else
+		strcpy(l_dp_id, temp[1]);
+	fprintf(l_logfile,"\n------------------------------------------------------------------------");
+	fprintf(l_logfile,"\n\t\tINPUT VALUES");
+	fprintf(l_logfile,"\n Reconciliation Date: |%s|\tlength=%d",l_upl_date,strlen(l_upl_date));
+	fprintf(l_logfile,"\n Depository ID: |%s|\tlength =%d",l_dp_id,strlen(l_dp_id));
+	fprintf(l_logfile,"\n------------------------------------------------------------------------");	
+
+	/*SQL Declaration*/
+	EXEC SQL BEGIN DECLARE SECTION;
+	EXEC SQL VAR l_upl_date is STRING;
+	EXEC SQL VAR l_dp_id  is STRING;
+	EXEC SQL VAR l_row_id is STRING;
+	EXEC SQL VAR l_cln_dp_code is STRING;
+	EXEC SQL VAR l_instr_isin is STRING;
+	EXEC SQL VAR l_status is STRING;
+	EXEC SQL END DECLARE SECTION;
+
+	/*Deleting all non RC Records from SOH_RECON*/
+	fprintf(l_logfile,"\n\n\tRecords Deletion from SOH_RECON");
+	EXEC SQL DELETE FROM SOH_RECON WHERE TRIM(STATUS) <> TRIM('RC') AND TRIM(LOCATION_CD) = TRIM(:l_dp_id) AND TRUNC(POSIT_DATE)=to_date(:l_upl_date,'DD/MM/YYYY');
+	fprintf(l_logfile,"\nsqlcode=%d",sqlca.sqlcode);
+	if(APL_ZERO_RESULT_SET)
+	{
+		fprintf(l_logfile,"\nNo Records for deletion");
+	} 
+
+	/*Updating Status of all RF Records as UU*/
+	fprintf(l_logfile,"\n\n\tStatus Updation from DL_UPL_SOH");
+	EXEC SQL UPDATE DL_UPL_SOH SET STATUS='UU' , COMMENTS='' WHERE TRIM(STATUS) = TRIM('RF') AND TRIM(DP_ID) = TRIM(:l_dp_id) AND TRUNC(UPL_DATE)=to_date(:l_upl_date,'DD/MM/YYYY');
+	fprintf(l_logfile,"\nsqlcode=%d",sqlca.sqlcode);
+	if(APL_ZERO_RESULT_SET)
+	{
+		fprintf(l_logfile,"\nNo Records for updation");
+	} 
+
+	/*Cursor Declaration retrieving values from  DL_HISSAFEK*/
+	EXEC SQL DECLARE deal_outer CURSOR FOR
+	SELECT rowid ,S.*  FROM  DL_HISSAFEK S WHERE TRUNC(POSIT_DATE)=To_Date(TRIM(:l_upl_date),'DD/MM/YYYY') AND LOCATION_CD LIKE :l_dp_id;
+
+	EXEC SQL OPEN deal_outer;
+
+	for(;;)
+	{
+		l_ben_acc_pos=0;
+		fprintf(l_logfile,"\n\n\tValues from HISSAFEK");
+		EXEC SQL FETCH deal_outer INTO :l_row_id,:l_dl_safek:l_dl_safek_ind;
+		fprintf(l_logfile,"\nsqlcode=%d",sqlca.sqlcode);
+		if(APL_ZERO_RESULT_SET)
+			break;
+
+		/*HISSAFEK Value Display*/
+		fprintf(l_logfile,"\nRow ID: |%s|",l_row_id);
+		fprintf(l_logfile,"\nINSTR_CODE: |%s|",l_dl_safek->h_instr_code);
+		fprintf(l_logfile,"\nPOSIT_DATE: |%s|",l_dl_safek->h_posit_date);
+		fprintf(l_logfile,"\nDepository ID:  |%s|",l_dl_safek->h_location_cd);
+		fprintf(l_logfile,"\nClient CODE: |%s|",l_dl_safek->h_client);
+		fprintf(l_logfile,"\nSAFEK Pos: |%lf|",l_dl_safek->h_safekeep_pos);
+		fprintf(l_logfile,"\nBLOCK Type:  |%s|",l_dl_safek->h_block_type);
+		
+		/*Client Depo Code Retrieval*/
+		fprintf(l_logfile,"\n\n\tClient Depo Code Retrieval");
+		EXEC SQL SELECT TRIM(CLN_DEPO_MAP_CLIENT_ID) INTO :l_cln_dp_code FROM MT_CLI_DEPO_MAP WHERE TRIM(CLN_CODE) = TRIM(:l_dl_safek->h_client) AND TRIM(CLN_DEPO_CODE)=TRIM(:l_dl_safek->h_location_cd) AND STATUS='AA';
+		fprintf(l_logfile,"\nsqlcode=%d",sqlca.sqlcode);
+		if(APL_ZERO_RESULT_SET)
+		{
+			fprintf(l_logfile,"\nClient Depo Code Does not exist",sqlca.sqlcode);
+			/*Insertion in SOH_RECON*/
+			fprintf(l_logfile,"\n\n\tSOH_RECON Insertion ::::Comment: Client DP ID not present");
+			EXEC SQL INSERT INTO SOH_RECON 
+			VALUES(
+				TRIM(:l_dp_id),
+				to_date(:l_upl_date,'DD/MM/YYYY'),
+				TRIM(:l_dl_safek->h_client),
+				TRIM(:l_dl_safek->h_instr_code),
+				TRIM(:l_ben_acc_pos),
+				:l_dl_safek->h_safekeep_pos,
+				TRIM('RF'), 
+				TRIM('Client DP ID not present')
+			);
+			fprintf(l_logfile,"\nsqlcode=%d  :::::Comment : Client DP ID not present",sqlca.sqlcode);
+			continue;
+		}
+		fprintf(l_logfile,"\n\nClient Depo Code: |%s|",l_cln_dp_code);		
+
+		/*Instrument Retrieval*/
+		fprintf(l_logfile,"\n\n\tISIN Retrieval");
+		EXEC SQL SELECT  INSTR_ISIN INTO :l_instr_isin FROM MT_INSTRUMENT WHERE TRIM(INSTR_CODE) = TRIM(:l_dl_safek->h_instr_code) AND TRIM(STATUS)='AA';
+		fprintf(l_logfile,"\nsqlcode=%d",sqlca.sqlcode);
+		if(APL_ZERO_RESULT_SET)
+		{
+			fprintf(l_logfile,"\nInstrument ISIN Does  not exist ",sqlca.sqlcode);
+		}
+		else
+		{
+			fprintf(l_logfile,"\nInstrument ISIN: |%s|",l_instr_isin);
+		}
+
+		if(!strcmp(l_dl_safek->h_block_type,"FREE"))
+			strcpy(l_block_type,"F");
+
+		if(!strcmp(l_dl_safek->h_block_type,"CABL"))
+			strcpy(l_block_type,"L");
+
+		if(!strcmp(l_dl_safek->h_block_type,"BLCK"))
+			strcpy(l_block_type,"B");
+		fprintf(l_logfile,"\n\nBlock Type: |%s|",l_block_type);
+
+		/*DL_UPL_SOH Retrieval*/
+		fprintf(l_logfile,"\n\n\tDL_UPL_SOH Retrieval");
+		EXEC SQL SELECT BEN_ACC_POS,STATUS,rowid INTO :l_ben_acc_pos,:l_soh_status,:l_soh_row_id FROM DL_UPL_SOH WHERE TRIM(ISIN) = TRIM(:l_instr_isin) AND TRIM(DP_ID) = TRIM(:l_dp_id) AND TRIM(BEN_ACC_NO)=TRIM(:l_cln_dp_code) AND TRIM(BLFLAG)=TRIM(:l_block_type) AND TRUNC(UPL_DATE)=to_date(:l_upl_date,'DD/MM/YYYY');
+		fprintf(l_logfile,"\nsqlcode=%d",sqlca.sqlcode);
+		
+		if(APL_ZERO_RESULT_SET)
+		{
+			/*Insertion in SOH_RECON*/
+			fprintf(l_logfile,"\n\n\tSOH_RECON Insertion ::::Comment: No Upload Present");
+			EXEC SQL INSERT INTO SOH_RECON 
+			VALUES(
+				TRIM(:l_dp_id),
+				to_date(:l_upl_date,'DD/MM/YYYY'),
+				TRIM(:l_dl_safek->h_client),
+				TRIM(:l_dl_safek->h_instr_code),
+				TRIM(:l_ben_acc_pos),
+				:l_dl_safek->h_safekeep_pos,
+				TRIM('UU'), 
+				TRIM('No Upload Present')
+			);
+			fprintf(l_logfile,"\nsqlcode=%d  :::::Comment : No Upload Present",sqlca.sqlcode);
+		
+			continue;
+		}
+		if(strcmp(l_soh_status,"RC"))
+		{
+			if(l_ben_acc_pos == l_dl_safek->h_safekeep_pos)
+			{
+				strcpy(l_status,"RC");
+				strcpy(l_comment,"Holdings Matched");
+				fprintf(l_logfile,"\nMatched");
+			}
+			else
+			{
+				strcpy(l_status,"RF");
+				/*strcpy(l_comment,"SAFEK Holdings:");
+				strcat(l_comment,((char*)ltoa(l_dl_safek->h_safekeep_pos)));
+				strcat(l_comment," , Upload Holdings:");
+				strcat(l_comment,((char*)ltoa(l_ben_acc_pos)));
+				*/
+				strcpy(l_comment,"Holdings Mismatch");
+			}
+			fprintf(l_logfile,"\nStatus=|%s|",l_status);
+			fprintf(l_logfile,"\nComments=|%s|",l_comment);
+		
+			/*Insertion in SOH_RECON*/
+			fprintf(l_logfile,"\n\n\tSOH_RECON Insertion");
+			EXEC SQL INSERT INTO SOH_RECON 
+			VALUES(
+				TRIM(:l_dp_id),
+				to_date(:l_upl_date,'DD/MM/YYYY'),
+				TRIM(:l_dl_safek->h_client),
+				TRIM(:l_dl_safek->h_instr_code),
+				TRIM(:l_ben_acc_pos),
+				:l_dl_safek->h_safekeep_pos,
+				TRIM(:l_status) , 
+				TRIM(:l_comment)
+			);
+			fprintf(l_logfile,"\nsqlcode=%d",sqlca.sqlcode);
+			
+			if(APL_ZERO_RESULT_SET)
+			{
+				continue;
+			}
+
+			/*Status Updation in DL_UPL_SOH*/
+			fprintf(l_logfile,"\n\n\tDL_UPL_SOH Status Updation");
+			EXEC SQL UPDATE DL_UPL_SOH SET STATUS=TRIM(:l_status) , COMMENTS=TRIM(:l_comment) WHERE ROWID=:l_soh_row_id;
+			fprintf(l_logfile,"\nsqlcode=%d",sqlca.sqlcode);
+			
+			if(APL_ZERO_RESULT_SET)
+			{
+				continue;
+			}
+		}
+	}
+
+	RETURN_SUCCESS :
+		if(BT_Status_Completed(argv[0],
+			argv[1],
+			argv[2],
+			l_debug_info_ptr)   ==  APL_FAILURE )
+		{
+			APL_GOBACK_FAIL
+		}
+		CO_Proc_RptClose(l_logfile, l_debug_info_ptr);
+
+		EXEC SQL COMMIT WORK;
+
+		if(sqlca.sqlcode != 0)APL_GOBACK_FAIL
+		exit(0);
+
+	RETURN_FAILURE    :
+		CO_ProcMonitor(l_logfile, "Data Not Found", NULL, NULL);
+		CO_Proc_RptClose(l_logfile, l_debug_info_ptr);
+		exit(-1);
+
+}		 

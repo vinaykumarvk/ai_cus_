@@ -1,0 +1,236 @@
+
+
+
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+
+
+
+
+#include "stdio_64.h" 
+#include <unistd.h>
+#include <string.h>
+#include <sys/wait.h>
+#include "CR_Common.h"
+
+
+#define S_RESTART 10
+#define S_START 11
+#define S_CANNOT_EXECUTE 12
+#define S_CONFLICT 13
+#define S_PREDECESSOR 14
+#define ERROR_LENGTH 200 
+#define S_NOTGOTLOCK sqlca.sqlcode==-54
+
+
+EXEC SQL INCLUDE SQLCA.H;
+EXEC SQL INCLUDE SQLDA.H;
+
+char						chr_inifile[PATH_LENGTH];
+FILE* chr_finifile1 = NULL;
+extern	char						chr_db_id[APL_USERID_LEN];
+extern	char						chr_db_pwd[APL_USERID_LEN];
+
+
+
+
+static int CO_Pro_ChkAborted(char *p_programname,
+									  char *chr_p_key_a,
+									  int *p_status_ind,
+									  DEBUG_INFO_STRUCT_H **l_debug_info_ptr,
+									  INTL_ENV_DATA_STRUCT_H *p_intl_env_datastruct_h) {
+	*p_status_ind=1;
+	char l_temp_status[16] = APL_NULL_STRING;
+	
+	EXEC SQL SELECT STATUS into :l_temp_status 
+		FROM SYS_BATCHPROC
+			WHERE PROCESS_NAME=:p_programname
+			  AND PROC_INIT	  =:chr_p_key_a
+			  AND STATUS  ='started'
+			  FOR UPDATE OF STATUS NOWAIT;
+	if(S_NOTGOTLOCK) {
+		*p_status_ind=0;
+		APL_GOBACK_SUCCESS
+		}
+	IS_ANY_ORA_ERROR			
+RETURN_SUCCESS:
+{
+	return APL_SUCCESS;
+}
+RETURN_FAILURE:
+{
+	return APL_FAILURE;
+}
+
+}
+
+
+
+static int CO_Pro_ChkDuplicate(char *p_programname,
+									  	 char *chr_p_key_a,
+										 int *p_status_ind,
+										 DEBUG_INFO_STRUCT_H **l_debug_info_ptr,
+										 INTL_ENV_DATA_STRUCT_H *p_intl_env_datastruct_h) 
+{
+	int int_h_count;
+	int int_funcreturnstatus;
+	char chr_errmsg[ERROR_LENGTH];
+	*p_status_ind=1;
+
+	EXEC SQL SELECT NVL(COUNT(*),0) INTO :int_h_count
+		FROM SYS_BATCHPROC 
+			WHERE 	PROCESS_NAME=:p_programname
+				  AND	PROC_INIT	  =:chr_p_key_a
+				  AND STATUS ='started';
+	IS_ANY_ORA_ERROR
+
+	if(int_h_count>1) 
+	{
+	 
+		sprintf(chr_errmsg,"Duplicate entry for process %s\n",p_programname);
+		CO_ProcMonitor(APL_OUT_FILE,chr_errmsg,NULL,p_intl_env_datastruct_h);
+		*p_status_ind=S_CANNOT_EXECUTE;
+		APL_GOBACK_SUCCESS
+	}
+
+	if(int_h_count==0) {
+		*p_status_ind=S_START;
+		APL_GOBACK_SUCCESS
+		}
+
+	if(CO_Pro_ChkAborted(p_programname,
+								chr_p_key_a,
+								&int_funcreturnstatus,
+								l_debug_info_ptr,
+								p_intl_env_datastruct_h)==APL_SUCCESS){
+		if(int_funcreturnstatus)
+		*p_status_ind=S_RESTART;
+		else
+		*p_status_ind=S_CANNOT_EXECUTE;
+		APL_GOBACK_SUCCESS
+		}
+APL_GOBACK_FAIL 
+RETURN_SUCCESS:
+{
+	return APL_SUCCESS;
+}
+
+RETURN_FAILURE:
+{
+	return APL_FAILURE;
+}
+}
+
+
+
+
+
+int EI_Proc_BatchRestart(char *p_progname,
+						  char *chr_p_key_a,
+						  char *p_funcparam,
+						  int *int_p_funcreturnstate,
+						  DEBUG_INFO_STRUCT_H **l_debug_info_ptr,
+						  INTL_ENV_DATA_STRUCT_H *p_intl_env_datastruct_h)
+{
+	int int_l_created;
+	char *chr_tempchar;
+	int int_l_chpid;
+	int int_l_status;
+	int int_deleteit;
+	char chr_errmsg[ERROR_LENGTH];
+	int i;
+	int int_l_howtostart;
+	char chr_l_sysdate_a[APL_DATE_LEN];
+	int int_funcreturnstatus;
+	char chr_sesamexecdir[PATH_LENGTH];
+
+	char l_temp_processing_status[51] = APL_NULL_STRING;
+	char l_temp_status[16] = APL_NULL_STRING;
+	int_deleteit=0;
+	int_l_created=0;
+
+	if((chr_tempchar=getenv("INTL_ROOT_PATH"))==NULL) 
+		return(APL_FAILURE);
+	sprintf(chr_inifile,"%s/intl_sun.cfg",chr_tempchar);
+	if((chr_finifile1=fopen(chr_inifile,"r"))==NULL)
+		return(APL_FAILURE);
+	
+	EXEC SQL VAR chr_l_sysdate_a IS STRING;
+	if(CO_RtvSysDt(chr_l_sysdate_a,l_debug_info_ptr)==APL_FAILURE)
+		APL_GOBACK_FAIL
+
+
+
+	int_funcreturnstatus=CO_Pro_ChkDuplicate(p_progname,
+												chr_p_key_a,
+												&int_l_howtostart,
+												l_debug_info_ptr,
+												p_intl_env_datastruct_h);
+	if(int_funcreturnstatus==APL_FAILURE) {
+		APL_GOBACK_FAIL
+		}
+	*int_p_funcreturnstate=S_RESTART;
+
+	if(int_l_howtostart==S_CANNOT_EXECUTE) 
+	{
+		sprintf(chr_errmsg,"A copy of program still running");
+		CO_ProcMonitor(APL_OUT_FILE,chr_errmsg,NULL,p_intl_env_datastruct_h);
+		*int_p_funcreturnstate=S_CANNOT_EXECUTE;
+		int_deleteit=1;
+		APL_GOBACK_SUCCESS
+	}
+
+	if(int_l_howtostart==S_START) {
+		*int_p_funcreturnstate=S_START;
+		EXEC SQL INSERT INTO SYS_BATCHPROC (PROCESS_NAME,PROC_INIT,STATUS,STARTDATE,USR, PROCESS_DESC)
+			VALUES(:p_progname,:chr_p_key_a,'started',:chr_l_sysdate_a,:p_intl_env_datastruct_h->usr, :p_intl_env_datastruct_h->processtion);
+		IS_ANY_ORA_ERROR
+		EXEC SQL COMMIT;
+		IS_ANY_ORA_ERROR
+		
+		  EXEC SQL SELECT STATUS,PROCESSING_STATUS into :l_temp_status,:l_temp_processing_status FROM SYS_BATCHPROC
+			  WHERE PROCESS_NAME=:p_progname
+			  AND 	PROC_INIT	  =:chr_p_key_a
+			  AND	STATUS  ='started'
+		     FOR UPDATE OF STATUS,PROCESSING_STATUS NOWAIT;
+		if(S_NOTGOTLOCK) {
+			CO_ProcMonitor(APL_OUT_FILE,"A copy of program running",NULL,p_intl_env_datastruct_h);
+			*int_p_funcreturnstate=S_CANNOT_EXECUTE;
+			int_deleteit=0;
+			APL_GOBACK_SUCCESS
+			}
+
+			  int_l_created=1;
+		}
+
+
+
+
+
+RETURN_SUCCESS:	
+{
+	fclose(chr_finifile1);
+	EXEC SQL COMMIT ;
+   return APL_SUCCESS;
+}
+
+RETURN_FAILURE:
+{
+	CO_ProcMonitor(APL_OUT_FILE,NULL,l_debug_info_ptr,p_intl_env_datastruct_h);
+	EXEC SQL COMMIT ;
+	fclose(chr_finifile1);
+	return APL_FAILURE;
+	}
+} 
+
+

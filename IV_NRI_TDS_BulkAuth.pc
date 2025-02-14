@@ -1,0 +1,265 @@
+/*
+ *    COPYRIGHT NOTICE
+ *
+ *   Copyright 2005 Polaris Software Lab Limited. All rights reserved.
+ *
+ *   These materials are confidential and proprietary to
+ *    Polaris Software Lab Limited and no part of these materials should
+ *    be reproduced, published, transmitted or distributed in any form or
+ *    by any means, electronic, mechanical, photocopying, recording or
+ *    otherwise, or stored in any information storage or retrieval system
+ *    of any nature nor should the materials be disclosed to third parties
+ *    or used in any other manner for which this is not authorized, without
+ *    the prior express written authorization of Polaris Software Lab Limited.
+*/
+/*********************************************************************
+ *
+ * Module Name         :      Billing Maintenance
+ *
+ * File Name           :      IV_NRI_TDSBulkAuth.pc
+ *
+ * Description         :      Bulk Authorization of NRI TDS records.
+ *                            
+ *
+ *
+ *            Version Control Block
+ *
+ * Date        Version     Author         Description       RFS No.
+ * ---------   --------  ------------     -------------     ---------
+ * 03/07/2008   1.0        ASHISH         New file           
+ *
+ *********************************************************************/
+
+#include "Intellect_Common.h"
+#include "BT_Common.h"
+#define APL_STATUS_START   "started"
+#include "CO_HostStructdef.h"
+#include "IV_Control_A.h"
+
+EXEC SQL INCLUDE SQLCA;
+int main(int argc,char **argv) //AIX - Warnings Removal
+{
+	struct sqlca sqlca;
+
+	FILE *g_flogfile                       = (FILE *)NULL;
+	DEBUG_INFO_STRUCT_H **l_debug_info_ptr = (DEBUG_INFO_STRUCT_H **) NULL;
+	FILE *chr_finifile                     = NULL;
+	char chr_inifile[PATH_LENGTH]          = APL_NULL_STRING;
+	char **temp                            = (char **)NULL;
+	char g_logger[1000]                    = APL_NULL_STRING;
+	char l_records[100]                    = APL_NULL_STRING;
+	char chr_sys_access_stamp[APL_DATE_LEN] = APL_NULL_STRING;
+	int count                              = 0;
+    int l_int_count                        = 0;
+    int l_cnt_fail_auth_rec                = 0;
+	int l_cnt_mult_rec                     = 0;
+	int l_cnt_zero_rec                     = 0;
+	int l_int_num                          = 0;
+
+	INTL_ENV_DATA_STRUCT_H       l_intl_env_data_h;
+
+	IV_NRI_TDS_STRUCT_H *p_iv_nri_tds_struct_h;
+	IV_NRI_TDS_STRUCT_I *p_iv_nri_tds_struct_i;  	
+
+	p_iv_nri_tds_struct_h = (IV_NRI_TDS_STRUCT_H *) calloc(1,sizeof(IV_NRI_TDS_STRUCT_H));
+	p_iv_nri_tds_struct_i = (IV_NRI_TDS_STRUCT_I *) calloc(1,sizeof(IV_NRI_TDS_STRUCT_I));  
+
+ 	APL_MALLOC_FAIL(p_iv_nri_tds_struct_h);
+  	APL_MALLOC_FAIL(p_iv_nri_tds_struct_i);
+
+	l_debug_info_ptr = (DEBUG_INFO_STRUCT_H **)calloc(1,sizeof(DEBUG_INFO_STRUCT_H *));
+
+	if(CO_Get_DBConnect(l_debug_info_ptr) == APL_FAILURE)
+	{
+		CO_ProcMonitor(g_flogfile,"\n Oracle Connection failed \n",l_debug_info_ptr,NULL);
+		APL_GOBACK_FAIL
+	}
+
+
+    strcpy(chr_inifile,getenv("INTL_ROOT_PATH"));
+
+   	strcat(chr_inifile,"intl_sun.cfg");
+
+	   if ( (chr_finifile = fopen(chr_inifile,"r") ) == NULL )
+	   {
+	       fprintf(g_flogfile,"\n Unable to open intl_sun.cfg \n");
+		   APL_GOBACK_FAIL
+	   }
+
+	if (APL_FAILURE == CO_Rtv_RptFileName( "NRI_TDS",
+											APL_LOGFILE_DESC,
+											100,
+											argv[5],
+											argv,
+											&g_flogfile,
+											l_debug_info_ptr ))
+	{
+		CO_ProcMonitor(g_flogfile,"\n Failure from CO_Rtv_RptFileName() \n",l_debug_info_ptr,NULL);
+		APL_GOBACK_FAIL
+	}
+
+	
+	
+	if(BT_Status_Update(argv[0],
+						argv[1],
+						argv[2],
+						APL_STARTED_STATUS,
+						l_debug_info_ptr) ==APL_FAILURE)
+	{
+		CO_ProcMonitor(g_flogfile,"\n Failure from BT_Status_Update() \n",l_debug_info_ptr,NULL);
+		APL_GOBACK_FAIL
+	}
+
+	
+	
+	if(APL_FAILURE == CO_SplitStr(argv[9],
+				      '|',
+				      &l_int_num,&temp))
+	{
+		CO_ProcMonitor(g_flogfile,"Failure from CO_SplitStr()",l_debug_info_ptr,NULL);
+		APL_GOBACK_FAIL
+	}
+
+	
+	printf("\n No of arguments |%d| \n",l_int_num);
+
+	
+	strcpy(l_intl_env_data_h.usr,          argv[3]);
+	strcpy(l_intl_env_data_h.h_mode,       argv[4]);
+	strcpy(l_intl_env_data_h.processtion,  argv[5]);
+	strcpy(l_intl_env_data_h.auth_req,     argv[6]);
+	strcpy(l_intl_env_data_h.subprocess,   argv[7]);
+	strcpy(l_intl_env_data_h.h_process,    argv[8]);
+
+
+	if(CO_RtvSysDtTime(chr_sys_access_stamp,l_debug_info_ptr) !=APL_SUCCESS)
+	{
+		CO_ProcMonitor(g_flogfile,"\n Fail to find System Date \n",l_debug_info_ptr,NULL);
+		APL_GOBACK_FAIL
+	}
+	
+	strcpy(p_iv_nri_tds_struct_h->h_access_stamp,chr_sys_access_stamp);
+	p_iv_nri_tds_struct_i->i_access_stamp =0;
+
+	strcpy(p_iv_nri_tds_struct_h->h_checker,l_intl_env_data_h.usr);
+	p_iv_nri_tds_struct_i->i_checker=0;
+
+	strcpy(p_iv_nri_tds_struct_h->h_checker_dt,chr_sys_access_stamp);
+	p_iv_nri_tds_struct_i->i_checker_dt=0;
+
+	strcpy(p_iv_nri_tds_struct_h->h_status,STATUS_AUTH);
+	p_iv_nri_tds_struct_i->i_status =0;
+
+	if(strcmp(l_intl_env_data_h.h_mode,"SPF") == 0)
+	{
+		strcpy(l_intl_env_data_h.h_mode,APL_FUNC_AUTHORISE);
+	}
+
+	if(l_int_num > 0)
+	{
+		for(count = 0 ; count < l_int_num ; count++)
+		{
+			strcpy(l_records,temp[count]);
+
+			EXEC SQL SELECT COUNT(*)
+					 INTO:l_int_count
+					 FROM IV_NRI_TDS
+					 WHERE TO_CHAR(TRUNC(DEAL_DATE),'DD/MM/YYYY')||';'||CLIENT_CODE IN (:l_records) 
+					 AND STATUS = 'UU';
+			IS_ANY_ORA_ERROR
+			Alert("\n sqlca.sqlcode = |%d| \n",sqlca.sqlcode);
+			Alert("\n No. of Records for (deal date;client) (%s) = |%d| \n",l_records,l_int_count);
+
+			if(l_int_count == 1)
+			{
+				p_iv_nri_tds_struct_i->i_client_code = 0;
+				p_iv_nri_tds_struct_i->i_identiry_no = 0;
+				p_iv_nri_tds_struct_i->i_deal_date   = 0;
+				p_iv_nri_tds_struct_i->i_gross_amt   = 0;
+				p_iv_nri_tds_struct_i->i_maker       = 0;
+				p_iv_nri_tds_struct_i->i_maker_dt    = 0;
+				p_iv_nri_tds_struct_i->i_checker     = 0;
+				p_iv_nri_tds_struct_i->i_checker_dt  = 0;
+				p_iv_nri_tds_struct_i->i_status      = 0;
+				p_iv_nri_tds_struct_i->i_access_stamp= 0;
+
+
+				EXEC SQL SELECT *
+						 INTO:p_iv_nri_tds_struct_h:p_iv_nri_tds_struct_i
+						 FROM IV_NRI_TDS
+						 WHERE TO_CHAR(TRUNC(DEAL_DATE),'DD/MM/YYYY')||';'||CLIENT_CODE IN (:l_records)
+						 AND STATUS = 'UU';
+				IS_ANY_ORA_ERROR
+				Alert("\n sqlca.sqlcode = |%d| \n",sqlca.sqlcode);
+
+				if(APL_FAILURE == WI_ModDbIV_NRI_TDS(p_iv_nri_tds_struct_h,l_intl_env_data_h,l_debug_info_ptr))
+				{
+					CO_ProcMonitor(g_flogfile,"\n Failure from function WI_ModDbIV_NRI_TDS() \n",l_debug_info_ptr,NULL);
+
+					l_cnt_fail_auth_rec++;
+
+				}
+			}
+
+			else if(l_int_count > 1)
+			{
+				sprintf(g_logger,"\n Multiple records have been found for (Deal Date;Client) = (%s) \n",l_records);
+				CO_ProcMonitor(g_flogfile,g_logger,l_debug_info_ptr,NULL);
+
+				l_cnt_mult_rec++;
+			}
+
+			else
+			{
+				sprintf(g_logger,"\n No record has been found for (Deal Date;Client) = (%s) \n",l_records);
+				CO_ProcMonitor(g_flogfile,g_logger,l_debug_info_ptr,NULL);
+
+				l_cnt_zero_rec++;
+			}
+
+		}
+	}
+
+    
+	sprintf(g_logger,"\n So Total No. of records fail in authorization = |%d| \n",l_cnt_fail_auth_rec+l_cnt_mult_rec+l_cnt_zero_rec);
+
+	Alert("\n %s \n",g_logger);
+
+	CO_ProcMonitor(g_flogfile,g_logger, l_debug_info_ptr, NULL);
+
+	APL_GOBACK_SUCCESS
+
+			RETURN_SUCCESS:
+
+			sprintf(g_logger,"\n Success from NRI TDS Bulk Authorization with no. of fail records = |%d| \n",l_cnt_fail_auth_rec+l_cnt_mult_rec+l_cnt_zero_rec);
+            
+			Alert("\n %s \n",g_logger);
+
+			CO_ProcMonitor(g_flogfile,g_logger, l_debug_info_ptr, NULL);
+
+
+			if(BT_Status_Completed(argv[0],
+							argv[1],
+							argv[2],
+							l_debug_info_ptr)   ==  APL_FAILURE )
+			{
+						APL_GOBACK_FAIL
+			}
+
+			CO_Proc_RptClose(g_flogfile, l_debug_info_ptr);
+
+			EXEC SQL COMMIT WORK;
+
+			if(sqlca.sqlcode != 0)
+				APL_GOBACK_FAIL
+				exit(0);
+
+			RETURN_FAILURE:
+
+			sprintf(g_logger,"\n Failure from NRI TDS Bulk Authorization %d \n", l_cnt_fail_auth_rec+l_cnt_mult_rec+l_cnt_zero_rec);
+            
+			Alert("\n %s \n",g_logger);
+
+			CO_Proc_RptClose(g_flogfile, l_debug_info_ptr);
+			exit(-1);
+}

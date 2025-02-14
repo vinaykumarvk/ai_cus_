@@ -1,0 +1,193 @@
+/*
+ *    COPYRIGHT NOTICE
+ *
+ *   Copyright 2014 Polaris Financial Technology Limited. All rights reserved.
+ *
+ *   These materials are confidential and proprietary to
+ *    Polaris Software Lab Limited and no part of these materials should
+ *    be reproduced, published, transmitted or distributed in any form or
+ *    by any means, electronic, mechanical, photocopying, recording or
+ *    otherwise, or stored in any information storage or retrieval system
+ *    of any nature nor should the materials be disclosed to third parties
+ *    or used in any other manner for which this is not authorized, without
+ *    the prior express written authorization of Polaris Software Lab Limited.
+ */
+/*********************************************************************
+ *
+ * Module Name         :      Generic Process
+ *
+ * File Name           :      CM_BatchDaemon.pc
+ *
+ * Description         :      Update Batch Process,As Mark Process Completed
+ *
+ *
+ *
+ *            Version Control Block
+ *
+ * Date        Version     Author           Description        RFS No.
+ * ---------   --------  ---------------  ------------------   ---------
+ * 10/12/2014	1.0		 Prateek Singh		ISKB_7091(Front End Option to Mark Process as Completed if it is not running on Unix)
+ *
+ *					    
+ *************************************************************************/
+
+ 
+#include <unistd.h>
+#include "CR_Common.h"
+#include "stdio_64.h"
+EXEC SQL INCLUDE SQLCA.H;
+#define SLEEP_TIME 100
+#define APL_ZERO_RESULTSET (sqlca.sqlcode==1403)
+
+char process_name[60];
+char chr_pid[8];
+char chr_rowid[100];
+int CO_ChkIsWorking() {
+	FILE *fp;
+	char chr_buff[101];
+	char chr_cmdstring[200];
+	sprintf(chr_cmdstring,"ps -efa|grep %s|grep %s|grep -v grep",chr_pid,process_name);
+	fp=popen(chr_cmdstring,"r");
+	if(fgets(chr_buff,100,fp)!=NULL)
+	{
+		fclose(fp);
+		return(1);
+	}
+	
+	fclose(fp);
+	return(0);
+}
+int main(int argc, char ** argv) {
+	short i_progclr_name,i_pid,i_rowId;
+	DEBUG_INFO_STRUCT_H *l_debug_infomation =NULL;          
+	DEBUG_INFO_STRUCT_H **l_debug_info_ptr =NULL; 
+	FILE *chr_inifile;
+	FILE* g_logfile;
+	char chr_db_id[30];
+	char chr_custody_id_b[30];
+	char chr_db_pwd[200];
+	char chr_finifile[PATH_LENGTH];
+	char chr_g_log_buff[MSG_LENGTH]= APL_NULL_STRING;
+	char chr_l_sysdate_a[APL_DATE_LEN] = APL_NULL_STRING;
+	char chr_g_sys_date_time[APL_DATE_LEN]= APL_NULL_STRING;
+	l_debug_info_ptr=&l_debug_infomation;
+	EXEC SQL VAR process_name IS STRING;
+	EXEC SQL VAR chr_pid IS STRING;
+	EXEC SQL VAR chr_rowid IS STRING;
+	EXEC SQL VAR chr_l_sysdate_a IS STRING;
+	sqlca.sqlcode=0;
+
+
+	/* 1. Connect to Database */
+
+	chr_inifile=fopen(strcat(strcpy(chr_finifile,getenv("INTL_ROOT_PATH")),"/intl_sun.cfg"),"r");
+	APL_FETCH_DB_LOGIN_DETAILS(chr_inifile,chr_custody_id_b,chr_db_id,chr_db_pwd,stdout,&l_debug_info_ptr);
+	fclose(chr_inifile);
+
+	EXEC SQL CONNECT :chr_db_id IDENTIFIED BY :chr_db_pwd;	
+	if(sqlca.sqlcode<0) {
+		printf("Could not Connect\n");
+		printf("Sql h_code is %d\n",sqlca.sqlcode);
+		APL_GOBACK_FAIL;
+	}
+	if ( CO_Rtv_RptFileName("4C",
+                APL_LOGFILE_DESC,
+                100,
+                argv[5],
+                argv,
+                &g_logfile,
+                l_debug_info_ptr) ==APL_FAILURE)
+	{
+		APL_GOBACK_FAIL;
+	}
+
+	if ( CO_RtvSysDtTime(chr_g_sys_date_time,l_debug_info_ptr) == APL_FAILURE )
+		APL_GOBACK_FAIL
+	EXEC SQL COMMIT;
+	
+		EXEC SQL DECLARE curs CURSOR FOR
+		SELECT PROCESS_NAME,PROC_ID,ROWID
+		FROM SYS_BATCHPROC
+		WHERE STATUS='started'
+		AND PROCESS_NAME NOT LIKE '%Transmitter' 
+		AND PROCESS_NAME NOT LIKE '%ISOFormatter' 
+		AND PROCESS_NAME NOT LIKE 'CM_BatchDaemon'
+		AND PROCESS_NAME NOT LIKE '%MessageMover'
+		AND PROCESS_NAME NOT LIKE 'PROC_EOD';
+		IS_ANY_ORA_ERROR
+
+		sprintf(chr_g_log_buff,"Mark Process Complete Started on	(%s)\n",chr_g_sys_date_time);
+			CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+			
+
+
+		EXEC SQL OPEN curs;
+		IS_ANY_ORA_ERROR
+
+		while(1)
+			{
+			EXEC SQL FETCH curs INTO :process_name:i_progclr_name,:chr_pid:i_pid,:chr_rowid:i_rowId;
+			IS_ANY_ORA_ERROR
+
+			if(APL_ZERO_RESULTSET)
+			{
+				break;
+			}
+
+			if(CO_ChkIsWorking()) {
+			sprintf(chr_g_log_buff,"Process  %s   %s  still Running. Skipping. \n",chr_pid,process_name);
+			CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+			continue;
+			}
+
+			EXEC SQL UPDATE SYS_BATCHPROC
+				SET STATUS='completed'
+				WHERE ROWID=:chr_rowid;
+				
+			EXEC SQL COMMIT;
+			IS_ANY_ORA_ERROR
+			
+
+			sprintf(chr_g_log_buff,"Marked Process  %s   %s   Completed.\n",chr_pid,process_name);
+			CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+			
+			
+
+			}
+
+			EXEC SQL CLOSE curs;
+			IS_ANY_ORA_ERROR
+
+	RETURN_SUCCESS:
+	{
+                        if(BT_Status_Completed(argv[0],
+					       argv[1],
+					       argv[2],
+					       l_debug_info_ptr)   ==  APL_FAILURE )
+			{
+			APL_GOBACK_FAIL
+			}
+			EXEC SQL COMMIT;
+			sprintf(chr_g_log_buff,"Mark  Process Complete Exiting Successfully. (%s)\n",chr_g_sys_date_time);
+			CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+			fclose(g_logfile);
+			exit(0);
+		
+	}
+	RETURN_FAILURE:
+	{
+			if(BT_Status_Completed(argv[0],
+					       argv[1],
+					       argv[2],
+					       l_debug_info_ptr)   ==  APL_FAILURE )
+			{
+			APL_GOBACK_FAIL
+			}
+			EXEC SQL COMMIT;
+			sprintf(chr_g_log_buff,"Mark Process Complete Exiting With Failure (%s)\n",chr_g_sys_date_time);
+			CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+			fclose(g_logfile);
+			exit(-1);
+		
+	}
+}

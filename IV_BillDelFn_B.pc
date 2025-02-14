@@ -1,0 +1,858 @@
+
+
+
+
+
+#include "stdio_64.h"
+#include <string.h> 
+#include <stdlib.h>
+#include "IV_Control_A.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+
+
+int IV_Rtv_IsExistUUAccounts(FILE *p_errorlog, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	
+
+	char chr_l_isopenunauthacc = 'N';
+	int int_l_count = 0;
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+		char chr_h_client[APL_CLIENT_LENGTH];
+		EXEC SQL VAR chr_h_client IS STRING;
+
+		short int int_i_client = 0;
+		struct sqlca sqlca;
+
+	EXEC SQL END DECLARE SECTION;
+
+	#ifdef APL_THREADS
+		APL_SET_CONTEXT
+		EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	memset(chr_h_client, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+
+	EXEC SQL DECLARE UnauthAcc CURSOR FOR
+		 SELECT CLIENT
+		 FROM IV_CLIENTSETUP, SYS_IVCONTROLPARAM
+		 WHERE ((IV_CLIENTSETUP.STAT_IND = 'U') AND
+			(IV_CLIENTSETUP.DATE_OF_INPUT <= SYS_IVCONTROLPARAM.B_UPTO_DATE));
+
+	EXEC SQL OPEN UnauthAcc;
+
+	IS_ANY_ORA_ERROR
+
+	chr_l_isopenunauthacc = 'Y';
+
+	for ( ; ;int_l_count++ )
+	{
+		EXEC SQL FETCH UnauthAcc INTO :chr_h_client INDICATOR :int_i_client;
+
+		IS_ANY_ORA_ERROR
+
+		if ( sqlca.sqlcode == 1403 )
+		{
+			break;	
+		}
+
+		fprintf(p_errorlog, "\t%d\tUnauthorised Account: %s\n", 
+			int_l_count, chr_h_client);
+	}
+
+	EXEC SQL CLOSE UnauthAcc;
+
+	chr_l_isopenunauthacc = 'N';
+
+	if ( !int_l_count )
+	{
+		APL_GOBACK_FAIL 
+	}
+	else
+	{
+		APL_GOBACK_SUCCESS
+	}
+
+	RETURN_SUCCESS:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully from \
+IV_Rtv_IsExistUUAccounts().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_SUCCESS;
+
+	RETURN_FAILURE:
+
+		if ( chr_l_isopenunauthacc == 'Y' )	
+		{
+			EXEC SQL CLOSE UnauthAcc;
+		}
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully from \
+IV_Rtv_IsExistUUAccounts().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_FAILURE;
+}
+
+
+
+int IV_Mod_BYRACT(const int p_year, const int p_month, 
+		  const char p_typeofentry, const double p_amount, 
+		  int *int_p_retstat, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	char chr_l_existsimilarentry = 'Y';
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+		char chr_h_rowid[APL_ROWID_LEN];
+		EXEC SQL VAR chr_h_rowid IS STRING;
+
+		short int int_i_rowid = 0, int_i_year = 0, int_i_month = 0;
+		short int int_i_billing = 0, int_i_payments = 0;
+		struct sqlca sqlca;
+
+	EXEC SQL END DECLARE SECTION;
+
+	#ifdef APL_THREADS
+		APL_SET_CONTEXT
+		EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	memset(chr_h_rowid, APL_NULL_CHAR, APL_ROWID_LEN);
+
+	EXEC SQL SELECT ROWID
+		 INTO :chr_h_rowid INDICATOR :int_i_rowid
+		 FROM YEARLY_AE
+		 WHERE ((YR = :p_year) AND
+			(MONTH = :p_month));
+
+	if ( sqlca.sqlcode < 0 )
+	{
+		char chr_l_buffer[KEY_LENGTH];
+
+		memset(chr_l_buffer, APL_NULL_CHAR, KEY_LENGTH);
+
+		ltoa_r(sqlca.sqlcode, chr_l_buffer, KEY_LENGTH - 1);
+
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+		CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, chr_l_buffer, 
+			       APL_NULL_STRING, APL_NULL_STRING, 
+			       __LINE__, __FILE__);
+
+		APL_GOBACK_FAIL;
+	}
+	else if ( sqlca.sqlcode == 1403 )
+	{
+		chr_l_existsimilarentry = 'N';
+	}
+
+	if (chr_l_existsimilarentry == 'N')
+	{
+		if (p_typeofentry == 'B')
+		{
+			EXEC SQL INSERT INTO YEARLY_AE
+				 VALUES(:p_year INDICATOR :int_i_year, 
+			       		:p_month INDICATOR :int_i_month, 
+			        	:p_amount INDICATOR :int_i_billing, 
+				 	 0.0);
+
+			if ( sqlca.sqlcode < 0 )
+			{
+				char chr_l_buffer[KEY_LENGTH];
+
+				memset(chr_l_buffer, APL_NULL_CHAR, KEY_LENGTH);
+
+				ltoa_r(sqlca.sqlcode, chr_l_buffer, KEY_LENGTH - 1);
+
+				*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+				CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, 
+					       chr_l_buffer, APL_NULL_STRING, 
+					       APL_NULL_STRING, __LINE__, 
+					       __FILE__);
+
+				APL_GOBACK_FAIL;
+			}	
+		}
+		else if (p_typeofentry == 'P')
+		{
+			EXEC SQL INSERT INTO YEARLY_AE
+				 VALUES(:p_year INDICATOR :int_i_year, 
+			        	:p_month INDICATOR :int_i_month, 
+					 0.0, 
+			        	:p_amount INDICATOR :int_i_payments);
+
+			if ( sqlca.sqlcode < 0 )
+			{
+				char chr_l_buffer[KEY_LENGTH];
+
+				memset(chr_l_buffer, APL_NULL_CHAR, KEY_LENGTH);
+
+				ltoa_r(sqlca.sqlcode, chr_l_buffer, KEY_LENGTH - 1);
+
+				*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+				CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, 
+					       chr_l_buffer, APL_NULL_STRING, 
+					       APL_NULL_STRING, __LINE__, 
+					       __FILE__);
+
+				APL_GOBACK_FAIL;
+			}	
+		}
+	}
+	else if (chr_l_existsimilarentry == 'Y')
+	{
+		if (p_typeofentry == 'P')
+		{
+			EXEC SQL UPDATE YEARLY_AE
+				 SET PAYMENTS = PAYMENTS + :p_amount
+				 WHERE (ROWID = :chr_h_rowid);
+
+			if ( sqlca.sqlcode < 0 )
+			{
+				char chr_l_buffer[KEY_LENGTH];
+
+				memset(chr_l_buffer, APL_NULL_CHAR, KEY_LENGTH);
+
+				ltoa_r(sqlca.sqlcode, chr_l_buffer, KEY_LENGTH - 1);
+
+				*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+				CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, 
+					       chr_l_buffer, 
+					       APL_NULL_STRING, APL_NULL_STRING,
+					       __LINE__, __FILE__);
+
+				APL_GOBACK_FAIL;
+			}	
+		}
+		else 
+		{
+			EXEC SQL UPDATE YEARLY_AE
+			     SET INVOICE = INVOICE + :p_amount
+			     WHERE ( ROWID = :chr_h_rowid );
+
+			if ( sqlca.sqlcode < 0 )
+			{
+				char chr_l_buffer[KEY_LENGTH];
+
+				memset(chr_l_buffer, APL_NULL_CHAR, KEY_LENGTH);
+
+				ltoa_r(sqlca.sqlcode, chr_l_buffer, KEY_LENGTH - 1);
+
+				*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+				CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, 
+					       chr_l_buffer, 
+					       APL_NULL_STRING, APL_NULL_STRING,
+					       __LINE__, __FILE__);
+
+				APL_GOBACK_FAIL;
+			}	
+		}
+	} 
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of \
+IV_Mod_BYRACT().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_SUCCESS;
+
+	RETURN_FAILURE:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of\
+ IV_Mod_BYRACT().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_FAILURE;
+
+}
+
+
+
+int IV_Proc_AdjOverbillAmount(const char *p_client, double p_overbillamt, 
+		      const char *p_blccycode, int *int_p_retstat, 
+		      DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	
+
+	extern int IV_Mod_IVLEDGERAmt(const IV_LEDGER_STRUCT *l_iv_ledger_struct, 
+				      const char *chr_l_rowid, int *int_l_status, 
+				      DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+	
+
+	char chr_l_isopenoverbilladjcur = 'N';
+	char chr_l_buffer1[BUFFER_LEN];
+	int int_l_status = 0;
+	double l_overbillamount = p_overbillamt;
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+		char chr_h_rowid[APL_ROWID_LEN];
+		char chr_h_maxdocdt[APL_DATE_LEN];
+
+		EXEC SQL VAR chr_h_rowid IS STRING;
+		EXEC SQL VAR chr_h_maxdocdt IS STRING;
+
+		int int_h_maxseqnum = 0;
+		double h_servpymntamount = 0.0;
+
+		IV_LEDGER_STRUCT l_iv_ledger_structa;
+		EXEC SQL VAR l_iv_ledger_structa.client IS STRING;
+		EXEC SQL VAR l_iv_ledger_structa.dateof_doc IS STRING;
+		EXEC SQL VAR l_iv_ledger_structa.b_ccycd IS STRING;
+
+		short int int_i_rowid = 0, int_i_maxdocdt = 0, int_i_maxseqnum = 0;
+		I_IV_LEDGER_STRUCT l_i_iv_ledger_struct = {0, 0, 0, 0, 0, 0, 0, 0, 0};
+		struct sqlca sqlca;
+
+	EXEC SQL END DECLARE SECTION;
+
+	#ifdef APL_THREADS
+		APL_SET_CONTEXT
+		EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	if ( !strlen(p_client) )
+	{
+		APL_DATA_MISSING("Account", APL_NULL_STRING, APL_NULL_STRING)
+	}
+
+	if ( !strlen(p_blccycode) )
+	{
+		APL_DATA_MISSING("Currency Code", APL_NULL_STRING, 
+				 APL_NULL_STRING)
+	}
+
+	
+
+	EXEC SQL DECLARE OverbillAdjCur CURSOR FOR
+		 SELECT ROWID, SERVICE_CD, CLIENT, DATEOF_DOC, INDEN_NUM, 
+			SERVICE_AMT, RUN_BALANCE, OUT_STAND_AMT, CLASS_IND, B_CCYCD
+		 FROM IV_LEDGER
+		 WHERE ((CLIENT = :p_client) AND
+			(CLASS_IND = 'B') AND
+			(OUT_STAND_AMT > 0.0))
+		 ORDER BY DATEOF_DOC;
+
+      
+
+	EXEC SQL OPEN OverbillAdjCur;
+
+	*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+	IS_ANY_ORA_ERROR
+
+	memset(l_iv_ledger_structa.client, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+	memset(l_iv_ledger_structa.dateof_doc, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(l_iv_ledger_structa.b_ccycd, APL_NULL_CHAR, APL_CCYCODE_LEN);
+
+	strcpy(l_iv_ledger_structa.client, p_client);
+	strcpy(l_iv_ledger_structa.b_ccycd, p_blccycode);
+
+	for ( ; l_overbillamount > 0.0; )
+	{
+		memset(chr_h_rowid, APL_NULL_CHAR, APL_ROWID_LEN);
+
+		EXEC SQL FETCH OverbillAdjCur
+			 INTO :chr_h_rowid INDICATOR :int_i_rowid, 
+			      :l_iv_ledger_structa INDICATOR :l_i_iv_ledger_struct;
+
+		if ( sqlca.sqlcode < 0.0 )
+		{
+			char chr_l_buffer[KEY_LENGTH];
+
+			memset(chr_l_buffer, APL_NULL_CHAR, KEY_LENGTH);
+
+			ltoa_r(sqlca.sqlcode, chr_l_buffer, KEY_LENGTH - 1);
+
+			*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+			CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, chr_l_buffer, 
+				       APL_NULL_STRING, APL_NULL_STRING, 
+				       __LINE__, __FILE__);
+
+			APL_GOBACK_FAIL
+		}
+		else if ( sqlca.sqlcode == 1403 )
+		{
+			break;
+		}
+
+		chr_l_isopenoverbilladjcur = 'Y';
+
+		h_servpymntamount = 0.0;
+
+		h_servpymntamount = MIN(l_iv_ledger_structa.out_stand_amt, l_overbillamount);
+
+		l_overbillamount -= h_servpymntamount;
+
+		l_iv_ledger_structa.out_stand_amt -= h_servpymntamount;
+
+		l_iv_ledger_structa.class_ind = 'P';
+
+		int_l_status = 0;
+
+		if (APL_FAILURE == IV_Mod_IVLEDGERAmt(&l_iv_ledger_structa, chr_h_rowid, 
+						      &int_l_status, l_debug_info_ptr))
+		{
+			*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+			APL_GOBACK_FAIL
+		}
+
+	     
+
+		
+
+		memset(chr_h_maxdocdt, APL_NULL_CHAR, APL_DATE_LEN);
+
+		EXEC SQL SELECT MAX(DATEOF_DOC)
+		INTO :chr_h_maxdocdt INDICATOR :int_i_maxdocdt
+		FROM IV_LEDGER
+		WHERE ((CLIENT= :l_iv_ledger_structa.client) AND
+		       (SERVICE_CD = :l_iv_ledger_structa.service_cd));
+
+		if ( sqlca.sqlcode < 0 )
+		{
+			char chr_l_buffer[KEY_LENGTH];
+
+			memset(chr_l_buffer, APL_NULL_CHAR, KEY_LENGTH);
+
+			ltoa_r(sqlca.sqlcode, chr_l_buffer, KEY_LENGTH - 1);
+
+			*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+			CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, chr_l_buffer, 
+				       APL_NULL_STRING, APL_NULL_STRING, 
+				       __LINE__, __FILE__);
+
+			APL_GOBACK_FAIL
+		}
+
+		EXEC SQL SELECT MAX(INDEN_NUM)
+		INTO :int_h_maxseqnum INDICATOR :int_i_maxseqnum
+		FROM IV_LEDGER
+		WHERE ((CLIENT = :l_iv_ledger_structa.client) AND
+		       (SERVICE_CD = :l_iv_ledger_structa.service_cd) AND
+		       (DATEOF_DOC = :chr_h_maxdocdt));
+
+		if ( sqlca.sqlcode < 0 )	
+		{
+			char chr_l_buffer[KEY_LENGTH];
+
+			memset(chr_l_buffer, APL_NULL_CHAR, KEY_LENGTH);
+
+			ltoa_r(sqlca.sqlcode, chr_l_buffer, KEY_LENGTH - 1);
+
+			*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+			CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, chr_l_buffer, 
+				       APL_NULL_STRING, APL_NULL_STRING, 
+				       __LINE__, __FILE__);
+
+			APL_GOBACK_FAIL
+		}
+
+		EXEC SQL UPDATE IV_LEDGER
+		SET RUN_BALANCE = RUN_BALANCE - :h_servpymntamount
+		WHERE ((CLIENT = :l_iv_ledger_structa.client) AND
+		       (SERVICE_CD = :l_iv_ledger_structa.service_cd) AND
+		       (DATEOF_DOC = :chr_h_maxdocdt) AND
+		       (INDEN_NUM = :int_h_maxseqnum));
+
+		if ( sqlca.sqlcode < 0 )
+		{
+			char chr_l_buffer[KEY_LENGTH];
+
+			memset(chr_l_buffer, APL_NULL_CHAR, KEY_LENGTH);
+
+			ltoa_r(sqlca.sqlcode, chr_l_buffer, KEY_LENGTH - 1);
+
+			*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+			CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, chr_l_buffer, 
+				       APL_NULL_STRING, APL_NULL_STRING, 
+				       __LINE__, __FILE__);
+
+			APL_GOBACK_FAIL
+		}
+
+	     
+
+	} 
+
+	EXEC SQL CLOSE OverbillAdjCur;
+
+	chr_l_isopenoverbilladjcur = 'N';
+
+	*int_p_retstat = IV_SUCCESS;
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of \
+IV_Proc_AdjOverbillAmount().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_SUCCESS;
+
+	RETURN_FAILURE:
+
+		if ( chr_l_isopenoverbilladjcur == 'Y' )
+		{
+			EXEC SQL CLOSE OverbillAdjCur;
+		}
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of\
+IV_Proc_AdjOverbillAmount().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_FAILURE;
+}
+
+
+
+int IV_Proc_CurrPrdPymnt(const char *p_client, const char *chr_p_sys_date, 
+		    const char *p_ledg_date, const double p_totpymntamt, 
+		    const char *p_blccycode, const int p_pymntseqnum, 
+		    int *int_p_retstat, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	
+
+	extern int IV_Mod_IVLEDGERAmt(const IV_LEDGER_STRUCT *l_iv_ledger_struct, 
+				      const char *l_rowid, int *int_l_status, 
+				      DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+	extern int IV_Mod_IVLEDGERNew(const IV_LEDGER_STRUCT *l_iv_ledger_struct, 
+				  int *int_l_retstat, DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+	
+
+	char chr_l_buffer1[BUFFER_LEN];
+	char chr_l_isopencurrprdcur = 'N';
+	int int_l_status = 0;
+	double l_servpymntamount = 0.0, l_totpymntamount = p_totpymntamt;
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+		char chr_h_rowid[APL_ROWID_LEN];
+		EXEC SQL VAR chr_h_rowid IS STRING;
+
+		IV_LEDGER_STRUCT l_iv_ledger_structa;
+		EXEC SQL VAR l_iv_ledger_structa.client IS STRING;
+		EXEC SQL VAR l_iv_ledger_structa.dateof_doc IS STRING;
+		EXEC SQL VAR l_iv_ledger_structa.b_ccycd IS STRING;
+
+		short int int_i_rowid = 0;
+		I_IV_LEDGER_STRUCT l_i_iv_ledger_struct = {0, 0, 0, 0, 0, 0, 0, 0, 0};
+		struct sqlca sqlca;
+
+	EXEC SQL END DECLARE SECTION;
+
+	#ifdef APL_THREADS
+		APL_SET_CONTEXT
+		EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	if ( !strlen(p_client) )
+	{
+		APL_DATA_MISSING("Account", APL_NULL_STRING, APL_NULL_STRING)
+	}
+
+	if ( !strlen(chr_p_sys_date) )
+	{
+		APL_DATA_MISSING("System Date", APL_NULL_STRING, 
+				 APL_NULL_STRING)
+	}
+
+	if ( !strlen(p_ledg_date) )
+	{
+		APL_DATA_MISSING("Payment Date", APL_NULL_STRING, 
+				 APL_NULL_STRING)
+	}
+
+	if ( !strlen(p_blccycode) )
+	{
+		APL_DATA_MISSING("Billing Ccy Code", APL_NULL_STRING, 
+				 APL_NULL_STRING)
+	}
+
+	memset(chr_l_buffer1, APL_NULL_CHAR, BUFFER_LEN);
+	sprintf(chr_l_buffer1, "%d", p_pymntseqnum);
+
+	if ( !strlen(chr_l_buffer1) )
+	{
+		APL_DATA_MISSING("Pymnt Seq Num", APL_NULL_STRING, 
+				 APL_NULL_STRING)
+	}
+
+	
+
+	EXEC SQL DECLARE CurrPrdCur CURSOR FOR 
+		 SELECT ROWID, SERVICE_CD, CLIENT, DATEOF_DOC, INDEN_NUM, 
+			SERVICE_AMT, RUN_BALANCE, OUT_STAND_AMT, CLASS_IND, B_CCYCD 
+		 FROM IV_LEDGER 
+		 WHERE ((DATEOF_DOC = :chr_p_sys_date) AND 
+			(CLIENT = :p_client) AND 
+			(CLASS_IND = 'B') AND 
+			(OUT_STAND_AMT > 0.0));
+
+     
+
+	EXEC SQL OPEN CurrPrdCur;
+
+	*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+	IS_ANY_ORA_ERROR
+
+	memset(l_iv_ledger_structa.client, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+	memset(l_iv_ledger_structa.dateof_doc, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(l_iv_ledger_structa.b_ccycd, APL_NULL_CHAR, APL_CCYCODE_LEN);
+
+	strcpy(l_iv_ledger_structa.client, p_client);
+	strcpy(l_iv_ledger_structa.dateof_doc, chr_p_sys_date);
+	strcpy(l_iv_ledger_structa.b_ccycd, p_blccycode);
+
+        for ( ; l_totpymntamount > 0.0; )
+        {
+		memset(chr_h_rowid, APL_NULL_CHAR, APL_ROWID_LEN);
+		l_servpymntamount = 0.0;
+
+                EXEC SQL FETCH CurrPrdCur
+                         INTO :chr_h_rowid INDICATOR :int_i_rowid,
+                              :l_iv_ledger_structa INDICATOR :l_i_iv_ledger_struct;
+
+		if ( sqlca.sqlcode < 0 )
+		{
+			char chr_l_buffer[KEY_LENGTH];
+
+			memset(chr_l_buffer, APL_NULL_CHAR, KEY_LENGTH);
+
+			ltoa_r(sqlca.sqlcode, chr_l_buffer, KEY_LENGTH - 1);
+
+			*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+			CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, chr_l_buffer, 
+				       APL_NULL_STRING, APL_NULL_STRING, 
+				       __LINE__, __FILE__);
+
+			APL_GOBACK_FAIL
+		}
+		else if ( sqlca.sqlcode == 1403 )
+		{
+			break;
+		}
+
+		chr_l_isopencurrprdcur = 'Y';
+
+                l_servpymntamount = MIN(l_iv_ledger_structa.out_stand_amt, l_totpymntamount);
+
+                l_totpymntamount -= l_servpymntamount;
+
+                l_iv_ledger_structa.out_stand_amt -= l_servpymntamount;
+
+                l_iv_ledger_structa.class_ind = 'P';
+
+		int_l_status = 0;
+
+		if (APL_FAILURE == IV_Mod_IVLEDGERAmt(&l_iv_ledger_structa, chr_h_rowid, 
+						      &int_l_status, l_debug_info_ptr))
+                {
+			*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+                        APL_GOBACK_FAIL
+                }
+
+	     
+
+                l_iv_ledger_structa.inden_num = p_pymntseqnum;
+                strcpy(l_iv_ledger_structa.dateof_doc, p_ledg_date);
+                l_iv_ledger_structa.out_stand_amt = 0.0;
+                l_iv_ledger_structa.service_amt = l_servpymntamount;
+                l_iv_ledger_structa.run_balance -= l_servpymntamount;
+                l_iv_ledger_structa.class_ind = 'P';
+
+                l_i_iv_ledger_struct.i_service_cd = 0;
+                l_i_iv_ledger_struct.i_dl_client = 0;
+                l_i_iv_ledger_struct.i_doc_date = 0;
+                l_i_iv_ledger_struct.i_sequence_num = 0;
+                l_i_iv_ledger_struct.i_srv_amount = 0;
+                l_i_iv_ledger_struct.i_run_balance = 0;
+                l_i_iv_ledger_struct.i_os_amount = 0;
+                l_i_iv_ledger_struct.i_class_ind = 0;
+                l_i_iv_ledger_struct.i_bl_currencycode = 0;
+
+		int_l_status = 0;
+
+		if ( APL_FAILURE == IV_Mod_IVLEDGERNew(&l_iv_ledger_structa, &int_l_status, 
+						   l_debug_info_ptr) )
+
+		{
+			*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+			APL_GOBACK_FAIL
+		}
+
+	     
+
+	} 
+
+	*int_p_retstat = IV_SUCCESS;
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of \
+IV_Proc_CurrPrdPymnt().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_SUCCESS;
+
+	RETURN_FAILURE:
+
+		if ( chr_l_isopencurrprdcur == 'Y' )
+		{
+			EXEC SQL CLOSE CurrPrdCur;
+		}
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of\
+IV_Proc_CurrPrdPymnt().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_FAILURE;
+}
+
+
+
+int IV_Proc_ResetInvNoSeqNo(FILE *p_ptr_log_file,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+   FILE *l_finifile;
+   struct sqlca            sqlca;
+   int                     int_l_next_number  = 0 ;
+   char                    chr_l_str_sqlstmt[50]    = APL_NULL_STRING ;
+   char chr_l_inifile[31]   = APL_NULL_STRING;
+   char chr_owner[31] = APL_NULL_STRING;
+
+   #ifdef APL_THREADS
+      APL_SET_CONTEXT
+      EXEC SQL CONTEXT USE :my_ctx_local;
+   #endif
+
+   CO_ProcMonitor(p_ptr_log_file,"Entered processtion EI_Proc_MQSeqRst \n",NULL,(INTL_ENV_DATA_STRUCT_H *)NULL);
+   sqlca.sqlcode = 0;
+
+   strcpy(chr_l_inifile,getenv("INTL_ROOT_PATH"));
+   strcat(chr_l_inifile,"intl_sun.cfg");
+
+   if ( ( l_finifile=fopen(chr_l_inifile,"r") ) == NULL)
+   {
+      printf("\nNot able to open the intl_sun.cfg h_file\n");
+      exit(-1);
+   }
+
+   EXEC SQL SELECT INVOICE_NO_SEQ.NEXTVAL into :int_l_next_number FROM DUAL ;
+  if(sqlca.sqlcode == -2289)
+   {
+      fprintf(p_ptr_log_file,"sqlca.sqlcode = %d\n",sqlca.sqlcode);
+      CO_ProcMonitor(p_ptr_log_file,"Sequence does not exist/Insufficient Privileges \n",NULL,(INTL_ENV_DATA_STRUCT_H *)NULL);
+      APL_GOBACK_FAIL
+   }
+   else if(sqlca.sqlcode == -1031)
+   {
+      fprintf(p_ptr_log_file,"sqlca.sqlcode = %d\n",sqlca.sqlcode);
+      CO_ProcMonitor(p_ptr_log_file,"Insufficient Privileges to perform SELECT on Sequence INVOICE_NO_SEQ\n",NULL,(INTL_ENV_DATA_STRUCT_H *)NULL);
+      APL_GOBACK_FAIL
+   }
+   else if(sqlca.sqlcode != 0)
+   {
+      fprintf(p_ptr_log_file,"sqlca.sqlcode = %d\n",sqlca.sqlcode);
+      APL_GOBACK_FAIL
+   }
+
+   fprintf(p_ptr_log_file,"NextVal Of Sequence INVOICE_NO_SEQ =<%d>\n",int_l_next_number);
+
+   if(CO_ReadToken(l_finifile,"INTL_DB_ADM",chr_owner,l_debug_info_ptr) == APL_FAILURE)
+     {
+         CO_InsertErr(l_debug_info_ptr,ERR_FILE_NOTFND, APL_NULL_STRING,
+                                                APL_NULL_STRING,
+                                                APL_NULL_STRING, __LINE__, __FILE__);
+         APL_GOBACK_FAIL;
+     }
+
+   printf("\n The chr_owner is : %s\n",chr_owner);
+
+   sprintf(chr_l_str_sqlstmt,"ALTER SEQUENCE %s.INVOICE_NO_SEQ MAXVALUE %d",chr_owner,int_l_next_number) ;
+
+   EXEC SQL EXECUTE IMMEDIATE :chr_l_str_sqlstmt ;
+if(sqlca.sqlcode == -1031)
+{
+      fprintf(p_ptr_log_file,"sqlca.sqlcode = %d\n",sqlca.sqlcode);
+      CO_ProcMonitor(p_ptr_log_file,"Insufficient Privileges to Alter the Sequence\n",NULL,(INTL_ENV_DATA_STRUCT_H *)NULL);
+      APL_GOBACK_FAIL
+   }
+   else if(sqlca.sqlcode != 0)
+   {
+      fprintf(p_ptr_log_file,"sqlca.sqlcode = %d\n",sqlca.sqlcode);
+      APL_GOBACK_FAIL
+   }
+
+   EXEC SQL SELECT INVOICE_NO_SEQ.NEXTVAL into :int_l_next_number FROM DUAL ;
+   
+
+   IS_ANY_ORA_ERROR
+
+   strcpy(chr_l_str_sqlstmt,"");
+   sprintf(chr_l_str_sqlstmt,"ALTER SEQUENCE %s.INVOICE_NO_SEQ MAXVALUE 99999",chr_owner );
+
+   EXEC SQL EXECUTE IMMEDIATE :chr_l_str_sqlstmt ;
+
+   IS_ANY_ORA_ERROR
+
+   fprintf(p_ptr_log_file,"Sequence Reset.The Currval of Sequence MQ_DATA_SEQ =<%d>\n",int_l_next_number);
+
+   APL_GOBACK_SUCCESS
+
+   RETURN_SUCCESS :
+   {
+      CO_ProcMonitor(p_ptr_log_file,"Leaving processtion IV_Proc_ResetInvNoSeqNo SUCCESS\n",NULL,(INTL_ENV_DATA_STRUCT_H *)NULL);
+
+      return(APL_SUCCESS);
+   } 
+ RETURN_FAILURE :
+   {
+      CO_ProcMonitor(p_ptr_log_file,"Leaving processtion IV_Proc_ResetInvNoSeqNo FAILURE\n",NULL,(INTL_ENV_DATA_STRUCT_H *)NULL);
+
+      return(APL_FAILURE);
+   }
+}
+

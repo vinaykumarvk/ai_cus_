@@ -1,0 +1,1630 @@
+/*
+ *   COPYRIGHT NOTICE
+ *
+ *   Copyright 2016 Intellect Design Arena Limited. All rights reserved.
+ *
+ *    These materials are confidential and proprietary to 
+ *    Intellect Design Arena Limited and no part of these materials should
+ *    be reproduced, published, transmitted or distributed in any form or
+ *    by any means, electronic, mechanical, photocopying, recording or 
+ *    otherwise, or stored in any information storage or retrieval system
+ *    of any nature nor should the materials be disclosed to third parties
+ *    or used in any other manner for which this is not authorized, without
+ *    the prior express written authorization of Intellect Design Arena Limited.
+ */
+/*******************************************************************************
+ *
+ * Module Name         :         Archival
+ *
+ * File Name           :         CR_MonthlyClose.pc
+ *
+ * Description         :         
+ *
+ *            Version Control Block
+ *
+ * Date        Version       Author           Description								 RFS No.
+ * ---------   --------   ---------------  -----------------						--------------
+ * 19/12/2016   1.0.0.1    Prateek Singh    Re-Initiation of Archival Enhancement	ISKB_2071 (Old IsolveIds 2244 and 2469)
+ * ***********************************************************************************************/
+
+
+
+
+
+
+
+#include <errno.h>
+#include "CO_HostStructdef.h"
+EXEC SQL INCLUDE SQLCA.H;
+
+#define 	EOMMCL_REPWIDTH  	50
+#define	COMMIT_COUNT_G			200 
+#define	FILEPATH_LEN			70 
+#define	FILENAME_LEN_A			80 
+#define	APL_COMMIT_FREQENCY	500 
+
+
+
+int EOM_Proc_MCL(	char *p_asofdate, 
+						char **argv,
+						FILE *p_logfile,
+						INTL_ENV_DATA_STRUCT_H *p_intl_envdatastruct_h,
+						DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	
+
+	struct sqlca sqlca;
+	char chr_l_buf[BUFFER_LEN] = APL_NULL_STRING;
+	int int_l_error_flag = APL_SUCCESS;
+	FILE *l_repfile = NULL;
+   char                  chr_g_restart_data[APL_RESTARTDATA_LENGTH];
+    short                 g_restart_data_i;
+
+EXEC SQL VAR chr_g_restart_data is string;
+
+
+   sqlca.sqlcode = 0;
+
+	
+
+	CO_ProcMonitor(	p_logfile, 
+					"Entered Function EOM_Proc_MCL\n",
+					NULL,
+					NULL);
+	memset( chr_l_buf, NULL, BUFFER_LEN );
+	sprintf(		chr_l_buf, 
+					"The As Of Date is : %s\n", 
+					p_asofdate);
+	CO_ProcMonitor(	p_logfile, 
+					chr_l_buf,	
+					NULL,
+					NULL);
+	
+	
+
+	if (!strlen(p_asofdate))
+	{
+		APL_DATA_MISSING("As Of Date", APL_NULL_STRING, APL_NULL_STRING);
+		int_l_error_flag = APL_FAILURE;
+	} 
+
+	if (APL_FAILURE == int_l_error_flag) APL_GOBACK_FAIL
+
+	
+
+	
+
+   EXEC SQL SELECT PROCESSING_STATUS INTO :chr_g_restart_data:g_restart_data_i
+	FROM SYS_BATCHPROC
+   WHERE PROCESS_NAME=:argv[0]
+   AND   PROC_INIT=:argv[1]
+   AND   STARTDATE=:argv[2]
+   AND   STATUS='started'
+   FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+   if(APL_ZERO_RESULT_SET)
+   {
+      CO_ProcMonitor(p_logfile,"E:No entry in batch_in_proc",NULL,NULL);
+      APL_GOBACK_FAIL
+   }
+
+	
+
+	if (APL_FAILURE == CO_Rtv_RptFileName(	"MC",
+													"EOM Monthly Closing Report",
+													EOMMCL_REPWIDTH,
+													p_intl_envdatastruct_h->processtion,
+													argv,
+													&l_repfile,
+													l_debug_info_ptr ))
+	{
+		APL_GOBACK_FAIL
+	}
+
+	
+
+	fprintf(l_repfile, "                 Monthly Closing\n             As Of Date : %.11s\n\n", p_asofdate);
+
+	
+
+	if (APL_FAILURE == EOM_Proc_MCLMnthlyMktPr(	l_repfile,
+												p_logfile,
+												l_debug_info_ptr ))
+	{
+		APL_GOBACK_FAIL
+	}
+
+	
+
+	memset(chr_l_buf, NULL, BUFFER_LEN);
+	sprintf(chr_l_buf, "Finished MCL for Monthly Market Price Records");
+
+	EXEC SQL UPDATE SYS_BATCHPROC
+	SET STAT_DET = :chr_l_buf
+  	WHERE PROCESS_NAME=:argv[0]
+  	AND   PROC_INIT=:argv[1]
+  	AND   STARTDATE=:argv[2]
+  	AND   STATUS='started';
+
+	IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_REC_NOTFND,
+														"Batch_in_proc Rec",
+														APL_NULL_STRING,
+														APL_NULL_STRING )
+
+	
+
+	EXEC SQL COMMIT WORK ;
+	IS_ANY_ORA_ERROR
+
+	CO_ProcMonitor(p_logfile, "Record Committed", NULL, NULL);
+
+  	EXEC SQL SELECT PROCESSING_STATUS INTO :chr_g_restart_data:g_restart_data_i
+  	FROM SYS_BATCHPROC
+  	WHERE PROCESS_NAME=:argv[0]
+  	AND   PROC_INIT=:argv[1]
+  	AND   STARTDATE=:argv[2]
+  	AND   STATUS='started'
+  	FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+  	if(APL_ZERO_RESULT_SET)
+  	{
+    	CO_ProcMonitor(p_logfile,"E:No entry in batch_in_proc",NULL,NULL);
+    	APL_GOBACK_FAIL
+  	}
+
+	
+
+	if (APL_FAILURE == EOM_Proc_MCLTrdOrd(	p_asofdate,
+													argv,
+													l_repfile,
+													p_logfile,
+													l_debug_info_ptr ))
+	{
+		APL_GOBACK_FAIL
+	}
+
+	
+
+	memset(chr_l_buf, NULL, BUFFER_LEN);
+	sprintf(chr_l_buf, "Finished MCL for Trade Records");
+
+	EXEC SQL UPDATE SYS_BATCHPROC
+	SET STAT_DET = :chr_l_buf
+  	WHERE PROCESS_NAME=:argv[0]
+  	AND   PROC_INIT=:argv[1]
+  	AND   STARTDATE=:argv[2]
+  	AND   STATUS='started';
+
+	IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_REC_NOTFND,
+														"Batch_in_proc Rec",
+														APL_NULL_STRING,
+														APL_NULL_STRING )
+
+	
+
+	EXEC SQL COMMIT WORK ;
+	IS_ANY_ORA_ERROR
+
+	CO_ProcMonitor(p_logfile, "Record Committed", NULL, NULL);
+
+  	EXEC SQL SELECT PROCESSING_STATUS INTO :chr_g_restart_data:g_restart_data_i
+  	FROM SYS_BATCHPROC
+  	WHERE PROCESS_NAME=:argv[0]
+  	AND   PROC_INIT=:argv[1]
+  	AND   STARTDATE=:argv[2]
+  	AND   STATUS='started'
+  	FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+  	if(APL_ZERO_RESULT_SET)
+  	{
+    	CO_ProcMonitor(p_logfile,"E:No entry in batch_in_proc",NULL,NULL);
+    	APL_GOBACK_FAIL
+  	}
+
+	
+
+	if (APL_FAILURE == EOM_Proc_MCLDlyMktPr(	p_asofdate,
+												l_repfile,
+												p_logfile,
+												l_debug_info_ptr ))
+	{
+		APL_GOBACK_FAIL
+	}
+
+	
+
+	memset(chr_l_buf, NULL, BUFFER_LEN);
+	sprintf(chr_l_buf, "Finished MCL for Daily Mkt. Prc. Records");
+
+	EXEC SQL UPDATE SYS_BATCHPROC
+	SET STAT_DET = :chr_l_buf
+  	WHERE PROCESS_NAME=:argv[0]
+  	AND   PROC_INIT=:argv[1]
+  	AND   STARTDATE=:argv[2]
+  	AND   STATUS='started';
+
+	IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_REC_NOTFND,
+														"Batch_in_proc Rec",
+														APL_NULL_STRING,
+														APL_NULL_STRING )
+
+	
+
+	EXEC SQL COMMIT WORK ;
+	IS_ANY_ORA_ERROR
+
+	CO_ProcMonitor(p_logfile, "Record Committed", NULL, NULL);
+
+  	EXEC SQL SELECT PROCESSING_STATUS INTO :chr_g_restart_data:g_restart_data_i
+  	FROM SYS_BATCHPROC
+  	WHERE PROCESS_NAME=:argv[0]
+  	AND   PROC_INIT=:argv[1]
+  	AND   STARTDATE=:argv[2]
+  	AND   STATUS='started'
+  	FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+  	if(APL_ZERO_RESULT_SET)
+  	{
+    	CO_ProcMonitor(p_logfile,"E:No entry in batch_in_proc",NULL,NULL);
+    	APL_GOBACK_FAIL
+  	}
+
+/* Retro from HDFC Change - To avoid overwrite pending position - Rohit 27102007   */
+/*	
+
+	if (APL_FAILURE == EOM_Proc_MCLPos(	l_repfile,
+													p_logfile,
+													l_debug_info_ptr ))
+	{
+		APL_GOBACK_FAIL
+	}
+
+*/	
+
+	memset(chr_l_buf, NULL, BUFFER_LEN);
+	sprintf(chr_l_buf, "Finished MCL for Safek Records");
+
+	EXEC SQL UPDATE SYS_BATCHPROC
+	SET STAT_DET = :chr_l_buf
+  	WHERE PROCESS_NAME=:argv[0]
+  	AND   PROC_INIT=:argv[1]
+  	AND   STARTDATE=:argv[2]
+  	AND   STATUS='started';
+
+	IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_REC_NOTFND,
+														"Batch_in_proc Rec",
+														APL_NULL_STRING,
+														APL_NULL_STRING )
+
+	
+
+	EXEC SQL COMMIT WORK ;
+	IS_ANY_ORA_ERROR
+
+	CO_ProcMonitor(p_logfile, "Record Committed", NULL, NULL);
+
+  	EXEC SQL SELECT PROCESSING_STATUS INTO :chr_g_restart_data:g_restart_data_i
+  	FROM SYS_BATCHPROC
+  	WHERE PROCESS_NAME=:argv[0]
+  	AND   PROC_INIT=:argv[1]
+  	AND   STARTDATE=:argv[2]
+  	AND   STATUS='started'
+  	FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+  	if(APL_ZERO_RESULT_SET)
+  	{
+    	CO_ProcMonitor(p_logfile,"E:No entry in batch_in_proc",NULL,NULL);
+    	APL_GOBACK_FAIL
+  	}
+
+	
+
+	if (APL_FAILURE == EOM_Proc_MCLMisTxn(	p_asofdate,
+													l_repfile,
+													p_logfile,
+													l_debug_info_ptr ))
+	{
+		APL_GOBACK_FAIL
+	}
+
+	
+
+	memset(chr_l_buf, NULL, BUFFER_LEN);
+	sprintf(chr_l_buf, "Finished MCL for Missing Txns");
+
+	EXEC SQL UPDATE SYS_BATCHPROC
+	SET STAT_DET = :chr_l_buf
+  	WHERE PROCESS_NAME=:argv[0]
+  	AND   PROC_INIT=:argv[1]
+  	AND   STARTDATE=:argv[2]
+  	AND   STATUS='started';
+
+	IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_REC_NOTFND,
+														"Batch_in_proc Rec",
+														APL_NULL_STRING,
+														APL_NULL_STRING )
+
+	
+
+	EXEC SQL COMMIT WORK ;
+	IS_ANY_ORA_ERROR
+
+	CO_ProcMonitor(p_logfile, "Record Committed", NULL, NULL);
+
+  	EXEC SQL SELECT PROCESSING_STATUS INTO :chr_g_restart_data:g_restart_data_i
+  	FROM SYS_BATCHPROC
+  	WHERE PROCESS_NAME=:argv[0]
+  	AND   PROC_INIT=:argv[1]
+  	AND   STARTDATE=:argv[2]
+  	AND   STATUS='started'
+  	FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+  	if(APL_ZERO_RESULT_SET)
+  	{
+    	CO_ProcMonitor(p_logfile,"E:No entry in batch_in_proc",NULL,NULL);
+    	APL_GOBACK_FAIL
+  	}
+
+	
+
+	if (APL_FAILURE == EOM_Proc_MCLLocChg(	p_asofdate,
+													l_repfile,
+													p_logfile,
+													l_debug_info_ptr ))
+	{
+		APL_GOBACK_FAIL
+	}
+
+	
+
+	memset(chr_l_buf, NULL, BUFFER_LEN);
+	sprintf(chr_l_buf, "Finished MCL for Location Change Records");
+
+	EXEC SQL UPDATE SYS_BATCHPROC
+	SET STAT_DET = :chr_l_buf
+  	WHERE PROCESS_NAME=:argv[0]
+  	AND   PROC_INIT=:argv[1]
+  	AND   STARTDATE=:argv[2]
+  	AND   STATUS='started';
+
+	IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_REC_NOTFND,
+														"Batch_in_proc Rec",
+														APL_NULL_STRING,
+														APL_NULL_STRING )
+
+	
+
+	EXEC SQL COMMIT WORK ;
+	IS_ANY_ORA_ERROR
+
+	CO_ProcMonitor(p_logfile, "Record Committed", NULL, NULL);
+
+  	EXEC SQL SELECT PROCESSING_STATUS INTO :chr_g_restart_data:g_restart_data_i
+  	FROM SYS_BATCHPROC
+  	WHERE PROCESS_NAME=:argv[0]
+  	AND   PROC_INIT=:argv[1]
+  	AND   STARTDATE=:argv[2]
+  	AND   STATUS='started'
+  	FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+  	if(APL_ZERO_RESULT_SET)
+  	{
+    	CO_ProcMonitor(p_logfile,"E:No entry in batch_in_proc",NULL,NULL);
+    	APL_GOBACK_FAIL
+  	}
+
+	
+
+	if (APL_FAILURE == EOM_Proc_Purge(argv,p_logfile,l_debug_info_ptr))
+		APL_GOBACK_FAIL
+
+	
+
+	memset(chr_l_buf,APL_NULL_CHAR,BUFFER_LEN);
+	sprintf(chr_l_buf,"Finished purging AUDIT_LOG and COMMON_REPORT records");
+	EXEC SQL UPDATE SYS_BATCHPROC
+	SET stat_det = :chr_l_buf
+	WHERE process_name = :argv[0]
+	AND proc_init = :argv[1]
+	AND STARTDATE = :argv[2]
+	AND status = 'started';
+
+	IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,APL_NULL_STRING,APL_NULL_STRING,APL_NULL_STRING)
+
+	
+
+	EXEC SQL COMMIT WORK;
+	IS_ANY_ORA_ERROR
+
+	CO_ProcMonitor(p_logfile,"Work committed",NULL,NULL);
+
+	
+
+	EXEC SQL SELECT PROCESSING_STATUS INTO :chr_g_restart_data:g_restart_data_i
+	FROM SYS_BATCHPROC
+	WHERE PROCESS_NAME = :argv[0]
+	AND PROC_INIT = :argv[1]
+	AND STARTDATE = :argv[2]
+	AND STATUS = 'started'
+	FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+	IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,APL_NULL_STRING,APL_NULL_STRING,APL_NULL_STRING)
+
+	
+	
+	if (APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr)) 
+	{
+		APL_GOBACK_FAIL
+	}
+	else
+	{
+		APL_GOBACK_SUCCESS
+	}
+
+	RETURN_SUCCESS :
+	
+		EXEC SQL COMMIT WORK;
+		IS_ANY_ORA_ERROR
+		if (APL_FAILURE == CO_Proc_RptClose(l_repfile, l_debug_info_ptr ))
+		{
+			APL_GOBACK_FAIL
+		}
+		CO_ProcMonitor(p_logfile, "Exiting EOM_Proc_MCL successfully", NULL, p_intl_envdatastruct_h);
+		return(APL_SUCCESS);
+
+	RETURN_FAILURE :
+
+		CO_Proc_RptClose(l_repfile, l_debug_info_ptr);
+		CO_ProcMonitor(p_logfile, "Exiting EOM_Proc_MCL with errors", NULL, p_intl_envdatastruct_h);
+		CO_ProcMonitor(p_logfile, APL_NULL_STRING, l_debug_info_ptr, p_intl_envdatastruct_h);
+		CO_FreeErrLst(l_debug_info_ptr);
+		return(APL_FAILURE);
+
+}
+
+
+
+int EOM_Proc_MCLMnthlyMktPr(	FILE *p_repfile,
+						FILE *p_logfile,
+						DEBUG_INFO_STRUCT_H **l_debug_info_ptr )
+{
+
+	
+
+	struct sqlca sqlca;
+
+   sqlca.sqlcode = 0;
+
+   
+
+   CO_ProcMonitor(p_logfile, "Entered Function CDBMCLMMPFn", NULL, NULL);
+
+	
+
+	EXEC SQL DELETE MT_MTHLYMKTPRC a
+	WHERE NOT EXISTS (	SELECT INSTR_CODE FROM MT_INSTRUMENT b
+								WHERE b.INSTR_CODE = a.INSTR_CODE );
+
+	IS_ANY_ORA_ERROR
+
+	fprintf(p_repfile, "No. of Monthly Market Prices Dropped          : %d\n", sqlca.sqlerrd[2]);
+
+	
+
+	EXEC SQL UPDATE MT_MTHLYMKTPRC
+	SET OPEN_PR = CLOSING_PR,
+		 CLOSING_PR = 0 ;
+
+	IS_ANY_ORA_ERROR
+
+APL_GOBACK_SUCCESS // AIX - Warnings removal
+
+   RETURN_SUCCESS :
+      CO_ProcMonitor(p_logfile, "Leaving Function EOM_Proc_MCLMnthlyMktPr with success", NULL, NULL);
+      return(APL_SUCCESS);
+
+   RETURN_FAILURE :
+      CO_ProcMonitor(p_logfile, "Leaving Function EOM_Proc_MCLMnthlyMktPr with errors", NULL, NULL);
+      return(APL_FAILURE);	
+
+}
+
+
+
+int EOM_Proc_MCLTrdOrd(	char *p_asofdate,
+							char **argv,
+							FILE *p_repfile,
+							FILE *p_logfile,
+							DEBUG_INFO_STRUCT_H **l_debug_info_ptr )
+{
+
+	
+
+	struct sqlca sqlca;
+
+	char		chr_l_h_client_a[APL_CLIENT_LENGTH]		= APL_NULL_STRING;
+	char		chr_l_h_refno_A[APL_TXNREFNO_LEN]		= APL_NULL_STRING;
+	char		chr_l_h_orderrefno[APL_TXNREFNO_LEN]	= APL_NULL_STRING;
+	char		chr_l_h_trdclient[APL_CLIENT_LENGTH]	= APL_NULL_STRING;
+	char		chr_l_h_trdrefno[APL_TXNREFNO_LEN]	= APL_NULL_STRING;
+	char		l_temp_identity_no[17]	= APL_NULL_STRING;
+	char		chr_l_buf[BUFFER_LEN]						= APL_NULL_STRING;
+
+	short		l_i_account								= 0;
+	short		l_i_refno								= 0;
+	short		l_i_orderrefno							= 0;
+	short		l_i_trdaccount							= 0;
+	short		l_i_trdrefno							= 0;
+
+	int		int_l_reccount								= 0;
+
+	short    int_l_rowexists = 0;  
+  char     chr_h_accclass[2];  
+  char     chr_h_field_val[40]; 
+  char     chr_l_h_acc_class[3] = APL_NULL_STRING; 
+  short    l_i_acc_class = 0; 
+	 char     chr_mainfuncarea[APL_MAINFUNCAREA_LEN]= APL_NULL_STRING;
+  char     chr_l_condid[APL_CONDID_LEN]            = APL_NULL_STRING;
+	short   int_l_condexists = 0;  // AIX - Warnings removal
+	int int_l_accclass = 0; 
+   int int_h_count = 0;
+   int int_h_Tx_Tracker_count =0; // Added by shrinath for tax tracker 9306 
+   char                  chr_g_restart_data[APL_RESTARTDATA_LENGTH];
+	/*Added by siva.ganapathi for ISKB_2244 on 17/12/2009 Started*/
+   int l_monthsfor_arch = 0;
+   short i_monthsfor_arch = 0;
+   	/*Added by siva.ganapathi for ISKB_2244 on 17/12/2009 Ended*/
+
+    short                 g_restart_data_i;
+
+EXEC SQL VAR chr_g_restart_data is string;
+
+   EXEC SQL VAR chr_l_h_acc_class IS STRING; 
+
+
+   sqlca.sqlcode = 0;
+
+	
+
+	EXEC SQL VAR chr_l_h_client_a 		IS STRING;
+	EXEC SQL VAR chr_l_h_refno_A 			IS STRING;
+	EXEC SQL VAR chr_l_h_orderrefno 	IS STRING;
+	EXEC SQL VAR chr_l_h_trdclient 	IS STRING;
+	EXEC SQL VAR chr_l_h_trdrefno 		IS STRING;
+
+   
+
+   CO_ProcMonitor(p_logfile, "Entered Function EOM_Proc_MCLTrdOrd", NULL, NULL);
+
+	
+
+	if(CR_Proc_MvToHisTrdTmp( p_asofdate,l_debug_info_ptr)==APL_FAILURE)
+	{
+		APL_GOBACK_FAIL
+	}
+
+	/*Added by siva.ganapathi for ISKB_2244 on 17/12/2009 Started*/
+
+	EXEC SQL SELECT MONTHSFOR_ARCH 
+			INTO :l_monthsfor_arch:i_monthsfor_arch
+			FROM MT_COMMON_SYS_PARAMS;
+	
+	printf("\n sql error after fetching the monthsfor_arch from the MT_COMMON_SYS_PARAMS is %d",sqlca.sqlcode);
+	printf("\n monthsfor_arch value is %d indicator %d ",l_monthsfor_arch,i_monthsfor_arch);
+	/*Added by siva.ganapathi for ISKB_2244 on 17/12/2009 Ended*/
+
+	/*Query Modified by siva.ganapathi for ISKB_2244 on 17/12/2009 -- started*/
+/*Changes done by shrinath for Tax Certificate ISKB_9306 EOD operation start */
+	EXEC SQL DECLARE trd_cur CURSOR FOR 
+	SELECT CLIENT,IDENTIY_NO
+	FROM DL_DEAL
+	WHERE ALLOW_DROPDT <= ADD_MONTHS(:p_asofdate,-(:l_monthsfor_arch-1)) 
+	AND	REPORT_AT_EOM_IND   = 'Y'
+ AND ((CLIENT,IDENTIY_NO) in (SELECT CLIENT,REF_NO FROM DL_TAX_TRACKER WHERE AE_GEN='Y' AND STATUS = 'AA' AND REC_TYPE = 'D') OR 
+   (CLIENT,IDENTIY_NO) NOT IN (SELECT CLIENT,REF_NO FROM DL_TAX_TRACKER WHERE REC_TYPE = 'D'))
+   AND   0 = ( SELECT COUNT(*) FROM OR_ORDERDETAILS
+               WHERE DL_DEAL.CLIENT   = OR_ORDERDETAILS.CLIENT
+               AND   DL_DEAL.ORIG_REFNO = OR_ORDERDETAILS.ORD_REFNO)
+
+	FOR UPDATE OF ACCESS_STAMP ;
+/*Changes by shrinath for Tax Certificate ISKB_9306 EOD operation ends */	
+
+	/*Query Modified by siva.ganapathi for ISKB_2244 on 17/12/2009 -- Ended*/
+
+	EXEC SQL OPEN trd_cur;
+	IS_ANY_ORA_ERROR
+
+	for (int_l_reccount = 0; ;int_l_reccount++)
+	{
+		
+
+		memset(chr_l_h_client_a,NULL, APL_CLIENT_LENGTH);
+		memset(chr_l_h_refno_A,NULL, APL_TXNREFNO_LEN);
+		l_i_account = 0;
+		l_i_refno = 0;
+
+		EXEC SQL FETCH trd_cur INTO	:chr_l_h_client_a:l_i_account,
+												:chr_l_h_refno_A:l_i_refno ;
+
+		IS_ANY_ORA_ERROR
+
+		if (APL_ZERO_RESULT_SET) break;
+
+		
+		/*Added by shrinath for Tax Certificate ISKB_9306 EOD operation start */
+		EXEC SQL SELECT COUNT(*) into :int_h_Tx_Tracker_count FROM DL_TAX_TRACKER WHERE CLIENT=:chr_l_h_client_a AND REF_NO=:chr_l_h_refno_A AND AE_GEN='Y';
+		IS_ANY_ORA_ERROR
+		Alert("Shrinath check1 Txcount= |%d|",int_h_Tx_Tracker_count);
+		if(int_h_Tx_Tracker_count > 0)
+		{
+			if (APL_FAILURE == CR_Proc_MvToHisTxTracker(	chr_l_h_client_a,
+														chr_l_h_refno_A,
+														l_debug_info_ptr ))
+			{
+				APL_GOBACK_FAIL
+			}
+		}	
+		/*Added by shrinath for Tax Certificate ISKB_9306 EOD operation Ends */	
+
+		if (APL_FAILURE == CR_Proc_MvToHisTrd(	chr_l_h_client_a,
+														chr_l_h_refno_A,
+														l_debug_info_ptr ))
+		{
+			APL_GOBACK_FAIL
+		}
+
+
+		
+
+		EXEC SQL DELETE DL_DEALDET
+		WHERE client = :chr_l_h_client_a
+		AND   IDENTIY_NO = :chr_l_h_refno_A;
+
+		IS_ANY_ORA_ERROR
+
+
+		
+	
+		
+
+		strcpy(chr_mainfuncarea, "TRD_PMT_CHK");
+   	strcpy(chr_l_condid, "RU_REG_CHK");
+   	int_l_condexists = 0;
+
+ 	  if ( APL_SUCCESS != CO_Chk_CntryEnabled( chr_mainfuncarea,
+                                          chr_l_condid,
+                                          &int_l_condexists,
+                                          l_debug_info_ptr ))
+   	{
+      	APL_GOBACK_FAIL
+   	}
+
+   	if ( int_l_condexists > 0 )
+   	{
+
+			
+
+			EXEC SQL SELECT COUNT(*) INTO :int_h_count FROM DL_RUDEAL WHERE (CLIENT = :chr_l_h_client_a) AND IDENTIY_NO = :chr_l_h_refno_A;
+
+			IS_ANY_ORA_ERROR;
+
+			
+			if (int_h_count >= 1)
+
+			{
+				if (APL_FAILURE == CRUDBMvTrdHistFn(  chr_l_h_client_a,
+                                          chr_l_h_refno_A,
+                                          l_debug_info_ptr ))
+            {
+               APL_GOBACK_FAIL
+            }
+			}
+				
+		
+		}
+			
+      	
+
+		
+
+		if (!(int_l_reccount%COMMITSIZE))
+		{
+			
+
+			memset(chr_l_buf, NULL, BUFFER_LEN);
+			sprintf(chr_l_buf, "Processed %d Trades", int_l_reccount);
+
+			EXEC SQL UPDATE SYS_BATCHPROC
+			SET STAT_DET = :chr_l_buf
+  			WHERE PROCESS_NAME=:argv[0]
+  			AND   PROC_INIT=:argv[1]
+  			AND   STARTDATE=:argv[2]
+  			AND   STATUS='started';
+
+			IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_REC_NOTFND,
+																"Batch_in_proc Rec",
+																APL_NULL_STRING,
+																APL_NULL_STRING )
+
+			EXEC SQL COMMIT WORK ;
+			IS_ANY_ORA_ERROR
+
+			CO_ProcMonitor(p_logfile, "Record Committed", NULL, NULL);
+
+ 	  		EXEC SQL SELECT PROCESSING_STATUS INTO :chr_g_restart_data:g_restart_data_i
+  			FROM SYS_BATCHPROC
+   		WHERE PROCESS_NAME=:argv[0]
+   		AND   PROC_INIT=:argv[1]
+   		AND   STARTDATE=:argv[2]
+   		AND   STATUS='started'
+  			FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+   		if(APL_ZERO_RESULT_SET)
+   		{
+      		CO_ProcMonitor(p_logfile,"E:No entry in batch_in_proc",NULL,NULL);
+      		APL_GOBACK_FAIL
+   		}
+
+			EXEC SQL OPEN trd_cur;
+			IS_ANY_ORA_ERROR
+		}
+	}
+
+	fprintf(p_repfile, "No. of trades dropped                         : %d\n", int_l_reccount);
+
+	EXEC SQL CLOSE trd_cur;
+	IS_ANY_ORA_ERROR
+
+	
+	
+	if (l_mt_core_sys_params_struct_h.ord_proc_ind[0] == 'Y')
+	{
+		EXEC SQL DECLARE ord_cur CURSOR FOR
+		SELECT CLIENT,ORD_REFNO
+		FROM OR_ORDERDETAILS
+		WHERE ((DATEOF_CANCEL IS NOT NULL AND DATEOF_CANCEL < TO_DATE(:p_asofdate))
+		OR		 (EXP_DATE IS NOT NULL AND EXP_DATE < TO_DATE(:p_asofdate))
+		OR		 (ORD_QTY = EXEC_QTY))
+		AND	0 = (	SELECT COUNT(*) FROM DL_DEAL
+						WHERE CLIENT   = OR_ORDERDETAILS.CLIENT
+						AND   ORIG_REFNO = OR_ORDERDETAILS.ORD_REFNO
+						AND	( ALLOW_DROPDT > TO_DATE(:p_asofdate) 
+                        OR (ALLOW_DROPDT IS NULL) 
+								OR REPORT_AT_EOM_IND <> 'Y') )
+		FOR UPDATE OF ACCESS_STAMP ;
+	
+		EXEC SQL OPEN ord_cur;
+		IS_ANY_ORA_ERROR
+
+		for (int_l_reccount = 0; ;int_l_reccount++)
+		{
+			
+	
+			memset(chr_l_h_client_a,NULL, APL_CLIENT_LENGTH);
+			memset(chr_l_h_orderrefno,NULL, APL_TXNREFNO_LEN);
+			l_i_account = 0;
+			l_i_orderrefno = 0;
+
+			EXEC SQL FETCH ord_cur INTO	:chr_l_h_client_a:l_i_account,
+													:chr_l_h_orderrefno:l_i_orderrefno ;
+	
+			IS_ANY_ORA_ERROR
+
+			if (APL_ZERO_RESULT_SET) break;
+	
+			
+	
+			EXEC SQL DECLARE ord_trd_cur CURSOR FOR
+			SELECT CLIENT,IDENTIY_NO
+			FROM DL_DEAL
+			WHERE CLIENT   = RTRIM(:chr_l_h_client_a)
+			AND	ORIG_REFNO = RTRIM(:chr_l_h_orderrefno)
+			FOR UPDATE OF ACCESS_STAMP ;
+
+			EXEC SQL OPEN ord_trd_cur;
+			IS_ANY_ORA_ERROR
+
+			for ( ; ; )
+			{
+				
+
+				memset(chr_l_h_trdclient, NULL, APL_CLIENT_LENGTH);
+				memset(chr_l_h_trdrefno, NULL, APL_TXNREFNO_LEN);
+				l_i_trdaccount = 0;
+				l_i_trdrefno   = 0;
+
+				EXEC SQL FETCH ord_trd_cur INTO 	:chr_l_h_trdclient:l_i_trdaccount,
+															:chr_l_h_trdrefno:l_i_trdrefno ;
+
+				IS_ANY_ORA_ERROR
+
+				if (APL_ZERO_RESULT_SET) break;
+
+				
+
+				if (APL_FAILURE == CR_Proc_MvToHisTrd(	chr_l_h_trdclient,
+																chr_l_h_trdrefno,
+																l_debug_info_ptr ))
+				{
+					APL_GOBACK_FAIL
+				}
+
+				
+
+				EXEC SQL DELETE DL_DEALDET
+				WHERE client = :chr_l_h_trdclient
+				AND   IDENTIY_NO = :chr_l_h_trdrefno;
+
+				IS_ANY_ORA_ERROR
+
+				
+
+      		
+
+ 		     strcpy(chr_mainfuncarea, "TRD_PMT_CHK");
+      		strcpy(chr_l_condid, "RU_REG_CHK");
+      		int_l_condexists = 0;
+
+ 		    if ( APL_SUCCESS != CO_Chk_CntryEnabled( chr_mainfuncarea,
+                                          chr_l_condid,
+                                          &int_l_condexists,
+                                          l_debug_info_ptr ))
+      	{
+         	APL_GOBACK_FAIL
+      	}
+
+ 	     if ( int_l_condexists > 0 )
+   	   {
+
+					EXEC SQL SELECT IDENTIY_NO into :l_temp_identity_no FROM DL_RUDEAL WHERE (CLIENT = :chr_l_h_client_a) AND IDENTIY_NO = :chr_l_h_refno_A;
+
+ 		        IS_ANY_ORA_ERROR;
+
+ 	        	if (sqlca.sqlcode == 0)
+ 	        	{
+      	      if (APL_FAILURE == CRUDBMvTrdHistFn(  chr_l_h_client_a,
+                                          chr_l_h_refno_A,
+                                          l_debug_info_ptr ))
+         	   {
+            	   APL_GOBACK_FAIL
+            	}
+
+ 	        }
+   	   }
+
+      
+			}
+
+			EXEC SQL CLOSE ord_trd_cur;
+			IS_ANY_ORA_ERROR
+
+			
+
+			if (APL_FAILURE == CR_Proc_MvToHisOrd(	chr_l_h_client_a,
+															chr_l_h_orderrefno,
+															l_debug_info_ptr ))
+			{
+				APL_GOBACK_FAIL
+			}
+
+			
+
+			if (!(int_l_reccount%COMMITSIZE))
+			{
+				
+
+				memset(chr_l_buf, NULL, BUFFER_LEN);
+				sprintf(chr_l_buf, "Processed %d Orders", int_l_reccount);
+
+				EXEC SQL UPDATE SYS_BATCHPROC
+				SET STAT_DET = :chr_l_buf
+  				WHERE PROCESS_NAME=:argv[0]
+  				AND   PROC_INIT=:argv[1]
+  				AND   STARTDATE=:argv[2]
+  				AND   STATUS='started';
+
+				IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_REC_NOTFND,
+																	"Batch_in_proc Rec",
+																	APL_NULL_STRING,
+																	APL_NULL_STRING )
+
+				EXEC SQL COMMIT WORK ;
+				IS_ANY_ORA_ERROR
+
+				CO_ProcMonitor(p_logfile, "Record Committed", NULL, NULL);
+
+ 		  		EXEC SQL SELECT PROCESSING_STATUS INTO :chr_g_restart_data:g_restart_data_i
+  				FROM SYS_BATCHPROC
+  		 		WHERE PROCESS_NAME=:argv[0]
+  		 		AND   PROC_INIT=:argv[1]
+  		 		AND   STARTDATE=:argv[2]
+  		 		AND   STATUS='started'
+  				FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+  		 		if(APL_ZERO_RESULT_SET)
+  		 		{
+  		    		CO_ProcMonitor(p_logfile,"E:No entry in batch_in_proc",NULL,NULL);
+  	    			APL_GOBACK_FAIL
+   			}
+
+				EXEC SQL OPEN ord_cur;
+				IS_ANY_ORA_ERROR
+			}
+		}
+	
+		fprintf(p_repfile, "No. of orders dropped                         : %d\n", int_l_reccount);
+
+		EXEC SQL CLOSE ord_cur;
+		IS_ANY_ORA_ERROR
+	}
+
+	
+
+	if (APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+	{
+		APL_GOBACK_FAIL
+	}
+	else
+	{
+		APL_GOBACK_SUCCESS
+	}
+	
+
+   RETURN_SUCCESS :
+      CO_ProcMonitor(p_logfile, "Leaving Function EOM_Proc_MCLTrdOrd with success", NULL, NULL);
+      return(APL_SUCCESS);
+
+   RETURN_FAILURE :
+      CO_ProcMonitor(p_logfile, "Leaving Function EOM_Proc_MCLTrdOrd with errors", NULL, NULL);
+      return(APL_FAILURE);	
+
+}
+
+
+
+int EOM_Proc_MCLDlyMktPr(	char *p_asofdate,
+						FILE *p_repfile,
+						FILE *p_logfile,
+						DEBUG_INFO_STRUCT_H **l_debug_info_ptr )
+{
+
+	
+
+	struct sqlca sqlca;
+
+   sqlca.sqlcode = 0;
+
+   
+
+   CO_ProcMonitor(p_logfile, "Entered Function CDBMCLDMPFn", NULL, NULL);
+
+	
+/*	ISKB_2301	Change No of Days from 30 to 180 days. Additional condn to keep latest price date	Rohit	*/
+	EXEC SQL INSERT INTO MT_HISDLYMKTPRC
+	SELECT 	a.PRICE_DATE, a.INSTR_CODE, a.CLOSING_PR,
+				a.MODIFYMODE, a.MAKER, a.MAKER_DT,
+				a.MKRTPR_STAT, a.CHECKER, a.CHECKER_DT
+	FROM MT_DLYMKTPRC a
+	WHERE (PRICE_DATE < TO_DATE(:p_asofdate) - 180)
+	AND	0 = (	SELECT count(*) FROM DL_DEAL 
+					WHERE INSTR_CODE = a.INSTR_CODE
+					AND	DEAL_DATE   = a.PRICE_DATE )
+   AND a.PRICE_DATE != (SELECT MAX(PRICE_DATE) FROM MT_DLYMKTPRC p WHERE a.INSTR_CODE = p.INSTR_CODE);
+
+	IS_ANY_ORA_ERROR
+	
+   EXEC SQL COMMIT;       
+
+	EXEC SQL DELETE MT_DLYMKTPRC  
+	WHERE (PRICE_DATE < TO_DATE(:p_asofdate) - 180)
+	AND   0 = ( SELECT count(*) FROM DL_DEAL
+					WHERE INSTR_CODE = MT_DLYMKTPRC.INSTR_CODE
+					AND   DEAL_DATE   = MT_DLYMKTPRC.PRICE_DATE )
+   AND PRICE_DATE != (SELECT MAX(PRICE_DATE) FROM MT_DLYMKTPRC  WHERE INSTR_CODE = INSTR_CODE);
+
+	IS_ANY_ORA_ERROR
+
+	fprintf(p_repfile, "No. of Daily Market Prices dropped            : %d\n", sqlca.sqlerrd[2]);
+
+	if (APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+	{
+		APL_GOBACK_FAIL
+	}
+	else
+	{
+		APL_GOBACK_SUCCESS
+	}
+
+   RETURN_SUCCESS :
+      CO_ProcMonitor(p_logfile, "Leaving Function EOM_Proc_MCLDlyMktPr with success", NULL, NULL);
+      return(APL_SUCCESS);
+
+   RETURN_FAILURE :
+      CO_ProcMonitor(p_logfile, "Leaving Function EOM_Proc_MCLDlyMktPr with errors", NULL, NULL);
+      return(APL_FAILURE);	
+
+}
+
+
+
+int EOM_Proc_MCLPos(	FILE *p_repfile,
+							FILE *p_logfile,
+							DEBUG_INFO_STRUCT_H **l_debug_info_ptr )
+{
+
+	
+
+	struct sqlca sqlca;
+
+   sqlca.sqlcode = 0;
+
+   
+
+   CO_ProcMonitor(p_logfile, "Entered Function CDBMCLSafekFn", NULL, NULL);
+
+	
+
+	EXEC SQL UPDATE DL_SAFEK
+	SET START_SAFEK = SAFEKEEP_POS ;
+
+	IS_ANY_ORA_ERROR
+
+	if (APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+	{
+		APL_GOBACK_FAIL
+	}
+	else
+	{
+		APL_GOBACK_SUCCESS
+	}
+
+   RETURN_SUCCESS :
+      CO_ProcMonitor(p_logfile, "Leaving Function EOM_Proc_MCLPos with success", NULL, NULL);
+      return(APL_SUCCESS);
+
+   RETURN_FAILURE :
+      CO_ProcMonitor(p_logfile, "Leaving Function EOM_Proc_MCLPos with errors", NULL, NULL);
+      return(APL_FAILURE);	
+
+}
+
+
+
+int EOM_Proc_MCLMisTxn(	char *p_asofdate,
+							FILE *p_repfile,
+							FILE *p_logfile,
+							DEBUG_INFO_STRUCT_H **l_debug_info_ptr )
+{
+
+	
+
+	struct sqlca sqlca;
+
+   sqlca.sqlcode = 0;
+
+   
+
+   CO_ProcMonitor(p_logfile, "Entered Function CDBMCLMisTxnFn", NULL, NULL);
+
+	
+
+	EXEC SQL DELETE DL_MISDEAL
+	WHERE CHECKER_DT IS NOT NULL
+	AND	CHECKER_DT < TO_DATE(:p_asofdate) - 40 ;
+
+	IS_ANY_ORA_ERROR
+
+	fprintf(p_repfile, "No. of Missing Txns. dropped                  : %d\n", sqlca.sqlerrd[2]);
+
+	if (APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+	{
+		APL_GOBACK_FAIL
+	}
+	else
+	{
+		APL_GOBACK_SUCCESS
+	}
+
+   RETURN_SUCCESS :
+      CO_ProcMonitor(p_logfile, "Leaving Function EOM_Proc_MCLMisTxn with success", NULL, NULL);
+      return(APL_SUCCESS);
+
+   RETURN_FAILURE :
+      CO_ProcMonitor(p_logfile, "Leaving Function EOM_Proc_MCLMisTxn with errors", NULL, NULL);
+      return(APL_FAILURE);	
+
+}
+
+
+
+int EOM_Proc_MCLLocChg(	char *p_asofdate,
+							FILE *p_repfile,
+							FILE *p_logfile,
+							DEBUG_INFO_STRUCT_H **l_debug_info_ptr )
+{
+
+	
+
+	struct sqlca sqlca;
+
+   sqlca.sqlcode = 0;
+
+   
+
+   CO_ProcMonitor(p_logfile, "Entered Function CDBMCLLocChgFn", NULL, NULL);
+   CO_ProcMonitor(p_logfile, "Delete DL_LOCNCHG is commented", NULL, NULL);
+
+	
+	/*EXEC SQL DELETE DL_LOCNCHG
+	WHERE CHECKER_DT IS NOT NULL
+	AND 	CHECKER_DT < TO_DATE(:p_asofdate) ;
+
+	IS_ANY_ORA_ERROR
+
+	fprintf(p_repfile, "No. of Trade Location Change Records Dropped  : %d\n", sqlca.sqlerrd[2]);*/
+
+APL_GOBACK_SUCCESS // AIX - Warnings removal
+
+   RETURN_SUCCESS :
+      CO_ProcMonitor(p_logfile, "Leaving Function EOM_Proc_MCLLocChg with success", NULL, NULL);
+      return(APL_SUCCESS);
+
+   RETURN_FAILURE :
+      CO_ProcMonitor(p_logfile, "Leaving Function EOM_Proc_MCLLocChg with errors", NULL, NULL);
+      return(APL_FAILURE);	
+
+}
+
+
+
+ int EOM_Proc_Purge(char **argv, FILE *p_logfile, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+ {
+	struct sqlca    sqlca;
+	char				 chr_l_sys_date[APL_DATE_LEN] = APL_NULL_STRING;
+	char				 chr_l_inifile[FILENAME_LEN_A] = APL_NULL_STRING;
+	char				 chr_l_logdir[FILEPATH_LEN] = APL_NULL_STRING;
+	char				 chr_l_reptdir[FILEPATH_LEN] = APL_NULL_STRING;
+	char				 chr_l_hoffdir[FILEPATH_LEN] = APL_NULL_STRING;
+	FILE				 *l_ptr_ini_file = NULL;
+	char				 chr_l_repname[APL_COMMIT_FREQENCY][APL_REPNAME_LENGTH];
+	char				 chr_l_repdesc[APL_COMMIT_FREQENCY][APL_REPDESC_LENGTH];
+	char				 chr_l_log_file_to_del[FILENAME_LEN_A] = APL_NULL_STRING;
+	char				 chr_l_hoff_file_to_del[FILENAME_LEN_A] = APL_NULL_STRING;
+	char				 chr_l_rept_file_to_del[FILENAME_LEN_A] = APL_NULL_STRING;
+	int				 i;
+	int				 int_l_sys_commit_freq = APL_COMMIT_FREQENCY;
+	char				 *chr_l_ptr_rep_desc;
+	char				 *chr_l_ptr_rep_name;
+	int				 int_l_sqlcode;
+
+	char            chr_h_sys_log[9];
+	short				l_rus_flg=0; 
+   char                  chr_g_restart_data[APL_RESTARTDATA_LENGTH];
+    short                 g_restart_data_i;
+
+EXEC SQL VAR chr_g_restart_data is string;
+
+	EXEC SQL VAR chr_h_sys_log IS STRING;
+	EXEC SQL VAR chr_l_sys_date IS STRING;
+
+		
+	CO_ProcMonitor(p_logfile, "Entered processtion EOM_Proc_Purge \n",NULL,NULL);
+	memset(chr_h_sys_log,APL_NULL_CHAR,sizeof(chr_h_sys_log));
+	memset(chr_l_sys_date,APL_NULL_CHAR,sizeof(chr_l_sys_date));
+
+	sqlca.sqlcode = 0;
+
+	
+   EXEC SQL select SYS_DATE into :chr_l_sys_date
+            from MT_EOMSYSDATE;
+   IS_ANY_ORA_ERROR
+
+	strcpy(chr_l_inifile,getenv("INTL_ROOT_PATH"));
+	strcat(chr_l_inifile,"intl_sun.cfg");
+
+	if ((l_ptr_ini_file = fopen(chr_l_inifile,"r")) == NULL)
+		APL_GOBACK_FAIL
+
+	if (CO_ReadToken(l_ptr_ini_file,"INTL_LOG_PATH",chr_l_logdir,l_debug_info_ptr) != APL_SUCCESS)
+		APL_GOBACK_FAIL
+
+	if (CO_ReadToken(l_ptr_ini_file,"INTL_REP_PATH",chr_l_reptdir,l_debug_info_ptr) != APL_SUCCESS)
+		APL_GOBACK_FAIL
+	
+	if (CO_ReadToken(l_ptr_ini_file,"INTL_HF_PATH",chr_l_hoffdir,l_debug_info_ptr) != APL_SUCCESS)
+		APL_GOBACK_FAIL
+
+	
+
+	CO_ProcMonitor(p_logfile, "Starting deletion of AUDIT_LOG records",NULL,NULL);
+	
+
+	while(1)
+	{
+		EXEC SQL DELETE FROM AUDIT_LOG
+		WHERE (TO_DATE(:chr_l_sys_date, 'DD/MM/YYYY HH24:MI:SS')-start_time) > 60
+		AND ROWNUM < (:int_l_sys_commit_freq+1);
+
+		IS_ANY_ORA_ERROR
+
+		if (sqlca.sqlcode == 1403)
+			break;
+
+		EXEC SQL COMMIT WORK;
+		IS_ANY_ORA_ERROR
+
+		
+
+		EXEC SQL SELECT PROCESSING_STATUS INTO :chr_g_restart_data:g_restart_data_i
+		FROM SYS_BATCHPROC
+		WHERE PROCESS_NAME = :argv[0]
+		AND PROC_INIT = :argv[1]
+		AND STARTDATE = :argv[2]
+		AND STATUS = 'started'
+		FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,APL_NULL_STRING,APL_NULL_STRING,APL_NULL_STRING)
+	}
+
+	CO_ProcMonitor(p_logfile, "Finished deleting AUDIT_LOG records older than 60 days (if any)",NULL,NULL);
+
+	
+
+	 CO_ProcMonitor(p_logfile, "Starting deletion of COMMON_REPORT records",NULL,NULL);
+	 
+	 
+
+	 
+
+	 
+	  
+
+		l_rus_flg = 0;
+     if (APL_FAILURE == CO_Chk_CntryEnabled(  "COMMON_REPORT",
+                                             "STORE_REPORTS",
+                                             &l_rus_flg,
+                                             l_debug_info_ptr ))
+     {
+         APL_GOBACK_FAIL
+     }
+
+	if (l_rus_flg)
+	{	
+		strcpy(chr_h_sys_log,"LOG FILE");
+		EXEC SQL DECLARE ReportRecs CURSOR FOR
+		SELECT report_name,report_desc
+		FROM PRO_COMMON_REPORT
+		WHERE (TO_DATE(:chr_l_sys_date, 'DD/MM/YYYY HH24:MI:SS') - report_date) > 30
+		AND REPORT_DESC = :chr_h_sys_log
+		AND fe_be_ind = 'B';
+	}
+	else 
+	{
+		EXEC SQL DECLARE ReportRecs CURSOR FOR
+		SELECT report_name,report_desc
+		FROM PRO_COMMON_REPORT
+		WHERE (TO_DATE(:chr_l_sys_date, 'DD/MM/YYYY HH24:MI:SS') - report_date) > 30
+		AND fe_be_ind = 'B';
+	}
+
+	EXEC SQL OPEN ReportRecs;
+
+	IS_ANY_ORA_ERROR
+
+	for(;;)
+	{
+		
+
+		for(i=0;i<APL_COMMIT_FREQENCY;i++)
+		{
+			strcpy(chr_l_repname[i], APL_NULL_STRING);
+			strcpy(chr_l_repdesc[i], APL_NULL_STRING);
+		}
+
+		EXEC SQL FETCH ReportRecs INTO :chr_l_repname,:chr_l_repdesc;
+
+		IS_ANY_ORA_ERROR
+
+		int_l_sqlcode = sqlca.sqlcode;
+
+		if (strcmp(chr_l_repname[0], APL_NULL_STRING) == 0)
+			break;
+
+		
+
+		for(i=0;i<APL_COMMIT_FREQENCY;i++)
+		{
+			if (strcmp(chr_l_repname[i], APL_NULL_STRING) == 0)
+				break;
+
+			
+			if (strchr(chr_l_repdesc[i], APL_NULL_CHAR) == NULL)
+				strcat(chr_l_repdesc[i],APL_NULL_STRING);
+			chr_l_ptr_rep_desc = strchr(chr_l_repdesc[i], APL_NULL_CHAR);
+			chr_l_ptr_rep_desc--;
+			while(isspace(*chr_l_ptr_rep_desc))
+				chr_l_ptr_rep_desc--;
+			*(chr_l_ptr_rep_desc+1) = APL_NULL_CHAR;
+
+			if (strchr(chr_l_repname[i], APL_NULL_CHAR) == NULL)
+				strcat(chr_l_repname[i],APL_NULL_STRING);
+			chr_l_ptr_rep_name = strchr(chr_l_repname[i], APL_NULL_CHAR);
+			chr_l_ptr_rep_name--;
+			while(isspace(*chr_l_ptr_rep_name))
+				chr_l_ptr_rep_name--;
+			*(chr_l_ptr_rep_name+1) = APL_NULL_CHAR;
+
+			
+
+			if (strcmp(chr_l_repdesc[i], APL_LOGFILE_DESC) == 0)
+			{
+				strcpy(chr_l_log_file_to_del,chr_l_logdir);
+				strcat(chr_l_log_file_to_del,chr_l_repname[i]);
+
+				if (unlink(chr_l_log_file_to_del) != 0)
+				{
+					fprintf(p_logfile, "Log h_file %s could not be deleted \n",chr_l_log_file_to_del);
+			
+					if (errno != ENOENT)
+					{
+						
+
+						 EXEC SQL INSERT INTO DL_INSTRUMENTCONV_TEMP VALUES
+						 (NULL,NULL,NULL,:chr_l_repname[i]);
+			
+						 IS_ANY_ORA_ERROR
+					}
+				}
+			}
+			else if (strcmp(chr_l_repdesc[i], APL_HOFF_FILE_DESC) == 0)
+			{
+				strcpy(chr_l_hoff_file_to_del,chr_l_hoffdir);
+				strcat(chr_l_hoff_file_to_del,chr_l_repname[i]);
+
+				if (unlink(chr_l_hoff_file_to_del) != 0)
+				{
+					fprintf(p_logfile, "Handoff h_file %s could not be deleted \n",chr_l_hoff_file_to_del);
+
+					if (errno != ENOENT)
+					{
+						
+
+						 EXEC SQL INSERT INTO DL_INSTRUMENTCONV_TEMP VALUES
+						 (NULL,NULL,NULL,:chr_l_repname[i]);
+			
+						 IS_ANY_ORA_ERROR
+					}
+				}
+			}
+			else
+			{
+				strcpy(chr_l_rept_file_to_del,chr_l_reptdir);
+				strcat(chr_l_rept_file_to_del,chr_l_repname[i]);
+
+				if (unlink(chr_l_rept_file_to_del) != 0)
+				{
+					fprintf(p_logfile, "Report h_file %s could not be deleted \n",chr_l_rept_file_to_del);
+
+					if (errno != ENOENT)
+					{
+						
+
+						 EXEC SQL INSERT INTO DL_INSTRUMENTCONV_TEMP VALUES
+						 (NULL,NULL,NULL,:chr_l_repname[i]);
+			
+						 IS_ANY_ORA_ERROR
+					}
+				}
+			}
+		}
+
+		if (int_l_sqlcode == 1403)
+			break;
+	}
+
+	EXEC SQL CLOSE ReportRecs;
+	
+	
+
+	while(1)
+	{
+	if (l_rus_flg)
+	{
+		EXEC SQL DELETE FROM PRO_COMMON_REPORT
+		WHERE (TO_DATE(:chr_l_sys_date, 'DD/MM/YYYY HH24:MI:SS')-report_date) > 30
+		AND FE_BE_IND = 'B'
+		AND REPORT_DESC = :chr_h_sys_log
+		AND ROWNUM < (:int_l_sys_commit_freq+1)
+		AND REPORT_NAME NOT IN (SELECT ORD_REFNO FROM DL_INSTRUMENTCONV_TEMP);
+	}
+	else
+	{
+		EXEC SQL DELETE FROM PRO_COMMON_REPORT
+   	 WHERE (TO_DATE(:chr_l_sys_date, 'DD/MM/YYYY HH24:MI:SS')-report_date) > 30
+		AND FE_BE_IND = 'B'
+		AND ROWNUM < (:int_l_sys_commit_freq+1)
+		AND REPORT_NAME NOT IN (SELECT ORD_REFNO FROM DL_INSTRUMENTCONV_TEMP);
+	}
+		IS_ANY_ORA_ERROR
+
+		if (sqlca.sqlcode == 1403)
+			break;
+
+		EXEC SQL COMMIT WORK;
+		IS_ANY_ORA_ERROR
+
+		
+
+	   EXEC SQL SELECT PROCESSING_STATUS INTO :chr_g_restart_data:g_restart_data_i
+		FROM SYS_BATCHPROC
+		WHERE PROCESS_NAME = :argv[0]
+		AND PROC_INIT = :argv[1]
+		AND STARTDATE = :argv[2]
+		AND STATUS = 'started'
+		FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,APL_NULL_STRING,APL_NULL_STRING,APL_NULL_STRING)
+	}
+
+	
+
+	 EXEC SQL DELETE FROM DL_INSTRUMENTCONV_TEMP;
+	 IS_ANY_ORA_ERROR
+
+	CO_ProcMonitor(p_logfile, "Finished deleting COMMON_REPORT records older than 30 days (if any)",NULL,NULL);
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS :
+	{
+		CO_ProcMonitor(p_logfile,"Leaving processtion EOM_Proc_Purge with success \n",NULL,NULL);
+		return(APL_SUCCESS);
+	}
+	
+	RETURN_FAILURE :
+	{
+		CO_ProcMonitor(p_logfile,"Leaving processtion EOM_Proc_Purge with failure \n",NULL,NULL);
+		return(APL_FAILURE);
+	}
+}
+
+
+
+
+int main(int argc,char **argv) //AIX -Warnings Removal
+{
+	struct sqlca sqlca;
+   DEBUG_INFO_STRUCT_H *l_debug_info_ptr=NULL ;
+	INTL_ENV_DATA_STRUCT_H l_intl_env_data_h;
+	FILE *l_finifile;
+
+   int int_l_retval=0;
+	int int_num = 0;
+
+   char chr_uname[APL_USERID_LEN] 	= APL_NULL_STRING;
+   char chr_custody_id_b[APL_USERID_LEN] 	= APL_NULL_STRING;
+   char chr_passwd[APL_PASSWD_LEN] 	= APL_NULL_STRING;
+	char chr_l_logdir[PATH_LENGTH] 	= APL_NULL_STRING;
+	char chr_l_logname[PATH_LENGTH] 	= APL_NULL_STRING;
+	char chr_l_inifile[PATH_LENGTH] 	= APL_NULL_STRING;
+	char chr_l_now[APL_DATE_LEN]		= APL_NULL_STRING;
+
+	FILE *l_flogfile = NULL;
+
+   EXEC SQL VAR chr_uname IS STRING;
+   EXEC SQL VAR chr_custody_id_b IS STRING;
+   EXEC SQL VAR chr_passwd IS STRING;
+
+	sqlca.sqlcode = 0;
+
+	strcpy(chr_l_inifile,getenv("INTL_ROOT_PATH"));
+	strcat(chr_l_inifile,"intl_sun.cfg");
+
+	if ( ( l_finifile=fopen(chr_l_inifile,"r") ) == NULL)
+	{
+		APL_GOBACK_FAIL
+	}
+
+	
+
+	
+
+	APL_FETCH_DB_LOGIN_DETAILS(l_finifile, chr_custody_id_b, chr_uname, chr_passwd, APL_OUT_FILE, &l_debug_info_ptr)
+
+   EXEC SQL CONNECT :chr_uname IDENTIFIED BY :chr_passwd;
+
+   if (sqlca.sqlcode)
+   {
+      APL_GOBACK_FAIL
+   }
+   else
+   {
+		
+
+		if (APL_FAILURE == CO_Rtv_RptFileName(	"3P",
+														APL_LOGFILE_DESC,
+														100,
+														argv[5],
+														argv,
+														&l_flogfile,
+														&l_debug_info_ptr ) )
+		{
+			APL_GOBACK_FAIL
+		}
+
+		
+
+		EXEC SQL COMMIT WORK;
+
+		if (sqlca.sqlcode)
+		{
+			CO_ProcMonitor(l_flogfile, "Could not commit after opening chr_log file", NULL, NULL);
+			CO_Proc_RptClose(l_flogfile, &l_debug_info_ptr);
+			APL_GOBACK_FAIL
+		}
+
+		
+
+		if (APL_FAILURE == CO_RtvSysParams(&l_debug_info_ptr))
+		{
+			CO_ProcMonitor(l_flogfile, "Could not get system params", &l_debug_info_ptr, NULL);
+			CO_Proc_RptClose(l_flogfile, &l_debug_info_ptr);
+			APL_GOBACK_FAIL
+		}
+
+		
+
+		strcpy(l_intl_env_data_h.usr, argv[3]);
+		strcpy(l_intl_env_data_h.h_mode, argv[4]);
+		strcpy(l_intl_env_data_h.processtion, argv[5]);
+		strcpy(l_intl_env_data_h.auth_req, argv[6]);
+		strcpy(l_intl_env_data_h.subprocess, argv[7]);
+		strcpy(l_intl_env_data_h.h_process, argv[8]);
+
+
+
+      EXEC SQL select SYS_DATE into :chr_l_now
+            from MT_EOMSYSDATE;
+      IS_ANY_ORA_ERROR
+      
+		int_l_retval = EOM_Proc_MCL( chr_l_now, argv, l_flogfile, &l_intl_env_data_h, &l_debug_info_ptr);
+      if ( int_l_retval == APL_FAILURE )
+      {
+			CO_ProcMonitor(l_flogfile, "CDBEOMMCLFn returned failure", NULL, NULL);
+			CO_Proc_RptClose(l_flogfile, &l_debug_info_ptr);
+			EXEC SQL ROLLBACK WORK RELEASE;
+         APL_GOBACK_FAIL
+      }
+      else
+      {
+         EXEC SQL UPDATE SYS_BATCHPROC
+         SET  status = 'completed'
+         WHERE PROCESS_NAME=:argv[0]
+         AND   PROC_INIT=:argv[1]
+         AND   STARTDATE=:argv[2]
+         AND   STATUS='started';
+
+			if (sqlca.sqlcode)
+			{
+				CO_ProcMonitor(l_flogfile, "Could not update batch_in_proc", NULL, NULL);
+				CO_Proc_RptClose(l_flogfile, &l_debug_info_ptr);
+				APL_GOBACK_FAIL
+			}
+
+         EXEC SQL COMMIT WORK RELEASE;
+			if (sqlca.sqlcode)
+			{
+				CO_ProcMonitor(l_flogfile, "Could not do final commit", NULL, NULL);
+				CO_Proc_RptClose(l_flogfile, &l_debug_info_ptr);
+				APL_GOBACK_FAIL
+			}
+
+			CO_Proc_RptClose(l_flogfile, &l_debug_info_ptr);
+         APL_GOBACK_SUCCESS
+      }
+   }
+
+	RETURN_SUCCESS : exit(0);
+	RETURN_FAILURE : exit(-1);
+}

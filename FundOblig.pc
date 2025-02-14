@@ -1,0 +1,1153 @@
+#include "Intellect_Common.h"
+#include "CO_HostStructdef.h"
+#include "DL_Interface.h"
+#include<stdlib.h>
+#include<string.h>
+#include<strings.h>
+#define FEED_LINERR_LENGTH 500
+
+EXEC SQL INCLUDE SQLCA.H;
+/**Amitk:ISKB-350:04-10-2007**/
+char Label_header[400] = APL_NULL_STRING;
+char Label_header1[400] = APL_NULL_STRING;
+char Label_header2[400] = APL_NULL_STRING;
+/**Amitk:ISKB-350:04-10-2007**/
+
+/* ISKB-350: ASHISH 24-10-2007 */
+char g_arg2[100] = APL_NULL_STRING;
+char g_arg3[100] = APL_NULL_STRING;
+char g_arg5[100] = APL_NULL_STRING;
+char glob_chr_l_htm_fund_rept[PATH_LENGTH] = APL_NULL_STRING;
+
+
+int main(int argc,char **argv)  //AIX - Warnings Removal
+{  
+   /**DEBUG_INFO_STRUCT_H **l_debug_info_ptr = (DEBUG_INFO_STRUCT_H *) NULL; Changed for AIX Migration to remove warnings***/
+
+  DEBUG_INFO_STRUCT_H   *l_debug_info_struct = NULL, **l_debug_info_ptr = &l_debug_info_struct;
+   l_debug_info_ptr = (DEBUG_INFO_STRUCT_H **)calloc(1,sizeof(DEBUG_INFO_STRUCT_H *));
+  //AIX -Warning Removal
+
+   INTL_ENV_DATA_STRUCT_H l_intl_env_data_h;
+   FILE *l_logfile=(FILE *) NULL, *l_finifile, *l_mat_rept_file,*l_unmat_rept_file, *l_mis_rept_file;
+   char l_temp_processing_status[51] = APL_NULL_STRING;
+   char **temp;
+   int int_num=0;
+   char chr_l_hoff_file[PATH_LENGTH]=APL_NULL_STRING;
+   char chr_l_inifile[PATH_LENGTH] = APL_NULL_STRING;
+   struct sqlca sqlca;
+   char chr_l_sys_date[APL_DATE_LEN] = APL_NULL_STRING;
+   int int_retval=0;
+	char l_pay_in_dt[APL_DATE_LEN]=APL_NULL_STRING;
+	char l_pay_out_dt[APL_DATE_LEN]=APL_NULL_STRING;
+	char l_settle_no[12] = APL_NULL_STRING;
+	short i_pay_in_dt=0;
+	short i_pay_out_dt =0;
+	short i_settle_no =0;
+	char l_exch_code[4] = APL_NULL_STRING;
+	char                  chr_g_restart_data[APL_RESTARTDATA_LENGTH];
+	short                 g_restart_data_i;
+	char 					l_chr_mkttype[2] = APL_NULL_STRING;
+
+	/* ISKB-350 ASHISH 30-10-2007 */
+    char chr_settl_type[3] = APL_NULL_STRING;
+
+   char chr_uname[APL_USERID_LEN] = APL_NULL_STRING;
+   char chr_custody_id_b[APL_USERID_LEN] = APL_NULL_STRING;
+   char chr_passwd[APL_USERID_LEN] = APL_NULL_STRING;
+
+   EXEC SQL BEGIN DECLARE SECTION;
+   int int_l_count =0;
+
+
+   EXEC SQL VAR chr_l_sys_date         IS STRING;
+   EXEC SQL VAR chr_uname IS STRING;
+   EXEC SQL VAR chr_passwd IS STRING;
+   EXEC SQL END DECLARE SECTION;
+
+   memset(&l_intl_env_data_h, NULL, sizeof(INTL_ENV_DATA_STRUCT_H));
+   strcpy(l_intl_env_data_h.usr, argv[3]);
+   strcpy(l_intl_env_data_h.h_mode, argv[4]);
+   strcpy(l_intl_env_data_h.processtion, argv[5]);
+   strcpy(l_intl_env_data_h.auth_req, argv[6]);
+   strcpy(l_intl_env_data_h.subprocess, argv[7]);
+   strcpy(l_intl_env_data_h.h_process, argv[8]);
+
+
+
+  strcpy(chr_l_inifile,getenv("INTL_ROOT_PATH"));
+  strcat(chr_l_inifile,"intl_sun.cfg");
+  if ( ( l_finifile=fopen(chr_l_inifile,"r") ) == NULL)
+  {
+	   APL_GOBACK_FAIL
+  }
+  sqlca.sqlcode=0;
+  printf("Before calling DBConnect\n");
+  if(CO_Get_DBConnect(l_debug_info_ptr) == APL_FAILURE)/*& removed for AIX Migration*/
+   {
+     CO_ProcMonitor(APL_OUT_FILE,"Fund Obligation  Generation :Failed To Get Connection",NULL,NULL);
+     APL_GOBACK_FAIL
+   }
+  printf("After calling DBConnect\n");
+
+
+  if (APL_FAILURE == CO_Rtv_RptFileName( "BS",
+									              APL_LOGFILE_DESC,
+									              100,
+									              argv[5],
+									              argv,
+									              &l_logfile,
+									              l_debug_info_ptr ))/*& removed for AIX Migration*/
+  {
+      APL_GOBACK_FAIL
+  }
+
+	  
+  EXEC SQL SELECT PROCESSING_STATUS INTO :chr_g_restart_data:g_restart_data_i
+       		FROM SYS_BATCHPROC
+		      WHERE PROCESS_NAME=:argv[0]
+			    AND   PROC_INIT=:argv[1]
+			    AND   STARTDATE=:argv[2]
+			    AND   STATUS='started'
+			    FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+
+  if(APL_ZERO_RESULT_SET)
+  {
+      CO_ProcMonitor(l_logfile,"E:No entry in batch_in_proc\n",NULL,NULL);
+      APL_GOBACK_FAIL
+  }
+
+  IS_ANY_ORA_ERROR
+
+  fprintf(l_logfile, "Fund Obligation Report Generation Started..\n");
+
+
+
+	  
+  if (APL_FAILURE == CO_SplitStr(  argv[9],
+                                   '|',
+                                  &int_num,
+                                  &temp ))
+  {
+       fprintf(l_logfile, "\n\tString split processtion failed\n");
+      APL_GOBACK_FAIL
+  }
+  strcpy(l_settle_no , temp[0]);
+  strcpy(l_exch_code , temp[1]);
+  
+   /* ISKB-350: Added by ASHISH 24-10-2007 Start */
+  strcpy(chr_settl_type,temp[2]);
+  strcpy(g_arg2,argv[2]);
+  strcpy(g_arg3,argv[3]);
+  strcpy(g_arg5,argv[5]);
+  /* Added by ASHISH 24-10-2007 End */
+
+
+	  if ( CO_RtvSysParams(l_debug_info_ptr) == APL_FAILURE)//AIX Warning Removal 
+		APL_GOBACK_FAIL
+
+
+		EXEC SQL SELECT PAY_IN_DT, PAY_OUT_DT 
+				INTO :l_pay_in_dt:i_pay_in_dt,
+					  :l_pay_out_dt:i_pay_out_dt
+						FROM MT_SETTL_CAL
+						WHERE SETTL_NO =:l_settle_no
+						AND EXCH_CODE = :l_exch_code
+			            /* ISKB-350 ASHISH */
+			            AND SETTL_TYPE= :chr_settl_type      
+			            AND STATUS = 'AA';
+		        printf("\n Error to find payin and payout date = |%d| \n",sqlca.sqlcode);
+		                
+
+  		IS_ANY_ORA_ERROR
+		  
+			if(sqlca.sqlcode ==1403)
+			{
+				printf("Error in fetching settlement calender for %s\n",l_settle_no);
+				APL_GOBACK_FAIL
+			}
+
+
+		strcpy(l_chr_mkttype,"N");
+		fprintf(l_logfile,"\n");
+	if(APL_FAILURE== NSE_Gross_Rep(argv,
+											l_exch_code,
+											l_settle_no,
+											l_pay_in_dt,
+											l_pay_out_dt, 
+											l_chr_mkttype,
+											l_logfile,
+											&l_intl_env_data_h,
+											l_debug_info_ptr))/*& removed for AIX Migration*/
+	{
+		printf("Failed in NSE_Gross_Rep N aborting\n");
+		APL_GOBACK_FAIL
+	}
+
+		strcpy(l_chr_mkttype,"T");
+	if(APL_FAILURE== NSE_Gross_Rep(argv,l_exch_code,l_settle_no,l_pay_in_dt,l_pay_out_dt, l_chr_mkttype,l_logfile,&l_intl_env_data_h,l_debug_info_ptr))/*& removed for AIX Migration*/
+	{
+		printf("Failed in NSE_Gross_Rep T aborting\n");
+		APL_GOBACK_FAIL
+	}
+
+
+  RETURN_SUCCESS :
+   {
+
+            EXEC SQL UPDATE SYS_BATCHPROC
+                 SET STATUS='completed'
+                 WHERE PROCESS_NAME =:argv[0]
+                 AND PROC_INIT =:argv[1]
+                 AND STARTDATE =:argv[2]
+                 AND STATUS = 'started';
+
+      EXEC SQL COMMIT WORK RELEASE;
+      CO_ProcMonitor(l_logfile, "Record Committed\n", l_debug_info_ptr, &l_intl_env_data_h); /*& removed for AIX Migration*/
+		
+		return(APL_SUCCESS);
+
+	}
+  RETURN_FAILURE :
+   {
+      EXEC SQL ROLLBACK WORK RELEASE;
+      CO_ProcMonitor(l_logfile, "Got Errors : ", l_debug_info_ptr, &l_intl_env_data_h); /*& removed for AIX Migration*/
+      CO_ProcMonitor(l_logfile, "Rolling Back\n", l_debug_info_ptr, &l_intl_env_data_h);
+      CO_FreeErrLst(l_debug_info_ptr);
+
+      return(APL_FAILURE);
+   }
+
+
+
+}
+
+
+int NSE_Gross_Rep(char **argv,char *p_exch_code,char *p_settle_no,char *p_pay_in_dt,char *p_pay_out_dt,char *p_mkttype,FILE *p_log_file,INTL_ENV_DATA_STRUCT_H *p_intl_envdatastruct_h,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+FILE  *fn = APL_OUT_FILE ; //(FILE *) NULL;
+char l_client[14] = APL_NULL_STRING;
+short i_client = 0;
+char l_deal_cd[3] = APL_NULL_STRING;
+
+short i_deal_cd = 0;
+double l_sum_amt =0.0;
+short	i_sum_amt =0;
+double	l_brok_amt=0.0;
+
+short i_brok_amt=0;
+double l_stt_amt=0.0;
+short i_stt_amt=0;
+char l_prev_client[14] = APL_NULL_STRING;
+int l_counter=0;
+double sum_sale =0.00;
+double sum_pur = 0.00;
+double sum_net_pos =0.00;
+double l_rec_pur =0.00;
+double l_del_sale =0.00;
+double l_sum_stt_amt =0.00;
+char l_name[45] = APL_NULL_STRING;
+short i_name = 0;
+double l_net_posn =0.00;
+char l_chr_rec_pur[25] = APL_NULL_STRING;
+char l_chr_del_sale[25] = APL_NULL_STRING;
+char l_chr_net_posn[25] = APL_NULL_STRING;
+char l_chr_sum_stt_amt[25] = APL_NULL_STRING;
+char l_chr_sum_brok_amt[25] = APL_NULL_STRING;
+double l_net_amount =0.00;
+short i_net_amount =0;
+double sum_stt_amount =0.00;
+double sum_brk_amount =0.00;
+double l_sum_brk_amt =0.00;
+short i_sum_brk_amt=0;
+long l_counter1=0;
+char l_str_counter1[13] = APL_NULL_STRING;/** AmitB:ISKB-350:09-08-2007	**/
+
+/* SNOW- CS0046501 Changes by Shradha for Stamp Duty Enh. Starts*/
+double l_stamp_duty=0.0;
+short i_stamp_duty=0;
+double l_sum_stamp_duty =0.00;
+char l_chr_sum_stamp_duty[25] = APL_NULL_STRING;
+double sum_stamp_duty =0.00;
+/* SNOW- CS0046501 Changes by Shradha for Stamp Duty Enh. Ends*/
+
+/* ISKB-350: Added by ASHISH 24-10-2007 start */
+char chr_l_inifile[PATH_LENGTH] = APL_NULL_STRING;
+char chr_l_htm_fund_rept[PATH_LENGTH]= APL_NULL_STRING;	
+char chr_report_file_name[PATH_LENGTH]= APL_NULL_STRING;	
+FILE *l_ptr_ini_file =  NULL;
+FILE *l_rpt_file_xls =  NULL;
+char  chr_l_repo_path_dir[PATH_LENGTH]= APL_NULL_STRING;
+char l_txtfile_name[PATH_LENGTH]= APL_NULL_STRING;
+char l_xlsfile_name[PATH_LENGTH]= APL_NULL_STRING;
+short i_xlsfile_name = 0;
+char chr_l_rname[100] = APL_NULL_STRING;
+INTL_REPT_STRUCT_H            *l_intl_rept_struct_ha  =NULL;
+l_intl_rept_struct_ha   = (INTL_REPT_STRUCT_H *)calloc(1, sizeof(INTL_REPT_STRUCT_H));
+APL_MALLOC_FAIL(l_intl_rept_struct_ha);
+
+EXEC SQL BEGIN DECLARE SECTION;
+	EXEC SQL VAR l_xlsfile_name IS STRING;
+EXEC SQL END DECLARE SECTION;
+
+/* Added by ASHISH 24-10-2007 End */
+
+memset(l_txtfile_name,APL_NULL_CHAR,PATH_LENGTH);
+memset(l_xlsfile_name,APL_NULL_CHAR,PATH_LENGTH);
+	printf("\n Inside Function ");
+
+	fprintf(p_log_file,"Inside NSE_Gross_Rep\n");
+
+	/* ISKB-350: Added by ASHISH 24-10-2007 Start */
+	strcpy(chr_l_inifile,getenv("INTL_ROOT_PATH"));
+		strcat(chr_l_inifile,"intl_sun.cfg");
+			
+		if ((l_ptr_ini_file = fopen(chr_l_inifile,"r")) == NULL)
+		{
+			CO_ProcMonitor(p_log_file,"Failed to Open Config. File",NULL,NULL);
+			APL_GOBACK_FAIL
+		}
+
+		if (CO_ReadToken(l_ptr_ini_file,"INTL_REP_PATH",chr_l_repo_path_dir,l_debug_info_ptr) != APL_SUCCESS)
+		{
+			return(APL_FAILURE);
+		}
+		
+		printf("Report FilePath=|%s|",chr_l_repo_path_dir);
+				
+		strcpy(chr_l_htm_fund_rept,chr_l_repo_path_dir);
+		
+	/* ASHISH 24-10-2007 End */
+
+	if(strcmp(p_exch_code,"NSE")==0)
+	{
+		if(strcmp(p_mkttype,"N")==0)
+		{
+		printf("\n Inside NSE N ");
+
+				if (APL_FAILURE == CO_Rtv_RptFileName( "NSENRM",
+	         		                             "REPORT",
+	               		                       100,
+	                     		                 argv[5],
+	                           		           argv,
+	                                 	   	  &fn,
+	                                    	 	l_debug_info_ptr ) )
+				{
+	    			APL_GOBACK_FAIL
+				}
+
+       if (APL_FAILURE == RtvNewFileName( "NSENRM", chr_l_rname, l_debug_info_ptr ) )
+				{
+	    				APL_GOBACK_FAIL
+				}
+			
+		}
+		else
+		{
+		printf("\n Inside NSE else ");
+
+			if (APL_FAILURE == CO_Rtv_RptFileName( "NSET2T",
+	   		                                   "REPORT",
+	         		                             100,
+	               		                       argv[5],
+	                     		                 argv,
+	                           		           &fn,
+	                                 		    l_debug_info_ptr ) )
+			{
+	    		APL_GOBACK_FAIL
+			}
+            
+       if (APL_FAILURE == RtvNewFileName( "NSET2T", chr_l_rname, l_debug_info_ptr ) )
+            {
+              APL_GOBACK_FAIL
+            }
+		
+		}
+	}
+	else if(strcmp(p_exch_code,"BSE")==0)
+	{
+	
+		if(strcmp(p_mkttype,"N")==0)
+		{
+		printf("\n Inside else N");
+			if (APL_FAILURE == CO_Rtv_RptFileName( "BSENRM",
+	      		                                "REPORT",
+	            		                          100,
+	                  		                    argv[5],
+	                        			            argv,
+	                                 		     &fn,
+	                                     		l_debug_info_ptr ) )
+			{
+	    		APL_GOBACK_FAIL
+			}
+			
+			if (APL_FAILURE == RtvNewFileName( "BSENRM", chr_l_rname, l_debug_info_ptr ) )
+				{
+	    				APL_GOBACK_FAIL
+				}
+		}
+		else
+		{
+		printf("\n Inside else of else N");
+		
+
+				if (APL_FAILURE == CO_Rtv_RptFileName( "BSET2T",
+	         			                             "REPORT",
+	                  				                    100,
+	                              			        argv[5],
+	                       				               argv,
+	                                 			     &fn,
+	                               			      l_debug_info_ptr ) )
+				{
+	    			APL_GOBACK_FAIL
+				}
+				if (APL_FAILURE == RtvNewFileName( "BSET2T", chr_l_rname, l_debug_info_ptr ) )
+				{
+	    				APL_GOBACK_FAIL
+				}
+		
+		}
+	}
+	/* Priyanka - MCS-SX ench - UAT issue - start*/
+	if(strcmp(p_exch_code,"MCS")==0)
+	{
+		if(strcmp(p_mkttype,"N")==0)
+		{
+		printf("\n Inside MCS N ");
+
+				if (APL_FAILURE == CO_Rtv_RptFileName( "MCSNRM",
+	         		                             "REPORT",
+	               		                       100,
+	                     		                 argv[5],
+	                           		           argv,
+	                                 	   	  &fn,
+	                                    	 	l_debug_info_ptr ) )
+				{
+	    			APL_GOBACK_FAIL
+				}
+				if (APL_FAILURE == RtvNewFileName( "MCSNRM", chr_l_rname, l_debug_info_ptr ) )
+				{
+	    				APL_GOBACK_FAIL
+				}
+		
+
+		}
+		else
+		{
+		printf("\n Inside MCS else ");
+
+			if (APL_FAILURE == CO_Rtv_RptFileName( "MCST2T",
+	   		                                   "REPORT",
+	         		                             100,
+	               		                       argv[5],
+	                     		                 argv,
+	                           		           &fn,
+	                                 		    l_debug_info_ptr ) )
+			{
+	    		APL_GOBACK_FAIL
+			}
+			
+			if (APL_FAILURE == RtvNewFileName( "MCST2T", chr_l_rname, l_debug_info_ptr ) )
+				{
+	    				APL_GOBACK_FAIL
+				}
+		
+		}
+	}
+/* Priyanka - MCS-SX ench - UAT issue - end */
+	/* ISKB-350: ASHISH 24-10-2007 Start */
+
+   /*
+	if(CO_Rtv_FileNm_From_Pointer(fn,chr_l_repo_path_dir,l_txtfile_name) == APL_FAILURE)
+	{
+		 APL_GOBACK_FAIL
+	}	
+   */
+
+	strcpy(l_xlsfile_name,chr_l_rname);
+	printf("Text File Name |%s| \n",l_txtfile_name);
+
+     /*
+	EXEC SQL SELECT REPLACE(:l_txtfile_name,'txt','xls')
+		     INTO:l_xlsfile_name:i_xlsfile_name
+		     FROM DUAL;
+			 printf("\n sqlca.sqlcode = |%d| \n",sqlca.sqlcode);
+	IS_ANY_ORA_ERROR
+    */
+
+    strcat(chr_l_htm_fund_rept,l_xlsfile_name); 
+	strcat(chr_report_file_name,l_xlsfile_name); 
+	Alert("chr_report_file_name---|%s|\n",chr_report_file_name);
+	Alert("l_rpt_file_xls ----|%s|\n",l_rpt_file_xls);
+	Alert("chr_report_file_name---|%s|\n",chr_report_file_name);
+ 	if ((l_rpt_file_xls = fopen(chr_l_htm_fund_rept,"w")) == NULL)
+	{
+				return(APL_FAILURE);
+	}
+
+	strcpy(glob_chr_l_htm_fund_rept,chr_l_htm_fund_rept);
+
+	if (APL_FAILURE == print_header_cli_xls(p_exch_code,p_settle_no, p_pay_in_dt, p_pay_out_dt,p_mkttype,l_rpt_file_xls,l_debug_info_ptr))
+	{
+		printf("\n Failue in print_header_cli_xls \n");
+		APL_GOBACK_FAIL
+	}
+    	
+	/* ASHISH 24-10-2007 End */
+
+	if (APL_FAILURE == print_header(p_exch_code,p_settle_no, p_pay_in_dt, p_pay_out_dt,p_mkttype, fn,l_debug_info_ptr))
+	{
+		APL_GOBACK_FAIL
+	}
+	fflush(fn);
+
+	printf(" p_exch_code is |%s| \n",p_exch_code);
+	printf("p_settle_no is |%s|\n",p_settle_no);
+		if(strcmp(p_mkttype,"N")==0)
+		{
+			Alert("Normal--");
+	EXEC SQL DECLARE l_nse_nrm_cursor cursor FOR
+			SELECT CLIENT,DEAL_CD,SUM(AMOUNT),SUM(Brokercomm) , sum(stx_comm),SUM(NET_AMT), sum(stamp_duty)
+			FROM DL_DEAL
+			WHERE CLH_FLG ='C'
+/***		AND DEAL_STAT='CC'				***/
+			AND (DEAL_STAT=DECODE(DEAL_CD,'3','CC','4','MS') OR DEAL_STAT=DECODE(DEAL_CD,'3','CC','4','CC') OR DEAL_STAT IN('PM','MS','SS','CS')) 
+			AND EXCH_CODE =:p_exch_code
+			AND DEAL_CD in ('3','4')
+			AND (MKT_TYPE !=DECODE(:p_exch_code,'NSE','22','BSE','16','MCS','03') AND MKT_TYPE !=DECODE(:p_exch_code,'NSE','50','BSE','17','MCS','24'))/* Priyanka - MCS-SX ench - UAT issue */
+			AND SETTLEMENT_NO = :p_settle_no
+			group by client,deal_cd order by client;
+
+	IS_ANY_ORA_ERROR
+
+	EXEC SQL OPEN l_nse_nrm_cursor;
+	IS_ANY_ORA_ERROR
+
+	}
+	else
+	{
+		Alert("T2T--");
+	EXEC SQL DECLARE l_nse_t2t_cursor cursor FOR
+			SELECT CLIENT,DEAL_CD,SUM(AMOUNT),SUM(Brokercomm) , sum(stx_comm),SUM(NET_AMT), sum(stamp_duty)
+			FROM DL_DEAL
+			WHERE CLH_FLG ='C'
+/***		AND DEAL_STAT='CC'						***/
+			AND (DEAL_STAT=DECODE(DEAL_CD,'3','CC','4','MS') OR DEAL_STAT=DECODE(DEAL_CD,'3','CC','4','CC')OR  DEAL_STAT IN('PM','MS','SS','CS'))
+			AND EXCH_CODE =trim(:p_exch_code)
+			AND DEAL_CD in ('3','4')
+			//AND MKT_TYPE =DECODE(:p_exch_code,'NSE','22','BSE','16','MCS','03')/* Priyanka - MCS-SX ench - UAT issue */
+			AND (MKT_TYPE !=DECODE(:p_exch_code,'NSE','22','BSE','16','MCS','03') AND MKT_TYPE !=DECODE(:p_exch_code,'NSE','50','BSE','17','MCS','24'))
+			AND SETTLEMENT_NO = trim(:p_settle_no)
+			group by client,deal_cd order by client;
+
+	IS_ANY_ORA_ERROR
+
+	EXEC SQL OPEN l_nse_t2t_cursor;
+	IS_ANY_ORA_ERROR
+
+	}
+		for(;;)
+		{
+/* SNOW- CS0046501 Changes by Shradha for Stamp Duty Enh. Starts*/
+		if(strcmp(p_mkttype,"N")==0)
+			{
+				EXEC SQL FETCH  l_nse_nrm_cursor 
+							INTO 	:l_client:i_client,
+									:l_deal_cd:i_deal_cd,
+									:l_sum_amt:i_sum_amt,
+									:l_brok_amt:i_brok_amt,
+									:l_stt_amt:i_stt_amt,
+									:l_net_amount:i_net_amount,
+									:l_stamp_duty:i_stamp_duty;
+				printf("sqlca.sqlcode in NSE_Gross_rep1 is %d\n",sqlca.sqlcode);
+				IS_ANY_ORA_ERROR
+			}
+			else
+			{
+				EXEC SQL FETCH  l_nse_t2t_cursor 
+							INTO 	:l_client:i_client,
+									:l_deal_cd:i_deal_cd,
+									:l_sum_amt:i_sum_amt,
+									:l_brok_amt:i_brok_amt,
+									:l_stt_amt:i_stt_amt,
+									:l_net_amount:i_net_amount,
+									:l_stamp_duty:i_stamp_duty;
+				printf("sqlca.sqlcode in NSE_Gross_rep2 is %d\n",sqlca.sqlcode);
+				IS_ANY_ORA_ERROR
+			}
+/* SNOW- CS0046501 Changes by Shradha for Stamp Duty Enh. Ends*/
+				fprintf(p_log_file,"Inside NSE_Gross_Rep\n");
+
+					printf("l_client is %s\n",l_client);
+					printf("l_prev_client is %s\n",l_prev_client);
+					printf("l_counter is %d\n",l_counter);
+					printf("l_sum_amt is %lf \n",l_sum_amt);
+					printf("l_brok_amt is %lf\n",l_brok_amt);
+					printf("l_stt_amt is %lf\n",l_stt_amt);
+					printf("l_stamp_duty is %lf\n",l_stamp_duty);
+					printf("l_net_amount is %lf\n",l_net_amount);
+					printf("l_rec_pur is %lf\n",l_rec_pur);
+					printf("l_deal_cd is |%s|\n",l_deal_cd);
+					if(sqlca.sqlcode ==1403)
+					{
+						memset(l_client,APL_NULL_CHAR,14);
+						l_counter=2;
+					}
+				if((strcmp(l_client,l_prev_client)!=0)  && (l_counter!=0) )
+				{
+
+					EXEC SQL SELECT SUBSTR(CLN_NAME,1,20) 
+								INTO 	:l_name:i_name
+								FROM MT_CLIENT
+								WHERE CLN_CODE =:l_prev_client;
+					IS_ANY_ORA_ERROR
+
+					if(APL_FAILURE == CO_PadString(l_prev_client,'R',13," ",l_debug_info_ptr))
+	   			{
+			     		CO_ProcMonitor(p_log_file,"Failure in CO_PadString Function for l_prev_client",NULL,NULL);
+				      sprintf(l_prev_client,"%12s"," ");
+						strcat(l_prev_client,APL_NULL_STRING);
+				   }
+					if(APL_FAILURE == CO_PadString(l_name ,'R',25," ",l_debug_info_ptr))
+	   			{
+			     		CO_ProcMonitor(p_log_file,"Failure in CO_PadString Function for l_name",NULL,NULL);
+				      sprintf(l_name,"%24s"," "); //AIX - Warnings Removal
+						strcat(l_name,APL_NULL_STRING);
+				   }
+
+					
+/* SNOW- CS0046501 Changes by Shradha for Stamp Duty Enh. Starts*/
+/**Amitk:ISKB-350:04-10-2007**/
+					sprintf(l_chr_rec_pur,"%.2lf",l_rec_pur);
+					sprintf(l_chr_del_sale,"%.2lf",l_del_sale);
+					sprintf(l_chr_net_posn,"%.2lf",l_net_posn);
+					sprintf(l_chr_sum_stt_amt,"%.2lf",l_sum_stt_amt);
+					sprintf(l_chr_sum_brok_amt,"%.2lf",l_sum_brk_amt);
+					sprintf(l_chr_sum_stamp_duty,"%.2lf",l_sum_stamp_duty);
+
+/**Amitk:ISKB-350:04-10-2007**/
+					printf("l_chr_rec_pur is %s\n",l_chr_rec_pur);
+					printf("l_chr_del_sale is %s\n",l_chr_del_sale);
+					printf("l_chr_net_posn is %s\n",l_chr_net_posn);
+					printf("l_chr_sum_stt_amt is %s\n",l_chr_sum_stt_amt);
+					printf("l_chr_sum_stamp_duty is %s\n",l_chr_sum_stamp_duty);
+
+/**Amitk:ISKB-350:04-10-2007**/
+					if(APL_FAILURE == CO_PadString(l_chr_rec_pur ,'L',18," ",l_debug_info_ptr))
+	   			{
+			     		CO_ProcMonitor(p_log_file,"Failure in CO_PadString Function for l_chr_rec_pur",NULL,NULL);
+				      sprintf(l_chr_rec_pur,"%17s"," ");
+						strcat(l_chr_rec_pur,APL_NULL_STRING);
+				   }
+
+					if(APL_FAILURE == CO_PadString(l_chr_del_sale ,'L',18," ",l_debug_info_ptr))
+	   			{
+			     		CO_ProcMonitor(p_log_file,"Failure in CO_PadString Function for l_chr_del_sale",NULL,NULL);
+				      sprintf(l_chr_del_sale,"%17s"," ");
+						strcat(l_chr_del_sale,APL_NULL_STRING);
+				   }
+
+					if(APL_FAILURE == CO_PadString(l_chr_net_posn ,'L',18," ",l_debug_info_ptr))
+	   			{
+			     		CO_ProcMonitor(p_log_file,"Failure in CO_PadString Function for l_chr_net_posn",NULL,NULL);
+				      sprintf(l_chr_net_posn,"%17s"," ");
+						strcat(l_chr_net_posn,APL_NULL_STRING);
+				   }
+
+					if(APL_FAILURE == CO_PadString(l_chr_sum_stt_amt ,'L',18," ",l_debug_info_ptr))
+	   			{
+			     		CO_ProcMonitor(p_log_file,"Failure in CO_PadString Function for l_chr_net_posn",NULL,NULL);
+				      sprintf(l_chr_sum_stt_amt,"%17s"," ");
+						strcat(l_chr_sum_stt_amt,APL_NULL_STRING);
+				   }
+
+					if(APL_FAILURE == CO_PadString(l_chr_sum_brok_amt ,'L',18," ",l_debug_info_ptr))
+	   			{
+			     		CO_ProcMonitor(p_log_file,"Failure in CO_PadString Function for l_chr_brok_posn",NULL,NULL);
+				      sprintf(l_chr_sum_brok_amt,"%17s"," ");
+						strcat(l_chr_sum_brok_amt,APL_NULL_STRING);
+				   }
+				   
+				if(APL_FAILURE == CO_PadString(l_chr_sum_stamp_duty ,'L',18," ",l_debug_info_ptr))
+	   			{
+					CO_ProcMonitor(p_log_file,"Failure in CO_PadString Function for l_chr_sum_stamp_duty",NULL,NULL);
+					sprintf(l_chr_sum_stamp_duty,"%17s"," ");
+					strcat(l_chr_sum_stamp_duty,APL_NULL_STRING);
+				}
+/**Amitk:ISKB-350:04-10-2007**/
+				   /** AmitB:ISKB-350:09-08-2007	**/
+				   l_counter1=l_counter1+1;
+				   strcpy(l_str_counter1,(char *)ltoa(l_counter1));
+				   if(APL_FAILURE == CO_PadString(l_str_counter1 ,'R',12," ",l_debug_info_ptr))
+	   				{
+			     		CO_ProcMonitor(p_log_file,"Failure in CO_PadString Function for l_str_counter1",NULL,NULL);
+				      sprintf(l_str_counter1,"%11s"," ");
+						strcat(l_str_counter1,APL_NULL_STRING);
+				   }
+
+		if(strcmp(p_mkttype,"N")==0)
+					{	fprintf(fn,"%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",l_str_counter1,l_prev_client,l_name,l_chr_rec_pur,l_chr_del_sale,l_chr_net_posn,l_chr_sum_stt_amt,l_chr_sum_brok_amt,l_chr_sum_stamp_duty);
+                    fflush(fn);
+
+					/* ISKB-350: ASHISH 24-10-2007 Start */
+					fprintf(l_rpt_file_xls,"<tr> <td class='record' colspan='1' align='Left' x:num>%s</td> \n\t <td class='record' colspan='1' align='Left' x:str=\"'%s\">%s</td> \n\t <td class='record' colspan='1' align='Left' x:str=\"'%s\">%s</td> \n\t <td class='xl35' colspan='1' align='Right' x:num>%s</td> \n\t <td class='xl35' colspan='1' align='Right' x:num>%s</td> \n\t <td class='xl35' colspan='1' align='Right' x:num>%s</td> \n\t <td class='xl35' colspan='1' align='Right' x:num>%s</td> \n\t <td class='xl35' colspan='1' align='Right' x:num>%s</td> \n\t <td class='xl35' colspan='1' align='Right' x:num>%s</td> \n </tr> \n",l_str_counter1,l_prev_client,l_prev_client,l_name,l_name,l_chr_rec_pur,l_chr_del_sale,l_chr_net_posn,l_chr_sum_stt_amt,l_chr_sum_brok_amt,l_chr_sum_stamp_duty);
+                    /* ASHISH 24-10-2007 End */
+
+					}
+					else
+					{
+					fprintf(fn,"%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",l_str_counter1,l_prev_client,l_name,l_chr_rec_pur,l_chr_del_sale,l_chr_sum_stt_amt,l_chr_sum_brok_amt,l_chr_sum_stamp_duty);
+                     fflush(fn);
+
+					/* ISKB-350: ASHISH 24-10-2007 Start */
+					fprintf(l_rpt_file_xls,"<tr> <td class='record' colspan='1' align='Left' x:num>%s</td> \n\t <td class='record' colspan='1' align='Left' x:str=\"'%s\">%s</td> \n\t <td class='record' colspan='1' align='Left' x:str=\"'%s\">%s</td> \n\t <td class='xl35' colspan='1' align='Right' x:num>%s</td> \n\t <td class='xl35' colspan='2' align='Right' x:num>%s</td> \n\t <td class='xl35' colspan='1' align='Right' x:num>%s</td> \n\t <td class='xl35' colspan='1' align='Right' x:num>%s</td> \n\t <td class='xl35' colspan='1' align='Right' x:num>%s</td> \n </tr> \n",l_str_counter1,l_prev_client,l_prev_client,l_name,l_name,l_chr_rec_pur,l_chr_del_sale,l_chr_sum_stt_amt,l_chr_sum_brok_amt,l_chr_sum_stamp_duty);
+                    /* ASHISH 24-10-2007 End */
+
+					}
+					fflush(fn);
+					memset(l_chr_rec_pur,APL_NULL_CHAR,18);
+					memset(l_chr_del_sale,APL_NULL_CHAR,18);
+					memset(l_chr_net_posn,APL_NULL_CHAR,18);
+					memset(l_chr_sum_stt_amt,APL_NULL_CHAR,18);
+					memset(l_chr_sum_stamp_duty,APL_NULL_CHAR,18);
+					memset(l_chr_sum_brok_amt,APL_NULL_CHAR,18);
+					sum_pur= sum_pur + l_rec_pur;
+					sum_sale = sum_sale +l_del_sale;
+					sum_net_pos = sum_net_pos +l_net_posn;
+					sum_stt_amount = sum_stt_amount+ l_sum_stt_amt;
+					sum_stamp_duty = sum_stamp_duty+ l_sum_stamp_duty;
+					sum_brk_amount = sum_brk_amount+ l_sum_brk_amt;
+					l_rec_pur=0;
+					l_del_sale=0;
+					l_net_posn=0;
+					l_sum_brk_amt=0;
+					l_sum_stt_amt=0;
+					l_sum_stamp_duty=0;
+					
+				}
+				if(l_counter==2)
+					break;
+					strcpy(l_prev_client,l_client);
+					
+					if(strcmp(l_deal_cd,"4")==0)
+					{
+						if(strcmp(p_exch_code ,"NSE")==0 || strcmp(p_exch_code ,"MCS")==0)/* Priyanka - MCS-SX ench - UAT issue */
+							l_rec_pur = l_sum_amt;
+						else
+							l_rec_pur = l_net_amount;
+
+					}
+					else
+					{
+						if(strcmp(p_exch_code ,"NSE")==0 || strcmp(p_exch_code ,"MCS")==0 )/* Priyanka - MCS-SX ench - UAT issue */
+							l_del_sale = l_sum_amt;
+						else
+							l_del_sale = l_net_amount;
+
+					}
+					l_sum_brk_amt=l_sum_brk_amt +  l_brok_amt;
+					l_sum_stt_amt=l_sum_stt_amt +  l_stt_amt;
+					l_sum_stamp_duty=l_sum_stamp_duty +  l_stamp_duty;
+					l_net_posn = l_rec_pur-l_del_sale;
+					l_counter=1;
+							
+			
+		}
+		if(strcmp(p_mkttype,"N")==0)
+		{
+		EXEC SQL CLOSE l_nse_nrm_cursor;
+		IS_ANY_ORA_ERROR
+		}
+		else
+		{
+		EXEC SQL CLOSE l_nse_t2t_cursor;
+		IS_ANY_ORA_ERROR
+		}
+
+
+		if(APL_FAILURE== print_trailer(sum_pur,sum_sale,sum_net_pos,sum_stt_amount,sum_brk_amount,p_mkttype,fn,sum_stamp_duty,l_debug_info_ptr))
+		{
+				printf("failed in trailer function\n");
+				APL_GOBACK_FAIL
+		}
+
+		/* ISKB-350: ASHISH 24-10-2007 */
+		if(APL_FAILURE == print_trailer_cli_xls(sum_pur,sum_sale,sum_net_pos,sum_stt_amount,sum_brk_amount,p_mkttype,l_rpt_file_xls,sum_stamp_duty,l_debug_info_ptr))
+		{
+				printf("failed in print_trailer_cli_xls function\n");
+				APL_GOBACK_FAIL
+		}
+		/* SNOW- CS0046501 Changes by Shradha for Stamp Duty Enh. Ends*/
+
+	RETURN_SUCCESS:
+   {	
+	 	fclose(fn);
+
+        /* ISKB-350: ASHISH 24-10-2007 Start */
+		strcpy(l_intl_rept_struct_ha->report_name,chr_report_file_name);
+		strcpy(l_intl_rept_struct_ha->report_desc, "XLS_REPORT");
+		strcpy(l_intl_rept_struct_ha->report_date, g_arg2);
+		l_intl_rept_struct_ha->report_width = 100;
+		strcpy(l_intl_rept_struct_ha->task_desc, g_arg5);
+		strcpy(l_intl_rept_struct_ha->fe_be_ind, APL_BE_IND);
+		strcpy(l_intl_rept_struct_ha->usr, g_arg3);
+
+		if (APL_FAILURE == CO_Proc_DBRptIns( l_intl_rept_struct_ha, l_debug_info_ptr))
+		{
+			APL_GOBACK_FAIL
+		}
+		fclose(l_rpt_file_xls);  
+	    /* ASHISH 24-10-2007 End */
+
+	    return(APL_SUCCESS);
+   }
+
+   RETURN_FAILURE:
+   {
+		fclose(fn);
+		fclose(l_rpt_file_xls);	 /* ASHISH 24-10-2007 */
+        return(APL_FAILURE);
+   }
+
+
+}
+/* SNOW- CS0046501 Changes by Shradha for Stamp Duty Enh. Starts*/
+int print_trailer(double p_sum_pur,double p_sum_sale, double p_sum_net_pos, double p_sum_stt_amount, double  p_sum_brk_amount, char *p_mkttype,FILE *l_rpt_file, double p_sum_stamp_duty,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	char l_chr_sum_pur[25] = APL_NULL_STRING;
+	char l_chr_sum_sale[25] = APL_NULL_STRING;
+	char l_chr_sum_net_pos[25] = APL_NULL_STRING;
+	char l_chr_sum_stt_amount[25] = APL_NULL_STRING;
+	char l_chr_sum_stamp_duty[25] = APL_NULL_STRING;
+	char l_chr_sum_brk_amount[25] = APL_NULL_STRING;
+
+	memset(l_chr_sum_pur,APL_NULL_CHAR,25);
+	memset(l_chr_sum_sale,APL_NULL_CHAR,25);
+	memset(l_chr_sum_net_pos,APL_NULL_CHAR,25);
+	memset(l_chr_sum_stt_amount,APL_NULL_CHAR,25);
+	memset(l_chr_sum_stamp_duty,APL_NULL_CHAR,25);
+	memset(l_chr_sum_brk_amount,APL_NULL_CHAR,25);
+
+
+/**Amitk:ISKB-350:04-10-2007**/
+	printf("broker is %lf \n",p_sum_brk_amount);
+	sprintf(l_chr_sum_pur ,"%.2lf",p_sum_pur);
+	sprintf(l_chr_sum_sale ,"%.2lf",p_sum_sale);
+	sprintf(l_chr_sum_net_pos ,"%.2lf",p_sum_net_pos);
+	sprintf(l_chr_sum_stt_amount ,"%.2lf",p_sum_stt_amount);
+	sprintf(l_chr_sum_stamp_duty ,"%.2lf",p_sum_stamp_duty);
+	sprintf(l_chr_sum_brk_amount ,"%.2lf",p_sum_brk_amount);
+
+	if(APL_FAILURE == CO_PadString(l_chr_sum_pur ,'L',18," ",l_debug_info_ptr))
+	{
+   		printf("Failure in CO_PadString Function for l_chr_sum_pur\n");
+	      sprintf(l_chr_sum_pur,"%17s"," ");
+			strcat(l_chr_sum_pur,APL_NULL_STRING);
+   }
+
+	if(APL_FAILURE == CO_PadString(l_chr_sum_sale ,'L',18," ",l_debug_info_ptr))
+	{
+   		printf("Failure in CO_PadString Function for l_chr_sum_sale\n");
+	      sprintf(l_chr_sum_sale,"%17s"," ");
+			strcat(l_chr_sum_sale,APL_NULL_STRING);
+   }
+
+
+	if(APL_FAILURE == CO_PadString(l_chr_sum_net_pos ,'L',18," ",l_debug_info_ptr))
+	{
+   		printf("Failure in CO_PadString Function for l_chr_net_sum_posn\n");
+	      sprintf(l_chr_sum_net_pos,"%17s"," ");
+			strcat(l_chr_sum_net_pos,APL_NULL_STRING);
+   }
+
+
+	if(APL_FAILURE == CO_PadString(l_chr_sum_stt_amount ,'L',18," ",l_debug_info_ptr))
+	{
+   		printf("Failure in CO_PadString Function for l_chr_sum_stt_amount\n");
+	      sprintf(l_chr_sum_stt_amount,"%17s"," ");
+			strcat(l_chr_sum_stt_amount,APL_NULL_STRING);
+   }
+
+
+	if(APL_FAILURE == CO_PadString(l_chr_sum_brk_amount ,'L',18," ",l_debug_info_ptr))
+	{
+   		printf("Failure in CO_PadString Function for l_chr_sum_brk_amount\n");
+	      sprintf(l_chr_sum_brk_amount,"%17s"," ");
+			strcat(l_chr_sum_brk_amount,APL_NULL_STRING);
+   }
+   
+   if(APL_FAILURE == CO_PadString(l_chr_sum_stamp_duty ,'L',18," ",l_debug_info_ptr))
+	{
+   		printf("Failure in CO_PadString Function for l_chr_sum_stamp_duty\n");
+	      sprintf(l_chr_sum_stamp_duty,"%17s"," ");
+			strcat(l_chr_sum_stamp_duty,APL_NULL_STRING);
+   }
+
+/**Amitk:ISKB-350:04-10-2007**/
+
+
+/**Amitk:ISKB-350:04-10-2007**/
+	if(strcmp(p_mkttype,"N")==0)
+	{
+		fprintf(l_rpt_file,"\nTOTAL\t\t\t\t\t\t\t\t%s\t%s\t%s\t%s\t%s\t%s\n",l_chr_sum_pur,l_chr_sum_sale,l_chr_sum_net_pos,l_chr_sum_stt_amount,l_chr_sum_brk_amount,l_chr_sum_stamp_duty);
+	}
+	else
+	{
+		fprintf(l_rpt_file,"\nTOTAL\t\t\t\t\t\t\t\t%s\t%s\t%s\t%s\t%s\n",l_chr_sum_pur,l_chr_sum_sale,l_chr_sum_stt_amount,l_chr_sum_brk_amount,l_chr_sum_stamp_duty);
+	}
+
+/**Amitk:ISKB-350:04-10-2007**/
+ 	RETURN_SUCCESS:
+   {
+		printf("Returning successfully out of print_trailer func\n");
+     return(APL_SUCCESS);
+   }
+
+   RETURN_FAILURE:
+   {
+		printf("Returning unsuccessfully out of print_trailer func\n");
+      return(APL_FAILURE);
+   }
+
+
+}
+/* SNOW- CS0046501 Changes by Shradha for Stamp Duty Enh. Ends*/
+
+
+int print_header(char *p_exch_code,char *p_settle_no,char *p_pay_in_dt, char *p_pay_out_dt,char *p_mkttype, FILE *l_rpt_file,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	char	l_sys_date[APL_DATE_LEN] = APL_NULL_STRING;
+	char  l_print_mkttype[7] = APL_NULL_STRING;
+
+if(strcmp(p_mkttype,"N")==0)
+	{
+		strcpy(l_print_mkttype,"NORMAL");
+	}
+	else
+	{
+		strcpy(l_print_mkttype,"T2T");
+	}
+
+	 if (  CO_RtvSysDtTime(l_sys_date,l_debug_info_ptr) == APL_FAILURE )
+		 APL_GOBACK_FAIL
+
+
+	/** AmitB:ISKB-350:09-08-2007	amitk:04-10-2007**/
+/**Amitk:ISKB-350:04-10-2007**/
+	//fprintf(l_rpt_file,"\t\t\t\t\t\t\t\t%s\n", g_mt_commonsys_params_struct_h.ca_identname);
+	/* ISKB-350 : ASHISH 30-10-2007 */
+	fprintf(l_rpt_file,"\t\t\t\t\t\t\t\t%s\n", "Transaction Obligation Report");
+	if(strcmp(p_mkttype,"N")==0)
+	{
+		/* ISKB-350 : ASHISH 30-10-2007 */
+	//fprintf(l_rpt_file,"\t\t\t\t\t\t\tTransaction Obligation Report (%s - %s )\t\t\t\t\t\t\tDate : %s\n",p_exch_code,l_print_mkttype,l_sys_date); 
+	fprintf(l_rpt_file,"\t\t\t\t\t\t\tExchange Code - Market type : (%s - %s)\t\t\t\t\t\t\tDate : %s\n",p_exch_code,l_print_mkttype,l_sys_date); 
+	}
+	else
+	{
+		/* ISKB-350 : ASHISH 30-10-2007 */
+	//fprintf(l_rpt_file,"\t\t\t\t\t\t\tTransaction Obligation Report (%s - %s)\t\t\t\tDate : %s\n",p_exch_code,l_print_mkttype,l_sys_date);
+	fprintf(l_rpt_file,"\t\t\t\t\t\t\tExchange Code - Market type : (%s - %s)\t\t\t\tDate : %s\n",p_exch_code,l_print_mkttype,l_sys_date);
+	}
+	fprintf(l_rpt_file,"Settlement Summary	\n");
+/* SNOW- CS0046501 Changes by Shradha for Stamp Duty Enh. Starts*/
+if(strcmp(p_mkttype,"N")==0)
+	{
+	sprintf(Label_header2,"Exchange Code : %s%13sSettlement No : %s%47sPAYIN Date : %s%11sPAYOUT Date : %s%s%s",p_exch_code," ",p_settle_no," ",p_pay_in_dt," ",p_pay_out_dt,"\n","\n");
+    fprintf(l_rpt_file,Label_header2);
+	sprintf(Label_header,"Serial No.%6sClient%10sName%38sPurchase%20sSale%12sNet Position%14sStt Amount%15sBrokerage%15sStamp Duty%s"," "," "," "," "," "," "," "," ","\n");
+	fprintf(l_rpt_file,Label_header);
+	}
+else
+{
+    sprintf(Label_header2,"Exchange Code : %s%13sSettlement No : %s%25sPAYIN Date : %s%9sPAYOUT Date : %s%s%s",p_exch_code," ",p_settle_no," ",p_pay_in_dt," ",p_pay_out_dt,"\n","\n");
+    fprintf(l_rpt_file,Label_header2);
+	sprintf(Label_header1,"Serial No.%6sClient%10sName%38sPurchase%20sSale%14sStt Amount%15sBrokerage%15sStamp Duty%s"," "," "," "," "," "," "," ","\n");
+	fprintf(l_rpt_file,Label_header1);
+
+}
+/* SNOW- CS0046501 Changes by Shradha for Stamp Duty Enh. Ends*/
+/**Amitk:ISKB-350:04-10-2007**/
+	fflush(l_rpt_file);
+
+ 	RETURN_SUCCESS:
+   {
+		printf("Returning successfully out of print_header func\n");
+     return(APL_SUCCESS);
+   }
+
+   RETURN_FAILURE:
+   {
+		printf("Returning unsuccessfully out of print_header func\n");
+      return(APL_FAILURE);
+   }
+
+
+}
+
+
+/****************************************************************************************************************
+* Function    : print_header_cli_xls()									        *
+* Description : It prints the header part of xls file.							        *
+* Author      : Ashish Kumar Vasisth								                *
+* Date        : 24-10-2007									                *
+* Issue       : ISKB-350                                                                                        *
+****************************************************************************************************************/
+
+int print_header_cli_xls(char *p_exch_code,char *p_settle_no,char *p_pay_in_dt, char *p_pay_out_dt,char *p_mkttype, FILE *l_rpt_file_xls,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	char l_sys_date[APL_DATE_LEN]  = APL_NULL_STRING;
+	char l_print_mkttype[7]        = APL_NULL_STRING;
+	char h_pay_out_dt[APL_DATE_LEN]= APL_NULL_STRING;
+	char h_pay_in_dt[APL_DATE_LEN] = APL_NULL_STRING;
+    short i_pay_in_dt              = 0;
+	short i_pay_out_dt             = 0;
+
+	EXEC SQL BEGIN DECLARE SECTION;
+		EXEC SQL VAR h_pay_in_dt IS STRING;
+		EXEC SQL VAR h_pay_out_dt IS STRING;
+	EXEC SQL END DECLARE SECTION;
+
+	printf("\n Enter successfully in function print_header_cli_xls \n");
+
+	if(strcmp(p_mkttype,"N")==0)
+	{
+		strcpy(l_print_mkttype,"NORMAL");
+		Alert("l_print_mkttype 1---|%s|\n",l_print_mkttype);
+	}
+	else
+	{
+		strcpy(l_print_mkttype,"T2T");
+		Alert("l_print_mkttype 2---|%s|\n",l_print_mkttype);
+	}
+
+	 if (CO_RtvSysDtTime(l_sys_date,l_debug_info_ptr) == APL_FAILURE)
+	 {
+		 APL_GOBACK_FAIL
+	 }
+
+	//Issue fixes during linunx migration
+	EXEC SQL SELECT TO_CHAR(TO_DATE(:p_pay_in_dt,'DD/MM/YYYY HH24:MI:SS'),'DD/MM/YYYY'),
+		            TO_CHAR(TO_DATE(:p_pay_out_dt,'DD/MM/YYYY HH24:MI:SS'),'DD/MM/YYYY')
+		     INTO:h_pay_in_dt:i_pay_in_dt,:h_pay_out_dt:i_pay_out_dt
+		FROM DUAL;
+	printf("\n sqlca.sqlcode = |%d| \n",sqlca.sqlcode);
+    IS_ANY_ORA_ERROR	
+
+	fprintf(l_rpt_file_xls,"<HTML xmlns:o=\"urn:schemas-microsoft-com:office:office\" xmlns:x=\"urn:schemas-microsoft-com:office:excel\" xmlns=\"http://www.w3.org/TR/REC-html40\"> \n <HEAD> \n <meta http-equiv='Content-Type' content='text/html; charset=UTF-16'></meta> \n <STYLE> \n .heading{background:#e8eff9;; font-family: Arial, Helvetica, sans-serif; font-size: 10pt; color: #021882; font-weight: bold;} \n .lableblue{color: #000090; font-family: Arial, Helvetica, sans-serif; font-size: 9pt; font-weight: bold; text-decoration: none} \n .normalbold{font-family: Arial, Helvetica, sans-serif; font-size: 8pt; font-weight: bold; text-decoration: none} \n .normal{font-family: Arial, Helvetica, sans-serif; font-size: 8pt; color: #000000} \n .lablered{font-family: Arial, Helvetica, sans-serif; font-size: 8pt; color: #aa1133; font-weight: bold;} \n .ez1{background:#e8eff9;; color: #000090; font-family: Arial, Helvetica, sans-serif; font-size: 8pt; font-weight: normal; text-decoration: none} \n .ez4{background:#e8eff9; color: #000090; font-family: Arial, Helvetica, sans-serif; font-size: 8pt; font-weight: bold; text-decoration: none text-align: center} \n .lableredbg{background:#e3f5fd; color: #094D66 font-family: Arial, Helvetica, sans-serif; font-size: 8pt; color: #aa1133; font-weight: bold;} \n .lablebluebg{background:#e3f5fd; color: #094D66 font-family: Arial, Helvetica, sans-serif; font-size: 8pt; color: #aa1133; font-weight: bold;} \n .beforetable{background:#ffffff; color: #094D66; font-family: Arial, Helvetica, sans-serif; font-size: 8pt; font-weight: bold; text-decoration: none} \n .record{background:#F2FDFF;; color:#000090; font-family: Arial, Helvetica, sans-serif; font-size: 8pt; font-weight: normal; text-decoration: none} \n .aftertable{background:#E3F5FD;; color: #094D66; font-family: Arial, Helvetica, sans-serif; font-size: 7pt; font-weight: bold; text-decoration: none} \n .footer{color: #000090; font-family: Arial, Helvetica, sans-serif; font-size: 8pt; font-weight: normal; text-decoration: none} \n .headerdata{color: #000090; font-family: Arial, Helvetica, sans-serif; font-size: 9pt; font-weight: normal; text-decoration: none} \n .footerdata{color: #000090; font-family: Arial, Helvetica, sans-serif; font-size: 9pt; font-weight: normal; text-decoration: none} \n .xl35 {mso-style-parent:style0;color:navy;font-size:8.0pt;font-family:Arial, sans-serif;mso-font-charset:0;	mso-number-format:Fixed;text-align:right;background:white;mso-pattern:auto none;white-space:normal;} \n .xl36 {mso-style-parent:style0;color:#000090;font-size:8.0pt;font-family:Arial, sans-serif;mso-font-charset:0;	mso-number-format:Fixed;text-align:right;background:#ffffff;mso-pattern:auto none;white-space:normal;font-weight: bold;} \n .xl37 {mso-style-parent:style0;color:#000090;font-size:8.0pt;font-family:Arial, sans-serif;mso-font-charset:0;	mso-number-format:Fixed;text-align:left;background:#ffffff;mso-pattern:auto none;white-space:normal;font-weight: bold;} \n </style> \n </head> \n <body> \n");
+/* SNOW- CS0046501 Changes by Shradha for Stamp Duty Enh. Starts*/
+	if(strcmp(p_mkttype,"N")==0)
+	{
+		//fprintf(l_rpt_file_xls,"<table x:str borderColor='#000000' cellSpacing='0' cellPadding='1' width='100%%' border='0'>\n <tr> \n\t <td class='heading' colspan='8' align='center'>%s</td> \n </tr> \n",g_mt_commonsys_params_struct_h.ca_identname);
+		fprintf(l_rpt_file_xls,"<table x:str borderColor='#000000' cellSpacing='0' cellPadding='1' width='100%%' border='0'>\n <tr> \n\t <td class='heading' colspan='8' align='center'>%s</td> \n </tr> \n","Transaction Obligation Report");
+
+		//fprintf(l_rpt_file_xls,"<tr> \n\t <td class='lableblue'  colspan='2' align='Right'>Transaction Obligation Report :</td> \n\t <td class='headerdata' colspan='3' align='Left'>(%s - %s)</td> \n\t <td class='lableblue'  colspan='1' align='Right'>Date :</td> \n\t <td class='headerdata' colspan='3' align='Left'>%s</td> \n </tr> \n",p_exch_code,l_print_mkttype,l_sys_date);
+		fprintf(l_rpt_file_xls,"<tr> \n\t <td class='lableblue'  colspan='2' align='Right'>Exchange Code - Market Type :</td> \n\t <td class='headerdata' colspan='3' align='Left'>(%s - %s)</td> \n\t <td class='lableblue'  colspan='1' align='Right'>Date :</td> \n\t <td class='headerdata' colspan='3' align='Left'>%s</td> \n </tr> \n",p_exch_code,l_print_mkttype,l_sys_date);
+
+		fprintf(l_rpt_file_xls,"<tr> \n\t <td class='beforetable' colspan='8' align='Left'>Settlement Summary</td> \n\t </tr> \n");
+		fprintf(l_rpt_file_xls,"<tr> \n\t <td class='lableblue' colspan='1' align='Left'>Exchange Code :</td> \n\t <td class='headerdata' colspan='1' align='Left' x:str=\"'%s\">%s</td> \n\t <td class='lableblue'  colspan='1' align='Right' >Settlement No :</td> \n\t <td class='headerdata' colspan='1' align='Left' x:str=\"'%s\">%s</td> \n\t <td class='lableblue'  colspan='1' align='Right'>Payin Date :</td> \n\t <td class='headerdata' colspan='1' align='Left'>%s</td> \n\t <td class='lableblue'  colspan='1' align='Right'>Payout Date :</td> \n\t <td class='headerdata' colspan='1' align='Left'>%s</td> \n </tr> \n",p_exch_code,p_exch_code, p_settle_no,p_settle_no, h_pay_in_dt, h_pay_out_dt);
+		fprintf(l_rpt_file_xls,"<tr> \n\t <td class='lableblue' colspan='8'>&nbsp;</td> \n </tr> \n");
+		fprintf(l_rpt_file_xls,"<tr> \n\t <td class='ez4' colspan='1' align='Left'>Sr No.</td> \n\t <td class='ez4' colspan='1' align='Left'>Client</td> \n\t <td class='ez4' colspan='1' align='Left'>Name</td> \n\t <td class='ez4' colspan='1' align='Right'>Purchase</td> \n\t <td class='ez4' colspan='1' align='Right'>Sale</td> \n\t <td class='ez4' colspan='1' align='Right'>Net Position</td> \n\t <td class='ez4' colspan='1' align='Right'>Stt Amount</td> \n\t <td class='ez4' colspan='1' align='Right'>Brokerage</td> \n\t <td class='ez4' colspan='1' align='Right'>Stamp Duty</td> \n  </tr> \n");
+	}
+
+	else
+	{
+		//fprintf(l_rpt_file_xls,"<table x:str borderColor='#000000' cellSpacing='0' cellPadding='1' width='100%%' border='0'>\n <tr> \n\t <td class='heading' colspan='8' align='center'>%s</td> \n </tr> \n",g_mt_commonsys_params_struct_h.ca_identname);
+		fprintf(l_rpt_file_xls,"<table x:str borderColor='#000000' cellSpacing='0' cellPadding='1' width='100%%' border='0'>\n <tr> \n\t <td class='heading' colspan='8' align='center'>%s</td> \n </tr> \n","Transaction Obligation Report");
+
+		//fprintf(l_rpt_file_xls,"<tr> \n\t <td class='lableblue'  colspan='2' align='Right'>Transaction Obligation Report :</td> \n\t <td class='headerdata' colspan='3' align='Left'>(%s - %s)</td> \n\t <td class='lableblue'  colspan='1' align='Right'>Date :</td> \n\t <td class='headerdata' colspan='3' align='Left'>%s</td> \n </tr> \n",p_exch_code,l_print_mkttype,l_sys_date);
+		fprintf(l_rpt_file_xls,"<tr> \n\t <td class='lableblue'  colspan='2' align='Right'>Exchange Code - Market Type :</td> \n\t <td class='headerdata' colspan='3' align='Left'>(%s - %s)</td> \n\t <td class='lableblue'  colspan='1' align='Right'>Date :</td> \n\t <td class='headerdata' colspan='3' align='Left'>%s</td> \n </tr> \n",p_exch_code,l_print_mkttype,l_sys_date);
+
+		fprintf(l_rpt_file_xls,"<tr> \n\t <td class='beforetable' colspan='8' align='Left'>Settlement Summary</td> \n\t </tr> \n");
+		fprintf(l_rpt_file_xls,"<tr> \n\t <td class='lableblue' colspan='1' align='Left'>Exchange Code :</td> \n\t <td class='headerdata' colspan='1' align='Left' x:str=\"'%s\">%s</td> \n\t <td class='lableblue'  colspan='1' align='Right'>Settlement No :</td> \n\t <td class='headerdata' colspan='1' align='Left' x:str=\"'%s\">%s</td> \n\t <td class='lableblue'  colspan='1' align='Right'>Payin Date :</td> \n\t <td class='headerdata' colspan='1' align='Left'>%s</td> \n\t <td class='lableblue'  colspan='1' align='Right'>Payout Date :</td> \n\t <td class='headerdata' colspan='1' align='Left'>%s</td> \n </tr> \n",p_exch_code,p_exch_code,p_settle_no,p_settle_no, h_pay_in_dt,h_pay_out_dt);
+    	fprintf(l_rpt_file_xls,"<tr> \n\t <td class='lableblue' colspan='7'>&nbsp;</td> \n </tr> \n");
+		fprintf(l_rpt_file_xls,"<tr> \n\t <td class='ez4' colspan='1' align='Left'>Sr No.</td> \n\t <td class='ez4' colspan='1' align='Left'>Client</td> \n\t <td class='ez4' colspan='1' align='Left'>Name</td> \n\t <td class='ez4' colspan='1' align='Right'>Purchase</td> \n\t <td class='ez4' colspan='2' align='Right'>Sale</td> \n\t <td class='ez4' colspan='1' align='Right'>Stt Amount</td> \n\t <td class='ez4' colspan='1' align='Right'>Brokerage</td> \n\t <td class='ez4' colspan='1' align='Right'>Stamp Duty</td> \n  </tr> \n");
+	}
+
+/* SNOW- CS0046501 Changes by Shradha for Stamp Duty Enh. Ends*/
+   RETURN_SUCCESS:
+   {
+	 printf("Returning successfully out of print_header_cli_xls func\n");
+     return(APL_SUCCESS);
+   }
+
+   RETURN_FAILURE:
+   {
+		printf("Returning unsuccessfully out of print_header_cli_xls func\n");
+        return(APL_FAILURE);
+   }
+
+
+}
+
+/*****************************************************************************************************************
+* Function    : print_trailer_cli_xls()										 *
+* Description : It prints the trailing part of xls file.							 *
+* Author      : Ashish Kumar Vasisth										 *
+* Date        : 24-10-2007										         *
+* Issue       : ISKB-350                                                                                         *
+*****************************************************************************************************************/
+/* SNOW- CS0046501 Changes by Shradha for Stamp Duty Enh. Starts*/
+int print_trailer_cli_xls(double p_sum_pur,double p_sum_sale, double p_sum_net_pos, double p_sum_stt_amount, double  p_sum_brk_amount, char *p_mkttype,FILE *l_rpt_file_xls, double p_sum_stamp_duty,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	char l_chr_sum_pur[25]		  = APL_NULL_STRING;
+	char l_chr_sum_sale[25]       = APL_NULL_STRING;
+	char l_chr_sum_net_pos[25]    = APL_NULL_STRING;
+	char l_chr_sum_stt_amount[25] = APL_NULL_STRING;
+	char l_chr_sum_stamp_duty[25] = APL_NULL_STRING;
+	char l_chr_sum_brk_amount[25] = APL_NULL_STRING;
+	char l_buf[BUFFER_LEN]        = APL_NULL_STRING;
+	int retval                    = 0;
+
+	printf("\n Enter successfully in function print_trailer_cli_xls \n");
+   
+	memset(l_chr_sum_pur,APL_NULL_CHAR,25);
+	memset(l_chr_sum_sale,APL_NULL_CHAR,25);
+	memset(l_chr_sum_net_pos,APL_NULL_CHAR,25);
+	memset(l_chr_sum_stt_amount,APL_NULL_CHAR,25);
+	memset(l_chr_sum_stamp_duty,APL_NULL_CHAR,25);
+	memset(l_chr_sum_brk_amount,APL_NULL_CHAR,25);
+
+	printf("broker is %lf \n",p_sum_brk_amount);
+	sprintf(l_chr_sum_pur ,"%.2lf",p_sum_pur);
+	sprintf(l_chr_sum_sale ,"%.2lf",p_sum_sale);
+	sprintf(l_chr_sum_net_pos ,"%.2lf",p_sum_net_pos);
+	sprintf(l_chr_sum_stt_amount ,"%.2lf",p_sum_stt_amount);
+	sprintf(l_chr_sum_stamp_duty ,"%.2lf",p_sum_stamp_duty);
+	sprintf(l_chr_sum_brk_amount ,"%.2lf",p_sum_brk_amount);
+
+  	if(strcmp(p_mkttype,"N")==0)
+	{
+		fprintf(l_rpt_file_xls,"<tr> \n\t <td class='xl37' colspan='3' align='Left'>Total</td> \n\t <td class='xl36' colspan='1' align='Right' x:num>%s</td> \n\t <td class='xl36' colspan='1' align='Right' x:num>%s</td> \n\t <td class='xl36' colspan='1' align='Right' x:num>%s</td> \n\t <td class='xl36' colspan='1' align='Right' x:num>%s</td> \n\t <td class='xl36' colspan='1' align='Right' x:num>%s</td> \n\t <td class='xl36' colspan='1' align='Right' x:num>%s</td> \n </tr> \n" ,l_chr_sum_pur,l_chr_sum_sale,l_chr_sum_net_pos,l_chr_sum_stt_amount,l_chr_sum_brk_amount,l_chr_sum_stamp_duty);		
+	}
+	else
+	{	
+		fprintf(l_rpt_file_xls,"<tr> \n\t <td class='xl37' colspan='3' align='Left' x:num>Total</td> \n\t <td class='xl36' colspan='1' align='Right' x:num>%s</td> \n\t <td class='xl36' colspan='2' align='Right' x:num>%s</td> \n\t <td class='xl36' colspan='1' align='Right' x:num>%s</td> \n\t <td class='xl36' colspan='1' align='Right' x:num>%s</td> \n\t <td class='xl36' colspan='1' align='Right' x:num>%s</td> \n </tr> \n",l_chr_sum_pur,l_chr_sum_sale,l_chr_sum_stt_amount,l_chr_sum_brk_amount,l_chr_sum_stamp_duty);		
+	}
+
+	fprintf(l_rpt_file_xls,"</table> \n </body> \n </html> \n");
+	
+   RETURN_SUCCESS:
+   {
+		printf("Returning successfully out of print_trailer_xls func\n");
+	    return(APL_SUCCESS);
+   }
+
+   RETURN_FAILURE:
+   {
+	   
+	    sprintf(l_buf,"rm %s",glob_chr_l_htm_fund_rept);
+        retval=system(l_buf);
+		printf("\n REMOVE COMMAND EXECUTED WITH status = |%d| \n",retval);
+		printf("Returning unsuccessfully out of print_trailer_cli_xls func\n");
+	    return(APL_FAILURE);
+   }
+
+}
+/* SNOW- CS0046501 Changes by Shradha for Stamp Duty Enh. Ends*/

@@ -1,0 +1,2776 @@
+/*
+ *    COPYRIGHT NOTICE
+ *
+ *   Copyright 2016 Intellect Design Arena Limited. All rights reserved.
+ *
+ *    These materials are confidential and proprietary to 
+ *    Intellect Design Arena Limited and no part of these materials should
+ *    be reproduced, published, transmitted or distributed in any form or
+ *    by any means, electronic, mechanical, photocopying, recording or 
+ *    otherwise, or stored in any information storage or retrieval system
+ *    of any nature nor should the materials be disclosed to third parties
+ *    or used in any other manner for which this is not authorized, without
+ *    the prior express written authorization of Intellect Design Arena Limited.
+ *
+ *******************************************************************************
+ *
+ * Module Name         :         Archival Processing
+ *
+ * File Name           :         CR_Archival.pc
+ *
+ * Description         :        
+ *
+ *                         Version Control Block
+ *
+ * Date        Version		 Author         Description		    RFS No.
+ * ---------   --------	 ---------------  -----------------   --------------
+ * 14/04/2014  1.1       Prateek Singh    Changes done for ISKB_2469
+ * 19/12/2016  1.2       Prateek Singh    Re-Initiation of Archival Enhancement     ISKB_2071 (Old IsolveIds 2244 and 2469)
+ * **************************************************************************************************************************/
+
+
+
+
+
+
+
+
+#include "CO_HostStructdef.h"
+#define COMMIT_COUNT_E 1000 
+#define START_DAY  			20		
+#define INCREMENTBY_DAYS 	10
+#define ARCH_DATE_LEN	11
+EXEC SQL INCLUDE SQLCA.H;
+
+
+
+     
+
+int DL_Proc_EOMArch(	char **argv,
+						FILE *p_logfile,
+						DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	
+
+	struct sqlca sqlca;	
+	char	chr_l_now[APL_DATE_LEN]		= APL_NULL_STRING;
+	char	chr_l_buf[BUFFER_LEN]			= APL_NULL_STRING;
+	char                       chr_mainfuncarea[APL_MAINFUNCAREA_LEN]; 
+   char                       chr_l_condid[APL_CONDID_LEN]; 
+   short                      int_l_condexists;  
+	char	h_dl_client[11]			= APL_NULL_STRING; 
+	char	h_indentity_no[17] 			= APL_NULL_STRING; 
+	int 	int_l_seq_num 				= 0;
+	int int_h_no_of_rows 				= 0;
+   char                  chr_g_restart_data[APL_RESTARTDATA_LENGTH];
+    short                 g_restart_data_i;
+	char				*int_pos;
+	
+
+	int  i = 0;
+	long l_rowsprocessed = 0L;
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+	char  chr_h_rowidarr[COMMIT_COUNT_E][APL_ROWID_LEN];
+	short int int_i_rowidarr[COMMIT_COUNT_E];
+	int int_h_commitsize = COMMIT_COUNT_E + 1;
+	EXEC SQL VAR chr_h_rowidarr IS STRING;
+	EXEC SQL VAR h_dl_client IS STRING; 
+	EXEC SQL VAR h_indentity_no IS STRING; 
+EXEC SQL VAR chr_g_restart_data is string;
+	EXEC SQL END DECLARE SECTION;
+
+	sqlca.sqlcode = 0;
+
+	
+
+	CO_ProcMonitor(	p_logfile, 
+					"Entered Function DL_Proc_EOMArch\n",
+					NULL,
+					NULL);
+
+	
+
+	
+
+   EXEC SQL SELECT PROCESSING_STATUS INTO :chr_g_restart_data:g_restart_data_i
+	FROM SYS_BATCHPROC
+   WHERE PROCESS_NAME=:argv[0]
+   AND   PROC_INIT=:argv[1]
+   AND   STARTDATE=:argv[2]
+   AND   STATUS='started'
+   FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+	IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_REC_NOTFND,
+														"Batch-In-Proc Rec.",
+														APL_NULL_STRING,
+														APL_NULL_STRING )
+
+	
+
+	if (APL_FAILURE == CO_RtvSysDtTime(chr_l_now, l_debug_info_ptr ))
+	{
+		APL_GOBACK_FAIL
+	}
+
+	
+
+	CO_ProcMonitor(p_logfile, "Started archival for CHISSAFEK", NULL, NULL);
+
+	strcpy(chr_l_now,strtok_r(chr_l_now," ",&int_pos));
+   strcat(chr_l_now,APL_NULL_TIME);
+
+	
+
+	l_rowsprocessed = 0L;
+
+	for ( ; ; )
+	{
+		sqlca.sqlerrd[2] = 0;
+
+		for (i = 0; i < COMMIT_COUNT_E; i++ )
+			memset(chr_h_rowidarr[i], APL_NULL_CHAR, APL_ROWID_LEN);
+
+		memset(int_i_rowidarr, 0, COMMIT_COUNT_E);
+
+		EXEC SQL SELECT ROWID
+		INTO :chr_h_rowidarr INDICATOR :int_i_rowidarr
+		FROM DL_HISSAFEK
+		WHERE MONTHS_BETWEEN(:chr_l_now, POSIT_DATE) > :g_mt_commonsys_params_struct_h.monthsfor_arch
+				AND ROWNUM < :int_h_commitsize
+		ORDER BY ROWID;
+
+		IS_ANY_ORA_ERROR
+
+		if ( sqlca.sqlerrd[2] == 0 )
+		{
+			break;
+		}
+
+		l_rowsprocessed += sqlca.sqlerrd[2];
+
+		EXEC SQL INSERT INTO DL_ARCHSAFEK
+		SELECT DL_HISSAFEK.*,:chr_l_now FROM DL_HISSAFEK
+		WHERE ROWID IN (:chr_h_rowidarr INDICATOR :int_i_rowidarr);
+
+		IS_ANY_ORA_ERROR
+
+		EXEC SQL DELETE DL_HISSAFEK
+		WHERE ROWID IN (:chr_h_rowidarr INDICATOR :int_i_rowidarr);
+
+		IS_ANY_ORA_ERROR
+
+		
+
+		sprintf(chr_l_buf, "Moved %ld records from CHISSAFEK to Archives so far", l_rowsprocessed);
+
+		EXEC SQL UPDATE SYS_BATCHPROC
+		SET STAT_DET = :chr_l_buf
+		WHERE PROCESS_NAME=:argv[0]
+		AND   PROC_INIT=:argv[1]
+		AND   STARTDATE=:argv[2]
+		AND   STATUS='started';
+
+		
+
+		EXEC SQL COMMIT WORK;
+		IS_ANY_ORA_ERROR
+
+		
+
+		EXEC SQL SELECT PROCESSING_STATUS INTO :chr_g_restart_data:g_restart_data_i
+		FROM SYS_BATCHPROC
+		WHERE PROCESS_NAME=:argv[0]
+		AND   PROC_INIT=:argv[1]
+		AND   STARTDATE=:argv[2]
+		AND   STATUS='started'
+		FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_REC_NOTFND,
+															"Batch-In-Proc Rec.",
+															APL_NULL_STRING,
+															APL_NULL_STRING )
+	}
+
+	memset(chr_l_buf, NULL, BUFFER_LEN);
+	sprintf(chr_l_buf, "Finished Archival for Safekeeping Records");
+	CO_ProcMonitor(p_logfile, chr_l_buf, NULL, NULL);
+
+	
+
+	CO_ProcMonitor(p_logfile, "Started archival for CHISDLYMKTPRC", NULL, NULL);
+
+	
+
+	l_rowsprocessed = 0L;
+
+	for ( ; ; )
+	{
+		sqlca.sqlerrd[2] = 0;
+
+		for (i = 0; i < COMMIT_COUNT_E; i++ )
+			memset(chr_h_rowidarr[i], APL_NULL_CHAR, APL_ROWID_LEN);
+
+		memset(int_i_rowidarr, 0, COMMIT_COUNT_E);
+
+		EXEC SQL SELECT ROWID
+		INTO :chr_h_rowidarr INDICATOR :int_i_rowidarr
+		FROM MT_HISDLYMKTPRC
+		WHERE MONTHS_BETWEEN(:chr_l_now, PRICE_DATE) > :g_mt_commonsys_params_struct_h.monthsfor_arch
+				AND ROWNUM < :int_h_commitsize
+		ORDER BY ROWID;
+
+		IS_ANY_ORA_ERROR
+
+		if ( sqlca.sqlerrd[2] == 0 )
+		{
+			break;
+		}
+
+		l_rowsprocessed += sqlca.sqlerrd[2];
+
+		EXEC SQL INSERT INTO MT_ARCHDLYMKTPRC
+		SELECT MT_HISDLYMKTPRC.*,:chr_l_now FROM MT_HISDLYMKTPRC
+		WHERE ROWID IN (:chr_h_rowidarr INDICATOR :int_i_rowidarr);
+
+		IS_ANY_ORA_ERROR
+
+		EXEC SQL DELETE MT_HISDLYMKTPRC
+		WHERE ROWID IN (:chr_h_rowidarr INDICATOR :int_i_rowidarr);
+
+		IS_ANY_ORA_ERROR
+
+		sprintf(chr_l_buf, "Moved %ld records from CHISDLYMKTPRC to Archives", l_rowsprocessed);
+
+		
+
+		memset(chr_l_buf, NULL, BUFFER_LEN);
+
+		EXEC SQL UPDATE SYS_BATCHPROC
+		SET STAT_DET = :chr_l_buf
+		WHERE PROCESS_NAME=:argv[0]
+		AND   PROC_INIT=:argv[1]
+		AND   STARTDATE=:argv[2]
+		AND   STATUS='started';
+
+		
+
+		EXEC SQL COMMIT WORK;
+		IS_ANY_ORA_ERROR
+
+		
+
+		EXEC SQL SELECT PROCESSING_STATUS INTO :chr_g_restart_data:g_restart_data_i
+		FROM SYS_BATCHPROC
+		WHERE PROCESS_NAME=:argv[0]
+		AND   PROC_INIT=:argv[1]
+		AND   STARTDATE=:argv[2]
+		AND   STATUS='started'
+		FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_REC_NOTFND,
+															"Batch-In-Proc Rec.",
+															APL_NULL_STRING,
+															APL_NULL_STRING )
+	}
+
+	sprintf(chr_l_buf, "Finished Archival for Daily Market Price Records");
+	CO_ProcMonitor(p_logfile, chr_l_buf, NULL, NULL);
+
+	CO_ProcMonitor(p_logfile, "Started archival for CHISTRANSAUDIT", NULL, NULL);
+
+	l_rowsprocessed = 0L;
+
+	for ( ; ; )
+	{
+		sqlca.sqlerrd[2] = 0;
+
+		for (i = 0; i < COMMIT_COUNT_E; i++ )
+			memset(chr_h_rowidarr[i], APL_NULL_CHAR, APL_ROWID_LEN);
+
+		memset(int_i_rowidarr, 0, COMMIT_COUNT_E);
+
+		EXEC SQL SELECT ROWID
+		INTO :chr_h_rowidarr INDICATOR :int_i_rowidarr
+		FROM DL_HISDEALSAUDIT
+		WHERE MONTHS_BETWEEN(:chr_l_now, DATEOF_INPUT) > :g_mt_commonsys_params_struct_h.monthsfor_arch
+				AND ROWNUM < :int_h_commitsize
+		ORDER BY ROWID;
+
+		IS_ANY_ORA_ERROR
+
+		if ( sqlca.sqlerrd[2] == 0 )
+		{
+			break;
+		}
+
+		l_rowsprocessed += sqlca.sqlerrd[2];
+
+		EXEC SQL INSERT INTO DL_ARCHDLAUDIT
+		SELECT * FROM DL_HISDEALSAUDIT
+		WHERE ROWID IN (:chr_h_rowidarr INDICATOR :int_i_rowidarr);
+
+		IS_ANY_ORA_ERROR
+
+		EXEC SQL DELETE DL_HISDEALSAUDIT
+		WHERE ROWID IN (:chr_h_rowidarr INDICATOR :int_i_rowidarr);
+
+		IS_ANY_ORA_ERROR
+
+		sprintf(chr_l_buf, "Moved %ld records from CHISTRANSAUDIT to Archives", l_rowsprocessed);
+		CO_ProcMonitor(p_logfile, chr_l_buf, NULL, NULL);
+
+		
+
+		EXEC SQL UPDATE SYS_BATCHPROC
+		SET STAT_DET = :chr_l_buf
+		WHERE PROCESS_NAME=:argv[0]
+		AND   PROC_INIT=:argv[1]
+		AND   STARTDATE=:argv[2]
+		AND   STATUS='started';
+
+		
+
+		EXEC SQL COMMIT WORK;
+		IS_ANY_ORA_ERROR
+
+		
+
+		EXEC SQL SELECT PROCESSING_STATUS INTO :chr_g_restart_data:g_restart_data_i
+		FROM SYS_BATCHPROC
+		WHERE PROCESS_NAME=:argv[0]
+		AND   PROC_INIT=:argv[1]
+		AND   STARTDATE=:argv[2]
+		AND   STATUS='started'
+		FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_REC_NOTFND,
+															"Batch-In-Proc Rec.",
+															APL_NULL_STRING,
+														APL_NULL_STRING )
+	}
+
+	sprintf(chr_l_buf, "Finished Archival for Transaction Audit Records");
+	CO_ProcMonitor(p_logfile, chr_l_buf, NULL, NULL);
+
+	if (l_mt_core_sys_params_struct_h.proc_reg_ind[0] == APL_YES_FLAG)
+	{
+		
+
+		CO_ProcMonitor(p_logfile, "Started archival for CHISREGPAR", NULL, NULL);
+
+		
+
+		l_rowsprocessed = 0L;
+
+		for ( ; ; )
+		{
+			sqlca.sqlerrd[2] = 0;
+
+			for (i = 0; i < COMMIT_COUNT_E; i++ )
+				memset(chr_h_rowidarr[i], APL_NULL_CHAR, APL_ROWID_LEN);
+
+			memset(int_i_rowidarr, 0, COMMIT_COUNT_E);
+
+			EXEC SQL SELECT ROWID
+			INTO :chr_h_rowidarr INDICATOR :int_i_rowidarr
+			FROM DL_HISREGPAR
+			WHERE MONTHS_BETWEEN(:chr_l_now, DATEOF_INPUT) > :g_mt_commonsys_params_struct_h.monthsfor_arch
+					AND ROWNUM < :int_h_commitsize
+			ORDER BY ROWID;
+
+			IS_ANY_ORA_ERROR
+
+			if ( sqlca.sqlerrd[2] == 0 )
+			{
+				break;
+			}
+
+			l_rowsprocessed += sqlca.sqlerrd[2];
+
+			EXEC SQL INSERT INTO DL_ARCHREGPAR
+			SELECT * FROM DL_HISREGPAR
+			WHERE ROWID IN (:chr_h_rowidarr INDICATOR :int_i_rowidarr);
+
+			IS_ANY_ORA_ERROR
+
+			EXEC SQL DELETE DL_HISREGPAR
+			WHERE ROWID IN (:chr_h_rowidarr INDICATOR :int_i_rowidarr);
+
+			IS_ANY_ORA_ERROR
+
+			sprintf(chr_l_buf, "Moved %ld records from CHISREGPAR to Archives", l_rowsprocessed);
+
+			
+
+			EXEC SQL UPDATE SYS_BATCHPROC
+			SET STAT_DET = :chr_l_buf
+			WHERE PROCESS_NAME=:argv[0]
+			AND   PROC_INIT=:argv[1]
+			AND   STARTDATE=:argv[2]
+			AND   STATUS='started';
+
+			
+
+			EXEC SQL COMMIT WORK;
+			IS_ANY_ORA_ERROR
+
+			
+
+			EXEC SQL SELECT PROCESSING_STATUS INTO :chr_g_restart_data:g_restart_data_i
+			FROM SYS_BATCHPROC
+			WHERE PROCESS_NAME=:argv[0]
+			AND   PROC_INIT=:argv[1]
+			AND   STARTDATE=:argv[2]
+			AND   STATUS='started'
+			FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+			IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_REC_NOTFND,
+																"Batch-In-Proc Rec.",
+																APL_NULL_STRING,
+																APL_NULL_STRING )
+		} 
+
+		memset(chr_l_buf, NULL, BUFFER_LEN);
+		sprintf(chr_l_buf, "Finished Archival for Partial Reg. Records");
+		CO_ProcMonitor(p_logfile, chr_l_buf, NULL, NULL);
+
+		
+
+		CO_ProcMonitor(p_logfile, "Started archival for CHISREGDET", NULL, NULL);
+
+		
+
+		l_rowsprocessed = 0L;
+
+		for ( ; ; )
+		{
+			sqlca.sqlerrd[2] = 0;
+
+			for (i = 0; i < COMMIT_COUNT_E; i++ )
+				memset(chr_h_rowidarr[i], APL_NULL_CHAR, APL_ROWID_LEN);
+
+			memset(int_i_rowidarr, 0, COMMIT_COUNT_E);
+
+			EXEC SQL SELECT ROWID
+			INTO :chr_h_rowidarr INDICATOR :int_i_rowidarr
+			FROM DL_HISREGDET
+			WHERE MONTHS_BETWEEN(:chr_l_now, DATEOF_INPUT) > :g_mt_commonsys_params_struct_h.monthsfor_arch
+					AND ROWNUM < :int_h_commitsize
+			ORDER BY ROWID;
+
+			IS_ANY_ORA_ERROR
+
+			if ( sqlca.sqlerrd[2] == 0 )
+			{
+				break;
+			}
+
+			l_rowsprocessed += sqlca.sqlerrd[2];
+
+			EXEC SQL INSERT INTO DL_ARCHREGDET
+			SELECT * FROM DL_HISREGDET
+			WHERE ROWID IN (:chr_h_rowidarr INDICATOR :int_i_rowidarr);
+
+			IS_ANY_ORA_ERROR
+
+			EXEC SQL DELETE DL_HISREGDET
+			WHERE ROWID IN (:chr_h_rowidarr INDICATOR :int_i_rowidarr);
+
+			IS_ANY_ORA_ERROR
+
+			sprintf(chr_l_buf, "Moved %ld records from CHISREGDET to Archives", l_rowsprocessed);
+
+			
+
+			EXEC SQL UPDATE SYS_BATCHPROC
+			SET STAT_DET = :chr_l_buf
+			WHERE PROCESS_NAME=:argv[0]
+			AND   PROC_INIT=:argv[1]
+			AND   STARTDATE=:argv[2]
+			AND   STATUS='started';
+
+			
+
+			EXEC SQL COMMIT WORK;
+			IS_ANY_ORA_ERROR
+		
+			
+
+			EXEC SQL SELECT PROCESSING_STATUS INTO :chr_g_restart_data:g_restart_data_i
+			FROM SYS_BATCHPROC
+			WHERE PROCESS_NAME=:argv[0]
+			AND   PROC_INIT=:argv[1]
+			AND   STARTDATE=:argv[2]
+			AND   STATUS='started'
+			FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+			IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_REC_NOTFND,
+																"Batch-In-Proc Rec.",
+																APL_NULL_STRING,
+																APL_NULL_STRING )
+		} 
+
+		memset(chr_l_buf, NULL, BUFFER_LEN);
+		sprintf(chr_l_buf, "Finished Archival for Registration Records");
+		CO_ProcMonitor(p_logfile, chr_l_buf, NULL, NULL);
+	}
+
+	
+
+	CO_ProcMonitor(p_logfile, "Started archival for CHISTRADE", NULL, NULL);
+
+	
+
+	l_rowsprocessed = 0L;
+
+	for ( ; ; )
+	{
+		sqlca.sqlerrd[2] = 0;
+
+		for (i = 0; i < COMMIT_COUNT_E; i++ )
+			memset(chr_h_rowidarr[i], APL_NULL_CHAR, APL_ROWID_LEN);
+
+		memset(int_i_rowidarr, 0, COMMIT_COUNT_E);
+
+		EXEC SQL SELECT ROWID
+		INTO :chr_h_rowidarr INDICATOR :int_i_rowidarr
+		FROM DL_HISDEAL
+		WHERE MONTHS_BETWEEN(:chr_l_now, DATEOF_INPUT) > :g_mt_commonsys_params_struct_h.monthsfor_arch
+				AND ROWNUM < :int_h_commitsize
+		ORDER BY ROWID;
+
+		IS_ANY_ORA_ERROR
+
+		if ( sqlca.sqlerrd[2] == 0 )
+		{
+			break;
+		}
+
+		l_rowsprocessed += sqlca.sqlerrd[2];
+		int_h_no_of_rows = sqlca.sqlerrd[2]; 
+
+		EXEC SQL INSERT INTO DL_ARCHDEAL
+		SELECT CLIENT,IDENTIY_NO,DEAL_DATE,SETL_DATE,COST,EX_ARENA,AMOUNT,CUSTODYCOMM,BROKERCOMM,STX_COMM,OTH_COMM,INSTRUMENT_DT,MONEY_SETL_DT,QTY,DOMESTIC_CPCLT,SPOTTRD_IND,ORIG_QTY,ORIG_AMOUNT,DEAL_FRM_ORD,ENTRY,REAPIRED_IND,DOMCP_CUSTODYCLT,CP_CLT,CP_CLTNAME,CLIENTOF,CLIENT_NOTE,FX_REQD,PAYLOC_IND,VERFIED_WITH,AMT_DIFFER,BRK_NO,FAILREASON_CD,FAIL_DET,PARTIAL_IND_B,FX_RT,AMEND_COUNT,NUMBER_A,REPORT_AT_EOM_IND,DATEOFBILLING,LCL_IDENTNO,INSTRUCT_PERSON,REC_INT_000,DEAL_CD,INSTR_CODE,CURRENCY_CD,DL_CLASS,ORIG_REFNO,DATEOF_INPUT,MAKER,MAKER_DT,DEAL_STAT,ACCESSSTAMP,INFO1,LOCATION_CD,REGINSTR_IND,STATUS_POS,STATUS_REG,VAL_FDT,COMPREFNO,DATEOF_MARKFAIL,ALLOW_DROPDT,CHECKER,CHECKER_DT,INSTRCONV_IND,NDS_BLK_DT,LR_DL_CLASS,NDS_DATE,UNBLK_DATE,DELTA_000,DELTA_001,DELTA_003,DEL_REC_DATE,LAST_REG_DATE,LR_CHECK_DATE,LR_VALDATE,LRINSTR_DATE,REG_MSG_QTY,TMP_OUT_DT,TMP_OUT_DATE,TRANS_DATE,TOT_QTY,QTY_LOST,MRK_DL_FAILQTY,DL_COMPLETEQTY,OUT_REG_QTY,PEND_REG_QTY,RET_REG_QTY,STAMP_QTY,TEMP_OUT_QUANTITY,TEMP_RET_QUANTITY,VAL_DEED_QTY,HOST_DATE,LRNDS_BILLDT,LRNDS_DATE,LR_UNBLK_DATE,NUMBER_B,CLT_REQDEL_IND,MOD_HISPOS_IND,MOD_HISPOS_DATE,GL_CLIENT,CP_AMT,MSG_STAT,SUB_FAIL_CD,PARTIAL_IND_A,LOC_CHNG_IND,COMM_IDENT_NO,INSTRUCT_PERSONNM,CLIENTOF_CD,INTER_MED_PERSON,INTER_MED_PERSONNM,FXCCY,UNIQ_IDENT_NO,CNT_548,EXP_SETLDATE,RELATED_IDENT_NO,INFORMATON,SETTLEMENT_NO,MKT_TYPE,CLH_FLG,INTEREST,NET_AMT,PAYIN_DT,PAYOUT_DT,DEMAT_QTY,CONTRACT_REQ,EXCUM_FLG,CRN_NO,INTERFII_FLG,PAY_MODE,DL_SECSTATUS,DL_MNYSTATUS,AVAIL_QTY,ALLOT_QTY,SHORTAGE_QTY,CLN_DEPOACC,PLTOPL_FLG,ORIG_STATUS,MAP_FAILCODE,MATCH_FAILCODE,IS_MATCHED,EXCH_CODE,CONTRACT_CD,R_DELAY,SEBI_REPORTED,R_SETT_CODE,R_TRANS_CODE,R_TYPE,REPO_DATE,COMM_AMT,MF_SEQNO,CLNT_NAME,DOMESTIC_CPNAME,DOMCP_CUSTODYNM,INSTR_NAME,CLOSING_DATE,TRD_EXCH,TRD_SETL_NO,TRD_MKT_TYPE,:chr_l_now,STAMP_DUTY FROM DL_HISDEAL
+		WHERE ROWID IN (:chr_h_rowidarr INDICATOR :int_i_rowidarr);
+
+		IS_ANY_ORA_ERROR
+       
+	    
+
+
+		
+	
+		printf("Finally int_h_no_of_rows %d ",int_h_no_of_rows);
+
+
+		for (i = 0; i < int_h_no_of_rows; i++ )
+		{
+		EXEC SQL SELECT CLIENT,IDENTIY_NO INTO :h_dl_client,:h_indentity_no 
+		FROM DL_HISDEAL 
+		WHERE ROWID = (:chr_h_rowidarr[i]);
+		printf("account and refno:%s,%s\n",h_dl_client,h_indentity_no); 
+		IS_ANY_ORA_ERROR
+
+		EXEC SQL SELECT INDEN_NUM INTO :int_l_seq_num
+		FROM DL_HISMSGLINK
+		WHERE CLIENT = :h_dl_client 
+		AND IDENTIY_NO = :h_indentity_no;
+		printf("seq_num is %d",int_l_seq_num);
+		
+		IS_ANY_ORA_ERROR
+		EXEC SQL INSERT INTO DL_ARCHMSGLINKDET
+				SELECT * FROM DL_HISMSGLINKDET
+				WHERE INDEN_NUM = :int_l_seq_num;
+		
+		IS_ANY_ORA_ERROR
+
+		EXEC SQL DELETE DL_HISMSGLINKDET
+				WHERE INDEN_NUM = :int_l_seq_num;
+
+		IS_ANY_ORA_ERROR
+		
+		EXEC SQL INSERT INTO DL_ARCHMSGLINK
+				SELECT * FROM DL_HISMSGLINK
+				WHERE CLIENT = :h_dl_client AND IDENTIY_NO = :h_indentity_no;
+				printf("Before deleting\n");
+
+		IS_ANY_ORA_ERROR
+
+		EXEC SQL DELETE DL_HISMSGLINK
+			WHERE INDEN_NUM = :int_l_seq_num;
+			printf(" After deleting\n");
+
+			IS_ANY_ORA_ERROR
+
+		EXEC SQL DELETE FROM DL_HISMULT_REAS_CODES 
+		WHERE CLIENT = :h_dl_client 
+		AND IDENTIY_NO = :h_indentity_no;
+	
+		IS_ANY_ORA_ERROR
+		}
+		
+			
+		EXEC SQL DELETE DL_HISDEAL
+		WHERE ROWID IN (:chr_h_rowidarr INDICATOR :int_i_rowidarr);
+
+		IS_ANY_ORA_ERROR
+
+		sprintf(chr_l_buf, "Moved %ld records from CHISTRADE to Archives", l_rowsprocessed);
+
+		
+
+		EXEC SQL UPDATE SYS_BATCHPROC
+		SET STAT_DET = :chr_l_buf
+		WHERE PROCESS_NAME=:argv[0]
+		AND   PROC_INIT=:argv[1]
+		AND   STARTDATE=:argv[2]
+		AND   STATUS='started';
+
+		
+
+		EXEC SQL COMMIT WORK;
+		IS_ANY_ORA_ERROR
+
+		
+
+		EXEC SQL SELECT PROCESSING_STATUS INTO :chr_g_restart_data:g_restart_data_i
+		FROM SYS_BATCHPROC
+		WHERE PROCESS_NAME=:argv[0]
+		AND   PROC_INIT=:argv[1]
+		AND   STARTDATE=:argv[2]
+		AND   STATUS='started'
+		FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_REC_NOTFND,
+															"Batch-In-Proc Rec.",
+															APL_NULL_STRING,
+															APL_NULL_STRING )
+	}
+	
+	memset(chr_l_buf, NULL, BUFFER_LEN);
+	sprintf(chr_l_buf, "Finished Archival for Trade Records");
+	CO_ProcMonitor(p_logfile, chr_l_buf, NULL, NULL);
+	
+
+	l_rowsprocessed = 0L;
+
+      strcpy(chr_mainfuncarea, "TRD_PMT_CHK");
+      strcpy(chr_l_condid, "RU_REG_CHK");
+      int_l_condexists = 0;
+
+       memset(chr_l_buf, NULL, BUFFER_LEN);
+            sprintf(chr_l_buf, "before CRUARCH LOOP");
+            CO_ProcMonitor(p_logfile, chr_l_buf, NULL, NULL);
+
+      if ( APL_SUCCESS == CO_Chk_CntryEnabled( chr_mainfuncarea,
+                                             chr_l_condid,
+                                             &int_l_condexists,
+                                             l_debug_info_ptr ))
+      {
+
+         if ( int_l_condexists > 0 )
+         {
+             memset(chr_l_buf, NULL, BUFFER_LEN);
+            sprintf(chr_l_buf, "inside CRUARCH LOOP");
+            CO_ProcMonitor(p_logfile, chr_l_buf, NULL, NULL);
+
+            l_rowsprocessed = 0L;
+
+				for ( ; ; )
+            {
+                  sqlca.sqlerrd[2] = 0;
+
+                 for (i = 0; i < COMMIT_COUNT_E; i++ )
+                  memset(chr_h_rowidarr[i], APL_NULL_CHAR, APL_ROWID_LEN);
+
+                  memset(int_i_rowidarr, 0, COMMIT_COUNT_E);
+
+                  EXEC SQL SELECT ROWID
+                  INTO :chr_h_rowidarr INDICATOR :int_i_rowidarr
+                  FROM DL_RUHISSAFEK
+                  WHERE MONTHS_BETWEEN(:chr_l_now, POSIT_DATE) > :g_mt_commonsys_params_struct_h.monthsfor_arch
+                  AND ROWNUM < :int_h_commitsize
+                  ORDER BY ROWID;
+
+                 IS_ANY_ORA_ERROR
+
+                 if ( sqlca.sqlerrd[2] == 0 )
+                  {
+                     break;
+                  }
+
+                 l_rowsprocessed += sqlca.sqlerrd[2];
+
+                 EXEC SQL INSERT INTO DL_RUARCHSAFEK
+                  SELECT * FROM DL_RUHISSAFEK
+                  WHERE ROWID IN (:chr_h_rowidarr INDICATOR :int_i_rowidarr);
+
+                  IS_ANY_ORA_ERROR
+
+                 EXEC SQL DELETE DL_RUHISSAFEK
+                  WHERE ROWID IN (:chr_h_rowidarr INDICATOR :int_i_rowidarr);
+
+                  IS_ANY_ORA_ERROR
+
+                  
+
+                 sprintf(chr_l_buf, "Moved %ld records from CRUHISSAFEK to Archives so far", l_rowsprocessed);
+
+                  EXEC SQL UPDATE SYS_BATCHPROC
+                  SET STAT_DET = :chr_l_buf
+						WHERE PROCESS_NAME=:argv[0]
+                  AND   PROC_INIT=:argv[1]
+                  AND   STARTDATE=:argv[2]
+                  AND   STATUS='started';
+
+                 
+
+                 EXEC SQL COMMIT WORK;
+                  IS_ANY_ORA_ERROR
+
+                 
+
+                 EXEC SQL SELECT PROCESSING_STATUS INTO :chr_g_restart_data:g_restart_data_i
+                  FROM SYS_BATCHPROC
+                  WHERE PROCESS_NAME=:argv[0]
+                  AND   PROC_INIT=:argv[1]
+                  AND   STARTDATE=:argv[2]
+                  AND   STATUS='started'
+                  FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+                 IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET( ERR_REC_NOTFND,
+                                             "Batch-In-Proc Rec.",
+                                             APL_NULL_STRING,
+                                             APL_NULL_STRING )
+            }
+            memset(chr_l_buf, NULL, BUFFER_LEN);
+            sprintf(chr_l_buf, "Finished Archival for RUSSIA Safekeeping Records");
+            CO_ProcMonitor(p_logfile, chr_l_buf, NULL, NULL);
+		
+				memset(chr_l_buf, NULL, BUFFER_LEN);
+            sprintf(chr_l_buf, "inside CRUARCHTRADE LOOP");
+            CO_ProcMonitor(p_logfile, chr_l_buf, NULL, NULL);
+
+            l_rowsprocessed = 0L;
+
+            for ( ; ; )
+            {
+                  sqlca.sqlerrd[2] = 0;
+
+                 for (i = 0; i < COMMIT_COUNT_E; i++ )
+                  memset(chr_h_rowidarr[i], APL_NULL_CHAR, APL_ROWID_LEN);
+
+                  memset(int_i_rowidarr, 0, COMMIT_COUNT_E);
+
+                  EXEC SQL SELECT ROWID
+                  INTO :chr_h_rowidarr INDICATOR :int_i_rowidarr
+                  FROM DL_RUHISDEAL
+						WHERE MONTHS_BETWEEN(:chr_l_now, DATEOF_INPUT) > :g_mt_commonsys_params_struct_h.monthsfor_arch
+                  AND ROWNUM < :int_h_commitsize
+                  ORDER BY ROWID;
+
+                 IS_ANY_ORA_ERROR
+
+                 if ( sqlca.sqlerrd[2] == 0 )
+                  {
+                     break;
+                  }
+
+                 l_rowsprocessed += sqlca.sqlerrd[2];
+
+                 EXEC SQL INSERT INTO DL_ARCHRUHISDEAL
+						SELECT * FROM DL_RUHISDEAL
+						WHERE ROWID IN (:chr_h_rowidarr INDICATOR :int_i_rowidarr);
+
+                  IS_ANY_ORA_ERROR
+
+                 EXEC SQL DELETE DL_RUHISDEAL
+						WHERE ROWID IN (:chr_h_rowidarr INDICATOR :int_i_rowidarr);
+
+                  IS_ANY_ORA_ERROR
+
+                  
+
+                 sprintf(chr_l_buf, "Moved %ld records from CRUHISTRADE to Archives so far", l_rowsprocessed);
+
+                  EXEC SQL UPDATE SYS_BATCHPROC
+                  SET STAT_DET = :chr_l_buf
+                  WHERE PROCESS_NAME=:argv[0]
+                  AND   PROC_INIT=:argv[1]
+                  AND   STARTDATE=:argv[2]
+                  AND   STATUS='started';
+
+                 
+
+                 EXEC SQL COMMIT WORK;
+                  IS_ANY_ORA_ERROR
+
+                 
+
+                 EXEC SQL SELECT PROCESSING_STATUS INTO :chr_g_restart_data:g_restart_data_i
+                  FROM SYS_BATCHPROC
+                  WHERE PROCESS_NAME=:argv[0]
+                  AND   PROC_INIT=:argv[1]
+                  AND   STARTDATE=:argv[2]
+                  AND   STATUS='started'
+                  FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+                 IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET( ERR_REC_NOTFND,
+                                             "Batch-In-Proc Rec.",
+                                             APL_NULL_STRING,
+                                             APL_NULL_STRING )
+            }
+            memset(chr_l_buf, NULL, BUFFER_LEN);
+            sprintf(chr_l_buf, "Finished Archival for CRUHISTRADE RECORDS ");
+				CO_ProcMonitor(p_logfile, chr_l_buf, NULL, NULL);
+
+         }
+      }
+	
+
+	if (l_mt_core_sys_params_struct_h.ord_proc_ind[0] == 'Y')
+	{
+		
+
+		CO_ProcMonitor(p_logfile, "Started archival for OR_HISEXECORDER", NULL, NULL);
+
+		
+
+		l_rowsprocessed = 0L;
+
+		for ( ; ; )
+		{
+			sqlca.sqlerrd[2] = 0;
+
+			for (i = 0; i < COMMIT_COUNT_E; i++ )
+				memset(chr_h_rowidarr[i], APL_NULL_CHAR, APL_ROWID_LEN);
+
+			memset(int_i_rowidarr, 0, COMMIT_COUNT_E);
+
+			EXEC SQL SELECT ROWID
+			INTO :chr_h_rowidarr INDICATOR :int_i_rowidarr
+			FROM OR_HISEXECORDER
+			WHERE MONTHS_BETWEEN(:chr_l_now, EXEC_DATE) > :g_mt_commonsys_params_struct_h.monthsfor_arch
+					AND ROWNUM < :int_h_commitsize
+			ORDER BY ROWID;
+
+			IS_ANY_ORA_ERROR
+
+			if ( sqlca.sqlerrd[2] == 0 )
+			{
+				break;
+			}
+
+			l_rowsprocessed += sqlca.sqlerrd[2];
+
+			EXEC SQL INSERT INTO OR_ARCHEXEC
+			SELECT * FROM OR_HISEXECORDER
+			WHERE ROWID IN (:chr_h_rowidarr INDICATOR :int_i_rowidarr);
+
+			IS_ANY_ORA_ERROR
+
+			EXEC SQL DELETE OR_HISEXECORDER
+			WHERE ROWID IN (:chr_h_rowidarr INDICATOR :int_i_rowidarr);
+
+			IS_ANY_ORA_ERROR
+
+			sprintf(chr_l_buf, "Moved %ld records from OR_HISEXECORDER to Archives", l_rowsprocessed);
+
+			
+
+			EXEC SQL UPDATE SYS_BATCHPROC
+			SET STAT_DET = :chr_l_buf
+			WHERE PROCESS_NAME=:argv[0]
+			AND   PROC_INIT=:argv[1]
+			AND   STARTDATE=:argv[2]
+			AND   STATUS='started';
+
+			
+
+			EXEC SQL COMMIT WORK;
+			IS_ANY_ORA_ERROR
+
+			
+
+			EXEC SQL SELECT PROCESSING_STATUS INTO :chr_g_restart_data:g_restart_data_i
+			FROM SYS_BATCHPROC
+			WHERE PROCESS_NAME=:argv[0]
+			AND   PROC_INIT=:argv[1]
+			AND   STARTDATE=:argv[2]
+			AND   STATUS='started'
+			FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+			IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_REC_NOTFND,
+																"Batch-In-Proc Rec.",
+																APL_NULL_STRING,
+																APL_NULL_STRING )
+		} 
+
+		memset(chr_l_buf, NULL, BUFFER_LEN);
+		sprintf(chr_l_buf, "Finished Archival for Order Execution Records");
+		CO_ProcMonitor(p_logfile, chr_l_buf, NULL, NULL);
+
+		
+
+		CO_ProcMonitor(p_logfile, "Started archival for CHISORDER", NULL, NULL);
+
+		
+
+		l_rowsprocessed = 0L;
+
+		for ( ; ; )
+		{
+			sqlca.sqlerrd[2] = 0;
+
+			for (i = 0; i < COMMIT_COUNT_E; i++ )
+				memset(chr_h_rowidarr[i], APL_NULL_CHAR, APL_ROWID_LEN);
+
+			memset(int_i_rowidarr, 0, COMMIT_COUNT_E);
+
+			EXEC SQL SELECT ROWID
+			INTO :chr_h_rowidarr INDICATOR :int_i_rowidarr
+			FROM OR_HISORDER
+			WHERE MONTHS_BETWEEN(:chr_l_now, CLOSING_DATE) > :g_mt_commonsys_params_struct_h.monthsfor_arch
+					AND ROWNUM < :int_h_commitsize
+			ORDER BY ROWID;
+
+			IS_ANY_ORA_ERROR
+
+			if ( sqlca.sqlerrd[2] == 0 )
+			{
+				break;
+			}
+
+			l_rowsprocessed += sqlca.sqlerrd[2];
+
+			EXEC SQL INSERT INTO OR_ARCHORDERS
+			SELECT * FROM OR_HISORDER
+			WHERE ROWID IN (:chr_h_rowidarr INDICATOR :int_i_rowidarr);
+
+			IS_ANY_ORA_ERROR
+
+			EXEC SQL DELETE OR_HISORDER
+			WHERE ROWID IN (:chr_h_rowidarr INDICATOR :int_i_rowidarr);
+
+			IS_ANY_ORA_ERROR
+
+			sprintf(chr_l_buf, "Moved %ld records from CHISORDER to Archives", l_rowsprocessed);
+
+			
+
+			EXEC SQL UPDATE SYS_BATCHPROC
+			SET STAT_DET = :chr_l_buf
+			WHERE PROCESS_NAME=:argv[0]
+			AND   PROC_INIT=:argv[1]
+			AND   STARTDATE=:argv[2]
+			AND   STATUS='started';
+
+			
+
+			EXEC SQL COMMIT WORK;
+			IS_ANY_ORA_ERROR
+
+			
+
+			EXEC SQL SELECT PROCESSING_STATUS INTO :chr_g_restart_data:g_restart_data_i
+			FROM SYS_BATCHPROC
+			WHERE PROCESS_NAME=:argv[0]
+			AND   PROC_INIT=:argv[1]
+			AND   STARTDATE=:argv[2]
+			AND   STATUS='started'
+			FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+			IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_REC_NOTFND,
+																"Batch-In-Proc Rec.",
+																APL_NULL_STRING,
+																APL_NULL_STRING )
+		} 
+
+		memset(chr_l_buf, NULL, BUFFER_LEN);
+		sprintf(chr_l_buf, "Finished Archival for Order Records");
+		CO_ProcMonitor(p_logfile, chr_l_buf, NULL, NULL);
+	}	
+
+	CO_ProcMonitor(p_logfile, "\n\n***************************************************", NULL, NULL);
+	CO_ProcMonitor(p_logfile, "\n\nFinished Archival for all history records which are", NULL, NULL);
+	memset(chr_l_buf, NULL, BUFFER_LEN);
+	sprintf(	chr_l_buf, 
+				"more than %d months old as of chr_date : %.11s", 
+				g_mt_commonsys_params_struct_h.monthsfor_arch, 
+				chr_l_now );
+	CO_ProcMonitor(p_logfile, chr_l_buf, NULL, NULL);
+	CO_ProcMonitor(p_logfile, "Pl. take h_process to export Archival tables", NULL, NULL);
+	CO_ProcMonitor(p_logfile, "\n\n***************************************************\n", NULL, NULL);
+
+
+	
+	
+	APL_GOBACK_SUCCESS
+
+   RETURN_SUCCESS :
+		CO_ProcMonitor(	p_logfile, 
+						"Leaving Function DL_Proc_EOMArch with success\n",
+						NULL,
+						NULL);
+      return(APL_SUCCESS);
+
+   RETURN_FAILURE :
+		CO_ProcMonitor(	p_logfile, 
+						"Leaving Function DL_Proc_EOMArch with errors\n",
+						NULL,
+						NULL);
+		CO_ProcMonitor(p_logfile, APL_NULL_STRING, l_debug_info_ptr, NULL);
+		CO_FreeErrLst(l_debug_info_ptr);
+      return(APL_FAILURE);
+
+}
+
+
+
+
+int main(int argc,char **argv) //AIX -Warnings Removal
+{
+	struct sqlca sqlca;
+   DEBUG_INFO_STRUCT_H *l_debug_info_ptr = NULL;  
+   DEBUG_INFO_STRUCT_H l_debug_info;  /*ISKB_2469 Decleration missed out and resolved*/
+	FILE *l_finifile;
+
+   int int_l_retval=0;
+	int int_num = 0;
+
+   char chr_uname[APL_USERID_LEN] 	= APL_NULL_STRING;
+   char chr_custody_id_b[APL_USERID_LEN] 	= APL_NULL_STRING;
+   char chr_passwd[APL_PASSWD_LEN] 	= APL_NULL_STRING;
+	char chr_l_logdir[PATH_LENGTH] 	= APL_NULL_STRING;
+	char chr_l_logname[PATH_LENGTH] 	= APL_NULL_STRING;
+	char chr_l_inifile[PATH_LENGTH] 	= APL_NULL_STRING;
+
+	FILE *l_flogfile = NULL;
+	l_debug_info_ptr = &l_debug_info; /*ISKB_2469 Decleration missed out and resolved*/
+
+   EXEC SQL VAR chr_uname IS STRING;
+   EXEC SQL VAR chr_custody_id_b IS STRING;
+   EXEC SQL VAR chr_passwd IS STRING;
+
+	sqlca.sqlcode = 0;
+
+	strcpy(chr_l_inifile,getenv("INTL_ROOT_PATH"));
+	strcat(chr_l_inifile,"intl_sun.cfg");
+
+	if ( ( l_finifile=fopen(chr_l_inifile,"r") ) == NULL)
+	{
+		exit(-1);
+	}
+
+	
+
+	
+
+	APL_FETCH_DB_LOGIN_DETAILS(l_finifile, chr_custody_id_b, chr_uname, chr_passwd, APL_OUT_FILE, &l_debug_info_ptr)
+
+	
+
+	if (fclose(l_finifile)) 
+	{
+		exit(-1);
+	}
+
+   EXEC SQL CONNECT :chr_uname IDENTIFIED BY :chr_passwd;
+
+   if (sqlca.sqlcode)
+   {
+      APL_GOBACK_FAIL
+   }
+   else
+   {
+		
+
+		if (APL_FAILURE == CO_Rtv_RptFileName(	"3E",
+														APL_LOGFILE_DESC,
+														100,
+														argv[5],
+														argv,
+														&l_flogfile,
+														&l_debug_info_ptr ) )
+		{
+			APL_GOBACK_FAIL
+		}
+
+		
+
+		EXEC SQL COMMIT WORK;
+
+		if (sqlca.sqlcode)
+		{
+			CO_ProcMonitor(l_flogfile, "Could not commit after opening chr_log file", NULL, NULL);
+			CO_Proc_RptClose(l_flogfile, &l_debug_info_ptr);
+			APL_GOBACK_FAIL
+		}
+
+		
+
+		if (APL_FAILURE == CO_RtvSysParams(&l_debug_info_ptr))
+		{
+			CO_ProcMonitor(l_flogfile, "Could not get system params", &l_debug_info_ptr, NULL);
+			CO_Proc_RptClose(l_flogfile, &l_debug_info_ptr);
+			APL_GOBACK_FAIL
+		}
+		
+		
+      int_l_retval = DL_Proc_EOMFastArch( argv, l_flogfile, &l_debug_info_ptr);
+      if ( int_l_retval == APL_FAILURE )
+      {
+			CO_ProcMonitor(l_flogfile, "CDBEOMArchOptiFn returned failure", NULL, NULL);
+			CO_Proc_RptClose(l_flogfile, &l_debug_info_ptr);
+			EXEC SQL ROLLBACK WORK RELEASE;
+         APL_GOBACK_FAIL
+      }
+      else
+      {
+         EXEC SQL UPDATE SYS_BATCHPROC
+         SET  status = 'completed'
+         WHERE PROCESS_NAME=:argv[0]
+         AND   PROC_INIT=:argv[1]
+         AND   STARTDATE=:argv[2]
+         AND   STATUS='started';
+
+			if (sqlca.sqlcode)
+			{
+				CO_ProcMonitor(l_flogfile, "Could not update batch_in_proc", NULL, NULL);
+				CO_Proc_RptClose(l_flogfile, &l_debug_info_ptr);
+				APL_GOBACK_FAIL
+			}
+
+         EXEC SQL COMMIT WORK RELEASE;
+			if (sqlca.sqlcode)
+			{
+				CO_ProcMonitor(l_flogfile, "Could not do final commit", NULL, NULL);
+				CO_Proc_RptClose(l_flogfile, &l_debug_info_ptr);
+				APL_GOBACK_FAIL
+			}
+
+			CO_Proc_RptClose(l_flogfile, &l_debug_info_ptr);
+         APL_GOBACK_SUCCESS
+      }
+   }
+
+	RETURN_SUCCESS : exit(0);
+	RETURN_FAILURE : exit(-1);
+
+}
+
+
+
+
+int DL_Proc_EOMFastArch(	char **argv,
+						FILE *p_logfile,
+						DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	
+
+	struct sqlca sqlca;	
+	char	chr_l_now[ARCH_DATE_LEN]					= APL_NULL_STRING;
+	char	chr_l_buf[BUFFER_LEN]								= APL_NULL_STRING;
+	char  chr_mainfuncarea[APL_MAINFUNCAREA_LEN]   = APL_NULL_STRING; 
+  	char  chr_l_condid[APL_CONDID_LEN] 					= APL_NULL_STRING; 
+	char  chr_l_archdate[ARCH_DATE_LEN]    		= APL_NULL_STRING;
+	char  chr_l_tempdate[ARCH_DATE_LEN]    		= APL_NULL_STRING;
+   short int_l_condexists 		= 0; 												 
+	int   i 						= 0;
+	int   int_l_ctr 				= 0;
+	int   int_l_tempctr 			= 0;
+	long  l_rowsprocessed 	= 0L;
+	short i_now 				= 0;
+	short i_tempdate 			= 0;
+	short i_archdate 			= 0;
+	short i_tempctr			= 0;
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+	EXEC SQL VAR chr_l_archdate 	IS STRING;
+	EXEC SQL VAR chr_l_tempdate 	IS STRING; 
+	EXEC SQL VAR chr_l_now		 	IS STRING; 
+
+	EXEC SQL END DECLARE SECTION;
+
+	sqlca.sqlcode = 0;
+	memset(chr_l_archdate,	APL_NULL_CHAR,		ARCH_DATE_LEN);
+	memset(chr_l_tempdate,	APL_NULL_CHAR,		ARCH_DATE_LEN);
+	memset(chr_l_now,			APL_NULL_CHAR,		ARCH_DATE_LEN);
+
+	CO_ProcMonitor(p_logfile, "Entered Function DL_Proc_EOMFastArch\n",NULL,NULL);
+
+
+	EXEC SQL SELECT TO_CHAR(SYS_DATE,'DD/MM/YYYY') INTO :chr_l_now:i_now FROM PRO_SYS_DATE ;
+	IS_ANY_ORA_ERROR
+
+	/*EXEC SQL SELECT 
+	to_char(( to_date(:chr_l_now,'dd/chr_mm/yyyy') - :g_mt_commonsys_params_struct_h.monthsfor_arch * 30 ),'dd/chr_mm/yyyy') 
+	INTO :chr_l_archdate:i_archdate FROM DUAL ;*/
+	
+	EXEC SQL SELECT 
+	to_char(( to_date(:chr_l_now,'dd/mm/yyyy') - :g_mt_commonsys_params_struct_h.monthsfor_arch * 30 ),'dd/mm/yyyy') 
+	INTO :chr_l_archdate:i_archdate FROM DUAL ;
+	IS_ANY_ORA_ERROR
+
+	sprintf(chr_l_buf,"Archival chr_date=%s",chr_l_archdate);
+	CO_ProcMonitor(p_logfile,chr_l_buf,NULL,NULL);
+
+	//strcat(chr_l_now,APL_NULL_TIME);//Added by Gouse for ISKB-2469
+
+
+   
+
+
+	
+/*** AIX migration chnges to remove warnings -- too many arguments for format	
+	sprintf(chr_l_buf,"Started Archival of CHISSAFEK",NULL,NULL); **/
+	
+       sprintf(chr_l_buf,"Started Archival of CHISSAFEK");
+	l_rowsprocessed = 0L;
+	
+	if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+
+	for(int_l_ctr=START_DAY;int_l_ctr>=0;int_l_ctr-=INCREMENTBY_DAYS)
+   {
+
+		EXEC SQL SELECT TO_CHAR(TO_DATE(:chr_l_archdate,'DD/MM/YYYY') - :int_l_ctr,'DD/MM/YYYY') INTO
+      :chr_l_tempdate:i_tempdate FROM DUAL ;
+      IS_ANY_ORA_ERROR
+      
+		sprintf(chr_l_buf,"Records Archived prior to %s",chr_l_tempdate);
+		CO_ProcMonitor(p_logfile,chr_l_buf,NULL,NULL);
+
+      CO_ProcMonitor(p_logfile,"Before Insert into CARCHSAFEK",NULL,NULL);
+      EXEC SQL INSERT INTO DL_ARCHSAFEK SELECT DL_HISSAFEK.*,:chr_l_now FROM DL_HISSAFEK
+      WHERE POSIT_DATE < to_date(:chr_l_tempdate,'DD/MM/YYYY') ;
+		Alert("sqlca.sqlcode is |%d|",sqlca.sqlcode);
+      IS_ANY_ORA_ERROR
+
+      l_rowsprocessed+=sqlca.sqlerrd[2];
+
+      CO_ProcMonitor(p_logfile,"Before Delete from CHISSAFEK",NULL,NULL);
+      EXEC SQL DELETE FROM DL_HISSAFEK
+      WHERE POSIT_DATE < to_date(:chr_l_tempdate,'DD/MM/YYYY') ;
+		Alert("sqlca.sqlcode is |%d|",sqlca.sqlcode);
+      IS_ANY_ORA_ERROR
+
+      CO_ProcMonitor(p_logfile,"Before Commit",NULL,NULL);
+
+      sprintf(chr_l_buf, "Moved %ld records from CHISSAFEK to Archives", l_rowsprocessed);
+		
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+	
+		if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+
+   }
+      CO_ProcMonitor(p_logfile,"\n",NULL,NULL);
+      sprintf(chr_l_buf,"Total Records Processed For CHISSAFEK = %ld",l_rowsprocessed);
+
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+      CO_ProcMonitor(p_logfile,"\n",NULL,NULL);
+
+
+	
+
+
+	
+/*** AIX migration chnges to remove warnings -- too many arguments for format	
+	sprintf(chr_l_buf,"Started Archival of CHISDLYMKTPRC",NULL,NULL); **/
+	
+/* Commented by Gouse - Archival Not Required for MT_HISDLYMKTPRC
+        sprintf(chr_l_buf,"Started Archival of CHISDLYMKTPRC");
+	l_rowsprocessed = 0L;
+	
+	if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+
+	for(int_l_ctr=START_DAY;int_l_ctr>=0;int_l_ctr-=INCREMENTBY_DAYS)
+   {
+
+		EXEC SQL SELECT TO_CHAR(TO_DATE(:chr_l_archdate,'DD/MM/YYYY') - :int_l_ctr,'DD/MM/YYYY') INTO
+      :chr_l_tempdate:i_tempdate FROM DUAL ;
+      IS_ANY_ORA_ERROR
+      
+		sprintf(chr_l_buf,"Records Archived prior to %s",chr_l_tempdate);
+		CO_ProcMonitor(p_logfile,chr_l_buf,NULL,NULL);
+
+      CO_ProcMonitor(p_logfile,"Before Insert into CARCHDLYMKTPRC",NULL,NULL);
+      EXEC SQL INSERT INTO MT_ARCHDLYMKTPRC SELECT MT_HISDLYMKTPRC.*,:chr_l_now FROM MT_HISDLYMKTPRC
+      WHERE PRICE_DATE < to_date(:chr_l_tempdate,'DD/MM/YYYY') ;
+      IS_ANY_ORA_ERROR
+
+      l_rowsprocessed+=sqlca.sqlerrd[2];
+
+      CO_ProcMonitor(p_logfile,"Before Delete from CHISDLYMKTPRC",NULL,NULL);
+      EXEC SQL DELETE FROM MT_HISDLYMKTPRC
+      WHERE PRICE_DATE < to_date(:chr_l_tempdate,'DD/MM/YYYY') ;
+      IS_ANY_ORA_ERROR
+
+      CO_ProcMonitor(p_logfile,"Before Commit",NULL,NULL);
+
+      sprintf(chr_l_buf, "Moved %ld records from CHISDLYMKTPRC to Archives", l_rowsprocessed);
+	
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+		
+		if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+
+   }
+		CO_ProcMonitor(p_logfile,"\n",NULL,NULL);
+      sprintf(chr_l_buf,"Total Records Processed For CHISDLYMKTPRC = %ld",l_rowsprocessed);
+
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+		CO_ProcMonitor(p_logfile,"\n",NULL,NULL); */
+
+	/* Added by Gouse for ISKB_2469 - Start */
+
+    sprintf(chr_l_buf,"Started Archival of MT_DAILY_QUOT");
+	l_rowsprocessed = 0L;
+	
+	if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+
+	for(int_l_ctr=START_DAY;int_l_ctr>=0;int_l_ctr-=INCREMENTBY_DAYS)
+   {
+
+		EXEC SQL SELECT TO_CHAR(TO_DATE(:chr_l_archdate,'DD/MM/YYYY') - :int_l_ctr,'DD/MM/YYYY') INTO
+      :chr_l_tempdate:i_tempdate FROM DUAL ;
+      IS_ANY_ORA_ERROR
+      
+		sprintf(chr_l_buf,"Records Archived prior to %s",chr_l_tempdate);
+		CO_ProcMonitor(p_logfile,chr_l_buf,NULL,NULL);
+
+      CO_ProcMonitor(p_logfile,"Before Insert into MT_ARCHDAILY_QUOT",NULL,NULL);
+      EXEC SQL INSERT INTO MT_ARCHDAILY_QUOT SELECT MT_DAILY_QUOT.*,:chr_l_now FROM MT_DAILY_QUOT 
+      WHERE QUOT_DATE < to_date(:chr_l_tempdate,'DD/MM/YYYY') ;
+      IS_ANY_ORA_ERROR
+
+      l_rowsprocessed+=sqlca.sqlerrd[2];
+
+      CO_ProcMonitor(p_logfile,"Before Delete from MT_DAILY_QUOT",NULL,NULL);
+      EXEC SQL DELETE FROM MT_DAILY_QUOT 
+      WHERE QUOT_DATE < to_date(:chr_l_tempdate,'DD/MM/YYYY') ;
+      IS_ANY_ORA_ERROR
+
+      CO_ProcMonitor(p_logfile,"Before Commit",NULL,NULL);
+
+      sprintf(chr_l_buf, "Moved %ld records from MT_DAILY_QUOT to Archives", l_rowsprocessed);
+	
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+		
+		if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+
+   }
+		CO_ProcMonitor(p_logfile,"\n",NULL,NULL);
+      sprintf(chr_l_buf,"Total Records Processed For MT_DAILY_QUOT = %ld",l_rowsprocessed);
+
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+		CO_ProcMonitor(p_logfile,"\n",NULL,NULL);
+
+	/* Added by Gouse for ISKB_2469 - End */
+	
+
+	
+      /*** AIX migration chnges to remove warnings -- too many arguments for format	
+	sprintf(chr_l_buf,"Started Archival of CHISTRANSAUDIT",NULL,NULL); **/
+
+        sprintf(chr_l_buf,"Started Archival of CHISTRANSAUDIT");
+	
+	l_rowsprocessed = 0L;
+	
+	if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+
+	for(int_l_ctr=START_DAY;int_l_ctr>=0;int_l_ctr-=INCREMENTBY_DAYS)
+   {
+
+		EXEC SQL SELECT TO_CHAR(TO_DATE(:chr_l_archdate,'DD/MM/YYYY') - :int_l_ctr,'DD/MM/YYYY') INTO
+      :chr_l_tempdate:i_tempdate FROM DUAL ;
+      IS_ANY_ORA_ERROR
+      
+		sprintf(chr_l_buf,"Records Archived prior to %s",chr_l_tempdate);
+		CO_ProcMonitor(p_logfile,chr_l_buf,NULL,NULL);
+
+      CO_ProcMonitor(p_logfile,"Before Insert into CARCHTRANSAUDIT",NULL,NULL);
+      EXEC SQL INSERT INTO DL_ARCHDLAUDIT SELECT * FROM DL_HISDEALSAUDIT
+      WHERE DATEOF_INPUT < to_date(:chr_l_tempdate,'DD/MM/YYYY') ;
+      IS_ANY_ORA_ERROR
+
+      l_rowsprocessed+=sqlca.sqlerrd[2];
+
+      CO_ProcMonitor(p_logfile,"Before Delete from CHISTRANSAUDIT",NULL,NULL);
+      EXEC SQL DELETE FROM DL_HISDEALSAUDIT
+      WHERE DATEOF_INPUT < to_date(:chr_l_tempdate,'DD/MM/YYYY') ;
+      IS_ANY_ORA_ERROR
+
+      CO_ProcMonitor(p_logfile,"Before Commit",NULL,NULL);
+
+      sprintf(chr_l_buf, "Moved %ld records from CHISTRANSAUDIT to Archives", l_rowsprocessed);
+	
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+
+		if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+
+   }
+		CO_ProcMonitor(p_logfile,"\n",NULL,NULL);
+      sprintf(chr_l_buf,"Total Records Processed For CHISTRANSAUDIT = %ld",l_rowsprocessed);
+
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+		CO_ProcMonitor(p_logfile,"\n",NULL,NULL);
+
+
+	
+
+	if (l_mt_core_sys_params_struct_h.proc_reg_ind[0] == 'Y')
+	{
+
+	
+/*** AIX migration chnges to remove warnings -- too many arguments for format	
+	sprintf(chr_l_buf,"Started Archival of CHISREGPAR",NULL,NULL); **/
+	
+        sprintf(chr_l_buf,"Started Archival of CHISREGPAR");
+	l_rowsprocessed = 0L;
+	
+	if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+
+	for(int_l_ctr=START_DAY;int_l_ctr>=0;int_l_ctr-=INCREMENTBY_DAYS)
+   {
+
+		EXEC SQL SELECT TO_CHAR(TO_DATE(:chr_l_archdate,'DD/MM/YYYY') - :int_l_ctr,'DD/MM/YYYY') INTO
+      :chr_l_tempdate:i_tempdate FROM DUAL ;
+      IS_ANY_ORA_ERROR
+      
+		sprintf(chr_l_buf,"Records Archived prior to %s",chr_l_tempdate);
+		CO_ProcMonitor(p_logfile,chr_l_buf,NULL,NULL);
+
+      CO_ProcMonitor(p_logfile,"Before Insert into CARCHREGPAR",NULL,NULL);
+      EXEC SQL INSERT INTO DL_ARCHREGPAR SELECT * FROM DL_HISREGPAR
+      WHERE DATEOF_INPUT < to_date(:chr_l_tempdate,'DD/MM/YYYY') ;
+      IS_ANY_ORA_ERROR
+
+      l_rowsprocessed+=sqlca.sqlerrd[2];
+
+      CO_ProcMonitor(p_logfile,"Before Delete from CHISREGPAR",NULL,NULL);
+      EXEC SQL DELETE FROM DL_HISREGPAR
+      WHERE DATEOF_INPUT < to_date(:chr_l_tempdate,'DD/MM/YYYY') ;
+      IS_ANY_ORA_ERROR
+
+      CO_ProcMonitor(p_logfile,"Before Commit",NULL,NULL);
+
+      sprintf(chr_l_buf, "Moved %ld records from CHISREGPAR to Archives", l_rowsprocessed);
+	
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+
+		if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+
+   }
+
+      CO_ProcMonitor(p_logfile,"\n",NULL,NULL);
+		sprintf(chr_l_buf,"Total Records Processed For CHISREGPAR = %ld",l_rowsprocessed);
+
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+		CO_ProcMonitor(p_logfile,"\n",NULL,NULL);
+
+
+	
+
+	
+/*** AIX migration chnges to remove warnings -- too many arguments for format	
+	sprintf(chr_l_buf,"Started Archival of CHISREGDET",NULL,NULL); **/
+	
+        sprintf(chr_l_buf,"Started Archival of CHISREGDET");
+	l_rowsprocessed = 0L;
+	
+	if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+
+	for(int_l_ctr=START_DAY;int_l_ctr>=0;int_l_ctr-=INCREMENTBY_DAYS)
+   {
+
+		EXEC SQL SELECT TO_CHAR(TO_DATE(:chr_l_archdate,'DD/MM/YYYY') - :int_l_ctr,'DD/MM/YYYY') INTO
+      :chr_l_tempdate:i_tempdate FROM DUAL ;
+      IS_ANY_ORA_ERROR
+      
+		sprintf(chr_l_buf,"Records Archived prior to %s",chr_l_tempdate);
+		CO_ProcMonitor(p_logfile,chr_l_buf,NULL,NULL);
+
+      CO_ProcMonitor(p_logfile,"Before Insert into CARCHREGDET",NULL,NULL);
+      EXEC SQL INSERT INTO DL_ARCHREGDET SELECT * FROM DL_HISREGDET
+      WHERE DATEOF_INPUT < to_date(:chr_l_tempdate,'DD/MM/YYYY') ;
+      IS_ANY_ORA_ERROR
+
+      l_rowsprocessed+=sqlca.sqlerrd[2];
+
+      CO_ProcMonitor(p_logfile,"Before Delete from CHISREGDET",NULL,NULL);
+      EXEC SQL DELETE FROM DL_HISREGDET
+      WHERE DATEOF_INPUT < to_date(:chr_l_tempdate,'DD/MM/YYYY') ;
+      IS_ANY_ORA_ERROR
+
+      CO_ProcMonitor(p_logfile,"Before Commit",NULL,NULL);
+
+      sprintf(chr_l_buf, "Moved %ld records from CHISREGDET to Archives", l_rowsprocessed);
+	
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+
+		if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+
+   }
+		CO_ProcMonitor(p_logfile,"\n",NULL,NULL);
+      sprintf(chr_l_buf,"Total Records Processed For CHISREGDET = %ld",l_rowsprocessed);
+
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+		CO_ProcMonitor(p_logfile,"\n",NULL,NULL);
+
+
+	
+
+	}
+
+
+	
+    /*** AIX migration chnges to remove warnings -- too many arguments for format 	
+	sprintf(chr_l_buf,"Started Archival of CHISTRADE",NULL,NULL); **/
+	
+          sprintf(chr_l_buf,"Started Archival of CHISTRADE");
+	l_rowsprocessed = 0L;
+	
+	if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+
+	for(int_l_ctr=START_DAY;int_l_ctr>=0;int_l_ctr-=INCREMENTBY_DAYS)
+   {
+
+		EXEC SQL SELECT TO_CHAR(TO_DATE(:chr_l_archdate,'DD/MM/YYYY') - :int_l_ctr,'DD/MM/YYYY') INTO
+      :chr_l_tempdate:i_tempdate FROM DUAL ;
+      IS_ANY_ORA_ERROR
+      
+		sprintf(chr_l_buf,"Records Archived prior to %s",chr_l_tempdate);
+		CO_ProcMonitor(p_logfile,chr_l_buf,NULL,NULL);
+
+      CO_ProcMonitor(p_logfile,"Before Insert into CARCHTRADE",NULL,NULL);
+      EXEC SQL INSERT INTO DL_ARCHDEAL SELECT CLIENT,IDENTIY_NO,DEAL_DATE,SETL_DATE,COST,EX_ARENA,AMOUNT,CUSTODYCOMM,BROKERCOMM,STX_COMM,OTH_COMM,INSTRUMENT_DT,MONEY_SETL_DT,QTY,DOMESTIC_CPCLT,SPOTTRD_IND,ORIG_QTY,ORIG_AMOUNT,DEAL_FRM_ORD,ENTRY,REAPIRED_IND,DOMCP_CUSTODYCLT,CP_CLT,CP_CLTNAME,CLIENTOF,CLIENT_NOTE,FX_REQD,PAYLOC_IND,VERFIED_WITH,AMT_DIFFER,BRK_NO,FAILREASON_CD,FAIL_DET,PARTIAL_IND_B,FX_RT,AMEND_COUNT,NUMBER_A,REPORT_AT_EOM_IND,DATEOFBILLING,LCL_IDENTNO,INSTRUCT_PERSON,REC_INT_000,DEAL_CD,INSTR_CODE,CURRENCY_CD,DL_CLASS,ORIG_REFNO,DATEOF_INPUT,MAKER,MAKER_DT,DEAL_STAT,ACCESSSTAMP,INFO1,LOCATION_CD,REGINSTR_IND,STATUS_POS,STATUS_REG,VAL_FDT,COMPREFNO,DATEOF_MARKFAIL,ALLOW_DROPDT,CHECKER,CHECKER_DT,INSTRCONV_IND,NDS_BLK_DT,LR_DL_CLASS,NDS_DATE,UNBLK_DATE,DELTA_000,DELTA_001,DELTA_003,DEL_REC_DATE,LAST_REG_DATE,LR_CHECK_DATE,LR_VALDATE,LRINSTR_DATE,REG_MSG_QTY,TMP_OUT_DT,TMP_OUT_DATE,TRANS_DATE,TOT_QTY,QTY_LOST,MRK_DL_FAILQTY,DL_COMPLETEQTY,OUT_REG_QTY,PEND_REG_QTY,RET_REG_QTY,STAMP_QTY,TEMP_OUT_QUANTITY,TEMP_RET_QUANTITY,VAL_DEED_QTY,HOST_DATE,LRNDS_BILLDT,LRNDS_DATE,LR_UNBLK_DATE,NUMBER_B,CLT_REQDEL_IND,MOD_HISPOS_IND,MOD_HISPOS_DATE,GL_CLIENT,CP_AMT,MSG_STAT,SUB_FAIL_CD,PARTIAL_IND_A,LOC_CHNG_IND,COMM_IDENT_NO,INSTRUCT_PERSONNM,CLIENTOF_CD,INTER_MED_PERSON,INTER_MED_PERSONNM,FXCCY,UNIQ_IDENT_NO,CNT_548,EXP_SETLDATE,RELATED_IDENT_NO,INFORMATON,SETTLEMENT_NO,MKT_TYPE,CLH_FLG,INTEREST,NET_AMT,PAYIN_DT,PAYOUT_DT,DEMAT_QTY,CONTRACT_REQ,EXCUM_FLG,CRN_NO,INTERFII_FLG,PAY_MODE,DL_SECSTATUS,DL_MNYSTATUS,AVAIL_QTY,ALLOT_QTY,SHORTAGE_QTY,CLN_DEPOACC,PLTOPL_FLG,ORIG_STATUS,MAP_FAILCODE,MATCH_FAILCODE,IS_MATCHED,EXCH_CODE,CONTRACT_CD,R_DELAY,SEBI_REPORTED,R_SETT_CODE,R_TRANS_CODE,R_TYPE,REPO_DATE,COMM_AMT,MF_SEQNO,CLNT_NAME,DOMESTIC_CPNAME,DOMCP_CUSTODYNM,INSTR_NAME,CLOSING_DATE,TRD_EXCH,TRD_SETL_NO,TRD_MKT_TYPE,:chr_l_now,STAMP_DUTY FROM DL_HISDEAL
+      WHERE DATEOF_INPUT < to_date(:chr_l_tempdate,'DD/MM/YYYY') ;
+      IS_ANY_ORA_ERROR
+
+      l_rowsprocessed+=sqlca.sqlerrd[2];
+
+      CO_ProcMonitor(p_logfile,"Before Delete from CHISTRADE",NULL,NULL);
+      EXEC SQL DELETE FROM DL_HISDEAL
+      WHERE DATEOF_INPUT < to_date(:chr_l_tempdate,'DD/MM/YYYY') ;
+      IS_ANY_ORA_ERROR
+
+      CO_ProcMonitor(p_logfile,"Before Commit",NULL,NULL);
+
+      sprintf(chr_l_buf, "Moved %ld records from CHISTRADE to Archives", l_rowsprocessed);
+	
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+
+		if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+
+   }
+		CO_ProcMonitor(p_logfile,"\n",NULL,NULL);
+      sprintf(chr_l_buf,"Total Records Processed For CHISTRADE = %ld",l_rowsprocessed);
+
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+		CO_ProcMonitor(p_logfile,"\n",NULL,NULL);
+		
+	  printf(" \n*** Reached trade deleted ***** \n");
+	
+		
+      EXEC SQL DELETE FROM DL_DEALREPAIR
+      WHERE DEAL_STAT='DD' ;
+	 
+		EXEC SQL COMMIT WORK;	
+		
+		IS_ANY_ORA_ERROR	
+	printf(" \n **** Finished trade deleted ***** \n");	
+
+	/* Added by Gouse for ISKB_2469 - Start */
+	
+    sprintf(chr_l_buf,"Started Archival of DL_EXCHGORD_UPLD");
+	l_rowsprocessed = 0L;
+	
+	if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+
+	for(int_l_ctr=START_DAY;int_l_ctr>=0;int_l_ctr-=INCREMENTBY_DAYS)
+   {
+
+		EXEC SQL SELECT TO_CHAR(TO_DATE(:chr_l_archdate,'DD/MM/YYYY') - :int_l_ctr,'DD/MM/YYYY') INTO
+      :chr_l_tempdate:i_tempdate FROM DUAL ;
+      IS_ANY_ORA_ERROR
+      
+		sprintf(chr_l_buf,"Records Archived prior to %s",chr_l_tempdate);
+		CO_ProcMonitor(p_logfile,chr_l_buf,NULL,NULL);
+
+      CO_ProcMonitor(p_logfile,"Before Insert into DL_ARCHEXCHGORD_UPLD",NULL,NULL);
+      EXEC SQL INSERT INTO DL_ARCHEXCHGORD_UPLD SELECT DL_EXCHGORD_UPLD.*,:chr_l_now FROM DL_EXCHGORD_UPLD
+      WHERE MAKER_DT < to_date(:chr_l_tempdate,'DD/MM/YYYY') AND STATUS='PM';
+      IS_ANY_ORA_ERROR
+
+      l_rowsprocessed+=sqlca.sqlerrd[2];
+
+      CO_ProcMonitor(p_logfile,"Before Delete from CHISTRADE",NULL,NULL);
+      EXEC SQL DELETE FROM DL_EXCHGORD_UPLD
+      WHERE MAKER_DT < to_date(:chr_l_tempdate,'DD/MM/YYYY') AND STATUS='PM';
+      IS_ANY_ORA_ERROR
+
+      CO_ProcMonitor(p_logfile,"Before Commit",NULL,NULL);
+
+      sprintf(chr_l_buf, "Moved %ld records from CHISTRADE to Archives", l_rowsprocessed);
+	
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+
+		if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+
+   }
+		CO_ProcMonitor(p_logfile,"\n",NULL,NULL);
+      sprintf(chr_l_buf,"Total Records Processed For DL_EXCHGORD_UPLD = %ld",l_rowsprocessed);
+
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+		CO_ProcMonitor(p_logfile,"\n",NULL,NULL);
+		
+	  printf(" \n*** Reached Order deleted ***** \n");
+
+    sprintf(chr_l_buf,"Started Archival of SYS_BATCHPROC");
+	l_rowsprocessed = 0L;
+	
+	if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+
+	for(int_l_ctr=START_DAY;int_l_ctr>=0;int_l_ctr-=INCREMENTBY_DAYS)
+   {
+
+		EXEC SQL SELECT TO_CHAR(TO_DATE(:chr_l_archdate,'DD/MM/YYYY') - :int_l_ctr,'DD/MM/YYYY') INTO
+      :chr_l_tempdate:i_tempdate FROM DUAL ;
+      IS_ANY_ORA_ERROR
+      
+		sprintf(chr_l_buf,"Records Archived prior to %s",chr_l_tempdate);
+		CO_ProcMonitor(p_logfile,chr_l_buf,NULL,NULL);
+
+      CO_ProcMonitor(p_logfile,"Before Insert into SYS_BATCHPROC_ARCH",NULL,NULL);
+      EXEC SQL INSERT INTO SYS_BATCHPROC_ARCH SELECT SYS_BATCHPROC.*,:chr_l_now FROM SYS_BATCHPROC
+      WHERE STARTDATE < to_date(:chr_l_tempdate,'DD/MM/YYYY') ;
+      IS_ANY_ORA_ERROR
+
+      l_rowsprocessed+=sqlca.sqlerrd[2];
+
+      CO_ProcMonitor(p_logfile,"Before Delete from CHISTRADE",NULL,NULL);
+      EXEC SQL DELETE FROM SYS_BATCHPROC
+      WHERE STARTDATE < to_date(:chr_l_tempdate,'DD/MM/YYYY');
+      IS_ANY_ORA_ERROR
+
+      CO_ProcMonitor(p_logfile,"Before Commit",NULL,NULL);
+
+      sprintf(chr_l_buf, "Moved %ld records from CHISTRADE to Archives", l_rowsprocessed);
+	
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+
+		if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+
+   }
+		CO_ProcMonitor(p_logfile,"\n",NULL,NULL);
+      sprintf(chr_l_buf,"Total Records Processed For SYS_BATCHPROC = %ld",l_rowsprocessed);
+
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+		CO_ProcMonitor(p_logfile,"\n",NULL,NULL);
+		
+	  printf(" \n*** Reached SYS_BATCHPROC deleted ***** \n");
+
+    sprintf(chr_l_buf,"Started Archival of DF_COMMON_MSGRPT");
+	l_rowsprocessed = 0L;
+	
+	if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+
+	for(int_l_ctr=START_DAY;int_l_ctr>=0;int_l_ctr-=INCREMENTBY_DAYS)
+   {
+
+		EXEC SQL SELECT TO_CHAR(TO_DATE(:chr_l_archdate,'DD/MM/YYYY') - :int_l_ctr,'DD/MM/YYYY') INTO
+      :chr_l_tempdate:i_tempdate FROM DUAL ;
+      IS_ANY_ORA_ERROR
+      
+		sprintf(chr_l_buf,"Records Archived prior to %s",chr_l_tempdate);
+		CO_ProcMonitor(p_logfile,chr_l_buf,NULL,NULL);
+
+      CO_ProcMonitor(p_logfile,"Before Insert into DF_COMMON_MSGRPT_ARCH ",NULL,NULL);
+      EXEC SQL INSERT INTO DF_COMMON_MSGRPT_ARCH SELECT DF_COMMON_MSGRPT.*,:chr_l_now FROM DF_COMMON_MSGRPT
+      WHERE RECEIVED_ON < to_date(:chr_l_tempdate,'DD/MM/YYYY') ;
+      IS_ANY_ORA_ERROR
+
+      l_rowsprocessed+=sqlca.sqlerrd[2];
+
+      CO_ProcMonitor(p_logfile,"Before Delete from DF_COMMON_MSGRPT ",NULL,NULL);
+      EXEC SQL DELETE FROM DF_COMMON_MSGRPT
+      WHERE RECEIVED_ON < to_date(:chr_l_tempdate,'DD/MM/YYYY');
+      IS_ANY_ORA_ERROR
+
+      CO_ProcMonitor(p_logfile,"Before Commit",NULL,NULL);
+
+      sprintf(chr_l_buf, "Moved %ld records from CHISTRADE to Archives", l_rowsprocessed);
+	
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+
+		if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+
+   }
+		CO_ProcMonitor(p_logfile,"\n",NULL,NULL);
+      sprintf(chr_l_buf,"Total Records Processed For DF_COMMON_MSGRPT = %ld",l_rowsprocessed);
+
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+		CO_ProcMonitor(p_logfile,"\n",NULL,NULL);
+		
+	  printf(" \n*** Reached DF_COMMON_MSGRPT deleted ***** \n");
+
+    sprintf(chr_l_buf,"Started Archival of VARELM_UPLOAD_BSE");
+	l_rowsprocessed = 0L;
+	
+	if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+
+	for(int_l_ctr=START_DAY;int_l_ctr>=0;int_l_ctr-=INCREMENTBY_DAYS)
+   {
+
+		EXEC SQL SELECT TO_CHAR(TO_DATE(:chr_l_archdate,'DD/MM/YYYY') - :int_l_ctr,'DD/MM/YYYY') INTO
+      :chr_l_tempdate:i_tempdate FROM DUAL ;
+      IS_ANY_ORA_ERROR
+      
+		sprintf(chr_l_buf,"Records Archived prior to %s",chr_l_tempdate);
+		CO_ProcMonitor(p_logfile,chr_l_buf,NULL,NULL);
+
+      CO_ProcMonitor(p_logfile,"Before Insert into VARELM_UPLOAD_BSE_ARCH ",NULL,NULL);
+      EXEC SQL INSERT INTO VARELM_UPLOAD_BSE_ARCH SELECT VARELM_UPLOAD_BSE.*,:chr_l_now FROM VARELM_UPLOAD_BSE
+      WHERE UPLD_DATETIME < to_date(:chr_l_tempdate,'DD/MM/YYYY') ;
+      IS_ANY_ORA_ERROR
+
+      l_rowsprocessed+=sqlca.sqlerrd[2];
+
+      CO_ProcMonitor(p_logfile,"Before Delete from VARELM_UPLOAD_BSE ",NULL,NULL);
+      EXEC SQL DELETE FROM VARELM_UPLOAD_BSE
+      WHERE UPLD_DATETIME < to_date(:chr_l_tempdate,'DD/MM/YYYY');
+      IS_ANY_ORA_ERROR
+
+      CO_ProcMonitor(p_logfile,"Before Commit",NULL,NULL);
+
+      sprintf(chr_l_buf, "Moved %ld records from VARELM_UPLOAD_BSE to Archives", l_rowsprocessed);
+	
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+
+		if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+
+   }
+		CO_ProcMonitor(p_logfile,"\n",NULL,NULL);
+      sprintf(chr_l_buf,"Total Records Processed For VARELM_UPLOAD_BSE = %ld",l_rowsprocessed);
+
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+		CO_ProcMonitor(p_logfile,"\n",NULL,NULL);
+		
+	  printf(" \n*** Reached VARELM_UPLOAD_BSE deleted ***** \n");
+
+    sprintf(chr_l_buf,"Started Archival of VARELM_UPLOAD_NSE");
+	l_rowsprocessed = 0L;
+	
+	if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+
+	for(int_l_ctr=START_DAY;int_l_ctr>=0;int_l_ctr-=INCREMENTBY_DAYS)
+   {
+
+		EXEC SQL SELECT TO_CHAR(TO_DATE(:chr_l_archdate,'DD/MM/YYYY') - :int_l_ctr,'DD/MM/YYYY') INTO
+      :chr_l_tempdate:i_tempdate FROM DUAL ;
+      IS_ANY_ORA_ERROR
+      
+		sprintf(chr_l_buf,"Records Archived prior to %s",chr_l_tempdate);
+		CO_ProcMonitor(p_logfile,chr_l_buf,NULL,NULL);
+
+      CO_ProcMonitor(p_logfile,"Before Insert into VARELM_UPLOAD_NSE_ARCH ",NULL,NULL);
+      EXEC SQL INSERT INTO VARELM_UPLOAD_NSE_ARCH SELECT VARELM_UPLOAD_NSE.*,:chr_l_now FROM VARELM_UPLOAD_NSE
+      WHERE UPLD_DATETIME < to_date(:chr_l_tempdate,'DD/MM/YYYY') ;
+      IS_ANY_ORA_ERROR
+
+      l_rowsprocessed+=sqlca.sqlerrd[2];
+
+      CO_ProcMonitor(p_logfile,"Before Delete from VARELM_UPLOAD_NSE ",NULL,NULL);
+      EXEC SQL DELETE FROM VARELM_UPLOAD_NSE
+      WHERE UPLD_DATETIME < to_date(:chr_l_tempdate,'DD/MM/YYYY');
+      IS_ANY_ORA_ERROR
+
+      CO_ProcMonitor(p_logfile,"Before Commit",NULL,NULL);
+
+      sprintf(chr_l_buf, "Moved %ld records from VARELM_UPLOAD_NSE to Archives", l_rowsprocessed);
+	
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+
+		if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+
+   }
+		CO_ProcMonitor(p_logfile,"\n",NULL,NULL);
+      sprintf(chr_l_buf,"Total Records Processed For VARELM_UPLOAD_NSE = %ld",l_rowsprocessed);
+
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+		CO_ProcMonitor(p_logfile,"\n",NULL,NULL);
+		
+	  printf(" \n*** Reached VARELM_UPLOAD_NSE deleted ***** \n");
+
+	//Commented and Rewritten by Prateek on 14042014 for ISKB_2469 because DL_HOLD_UPL is no longer used --START
+    	//sprintf(chr_l_buf,"Started Archival of DL_HOLD_UPL");
+	sprintf(chr_l_buf,"Started Archival of DL_UPL_SOH");
+	//Commented and Rewritten by Prateek on 14042014 for ISKB_2469 because DL_HOLD_UPL is no longer used --END
+
+	l_rowsprocessed = 0L;
+	
+	if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+
+	for(int_l_ctr=START_DAY;int_l_ctr>=0;int_l_ctr-=INCREMENTBY_DAYS)
+   {
+
+		EXEC SQL SELECT TO_CHAR(TO_DATE(:chr_l_archdate,'DD/MM/YYYY') - :int_l_ctr,'DD/MM/YYYY') INTO
+      :chr_l_tempdate:i_tempdate FROM DUAL ;
+      IS_ANY_ORA_ERROR
+      
+		sprintf(chr_l_buf,"Records Archived prior to %s",chr_l_tempdate);
+		CO_ProcMonitor(p_logfile,chr_l_buf,NULL,NULL);
+		
+		//Commented and Rewritten by Prateek on 14042014 for ISKB_2469 because DL_HOLD_UPL is no longer used --START
+		//CO_ProcMonitor(p_logfile,"Before Insert into DL_HOLD_UPL_ARCH ",NULL,NULL);
+		CO_ProcMonitor(p_logfile,"Before Insert into DL_UPL_SOH_ARCH ",NULL,NULL);
+      	        //EXEC SQL INSERT INTO DL_HOLD_UPL_ARCH SELECT DL_HOLD_UPL.*,:chr_l_now FROM DL_HOLD_UPL
+		EXEC SQL INSERT INTO DL_UPL_SOH_ARCH SELECT DL_UPL_SOH.*,:chr_l_now FROM DL_UPL_SOH	
+		//Commented and Rewritten by Prateek on 14042014 for ISKB_2469 because DL_HOLD_UPL is no longer used --END
+		WHERE UPL_DATE < to_date(:chr_l_tempdate,'DD/MM/YYYY') ;
+		IS_ANY_ORA_ERROR
+
+      l_rowsprocessed+=sqlca.sqlerrd[2];
+
+	//Commented and Rewritten by Prateek on 14042014 for ISKB_2469 because DL_HOLD_UPL is no longer used --START
+      	//CO_ProcMonitor(p_logfile,"Before Delete from DL_HOLD_UPL ",NULL,NULL);
+	CO_ProcMonitor(p_logfile,"Before Delete from DL_UPL_SOH ",NULL,NULL);
+      	//EXEC SQL DELETE FROM DL_HOLD_UPL
+	EXEC SQL DELETE FROM DL_UPL_SOH 
+      WHERE UPL_DATE < to_date(:chr_l_tempdate,'DD/MM/YYYY');
+      IS_ANY_ORA_ERROR
+
+      CO_ProcMonitor(p_logfile,"Before Commit",NULL,NULL);
+
+      //sprintf(chr_l_buf, "Moved %ld records from DL_HOLD_UPL to Archives", l_rowsprocessed);
+	sprintf(chr_l_buf, "Moved %ld records from DL_UPL_SOH  to Archives", l_rowsprocessed);
+	
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+
+		if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+
+   }
+		CO_ProcMonitor(p_logfile,"\n",NULL,NULL);
+      //sprintf(chr_l_buf,"Total Records Processed For DL_HOLD_UPL = %ld",l_rowsprocessed);
+	sprintf(chr_l_buf,"Total Records Processed For DL_UPL_SOH = %ld",l_rowsprocessed);
+
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+		CO_ProcMonitor(p_logfile,"\n",NULL,NULL);
+		
+	  	//printf(" \n*** Reached DL_HOLD_UPL deleted ***** \n");
+		 printf(" \n*** Reached DL_UPL_SOH  deleted ***** \n");		
+
+    sprintf(chr_l_buf,"Started Archival of DL_COD_DTLS");
+	l_rowsprocessed = 0L;
+	
+	if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+
+	for(int_l_ctr=START_DAY;int_l_ctr>=0;int_l_ctr-=INCREMENTBY_DAYS)
+   {
+
+		EXEC SQL SELECT TO_CHAR(TO_DATE(:chr_l_archdate,'DD/MM/YYYY') - :int_l_ctr,'DDMMYYYY') INTO
+      :chr_l_tempdate:i_tempdate FROM DUAL ;
+      IS_ANY_ORA_ERROR
+      
+		sprintf(chr_l_buf,"Records Archived prior to %s",chr_l_tempdate);
+		CO_ProcMonitor(p_logfile,chr_l_buf,NULL,NULL);
+
+      CO_ProcMonitor(p_logfile,"Before Insert into DL_COD_DTLS_ARCH ",NULL,NULL);
+      EXEC SQL INSERT INTO DL_COD_DTLS_ARCH SELECT DL_COD_DTLS.*,:chr_l_now FROM DL_COD_DTLS
+      WHERE EXEC_DT < :chr_l_tempdate;
+      IS_ANY_ORA_ERROR
+
+      l_rowsprocessed+=sqlca.sqlerrd[2];
+
+      CO_ProcMonitor(p_logfile,"Before Delete from DL_COD_DTLS ",NULL,NULL);
+      EXEC SQL DELETE FROM DL_COD_DTLS
+      WHERE EXEC_DT < :chr_l_tempdate;
+      IS_ANY_ORA_ERROR
+
+      CO_ProcMonitor(p_logfile,"Before Commit",NULL,NULL);
+	
+      sprintf(chr_l_buf, "Moved %ld records from DL_COD_DTLS to Archives", l_rowsprocessed);
+
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+
+		if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+
+   }
+		CO_ProcMonitor(p_logfile,"\n",NULL,NULL);
+      sprintf(chr_l_buf,"Total Records Processed For DL_COD_DTLS = %ld",l_rowsprocessed);
+
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+		CO_ProcMonitor(p_logfile,"\n",NULL,NULL);
+		
+	  printf(" \n*** Reached DL_COD_DTLS deleted ***** \n");
+
+    sprintf(chr_l_buf,"Started Archival of SOH_RECON_NEW");
+	l_rowsprocessed = 0L;
+	
+	if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+
+	for(int_l_ctr=START_DAY;int_l_ctr>=0;int_l_ctr-=INCREMENTBY_DAYS)
+   {
+
+		EXEC SQL SELECT TO_CHAR(TO_DATE(:chr_l_archdate,'DD/MM/YYYY') - :int_l_ctr,'DD/MM/YYYY') INTO
+      :chr_l_tempdate:i_tempdate FROM DUAL ;
+      IS_ANY_ORA_ERROR
+      
+		sprintf(chr_l_buf,"Records Archived prior to %s",chr_l_tempdate);
+		CO_ProcMonitor(p_logfile,chr_l_buf,NULL,NULL);
+
+      CO_ProcMonitor(p_logfile,"Before Insert into SOH_RECON_NEW_ARCH ",NULL,NULL);
+      EXEC SQL INSERT INTO SOH_RECON_NEW_ARCH SELECT SOH_RECON_NEW.*,:chr_l_now FROM SOH_RECON_NEW
+      WHERE POSIT_DATE < to_date(:chr_l_tempdate,'DD/MM/YYYY') ;
+      IS_ANY_ORA_ERROR
+
+      l_rowsprocessed+=sqlca.sqlerrd[2];
+
+      CO_ProcMonitor(p_logfile,"Before Delete from SOH_RECON_NEW ",NULL,NULL);
+      EXEC SQL DELETE FROM SOH_RECON_NEW
+      WHERE POSIT_DATE < to_date(:chr_l_tempdate,'DD/MM/YYYY');
+      IS_ANY_ORA_ERROR
+
+      CO_ProcMonitor(p_logfile,"Before Commit",NULL,NULL);
+
+      sprintf(chr_l_buf, "Moved %ld records from SOH_RECON_NEW to Archives", l_rowsprocessed);
+	
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+
+		if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+
+   }
+		CO_ProcMonitor(p_logfile,"\n",NULL,NULL);
+      sprintf(chr_l_buf,"Total Records Processed For SOH_RECON_NEW = %ld",l_rowsprocessed);
+
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+		CO_ProcMonitor(p_logfile,"\n",NULL,NULL);
+	
+	  printf(" \n*** Reached SOH_RECON_NEW deleted ***** \n");
+
+	  /* Added by Gouse for ISKB_2469 - End*/
+
+	
+/*** AIX migration chnges to remove warnings -- too many arguments for format	
+	sprintf(chr_l_buf,"Started Archival of CHISMSGLINKDET",NULL,NULL); **/
+    
+       sprintf(chr_l_buf,"Started Archival of CHISMSGLINKDET"); 
+	
+	l_rowsprocessed = 0L;
+	
+	if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+
+	for(int_l_ctr=START_DAY;int_l_ctr>=0;int_l_ctr-=INCREMENTBY_DAYS)
+   {
+
+		EXEC SQL SELECT TO_CHAR(TO_DATE(:chr_l_archdate,'DD/MM/YYYY') - :int_l_ctr,'DD/MM/YYYY') INTO
+      :chr_l_tempdate:i_tempdate FROM DUAL ;
+      IS_ANY_ORA_ERROR
+      
+		sprintf(chr_l_buf,"Records Archived prior to %s",chr_l_tempdate);
+		CO_ProcMonitor(p_logfile,chr_l_buf,NULL,NULL);
+
+      CO_ProcMonitor(p_logfile,"Before Insert into CARCHMSGLINKDET",NULL,NULL);
+      EXEC SQL INSERT INTO DL_ARCHMSGLINKDET SELECT * FROM DL_HISMSGLINKDET
+		WHERE INDEN_NUM IN (  SELECT INDEN_NUM FROM DL_HISMSGLINK 
+      WHERE DATE_OF_INPUT < to_date(:chr_l_tempdate,'DD/MM/YYYY') );
+      IS_ANY_ORA_ERROR
+
+      l_rowsprocessed+=sqlca.sqlerrd[2];
+
+      CO_ProcMonitor(p_logfile,"Before Delete from CHISMSGLINKDET",NULL,NULL);
+      EXEC SQL DELETE FROM DL_HISMSGLINKDET
+		WHERE INDEN_NUM IN (  SELECT INDEN_NUM FROM DL_HISMSGLINK 
+      WHERE DATE_OF_INPUT < to_date(:chr_l_tempdate,'DD/MM/YYYY') );
+      IS_ANY_ORA_ERROR
+
+      CO_ProcMonitor(p_logfile,"Before Commit",NULL,NULL);
+
+      sprintf(chr_l_buf, "Moved %ld records from CHISMSGLINKDET to Archives", l_rowsprocessed);
+	
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+
+		if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+
+   }
+		CO_ProcMonitor(p_logfile,"\n",NULL,NULL);
+      sprintf(chr_l_buf,"Total Records Processed For CHISMSGLINKDET = %ld",l_rowsprocessed);
+
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+		CO_ProcMonitor(p_logfile,"\n",NULL,NULL);
+
+
+	
+
+
+	
+/*** AIX migration chnges to remove warnings -- too many arguments for format	
+	sprintf(chr_l_buf,"Started Archival of CHISMSGLINK",NULL,NULL); **/
+	
+      sprintf(chr_l_buf,"Started Archival of CHISMSGLINK");
+	l_rowsprocessed = 0L;
+	
+	if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+
+	for(int_l_ctr=START_DAY;int_l_ctr>=0;int_l_ctr-=INCREMENTBY_DAYS)
+   {
+
+		EXEC SQL SELECT TO_CHAR(TO_DATE(:chr_l_archdate,'DD/MM/YYYY') - :int_l_ctr,'DD/MM/YYYY') INTO
+      :chr_l_tempdate:i_tempdate FROM DUAL ;
+      IS_ANY_ORA_ERROR
+      
+		sprintf(chr_l_buf,"Records Archived prior to %s",chr_l_tempdate);
+		CO_ProcMonitor(p_logfile,chr_l_buf,NULL,NULL);
+
+      CO_ProcMonitor(p_logfile,"Before Insert into CARCHMSGLINK",NULL,NULL);
+      EXEC SQL INSERT INTO DL_ARCHMSGLINK SELECT * FROM DL_HISMSGLINK
+      WHERE DATE_OF_INPUT < to_date(:chr_l_tempdate,'DD/MM/YYYY') ;
+      IS_ANY_ORA_ERROR
+
+      l_rowsprocessed+=sqlca.sqlerrd[2];
+
+      CO_ProcMonitor(p_logfile,"Before Delete from CHISMSGLINK",NULL,NULL);
+      EXEC SQL DELETE FROM DL_HISMSGLINK
+      WHERE DATE_OF_INPUT < to_date(:chr_l_tempdate,'DD/MM/YYYY') ;
+      IS_ANY_ORA_ERROR
+
+      CO_ProcMonitor(p_logfile,"Before Commit",NULL,NULL);
+
+      sprintf(chr_l_buf, "Moved %ld records from CHISMSGLINK to Archives", l_rowsprocessed);
+	
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+
+		if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+
+   }
+		CO_ProcMonitor(p_logfile,"\n",NULL,NULL);
+      sprintf(chr_l_buf,"Total Records Processed For CHISMSGLINK = %ld",l_rowsprocessed);
+
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+		CO_ProcMonitor(p_logfile,"\n",NULL,NULL);
+
+
+	/* Added by Gouse for ISKB_2469 - Start */
+
+    /*sprintf(chr_l_buf,"Started Archival of DL_DPGEN_DET");
+	l_rowsprocessed = 0L;
+	
+	if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+
+	for(int_l_ctr=START_DAY;int_l_ctr>=0;int_l_ctr-=INCREMENTBY_DAYS)
+   {
+
+		EXEC SQL SELECT TO_CHAR(TO_DATE(:chr_l_archdate,'DD/MM/YYYY') - :int_l_ctr,'DD/MM/YYYY') INTO
+      :chr_l_tempdate:i_tempdate FROM DUAL ;
+      IS_ANY_ORA_ERROR
+      
+		sprintf(chr_l_buf,"Records Archived prior to %s",chr_l_tempdate);
+		CO_ProcMonitor(p_logfile,chr_l_buf,NULL,NULL);
+
+      CO_ProcMonitor(p_logfile,"Before Insert into DL_ARCHDPGEN_DET",NULL,NULL);
+      EXEC SQL INSERT INTO DL_ARCHDPGEN_DET SELECT * FROM MT_HISDLYMKTPRC
+      WHERE ACCESS_STAMP < to_date(:chr_l_tempdate,'DD/MM/YYYY') ;
+      IS_ANY_ORA_ERROR
+
+      l_rowsprocessed+=sqlca.sqlerrd[2];
+
+      CO_ProcMonitor(p_logfile,"Before Delete from DL_DPGEN_DET",NULL,NULL);
+      EXEC SQL DELETE FROM MT_HISDLYMKTPRC
+      WHERE ACCESS_STAMP < to_date(:chr_l_tempdate,'DD/MM/YYYY') ;
+      IS_ANY_ORA_ERROR
+
+      CO_ProcMonitor(p_logfile,"Before Commit",NULL,NULL);
+
+      sprintf(chr_l_buf, "Moved %ld records from DL_DPGEN_DET to Archives", l_rowsprocessed);
+	
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+		
+		if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+
+   }
+		CO_ProcMonitor(p_logfile,"\n",NULL,NULL);
+      sprintf(chr_l_buf,"Total Records Processed For DL_DPGEN_DET = %ld",l_rowsprocessed);
+
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+		CO_ProcMonitor(p_logfile,"\n",NULL,NULL); */
+
+    sprintf(chr_l_buf,"Started Archival of DL_POOLACCDMP");
+	l_rowsprocessed = 0L;
+	
+	if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	
+	for(int_l_ctr=START_DAY;int_l_ctr>=0;int_l_ctr-=INCREMENTBY_DAYS)
+   {
+
+		EXEC SQL SELECT TO_CHAR(TO_DATE(:chr_l_archdate,'DD/MM/YYYY') - :int_l_ctr,'DD/MM/YYYY') INTO
+      :chr_l_tempdate:i_tempdate FROM DUAL ;
+      IS_ANY_ORA_ERROR
+      
+		sprintf(chr_l_buf,"Records Archived prior to %s",chr_l_tempdate);
+		CO_ProcMonitor(p_logfile,chr_l_buf,NULL,NULL);
+
+      CO_ProcMonitor(p_logfile,"Before Insert into DL_ARCHPOOLACCDMP",NULL,NULL);
+      EXEC SQL INSERT INTO DL_ARCHPOOLACCDMP SELECT DL_POOLACCDMP.*,:chr_l_now FROM DL_POOLACCDMP
+      WHERE ICREL_DATE < to_date(:chr_l_tempdate,'DD/MM/YYYY') ;
+      IS_ANY_ORA_ERROR
+
+      l_rowsprocessed+=sqlca.sqlerrd[2];
+
+      CO_ProcMonitor(p_logfile,"Before Delete from DL_POOLACCDMP",NULL,NULL);
+      EXEC SQL DELETE FROM DL_POOLACCDMP
+      WHERE ICREL_DATE < to_date(:chr_l_tempdate,'DD/MM/YYYY') ;
+      IS_ANY_ORA_ERROR
+
+      CO_ProcMonitor(p_logfile,"Before Commit",NULL,NULL);
+
+      sprintf(chr_l_buf, "Moved %ld records from DL_POOLACCDMP to Archives", l_rowsprocessed);
+	
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+		
+		if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+
+   }
+		CO_ProcMonitor(p_logfile,"\n",NULL,NULL);
+      sprintf(chr_l_buf,"Total Records Processed For DL_POOLACCDMP = %ld",l_rowsprocessed);
+
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+		CO_ProcMonitor(p_logfile,"\n",NULL,NULL);
+
+    sprintf(chr_l_buf,"Started Archival of DL_MARKSHORTAGE");
+	l_rowsprocessed = 0L;
+	
+	if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+
+	for(int_l_ctr=START_DAY;int_l_ctr>=0;int_l_ctr-=INCREMENTBY_DAYS)
+   {
+
+		EXEC SQL SELECT TO_CHAR(TO_DATE(:chr_l_archdate,'DD/MM/YYYY') - :int_l_ctr,'DD/MM/YYYY') INTO
+      :chr_l_tempdate:i_tempdate FROM DUAL ;
+      IS_ANY_ORA_ERROR
+      
+		sprintf(chr_l_buf,"Records Archived prior to %s",chr_l_tempdate);
+		CO_ProcMonitor(p_logfile,chr_l_buf,NULL,NULL);
+
+      CO_ProcMonitor(p_logfile,"Before Insert into DL_ARCHMARKSHORTAGE",NULL,NULL);
+      EXEC SQL INSERT INTO DL_ARCHMARKSHORTAGE SELECT SETTLEMENT_NO ,DL_CLIENT     ,DL_REF_NO     ,INSTR_CODE    ,QTY           ,AVAIL_QTY     ,ALLOT_QTY     ,SHORTAGE_QTY  ,POOL_TRANS    ,STATUS        ,ACCESS_STAMP  ,CHECKER       ,MAKER         ,MAKER_DT      ,CHECKER_DT    ,DEPO_CODE     ,DP_ID         ,FILEBATCH_NO  ,MKT_TYPE      ,EXCH_CODE,:chr_l_now FROM DL_MARKSHORTAGE
+      WHERE ACCESS_STAMP < to_date(:chr_l_tempdate,'DD/MM/YYYY') ;
+		Alert("sqlca.sqlcode is |%d|",sqlca.sqlcode);
+      IS_ANY_ORA_ERROR
+
+      l_rowsprocessed+=sqlca.sqlerrd[2];
+
+      CO_ProcMonitor(p_logfile,"Before Delete from DL_MARKSHORTAGE",NULL,NULL);
+      EXEC SQL DELETE FROM DL_MARKSHORTAGE
+      WHERE ACCESS_STAMP < to_date(:chr_l_tempdate,'DD/MM/YYYY') ;
+		Alert("sqlca.sqlcode is |%d|",sqlca.sqlcode);
+      IS_ANY_ORA_ERROR
+
+      CO_ProcMonitor(p_logfile,"Before Commit",NULL,NULL);
+
+      sprintf(chr_l_buf, "Moved %ld records from DL_MARKSHORTAGE to Archives", l_rowsprocessed);
+	
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+		
+		if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+
+   }
+		CO_ProcMonitor(p_logfile,"\n",NULL,NULL);
+      sprintf(chr_l_buf,"Total Records Processed For DL_MARKSHORTAGE = %ld",l_rowsprocessed);
+
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+		CO_ProcMonitor(p_logfile,"\n",NULL,NULL);
+
+    sprintf(chr_l_buf,"Started Archival of DL_BCN");
+	l_rowsprocessed = 0L;
+	
+	if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	
+	for(int_l_ctr=START_DAY;int_l_ctr>=0;int_l_ctr-=INCREMENTBY_DAYS)
+   {
+
+		EXEC SQL SELECT TO_CHAR(TO_DATE(:chr_l_archdate,'DD/MM/YYYY') - :int_l_ctr,'DD/MM/YYYY') INTO
+      :chr_l_tempdate:i_tempdate FROM DUAL ;
+      IS_ANY_ORA_ERROR
+
+		sprintf(chr_l_buf,"Records Archived prior to %s",chr_l_tempdate);
+		CO_ProcMonitor(p_logfile,chr_l_buf,NULL,NULL);
+
+      CO_ProcMonitor(p_logfile,"Before Insert into DL_ARCHBCN",NULL,NULL);
+      EXEC SQL INSERT INTO DL_ARCHBCN SELECT CONTRACT_CD,MKT_TYPE,TRAN_TYPE,DL_DATE,DL_PRICE,BROKERCOMM,EXCH_CD,DEAL_CD,CLH_FLG,SEBI_REG_NO,BROKER_CD,CLIENT_CD,QTY,INSTR_CD,SETTLEMENT_NO,DL_AMT,BROKERAGE_AMT,STT_AMT,SETTLMENT_AMT,DL_REF_NO,INTER_FII_FLG,SEBI_REPORTED,ENTRY,REPAIRED_IND,MAKER,MAKER_DT,ACCESS_STAMP,CHECKER,CHECKER_DT,STATUS,SETT_DT,NARRATIVE,OFF_MARKET,COUNTER_PTY,R_TRANS_CODE,R_SETT_CODE,R_DELAY,R_TYPE,REPO_DATE,AMEND_DT,FAILREASON_CD,SUB_FAIL_CD,LR_VALDATE,ADDR_FRM,ADDR_TO,:chr_l_now,STAMP_DUTY FROM DL_BCN
+      WHERE ACCESS_STAMP < to_date(:chr_l_tempdate,'DD/MM/YYYY') ;
+      IS_ANY_ORA_ERROR
+
+      l_rowsprocessed+=sqlca.sqlerrd[2];
+
+      CO_ProcMonitor(p_logfile,"Before Delete from DL_BCN",NULL,NULL);
+      EXEC SQL DELETE FROM DL_BCN
+      WHERE ACCESS_STAMP < to_date(:chr_l_tempdate,'DD/MM/YYYY') ;
+      IS_ANY_ORA_ERROR
+
+      CO_ProcMonitor(p_logfile,"Before Commit",NULL,NULL);
+
+      sprintf(chr_l_buf, "Moved %ld records from DL_BCN to Archives", l_rowsprocessed);
+	
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+		
+		if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+
+   }
+		CO_ProcMonitor(p_logfile,"\n",NULL,NULL);
+      sprintf(chr_l_buf,"Total Records Processed For DL_BCN = %ld",l_rowsprocessed);
+
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+		CO_ProcMonitor(p_logfile,"\n",NULL,NULL);
+
+    sprintf(chr_l_buf,"Started Archival of DL_TAKEOVER");
+	l_rowsprocessed = 0L;
+	
+	if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+
+	for(int_l_ctr=START_DAY;int_l_ctr>=0;int_l_ctr-=INCREMENTBY_DAYS)
+   {
+
+		EXEC SQL SELECT TO_CHAR(TO_DATE(:chr_l_archdate,'DD/MM/YYYY') - :int_l_ctr,'DD/MM/YYYY') INTO
+      :chr_l_tempdate:i_tempdate FROM DUAL ;
+      IS_ANY_ORA_ERROR
+      
+		sprintf(chr_l_buf,"Records Archived prior to %s",chr_l_tempdate);
+		CO_ProcMonitor(p_logfile,chr_l_buf,NULL,NULL);
+
+      CO_ProcMonitor(p_logfile,"Before Insert into DL_ARCHTAKEOVER",NULL,NULL);
+      EXEC SQL INSERT INTO DL_ARCHTAKEOVER SELECT DL_TAKEOVER.*,:chr_l_now FROM DL_TAKEOVER
+      WHERE ACCESSTAMP < to_date(:chr_l_tempdate,'DD/MM/YYYY') ;
+      IS_ANY_ORA_ERROR
+
+      l_rowsprocessed+=sqlca.sqlerrd[2];
+
+      CO_ProcMonitor(p_logfile,"Before Delete from DL_TAKEOVER",NULL,NULL);
+      EXEC SQL DELETE FROM DL_TAKEOVER
+      WHERE ACCESSTAMP < to_date(:chr_l_tempdate,'DD/MM/YYYY') ;
+      IS_ANY_ORA_ERROR
+	
+      CO_ProcMonitor(p_logfile,"Before Commit",NULL,NULL);
+
+      sprintf(chr_l_buf, "Moved %ld records from DL_TAKEOVER to Archives", l_rowsprocessed);
+	
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+		
+		if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+
+   }
+		CO_ProcMonitor(p_logfile,"\n",NULL,NULL);
+      sprintf(chr_l_buf,"Total Records Processed For DL_TAKEOVER = %ld",l_rowsprocessed);
+
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+		CO_ProcMonitor(p_logfile,"\n",NULL,NULL);
+	
+	/* Added by Gouse for ISKB_2469 - End */
+
+   strcpy(chr_mainfuncarea, "TRD_PMT_CHK");
+   strcpy(chr_l_condid, "RU_REG_CHK");
+   int_l_condexists = 0;
+
+   if ( APL_FAILURE == CO_Chk_CntryEnabled( chr_mainfuncarea, chr_l_condid, &int_l_condexists, l_debug_info_ptr ))
+	APL_GOBACK_FAIL
+
+	if( int_l_condexists > 0 )
+	{
+	
+   
+/*** AIX migration chnges to remove warnings -- too many arguments for format	
+	sprintf(chr_l_buf,"Started Archival of CRUHISSAFEK",NULL,NULL); **/
+        sprintf(chr_l_buf,"Started Archival of CRUHISSAFEK");
+
+
+	l_rowsprocessed = 0L;
+	
+	if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+
+	for(int_l_ctr=START_DAY;int_l_ctr>=0;int_l_ctr-=INCREMENTBY_DAYS)
+   {
+
+		EXEC SQL SELECT TO_CHAR(TO_DATE(:chr_l_archdate,'DD/MM/YYYY') - :int_l_ctr,'DD/MM/YYYY') INTO
+      :chr_l_tempdate:i_tempdate FROM DUAL ;
+      IS_ANY_ORA_ERROR
+      
+		sprintf(chr_l_buf,"Records Archived prior to %s",chr_l_tempdate);
+		CO_ProcMonitor(p_logfile,chr_l_buf,NULL,NULL);
+
+      CO_ProcMonitor(p_logfile,"Before Insert into CRUARCHSAFEK",NULL,NULL);
+      EXEC SQL INSERT INTO DL_RUARCHSAFEK SELECT * FROM DL_RUHISSAFEK
+      WHERE POSIT_DATE < to_date(:chr_l_tempdate,'DD/MM/YYYY') ;
+      IS_ANY_ORA_ERROR
+
+      l_rowsprocessed+=sqlca.sqlerrd[2];
+
+      CO_ProcMonitor(p_logfile,"Before Delete from CRUHISSAFEK",NULL,NULL);
+      EXEC SQL DELETE FROM DL_RUHISSAFEK
+      WHERE POSIT_DATE < to_date(:chr_l_tempdate,'DD/MM/YYYY') ;
+      IS_ANY_ORA_ERROR
+
+      CO_ProcMonitor(p_logfile,"Before Commit",NULL,NULL);
+
+      sprintf(chr_l_buf, "Moved %ld records from CRUHISSAFEK to Archives", l_rowsprocessed);
+	
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+
+		if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+
+   }
+		CO_ProcMonitor(p_logfile,"\n",NULL,NULL);
+      sprintf(chr_l_buf,"Total Records Processed For CRUHISSAFEK = %ld",l_rowsprocessed);
+
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+		CO_ProcMonitor(p_logfile,"\n",NULL,NULL);
+
+
+	
+
+	
+      /*** AIX migration chnges to remove warnings -- too many arguments for format	
+	sprintf(chr_l_buf,"Started Archival of CRUHISTRADE",NULL,NULL); **/
+
+        sprintf(chr_l_buf,"Started Archival of CRUHISTRADE");
+	
+	l_rowsprocessed = 0L;
+	
+	if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+
+	for(int_l_ctr=START_DAY;int_l_ctr>=0;int_l_ctr-=INCREMENTBY_DAYS)
+   {
+
+		EXEC SQL SELECT TO_CHAR(TO_DATE(:chr_l_archdate,'DD/MM/YYYY') - :int_l_ctr,'DD/MM/YYYY') INTO
+      :chr_l_tempdate:i_tempdate FROM DUAL ;
+      IS_ANY_ORA_ERROR
+      
+		sprintf(chr_l_buf,"Records Archived prior to %s",chr_l_tempdate);
+		CO_ProcMonitor(p_logfile,chr_l_buf,NULL,NULL);
+
+      CO_ProcMonitor(p_logfile,"Before Insert into CRUARCHTRADE",NULL,NULL);
+      EXEC SQL INSERT INTO DL_ARCHRUHISDEAL SELECT * FROM DL_RUHISDEAL
+      WHERE DATEOF_INPUT < to_date(:chr_l_tempdate,'DD/MM/YYYY') ;
+      IS_ANY_ORA_ERROR
+
+      l_rowsprocessed+=sqlca.sqlerrd[2];
+
+      CO_ProcMonitor(p_logfile,"Before Delete from CRUHISTRADE",NULL,NULL);
+      EXEC SQL DELETE FROM DL_RUHISDEAL
+      WHERE DATEOF_INPUT < to_date(:chr_l_tempdate,'DD/MM/YYYY') ;
+      IS_ANY_ORA_ERROR
+
+      CO_ProcMonitor(p_logfile,"Before Commit",NULL,NULL);
+
+      sprintf(chr_l_buf, "Moved %ld records from CRUHISTRADE to Archives", l_rowsprocessed);
+	
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+
+		if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+
+   }
+		CO_ProcMonitor(p_logfile,"\n",NULL,NULL);
+      sprintf(chr_l_buf,"Total Records Processed For CRUHISTRADE = %ld",l_rowsprocessed);
+
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+		CO_ProcMonitor(p_logfile,"\n",NULL,NULL);
+
+   }
+
+	
+
+ if (l_mt_core_sys_params_struct_h.ord_proc_ind[0] == 'Y')
+ {
+
+	
+/*** AIX migration chnges to remove warnings -- too many arguments for format	
+	sprintf(chr_l_buf,"Started Archival of OR_HISEXECORDER",NULL,NULL); **/
+
+        sprintf(chr_l_buf,"Started Archival of OR_HISEXECORDER");
+	
+	l_rowsprocessed = 0L;
+	
+	if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+
+	for(int_l_ctr=START_DAY;int_l_ctr>=0;int_l_ctr-=INCREMENTBY_DAYS)
+   {
+
+		EXEC SQL SELECT TO_CHAR(TO_DATE(:chr_l_archdate,'DD/MM/YYYY') - :int_l_ctr,'DD/MM/YYYY') INTO
+      :chr_l_tempdate:i_tempdate FROM DUAL ;
+      IS_ANY_ORA_ERROR
+      
+		sprintf(chr_l_buf,"Records Archived prior to %s",chr_l_tempdate);
+		CO_ProcMonitor(p_logfile,chr_l_buf,NULL,NULL);
+
+      CO_ProcMonitor(p_logfile,"Before Insert into OR_ARCHEXEC",NULL,NULL);
+      EXEC SQL INSERT INTO OR_ARCHEXEC SELECT * FROM OR_HISEXECORDER
+      WHERE EXEC_DATE < to_date(:chr_l_tempdate,'DD/MM/YYYY') ;
+      IS_ANY_ORA_ERROR
+
+      l_rowsprocessed+=sqlca.sqlerrd[2];
+
+      CO_ProcMonitor(p_logfile,"Before Delete from OR_HISEXECORDER",NULL,NULL);
+      EXEC SQL DELETE FROM OR_HISEXECORDER
+      WHERE EXEC_DATE < to_date(:chr_l_tempdate,'DD/MM/YYYY') ;
+      IS_ANY_ORA_ERROR
+
+      CO_ProcMonitor(p_logfile,"Before Commit",NULL,NULL);
+
+      sprintf(chr_l_buf, "Moved %ld records from OR_HISEXECORDER to Archives", l_rowsprocessed);
+	
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+
+		if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+
+   }
+		CO_ProcMonitor(p_logfile,"\n",NULL,NULL);
+      sprintf(chr_l_buf,"Total Records Processed For OR_HISEXECORDER = %ld",l_rowsprocessed);
+
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+		CO_ProcMonitor(p_logfile,"\n",NULL,NULL);
+
+
+	
+
+
+/*** AIX migration chnges to remove warnings -- too many arguments for format	
+	sprintf(chr_l_buf,"Started Archival of CHISORDER",NULL,NULL); **/
+	
+        sprintf(chr_l_buf,"Started Archival of CHISORDER");
+	l_rowsprocessed = 0L;
+	
+	if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+	if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+	APL_GOBACK_FAIL
+
+	for(int_l_ctr=START_DAY;int_l_ctr>=0;int_l_ctr-=INCREMENTBY_DAYS)
+   {
+
+		EXEC SQL SELECT TO_CHAR(TO_DATE(:chr_l_archdate,'DD/MM/YYYY') - :int_l_ctr,'DD/MM/YYYY') INTO
+      :chr_l_tempdate:i_tempdate FROM DUAL ;
+      IS_ANY_ORA_ERROR
+      
+		sprintf(chr_l_buf,"Records Archived prior to %s",chr_l_tempdate);
+		CO_ProcMonitor(p_logfile,chr_l_buf,NULL,NULL);
+
+      CO_ProcMonitor(p_logfile,"Before Insert into CARCHCORDER",NULL,NULL);
+      EXEC SQL INSERT INTO OR_ARCHORDERS SELECT * FROM OR_HISORDER
+      WHERE CLOSING_DATE < to_date(:chr_l_tempdate,'DD/MM/YYYY') ;
+      IS_ANY_ORA_ERROR
+
+      l_rowsprocessed+=sqlca.sqlerrd[2];
+
+      CO_ProcMonitor(p_logfile,"Before Delete from CHISORDER",NULL,NULL);
+      EXEC SQL DELETE FROM OR_HISORDER
+      WHERE CLOSING_DATE < to_date(:chr_l_tempdate,'DD/MM/YYYY') ;
+      IS_ANY_ORA_ERROR
+
+      CO_ProcMonitor(p_logfile,"Before Commit",NULL,NULL);
+
+      sprintf(chr_l_buf, "Moved %ld records from CHISORDER to Archives", l_rowsprocessed);
+	
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+
+		if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+
+   }
+		CO_ProcMonitor(p_logfile,"\n",NULL,NULL);
+      sprintf(chr_l_buf,"Total Records Processed For CHISORDER = %ld",l_rowsprocessed);
+
+		if(APL_FAILURE == DL_Mod_ROMArchRec( argv , chr_l_buf , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+		CO_ProcMonitor(p_logfile,"\n",NULL,NULL);
+
+ }
+
+	
+
+		if(APL_FAILURE == DL_Proc_BatchRecLock( argv , p_logfile , l_debug_info_ptr ) )
+		APL_GOBACK_FAIL
+
+	
+	
+
+   APL_GOBACK_SUCCESS
+
+   RETURN_SUCCESS :
+      CO_ProcMonitor(   p_logfile,"Leaving Function DL_Proc_EOMFastArch with success\n",NULL,NULL);
+      return(APL_SUCCESS);
+
+   RETURN_FAILURE :
+      CO_ProcMonitor(   p_logfile, "Leaving Function DL_Proc_EOMFastArch with errors\n", NULL,NULL);
+      CO_ProcMonitor(p_logfile, APL_NULL_STRING, l_debug_info_ptr, NULL);
+      CO_FreeErrLst(l_debug_info_ptr);
+      return(APL_FAILURE);
+
+}	
+
+int DL_Proc_BatchRecLock( char **argv , FILE *p_logfile , DEBUG_INFO_STRUCT_H **l_debug_info_ptr )
+{
+
+	struct sqlca sqlca ;
+   char                  chr_g_restart_data[APL_RESTARTDATA_LENGTH];
+    short                 g_restart_data_i;
+
+EXEC SQL VAR chr_g_restart_data is string;   
+
+   EXEC SQL SELECT PROCESSING_STATUS INTO :chr_g_restart_data:g_restart_data_i
+   FROM SYS_BATCHPROC
+   WHERE PROCESS_NAME=:argv[0]
+   AND   PROC_INIT=:argv[1]
+   AND   STARTDATE=:argv[2]
+   AND   STATUS='started'
+   FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+   IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET( ERR_REC_NOTFND,"Batch-In-Proc Rec.",APL_NULL_STRING,APL_NULL_STRING)
+
+	APL_GOBACK_SUCCESS
+
+
+   RETURN_SUCCESS :
+      return(APL_SUCCESS);
+
+   RETURN_FAILURE :
+      CO_ProcMonitor(p_logfile,"Leaving Function DL_Proc_BatchRecLock with errors\n", NULL, NULL);
+      return(APL_FAILURE);
+}
+
+
+int DL_Mod_ROMArchRec( char **argv , char *chr_p_buf , FILE *p_logfile , DEBUG_INFO_STRUCT_H **l_debug_info_ptr )
+{
+
+   
+
+	struct sqlca sqlca ;
+
+	   EXEC SQL UPDATE SYS_BATCHPROC
+      SET 	STAT_DET 	= :chr_p_buf
+      WHERE PROCESS_NAME		=:argv[0]
+      AND   PROC_INIT			=:argv[1]
+      AND   STARTDATE	=:argv[2]
+      AND   STATUS		='started';
+   
+   IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET( ERR_REC_NOTFND,"Batch-In-Proc Rec.",APL_NULL_STRING,APL_NULL_STRING)
+
+	EXEC SQL COMMIT WORK ; 
+	IS_ANY_ORA_ERROR
+
+	APL_GOBACK_SUCCESS
+
+
+   RETURN_SUCCESS :
+      CO_ProcMonitor(p_logfile,chr_p_buf, NULL, NULL);
+      return(APL_SUCCESS);
+
+   RETURN_FAILURE :
+      CO_ProcMonitor(p_logfile,"Leaving Function DL_Mod_ROMArchRec with errors\n", NULL, NULL);
+      return(APL_FAILURE);
+}
+
+
+

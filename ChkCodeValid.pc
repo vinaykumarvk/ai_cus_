@@ -1,0 +1,190 @@
+/*
+ *    COPYRIGHT NOTICE
+ *
+ *   Copyright 2005 Polaris Software Lab Limited. All rights reserved.
+ *
+ *   These materials are confidential and proprietary to 
+ *    Polaris Software Lab Limited and no part of these materials should
+ *    be reproduced, published, transmitted or distributed in any form or
+ *    by any means, electronic, mechanical, photocopying, recording or 
+ *    otherwise, or stored in any information storage or retrieval system
+ *    of any nature nor should the materials be disclosed to third parties
+ *    or used in any other manner for which this is not authorized, without
+ *    the prior express written authorization of Polaris Software Lab Limited.
+ */
+/*********************************************************************
+ *
+ * Module Name         :		Maintenance
+ *
+ * File Name           :		ChkCodeValid.pc
+ *
+ * Description         :		Contains Functions which will validate
+ *										Static Codes in Static Table.
+ *           
+ *
+ *            Version Control Block
+ *
+ * Date        Version		Author         Description				RFS No.
+ * ---------   --------	 ---------------  ----------------		---------
+ * 10/10/2005		1.0		Smita Bhat		New File				HDFCMT_003
+ * 09/12/2005		1.1		Sonali			Included code for 
+ * 													'XX' country & 
+ * 													introduced loval variables
+ *
+ *********************************************************************/
+
+#include "CR_Common.h"
+
+#define S_CODE_LENGTH				21
+#define S_CODE_VAL_LENGTH			5
+
+EXEC SQL INCLUDE sqlca;
+
+
+
+/*********************************************************************************************************
+ *                                                                                                       *
+ * Function Name         : CO_Chk_CodeValid                                                              *
+ *                                                                                                       *
+ * Description           : This Function Accepts Code Identifier,Code Value,Country Code & debug pointer *
+ *                         Checks whether Code exists in Static Table.								            *
+ *                         returns Success/Failure depending upon validn.                                *
+ *                                                                                                       *
+ *                                                                                                       *
+ * Parameter                           Type                             Mode   Description               *
+ * ------------                        --------                         -----  ---------------           *
+ * p_code_ident								char *									I			Code Identifier         *
+ *																																			*
+ * p_code_val									char *									I			Code Value					*
+ *																																			*
+ * chr_p_country_code						char *									I			Country Code				*
+ *																																			*
+ * l_debug_info_ptr                    DEBUG_INFO_STRUCT_H **           I      Debug Info Structure      *
+ *                                                                                                       *
+ * Return Values        :                                                                                *
+ *                                                                                                       *
+ *  APL_SUCCESS  - SUCCESS                                                                               *
+ *  APL_FAILURE  - FAILURE                                                                               *
+ *                                                                                                       *
+ ********************************************************************************************************/
+int CO_Chk_CodeValid(	char *p_code_ident, 	
+								char *p_code_val, 
+								char *chr_p_country_code, 
+								DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+
+	struct sqlca	sqlca;
+	int				int_l_num_rows = 0;
+	char 				chr_l_code_val[21]=APL_NULL_STRING;
+	char 				chr_l_country_code[3]=APL_NULL_STRING;
+	char 				chr_l_code_ident[21]=APL_NULL_STRING;
+	char				l_chr_temp[41]=APL_NULL_STRING;
+	
+	EXEC SQL END DECLARE SECTION;
+	#ifdef APL_THREADS
+	APL_SET_CONTEXT
+	EXEC SQL CONTEXT USE	:my_ctx_local;
+	#endif
+
+	fprintf(APL_OUT_FILE,"Entered processtion CO_Chk_CodeValid \n");
+	
+	if ((p_code_ident == NULL) || (strcmp(p_code_ident, APL_NULL_STRING)) == 0)
+	{
+		APL_DATA_MISSING("CODE TYPE",APL_NULL_STRING,APL_NULL_STRING)
+
+		APL_GOBACK_FAIL
+	}
+
+	if ((p_code_val == NULL) || (strcmp(p_code_val, APL_NULL_STRING)) == 0)
+	{
+		APL_DATA_MISSING("CODE VALUE",APL_NULL_STRING,APL_NULL_STRING)
+
+		APL_GOBACK_FAIL
+	}
+
+	if ((chr_p_country_code == NULL) || (strcmp(chr_p_country_code, APL_NULL_STRING)) == 0)
+	{
+		APL_DATA_MISSING("COUNTRY CODE",APL_NULL_STRING,APL_NULL_STRING)
+
+		APL_GOBACK_FAIL
+	}
+
+	strcpy(chr_l_code_val,p_code_val);
+	strcpy(chr_l_country_code,chr_p_country_code);
+	strcpy(chr_l_code_ident,p_code_ident);
+
+	#ifdef SYS_DEBUG
+		fprintf(APL_OUT_FILE,"Code Ident is |%s| \n",chr_l_code_ident);
+		fprintf(APL_OUT_FILE,"Code Value is |%s| \n",chr_l_code_val);
+		fprintf(APL_OUT_FILE,"Country h_code is |%s| \n",chr_l_country_code);
+	#endif
+
+	APL_IF_DEBUG
+	{
+		printf("Code Ident = |%s|\n",chr_l_code_ident);
+		printf("Code Value = |%s|\n",chr_l_code_val);
+		printf("Country Code = |%s|\n",chr_l_country_code);
+	}
+
+	EXEC SQL SELECT map_desc into :l_chr_temp FROM PRO_SGENSTAT
+	WHERE MAP_TYPE = :chr_l_code_ident
+	AND   MAP_VAL = :chr_l_code_val
+	AND   NATION_CODE =:chr_l_country_code;
+
+	IS_ANY_ORA_ERROR
+
+	if (sqlca.sqlcode == 0)
+	{
+		APL_GOBACK_SUCCESS
+	}
+
+	else if (sqlca.sqlcode == 1403)
+	{
+		EXEC SQL SELECT NVL(COUNT(*),0) INTO :int_l_num_rows
+		FROM PRO_SGENSTAT
+		WHERE NATION_CODE = :chr_l_country_code
+		AND MAP_TYPE = :chr_l_code_ident;
+
+		IS_ANY_ORA_ERROR
+
+		if (int_l_num_rows > 0)
+		{
+			CO_InsertErr(	l_debug_info_ptr,
+								ERR_INVALID_CODE,
+								p_code_ident,
+								APL_NULL_STRING,
+								APL_NULL_STRING,
+								__LINE__,
+								__FILE__);
+			APL_GOBACK_FAIL
+		}
+		else
+		{
+			strcpy(chr_l_country_code,"XX");
+			EXEC SQL SELECT map_desc into :l_chr_temp FROM PRO_SGENSTAT
+			WHERE NATION_CODE = :chr_l_country_code
+			AND MAP_TYPE = :chr_l_code_ident
+			AND MAP_VAL = :chr_l_code_val;
+
+			IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_INVALID_CODE,p_code_ident,APL_NULL_STRING,APL_NULL_STRING)
+
+			if (sqlca.sqlcode == 0)
+			{
+				APL_GOBACK_SUCCESS
+			}
+		}
+	}
+
+	RETURN_SUCCESS :
+	{
+		fprintf(APL_OUT_FILE,"Leaving processtion CO_Chk_CodeValid SUCCESS\n");
+		return(APL_SUCCESS);
+	}
+
+	RETURN_FAILURE :
+	{
+		fprintf(APL_OUT_FILE,"Leaving processtion CO_Chk_CodeValid FAILURE\n");
+		return(APL_FAILURE);
+	}
+}

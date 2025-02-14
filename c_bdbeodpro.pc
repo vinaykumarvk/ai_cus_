@@ -1,0 +1,651 @@
+
+
+
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+
+
+
+
+#include <CO_HostStructdef.h>
+
+#define FILEPATH_LEN				70
+#define FILENAME_LEN_A				80
+
+EXEC SQL INCLUDE sqlca;
+
+int CDBEodProFn(char **argv,FILE *p_ptr_ini_file,FILE *p_ptr_log_file,INTL_ENV_DATA_STRUCT_H *p_intl_env_data_struct_h_d,DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+//main(int argc,char **argv)
+int main(int argc,char **argv)//Changes done for AIX Migration
+{
+	DEBUG_INFO_STRUCT_H			*l_debug_info_ptr = NULL;
+	FILE						*l_ptr_ini_file = NULL;
+	FILE						*l_ptr_log_file = NULL;
+	INTL_ENV_DATA_STRUCT_H	l_intl_envdatastruct_h;
+	char						chr_l_inifile[FILENAME_LEN_A]   = APL_NULL_STRING;
+	char						chr_uname[APL_USERID_LEN]   = APL_NULL_STRING;
+	char						chr_passwd[APL_PASSWD_LEN]  = APL_NULL_STRING;
+	char						chr_custody_id_b[APL_USERID_LEN]  = APL_NULL_STRING;
+	int						int_l_flg = 0;
+	int						int_retval = 0;
+	char						chr_l_buf[BUFFER_LEN] = APL_NULL_STRING;
+	struct sqlca			sqlca;
+
+	memset(&l_intl_envdatastruct_h,NULL,sizeof(INTL_ENV_DATA_STRUCT_H));
+	
+	sqlca.sqlcode = 0;
+
+	
+	strcpy(l_intl_envdatastruct_h.usr, argv[3]);
+	strcpy(l_intl_envdatastruct_h.h_mode, argv[4]);
+	strcpy(l_intl_envdatastruct_h.processtion, argv[5]);
+	strcpy(l_intl_envdatastruct_h.auth_req, argv[6]);
+	strcpy(l_intl_envdatastruct_h.subprocess, argv[7]);
+	strcpy(l_intl_envdatastruct_h.h_process, argv[8]);
+	
+	strcpy(chr_l_inifile,getenv("INTL_ROOT_PATH"));
+	strcat(chr_l_inifile,"intl_sun.cfg");
+
+	if ((l_ptr_ini_file = fopen(chr_l_inifile,"r")) == NULL)
+		exit(-1);
+	
+	APL_FETCH_DB_LOGIN_DETAILS(l_ptr_ini_file,chr_custody_id_b,chr_uname,chr_passwd,APL_OUT_FILE,&l_debug_info_ptr)
+	
+	
+	
+	if (CO_Con_Db(chr_uname,chr_passwd,&l_debug_info_ptr) != APL_SUCCESS)
+		APL_GOBACK_FAIL
+
+	
+
+	int_retval = CO_Rtv_RptFileName("3f",APL_LOGFILE_DESC,100,argv[5],argv,&l_ptr_log_file,&l_debug_info_ptr);
+
+	if (int_retval != APL_SUCCESS)
+	{
+		EXEC SQL ROLLBACK WORK RELEASE;
+		APL_GOBACK_FAIL
+	}
+
+	
+
+	EXEC SQL COMMIT WORK;
+	
+	if (sqlca.sqlcode != 0)
+	{
+		CO_Proc_RptClose(l_ptr_log_file,&l_debug_info_ptr);
+
+		EXEC SQL ROLLBACK WORK RELEASE;
+		APL_GOBACK_FAIL
+	}
+	
+	memset(chr_l_buf,APL_NULL_CHAR,BUFFER_LEN);
+	sprintf(chr_l_buf,"Product Handoff File - GR");
+	CO_ProcMonitor(l_ptr_log_file,chr_l_buf,NULL,NULL);
+
+	CO_ProcMonitor(l_ptr_log_file,"_________________________\n",NULL,NULL);
+	
+	CO_ProcMonitor(l_ptr_log_file,"Work Committed after chr_logfile creation \n",NULL,&l_intl_envdatastruct_h);
+
+	
+
+	if (CO_RtvSysParams(&l_debug_info_ptr) != APL_SUCCESS)
+	{
+		CO_ProcMonitor(l_ptr_log_file,"Unable to get system parameters - Rollback done \n",NULL,&l_intl_envdatastruct_h);
+		
+		CO_Proc_RptClose(l_ptr_log_file,&l_debug_info_ptr);
+		
+		EXEC SQL ROLLBACK WORK RELEASE;
+		
+		APL_GOBACK_FAIL	
+	}
+
+	
+	 
+	int_retval = CO_Pro_LocRec(argv,l_ptr_log_file,&l_debug_info_ptr);
+
+	if (int_retval != APL_SUCCESS)
+	{
+		CO_ProcMonitor(l_ptr_log_file,"Unable to lock BATCH_IN_PROC record - Rollback done \n",NULL,&l_intl_envdatastruct_h);
+		
+		CO_Proc_RptClose(l_ptr_log_file,&l_debug_info_ptr);
+
+		EXEC SQL ROLLBACK WORK RELEASE;
+		
+		APL_GOBACK_FAIL
+	}
+
+	
+
+		int_retval = CDBEodProFn(argv,l_ptr_ini_file,l_ptr_log_file,&l_intl_envdatastruct_h,&l_debug_info_ptr);
+
+	if (int_retval != APL_SUCCESS)
+	{
+		int_l_flg = 1;
+
+	   CO_Mod_Batch_Status(argv,l_ptr_log_file,&l_debug_info_ptr,int_l_flg);
+		
+		if (CO_ChkErr(l_debug_info_ptr) == APL_SUCCESS)
+		{
+			
+			CO_ProcMonitor(l_ptr_log_file,APL_NULL_STRING,&l_debug_info_ptr,&l_intl_envdatastruct_h);
+			CO_FreeErrLst(&l_debug_info_ptr);
+
+		}
+
+		CO_ProcMonitor(l_ptr_log_file,"FAILURE from Product hand-off h_file generation program \n",NULL,&l_intl_envdatastruct_h);
+
+		
+		CO_Proc_RptClose(l_ptr_log_file,&l_debug_info_ptr);
+
+		APL_GOBACK_FAIL	
+	}
+	else
+	{
+		int_l_flg = 0;
+
+		CO_Mod_Batch_Status(argv,l_ptr_log_file,&l_debug_info_ptr,int_l_flg);
+
+		if (CO_ChkErr(l_debug_info_ptr) == APL_SUCCESS)
+		{
+			
+			CO_ProcMonitor(l_ptr_log_file,APL_NULL_STRING,&l_debug_info_ptr,&l_intl_envdatastruct_h);
+			CO_FreeErrLst(&l_debug_info_ptr);
+
+		}
+
+		CO_ProcMonitor(l_ptr_log_file,"SUCCESS from product hand-off h_file generation program \n",NULL,&l_intl_envdatastruct_h);
+
+		
+		CO_Proc_RptClose(l_ptr_log_file,&l_debug_info_ptr);
+
+		APL_GOBACK_SUCCESS
+	}
+
+	RETURN_SUCCESS	:
+	{
+		fclose(l_ptr_ini_file);
+	   exit(0);
+	}
+
+	RETURN_FAILURE	:
+	{
+		fclose(l_ptr_ini_file);
+  		exit(-1);
+	}
+}
+
+
+
+int CDBEodProFn(char **argv,FILE *p_ptr_ini_file,FILE *p_ptr_log_file,INTL_ENV_DATA_STRUCT_H *p_intl_env_data_struct_h_d,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+		struct sqlca 		  		sqlca;
+		FILE							*l_ptr_qfile = NULL;
+		FILE							*l_ptr_qsesamfile = NULL;
+		char							chr_l_handoff_dir[FILEPATH_LEN] = APL_NULL_STRING;
+		int							i = 0;
+		INTL_REPT_STRUCT_H				*l_intl_rept_struct_ha	=NULL;
+		char							chr_l_qfile_name[FILENAME_LEN_A] = APL_NULL_STRING;
+		char							chr_l_qsesamfile_name[FILENAME_LEN_A] = APL_NULL_STRING;
+		char							chr_l_pfile_name[2*FILENAME_LEN_A] = APL_NULL_STRING;
+		char							chr_l_psesamfile_name[2*FILENAME_LEN_A] = APL_NULL_STRING;
+		int							int_result=0,int_n1=0;
+		char						   chr_l_buf[BUFFER_LEN] = APL_NULL_STRING;
+
+		char							h_instr_code[APL_INSTRUMENTCODE_LEN]=APL_NULL_STRING;
+		short							i_instr_code = 0;
+		char							h_instr_isin[13]=APL_NULL_STRING;
+		short							i_instr_isin = 0;
+		char							h_typeofinstr[TYPEOF_INSTR_LEN]=APL_NULL_STRING;
+		short							i_typeofinstr = 0;
+		char							h_instr_name[INSTR_NAME_LEN_D]=APL_NULL_STRING;
+		short							i_instr_name = 0;
+		char							chr_h_issuedt[APL_DATE_LEN]=APL_NULL_STRING;
+		short							i_issuedt = 0;
+		char							chr_h_maturedt[APL_DATE_LEN]=APL_NULL_STRING;
+		short							i_maturedt = 0;
+		char							h_belongto[13]=APL_NULL_STRING;
+		short							i_belongto = 0;
+		double						h_nominal_value = 0;
+		short							i_nominal_value = 0;
+		char							h_classcd[CLSCD_LEN]=APL_NULL_STRING;
+		short							i_classcd = 0;
+		double						h_closing_pr = 0;
+		short							i_closing_pr = 0;
+		char							h_currencycode[APL_CCYCODE_LEN]=APL_NULL_STRING;
+		short							i_currencycode = 0;
+
+		char							chr_h_typeofinstr_1[APL_FLAG_LENGTH]=APL_NULL_STRING;
+		char							chr_l_flg_instrcodeinisin[APL_FLAG_LENGTH]=APL_NULL_STRING;
+		char							chr_h_instrdesc1[71]=APL_NULL_STRING;
+		char							chr_h_issuedt_1[SETL_DATE_LEN]=APL_NULL_STRING;
+		char							chr_h_maturedt_1[SETL_DATE_LEN]=APL_NULL_STRING;
+		int							int_p_date_diff=0;
+		char							chr_h_yearissuedt_1[5]=APL_NULL_STRING;
+		char							chr_h_yearmaturedt_1[5]=APL_NULL_STRING;
+		char							chr_h_monmaturedt_1[3]=APL_NULL_STRING;
+		char							chr_h_monissuedt_1[3]=APL_NULL_STRING;
+		int							int_h_duration_1=0;
+		char							chr_h_duration[10]=APL_NULL_STRING;
+		char							chr_h_duration_typ[2]=APL_NULL_STRING;
+		char							chr_h_issuer_1[13]=APL_NULL_STRING;
+		int							int_l_issuerlen=0;
+		double						dbl_h_marketprc=0;
+		double						dbl_h_marketprc_1=0;
+		char							chr_h_str_marketprc[20]=APL_NULL_STRING;
+		double						h_nominal_value_1=0;
+		char							chr_h_str_nomval[20]=APL_NULL_STRING;
+		char							chr_h_clscode_1[10]=APL_NULL_STRING;
+		int							int_l_clscodelen=0,int_count_not_auth=0;
+		int							int_l_retval = 0;
+		PRO_GSEQNUM_STRUCT_H		l_progseqnum_struct_h;
+		char                    chr_l_buffer[150] = APL_NULL_STRING; 
+
+		EXEC SQL VAR h_instr_code IS STRING;
+		EXEC SQL VAR h_instr_isin IS STRING;
+		EXEC SQL VAR h_typeofinstr IS STRING;
+		EXEC SQL VAR h_instr_name IS STRING;
+		EXEC SQL VAR h_currencycode IS STRING;
+		EXEC SQL VAR chr_h_issuedt IS STRING;
+		EXEC SQL VAR chr_h_maturedt IS STRING;
+		EXEC SQL VAR h_belongto IS STRING;
+		EXEC SQL VAR h_classcd IS STRING;
+
+		CO_ProcMonitor(p_ptr_log_file,"Entered processtion CDBEodproFn \n",NULL,p_intl_env_data_struct_h_d);
+
+		memset(chr_l_handoff_dir,NULL,sizeof(chr_l_handoff_dir));
+		memset(chr_l_qfile_name,NULL,sizeof(chr_l_qfile_name));
+		memset(chr_l_qsesamfile_name,NULL,sizeof(chr_l_qsesamfile_name));
+		sqlca.sqlcode = 0;
+
+      EXEC SQL DECLARE CInstrNotAuth CURSOR FOR
+		SELECT A.INSTR_CODE
+		FROM  MT_INSTRUMENT A
+		WHERE A.STATUS = 'AA'
+		AND	NOT EXISTS (SELECT B.INSTR_CODE 
+								FROM MT_DLYMKTPRC B
+								WHERE	A.INSTR_CODE = B.INSTR_CODE 
+								AND 	B.PRICE_DATE = (SELECT SYS_DATE
+														 FROM PRO_SYS_DATE));
+      EXEC SQL OPEN CInstrNotAuth;
+
+      IS_ANY_ORA_ERROR
+      for(;;)
+      {
+         EXEC SQL FETCH CInstrNotAuth
+         INTO  :h_instr_code:i_instr_code;
+
+         IS_ANY_ORA_ERROR
+
+         if (APL_ZERO_RESULT_SET)
+            break;
+         fprintf(p_ptr_log_file,"\nNo Entry in CDLYMKTPRC for this Instrode %s\n",h_instr_code);
+			int_count_not_auth++;
+		}
+		EXEC SQL CLOSE CInstrNotAuth;
+		if (int_count_not_auth)
+		{
+			APL_GOBACK_FAIL
+		}
+
+		l_intl_rept_struct_ha	= (INTL_REPT_STRUCT_H *)calloc(1, sizeof(INTL_REPT_STRUCT_H));
+		APL_MALLOC_FAIL(l_intl_rept_struct_ha);
+
+		sqlca.sqlcode = 0;
+
+		if (CO_ReadToken(p_ptr_ini_file,"INTL_HF_PATH",chr_l_handoff_dir,l_debug_info_ptr) != APL_SUCCESS)
+			return(APL_FAILURE);
+
+	
+
+		memset(&l_progseqnum_struct_h, NULL, sizeof(PRO_GSEQNUM_STRUCT_H));
+		strcpy(l_progseqnum_struct_h.sequencename, "HOFFFILEEXT");
+		strcpy(l_progseqnum_struct_h.seq_attrb_a, APL_NULL_STRING);
+		strcpy(l_progseqnum_struct_h.seq_attrb_b, APL_NULL_STRING);
+		strcpy(l_progseqnum_struct_h.seq_attrb_c, APL_NULL_STRING);
+		l_progseqnum_struct_h.seq_stepby = 1;
+		l_progseqnum_struct_h.seq_start = 0;
+		l_progseqnum_struct_h.last_seqnum = 99999;
+		l_progseqnum_struct_h.recycle_ind=RECYCLE_YES;
+
+		int_l_retval = CO_RtvNxtSeqNum(&l_progseqnum_struct_h, l_debug_info_ptr);
+		if (int_l_retval == APL_FAILURE) APL_GOBACK_FAIL
+
+		sprintf(chr_l_psesamfile_name, "%sPSESAM.%d", chr_l_handoff_dir, int_l_retval);
+		sprintf(chr_l_pfile_name, "%sPFILE.%d", chr_l_handoff_dir, int_l_retval);
+		
+		
+		strcpy(chr_l_qfile_name,chr_l_handoff_dir);
+      strcat(chr_l_qfile_name,"QFILE.TXT");
+
+		if ((l_ptr_qfile = fopen(chr_l_qfile_name,"w")) == NULL)
+			return(APL_FAILURE);
+		fprintf(l_ptr_qfile,"PSESAM.TXT\n");
+		fclose(l_ptr_qfile);
+
+		strcpy(chr_l_qsesamfile_name,chr_l_handoff_dir);
+      strcat(chr_l_qsesamfile_name,"QSESAM.TXT");
+
+		if ((l_ptr_qsesamfile = fopen(chr_l_qsesamfile_name,"w")) == NULL)
+			return(APL_FAILURE);
+
+		EXEC SQL DECLARE CInstrAuth CURSOR FOR
+			SELECT 	A.INSTR_CODE,
+						A.INSTR_ISIN,
+						A.INSTR_TYPE,
+						A.INSTR_NAME,
+						A.CURRENCY_CD,
+						A.ISSUE_DATE,
+						A.MATURE_DT,
+						A.CMP_CODE,
+						A.NOMINAL_VALUE,
+						A.CLASSCD,
+						B.CLOSING_PR
+			FROM 		MT_INSTRUMENT A,MT_DLYMKTPRC B
+			WHERE		A.STATUS='AA'
+			AND		A.INSTR_CODE  = B.INSTR_CODE
+			AND		B.PRICE_DATE = (SELECT SYS_DATE
+                          		FROM   PRO_SYS_DATE)
+			FOR		UPDATE OF A.ACCESS_STAMP;
+
+		EXEC SQL OPEN CInstrAuth;
+
+		IS_ANY_ORA_ERROR
+
+		for(;;)
+		{
+			memset(h_instr_name,'\0',INSTR_NAME_LEN_D);
+			memset(chr_l_buffer,'\0',150);
+			EXEC SQL FETCH CInstrAuth 
+			INTO 	:h_instr_code:i_instr_code,
+					:h_instr_isin:i_instr_isin,
+					:h_typeofinstr:i_typeofinstr,		
+					:h_instr_name:i_instr_name,
+					:h_currencycode:i_currencycode,
+					:chr_h_issuedt:i_issuedt,	
+					:chr_h_maturedt:i_maturedt,
+					:h_belongto:i_belongto,
+					:h_nominal_value:i_nominal_value,
+					:h_classcd:i_classcd,
+					:h_closing_pr:i_closing_pr;
+
+			IS_ANY_ORA_ERROR
+
+			if (APL_ZERO_RESULT_SET)
+				break;
+
+			 
+			strcpy(chr_l_buffer,h_instr_isin);                
+			memset(chr_h_typeofinstr_1,'\0',4);
+			if ( (strcmp(h_typeofinstr,APL_INSTRU_SHARE) == 0) ||
+				  (strcmp(h_typeofinstr,APL_INSTRU_RIGHTS) == 0) )
+				strcpy(chr_h_typeofinstr_1,"1");
+			else  strcpy(chr_h_typeofinstr_1,"2");
+			 
+			strcat(chr_l_buffer,chr_h_typeofinstr_1);              
+			memset(chr_l_flg_instrcodeinisin,'\0',2);
+			if (strstr(h_instr_isin,h_instr_code) != NULL)
+				strcpy(chr_l_flg_instrcodeinisin,"2"); 
+			else  strcpy(chr_l_flg_instrcodeinisin,"1");
+			 
+			strcat(chr_l_buffer,chr_l_flg_instrcodeinisin);               
+			memset(chr_h_instrdesc1,'\0',71);
+			if (strlen(h_instr_name) > 70)
+			{
+				strncpy(chr_h_instrdesc1,h_instr_name,70);
+				chr_h_instrdesc1[70] = '\0';
+			}
+			else
+				strcpy(chr_h_instrdesc1,h_instr_name);
+			
+			CO_NewLine(chr_h_instrdesc1);
+			
+			if(CO_PadString(chr_h_instrdesc1, 'R',70, " ", l_debug_info_ptr)
+															== APL_FAILURE)
+			{
+					APL_GOBACK_FAIL
+			}
+			chr_h_instrdesc1[70] = '\0';                           
+			        
+			strcat(chr_l_buffer,chr_h_instrdesc1);                     
+
+			
+			memset(chr_h_issuedt_1,'\0',SETL_DATE_LEN);
+			if (strcmp(chr_h_issuedt,APL_NULL_STRING) == 0)
+				strcpy(chr_h_issuedt_1,"00000000");
+			else
+			{
+				strncpy(chr_h_issuedt_1,chr_h_issuedt+6,4);
+				strncat(chr_h_issuedt_1,chr_h_issuedt+3,2);
+				strncat(chr_h_issuedt_1,chr_h_issuedt,2);
+				chr_h_issuedt_1[8] = '\0';
+			}
+			       
+			strcat(chr_l_buffer,chr_h_issuedt_1);                    
+
+			
+			memset(chr_h_maturedt_1,'\0',SETL_DATE_LEN);
+			if (strcmp(chr_h_maturedt,APL_NULL_STRING) == 0)
+				strcpy(chr_h_maturedt_1,"00000000");
+			else
+			{
+				strncpy(chr_h_maturedt_1,chr_h_maturedt+6,4);
+				strncat(chr_h_maturedt_1,chr_h_maturedt+3,2);
+				strncat(chr_h_maturedt_1,chr_h_maturedt,2);
+				chr_h_maturedt_1[8] = '\0';
+			}
+			     
+			strcat(chr_l_buffer,chr_h_maturedt_1);                  
+
+			
+         int_p_date_diff =0;
+			memset(chr_h_yearmaturedt_1,'\0',5);
+			memset(chr_h_yearissuedt_1,'\0',5);
+			memset(chr_h_monmaturedt_1,'\0',3);
+			memset(chr_h_monissuedt_1,'\0',3);
+			memset(chr_h_duration,'\0',10);
+			if ( (strcmp(chr_h_issuedt,APL_NULL_STRING) != 0) &&
+				  (strcmp(chr_h_maturedt,APL_NULL_STRING) != 0) )
+			{
+				if ( APL_FAILURE == CO_Pro_DateComp(chr_h_issuedt,
+													chr_h_maturedt,
+													&int_p_date_diff,
+													l_debug_info_ptr))
+				{
+					APL_GOBACK_FAIL
+				}
+			}
+			if (int_p_date_diff > 91)
+			{
+				strncpy(chr_h_yearmaturedt_1,chr_h_maturedt+6,4);
+				chr_h_yearmaturedt_1[4]='\0';
+				strncpy(chr_h_yearissuedt_1,chr_h_issuedt+6,4);
+				chr_h_yearissuedt_1[4]='\0';
+				strncpy(chr_h_monmaturedt_1,chr_h_maturedt+3,2);
+				chr_h_monmaturedt_1[2]='\0';
+				strncpy(chr_h_monissuedt_1,chr_h_issuedt+3,2);
+				chr_h_monissuedt_1[2]='\0';
+				int_h_duration_1 = (int)( ((atol(chr_h_yearmaturedt_1)-atol(chr_h_yearissuedt_1))*12)+
+								 atol(chr_h_monmaturedt_1) - atol(chr_h_monissuedt_1) );
+				sprintf(chr_h_duration,"%d",int_h_duration_1);
+			}
+			else
+			{
+				sprintf(chr_h_duration,"%d",int_p_date_diff);
+			}
+			if(CO_PadString(chr_h_duration, 'L', 4, "0", l_debug_info_ptr) == APL_FAILURE)
+			{
+					APL_GOBACK_FAIL
+			}
+			    
+			strcat(chr_l_buffer,chr_h_duration);                 
+			memset(chr_h_duration_typ,'\0',2);
+			if (int_p_date_diff > 91)
+				strcpy(chr_h_duration_typ,"M");
+			else	strcpy(chr_h_duration_typ,"D");
+			 
+			strcat(chr_l_buffer,chr_h_duration_typ);              
+			      
+			strcat(chr_l_buffer,h_currencycode);                   
+
+			
+			memset(chr_h_issuer_1,'\0',13);
+			
+			if(CO_Trim(h_belongto,' ','R',chr_h_issuer_1,l_debug_info_ptr)
+															== APL_FAILURE)
+			{
+					APL_GOBACK_FAIL
+			}
+			
+			if(CO_Trim(h_belongto,' ','L',chr_h_issuer_1,l_debug_info_ptr)
+															== APL_FAILURE)
+			{
+					APL_GOBACK_FAIL
+			}
+			    
+			strcat(chr_l_buffer,chr_h_issuer_1);                 
+
+			
+			memset(chr_h_str_marketprc,'\0',20);
+			if (strcmp(h_typeofinstr,"FMT") == 0)
+			{
+				CO_Round(h_closing_pr*100,2,&dbl_h_marketprc);
+				CO_Round(dbl_h_marketprc*100,0,&dbl_h_marketprc_1);
+			}
+			else
+			{
+				CO_Round(h_closing_pr,2,&dbl_h_marketprc);
+				CO_Round(dbl_h_marketprc*100,0,&dbl_h_marketprc_1);
+			}
+			sprintf(chr_h_str_marketprc,"%.0lf",dbl_h_marketprc_1);
+			if(CO_PadString(chr_h_str_marketprc, 'L',15, "0", l_debug_info_ptr) 
+																		== APL_FAILURE)
+			{
+					APL_GOBACK_FAIL
+			}
+			  
+			strcat(chr_l_buffer,chr_h_str_marketprc);               
+
+			
+			memset(chr_h_str_nomval,'\0',20);
+			CO_Round(h_nominal_value*100,0,&h_nominal_value_1);
+			sprintf(chr_h_str_nomval,"%.0lf",h_nominal_value_1);
+			if(CO_PadString(chr_h_str_nomval, 'L',15, "0", l_debug_info_ptr) 
+																== APL_FAILURE)
+			{
+					APL_GOBACK_FAIL
+			}
+			   
+			strcat(chr_l_buffer,chr_h_str_nomval);                
+
+			
+			memset(chr_h_clscode_1,'\0',10);
+			
+			if(CO_Trim(h_classcd,' ','R',chr_h_clscode_1,l_debug_info_ptr)
+															== APL_FAILURE)
+			{
+					APL_GOBACK_FAIL
+			}
+			
+			if(CO_Trim(h_classcd,' ','L',chr_h_clscode_1,l_debug_info_ptr)
+															== APL_FAILURE)
+			{
+					APL_GOBACK_FAIL
+			}
+			   
+			strcat(chr_l_buffer,chr_h_clscode_1);                
+			       
+			strcat(chr_l_buffer,"GRD\n");                    
+			fputs(chr_l_buffer,l_ptr_qsesamfile);            
+	  } 
+	  fclose(l_ptr_qsesamfile);
+	  EXEC SQL CLOSE CInstrAuth;
+
+	 	 
+	 	
+		
+   memset(chr_l_buf, NULL, BUFFER_LEN);
+   sprintf(chr_l_buf,"mv -f %s  %s",chr_l_qfile_name,chr_l_pfile_name);
+   if (system(chr_l_buf) != 0)
+	{	
+   	memset(chr_l_buf, NULL, BUFFER_LEN);
+   	sprintf(chr_l_buf,"rm -f %s  %s",chr_l_qfile_name,chr_l_qsesamfile_name);
+		system(chr_l_buf);
+	   APL_GOBACK_FAIL
+	}
+   memset(chr_l_buf, NULL, BUFFER_LEN);
+   sprintf(chr_l_buf,"mv -f %s  %s",chr_l_qsesamfile_name,chr_l_psesamfile_name);
+   if (system(chr_l_buf) != 0)
+	{	
+   	memset(chr_l_buf, NULL, BUFFER_LEN);
+   	sprintf(chr_l_buf,"rm -f %s  %s %s",chr_l_qfile_name,chr_l_pfile_name,chr_l_qsesamfile_name);
+		system(chr_l_buf);
+	   APL_GOBACK_FAIL
+	}
+		
+		
+	 memset(l_intl_rept_struct_ha,NULL,sizeof(INTL_REPT_STRUCT_H));
+          
+
+          sprintf(l_intl_rept_struct_ha->report_name,"PSESAM.%d", int_l_retval);
+          strcpy(l_intl_rept_struct_ha->report_desc, APL_HOFF_FILE_DESC);
+          strcpy(l_intl_rept_struct_ha->report_date, argv[2]);
+          l_intl_rept_struct_ha->report_width = 100;
+          strcpy(l_intl_rept_struct_ha->task_desc, p_intl_env_data_struct_h_d->processtion);
+          strcpy(l_intl_rept_struct_ha->fe_be_ind, APL_BE_IND);
+          strcpy(l_intl_rept_struct_ha->usr, p_intl_env_data_struct_h_d->usr);
+
+          
+
+          if (APL_FAILURE == CO_Proc_DBRptIns( l_intl_rept_struct_ha, l_debug_info_ptr))
+          {
+                  APL_GOBACK_FAIL
+          }
+
+          memset(l_intl_rept_struct_ha,NULL,sizeof(INTL_REPT_STRUCT_H));
+
+          sprintf(l_intl_rept_struct_ha->report_name,"PFILE.%d", int_l_retval);
+          strcpy(l_intl_rept_struct_ha->report_desc, APL_HOFF_FILE_DESC);
+          strcpy(l_intl_rept_struct_ha->report_date, argv[2]);
+          l_intl_rept_struct_ha->report_width = 100;
+          strcpy(l_intl_rept_struct_ha->task_desc, p_intl_env_data_struct_h_d->processtion);
+          strcpy(l_intl_rept_struct_ha->fe_be_ind, APL_BE_IND);
+          strcpy(l_intl_rept_struct_ha->usr, p_intl_env_data_struct_h_d->usr);
+
+          
+
+                 if (APL_FAILURE == CO_Proc_DBRptIns( l_intl_rept_struct_ha, l_debug_info_ptr))
+                {
+                        APL_GOBACK_FAIL
+                }
+		
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS :
+	{
+		free(l_intl_rept_struct_ha);
+		CO_ProcMonitor(p_ptr_log_file,"Leaving processtion CDBEodProFn successfully\n",NULL,p_intl_env_data_struct_h_d);
+		return(APL_SUCCESS);
+	}
+
+	RETURN_FAILURE :
+	{
+		free(l_intl_rept_struct_ha);
+   	memset(chr_l_buf, NULL, BUFFER_LEN);
+   	sprintf(chr_l_buf,"rm -f %s  %s",chr_l_qfile_name,chr_l_qsesamfile_name);
+		system(chr_l_buf);
+		CO_ProcMonitor(p_ptr_log_file,"Leaving processtion CDBEodProFn with failure\n",NULL,p_intl_env_data_struct_h_d);
+		return(APL_FAILURE);
+	}
+}

@@ -1,0 +1,269 @@
+
+
+
+
+
+
+#include "IV_Control_A.h"
+
+EXEC SQL INCLUDE SQLCA.H;
+
+MT_COMMON_SYS_PARAMS_STRUCT_H  g_mt_common_sys_params_struct_h;
+
+int IV_Proc_ChkResend(	FILE* clt,
+					FILE* pymnt,	
+					char *chr_p_client,
+					char 	h_remdup,	
+					int *int_countunauthacc,
+					int *int_countunauthpymnt,
+					DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+
+int	 IV_Proc_ResendBill(	FILE 				*clt,
+							FILE 				*pymnt,
+							char				chr_p_remdup,
+							CLIENT_STRUCT_H		*i_printaccount_struct,
+							DEBUG_INFO_STRUCT_H	**l_debug_info_ptr) 
+{
+	
+
+	SYS_IVCONTROLPARAM_STRUCT 		l_sys_ivcntl_param_struct;
+	char						h_dl_client[APL_CLIENT_LENGTH];
+	short 					i_dl_client;
+	char 						chr_h_repdate[APL_DATE_LEN];
+	int int_retstat =0;
+	int i=0;
+	int int_countunauthacc =0;
+	int int_countunauthpymnt=0;
+
+	EXEC SQL BEGIN DECLARE SECTION;
+		
+	EXEC SQL VAR h_dl_client IS STRING;
+
+	EXEC SQL END DECLARE SECTION;
+
+	
+
+	if (APL_FAILURE == IV_Rtv_IVCNTLPARAM(&l_sys_ivcntl_param_struct,&int_retstat))
+	{
+		CO_InsertErr(l_debug_info_ptr,24,"billparaundefined",APL_NULL_STRING,APL_NULL_STRING,__LINE__,__FILE__);
+		APL_GOBACK_FAIL;
+	}
+
+
+	
+
+	if (l_sys_ivcntl_param_struct.generate_ind == 'N')
+	{
+		CO_InsertErr(l_debug_info_ptr,30,"billnotdelivered",APL_NULL_STRING,APL_NULL_STRING,__LINE__,__FILE__);
+		APL_GOBACK_FAIL
+	}
+
+
+	
+
+		fprintf(clt,"\t\tEXCEPTION REPORT(BILL RESEND)");
+
+		if (APL_FAILURE == CO_RtvSysDt(chr_h_repdate,l_debug_info_ptr))
+		{
+			APL_GOBACK_FAIL
+		}
+		chr_h_repdate[10] = APL_NULL_CHAR;
+
+		fprintf(clt,"\t%s\n",chr_h_repdate);
+					
+
+		fprintf(clt,"\t\tTHE FOLLOWING CUSTOMERS ARE UNAUTHORISED \n");
+		fprintf(clt,"\t\tTHEIR BILLS WOULD NOT BE RESENT\n");
+
+	
+
+		fprintf(pymnt,"\t\tEXCEPTION REPORT(BILL RESEND)");
+		fprintf(pymnt,"\t%s\n",chr_h_repdate);
+		fprintf(pymnt,"\t\tTHE FOLLOWING CUSTOMERS HAVE UNAUTHORISED PAYMENTS \n");
+		fprintf(pymnt,"\t\tTHEIR BILLS WOULD NOT BE RESENT\n");
+
+	
+	if (i_printaccount_struct->no_of_clt == 0)
+	{
+
+		EXEC SQL DECLARE mastercur CURSOR FOR
+		SELECT a.client 
+		FROM IV_CLIENTSETUP a ,MT_CLIENT b 
+		WHERE a.client = b.cln_code 
+		AND b.CLN_BILLABLEIND = 'Y'
+		AND (a.client = b.cLN_master OR a.b_gen_ind = 'S')
+		ORDER BY a.client;
+
+		EXEC SQL OPEN mastercur;
+		for(;;)
+		{
+
+			EXEC SQL FETCH  mastercur INTO
+			:h_dl_client:i_dl_client;
+			
+			IS_ANY_ORA_ERROR
+
+			if (sqlca.sqlcode == 1403)
+				break;
+			
+	   	if (APL_FAILURE == IV_Proc_ChkResend(clt,pymnt,h_dl_client,chr_p_remdup,&int_countunauthacc,&int_countunauthpymnt,l_debug_info_ptr))
+			{
+				APL_GOBACK_FAIL
+			}
+
+		}
+
+	}
+
+
+		
+	else 
+	{
+		for(i=0;i<i_printaccount_struct->no_of_clt;i++)
+		{
+
+				if (APL_FAILURE == IV_Proc_ChkResend(clt,pymnt,i_printaccount_struct->client[i],chr_p_remdup,&int_countunauthacc,&int_countunauthpymnt,&l_debug_info_ptr))
+				{
+					APL_GOBACK_FAIL
+				}
+		}
+
+
+	}
+
+	if (int_countunauthacc ==0)
+	{
+		fprintf(clt,"\n\t\tNO UNAUTHORISED ACCOUNTS \n ");
+	}
+
+	if (int_countunauthpymnt ==0)
+	{
+		fprintf(pymnt,"\n\t\tNO UNAUTHORISED PAYMENTS\n");
+	}
+		
+		
+		{
+			RETURN_SUCCESS:
+			#ifdef SYS_DEBUG
+			fprintf(APL_OUT_FILE ,"Leaving processtion IV_Proc_PrnAccount sucessfully\n");
+			#endif
+			return(APL_SUCCESS);
+
+			RETURN_FAILURE:
+			#ifdef SYS_DEBUG
+			fprintf(APL_OUT_FILE,"Leaving processtion IV_Proc_PrnAccount with errors\n");
+			#endif
+			return (APL_FAILURE);
+		}
+}
+
+
+int IV_Proc_ChkResend(	FILE* clt,
+					FILE* pymnt,	
+					char *chr_p_client,
+					char 	h_remdup,	
+					int *int_countunauthacc,
+					int *int_countunauthpymnt,
+					DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+
+IV_CLIENTSETUP_STRUCT l_iv_clt_setup_struct;
+
+
+int int_retstat= 0;
+int srlnum =0;
+int int_srnum =0;
+
+
+int int_h_countpymnt =0;
+
+
+
+		printf(" the accout is %s\n",chr_p_client);
+		printf("the remdup is %c\n",h_remdup);
+		
+		if (APL_FAILURE == IV_Rtv_IVCUSTSETUP(chr_p_client,&l_iv_clt_setup_struct,&int_retstat))
+		{
+	   		CO_InsertErr(l_debug_info_ptr,99,"bcustsetpundef",APL_NULL_STRING,APL_NULL_STRING,__LINE__,__FILE__);
+				APL_GOBACK_FAIL;
+		}
+
+		
+
+		if (l_iv_clt_setup_struct.stat_ind == 'U')
+		{
+			
+
+			(*int_countunauthacc)++;
+			printf("the chr_value of int_countunauthacc is %d\n",*int_countunauthacc);
+			srlnum++; 
+			fprintf(clt,"\n\n\t\t SR NO .\t\tACCOUNT\n");
+			fprintf(clt,"-------------------------------\n");
+			fprintf(clt,"\t\t %d",srlnum);
+			fprintf(clt,"\t\t%s\n",chr_p_client);
+		}
+
+
+		
+		if (APL_FAILURE == IV_Proc_CountIVPymt(chr_p_client,&int_h_countpymnt,&int_retstat))
+		{
+			APL_GOBACK_FAIL	
+		}
+
+		
+		
+		if (int_h_countpymnt !=0)
+		{
+			(*int_countunauthpymnt)++;
+			int_srnum++;
+			fprintf(pymnt,"\n\n\t\tSR NO. \t\tACCOUNT\n");
+			fprintf(pymnt,"-----------------------------------------\n");
+			fprintf(pymnt,"\t\t%d\t\t",int_srnum);
+			fprintf(pymnt,"\t\t%s\n",chr_p_client);
+		}
+
+		else
+		printf("the remdup is %c\n",h_remdup);
+		if (h_remdup == 'R')
+		{
+				if (APL_FAILURE ==GBDbInsIMSGENT("BLTLX","reminder",chr_p_client,l_debug_info_ptr))
+				{
+					CO_InsertErr(l_debug_info_ptr,30,"probleminsertingintoimsgent",APL_NULL_STRING,APL_NULL_STRING,__LINE__,__FILE__);
+					return APL_FAILURE;
+				}
+				
+		
+		}	
+		
+		if (h_remdup == 'D')
+		{
+				if (APL_FAILURE ==GBDbInsIMSGENT("BLTLX","duplicate",chr_p_client,l_debug_info_ptr))
+				{
+					CO_InsertErr(l_debug_info_ptr,30,"probleminsertingintoimsgent",APL_NULL_STRING,APL_NULL_STRING,__LINE__,__FILE__);
+					return APL_FAILURE;
+				}
+		}
+
+
+
+
+	APL_GOBACK_SUCCESS
+		
+	
+	{
+		RETURN_SUCCESS:
+		#ifdef SYS_DEBUG
+		fprintf(APL_OUT_FILE ,"Leaving processtion IV_Proc_PrnAccount sucessfully\n");
+		#endif
+		return(APL_SUCCESS);
+
+		RETURN_FAILURE:
+		#ifdef SYS_DEBUG
+		fprintf(APL_OUT_FILE,"Leaving processtion IV_Proc_PrnAccount with errors\n");
+		#endif
+		return (APL_FAILURE);
+	}
+} 
+

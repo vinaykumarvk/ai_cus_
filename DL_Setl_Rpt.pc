@@ -1,0 +1,224 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ 
+#include "stdio_64.h"
+#include <stdlib.h>
+#include <string.h>
+#include <CO_HostStructdef.h>
+
+EXEC SQL INCLUDE SQLCA.H;
+//main(int argc,char **argv)
+int main(int argc,char **argv)//Changes done for AIX Migration
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		char chr_uname[20] = "";
+		char chr_passwd[20] = "";
+		char chr_l_sys_date[20] = "";
+		char chr_l_country[20] = "";
+		char chr_l_branch_code[20] = "";
+		char chr_l_country_desc[40] = "";
+		int int_l_nbr_setledtxns = 0;
+		int int_l_ytod = 0;
+		EXEC SQL VAR chr_uname IS STRING;
+		EXEC SQL VAR chr_passwd IS STRING;
+		EXEC SQL VAR chr_l_sys_date IS STRING;
+		EXEC SQL VAR chr_l_country IS STRING;
+		EXEC SQL VAR chr_l_branch_code IS STRING;
+		EXEC SQL VAR chr_l_country_desc IS STRING;
+	EXEC SQL END DECLARE SECTION;
+   struct sqlca sqlca;
+   FILE	*fp = NULL;
+   FILE	*l_ptr_ini_file = NULL;
+   FILE	*errfp = NULL;
+	int i = 0;
+	char chr_l_mon[5] = "";
+	char chr_l_year[7] = "";
+	char nameof_file[25] = "";
+	char chr_l_cod_notxn[15] = "";
+	char chr_l_cod_total[15] = "";
+	char                 chr_l_inifile[60]="";
+	char                 chr_l_rep_dir[60]="";
+	char                 chr_l_log_dir[60]="";
+	char                 chr_l_dcreplog[80]="";
+	DEBUG_INFO_STRUCT_H         *l_debuginfo = NULL ;
+
+	sqlca.sqlcode = 0;
+
+	strcpy(chr_l_inifile,getenv("INTL_ROOT_PATH"));
+	strcat(chr_l_inifile,"intl_sun.cfg");
+   if ((l_ptr_ini_file = fopen(chr_l_inifile,"r")) == NULL)
+      exit(-1);
+
+	if (CO_ReadToken(l_ptr_ini_file,"INTL_LOG_PATH",chr_l_log_dir,&l_debuginfo) != APL_SUCCESS)
+         return(APL_FAILURE);
+
+	strcpy(chr_l_dcreplog,chr_l_log_dir);
+	strcat(chr_l_dcreplog,"/dcrep.err");
+   if ((errfp = fopen(chr_l_dcreplog,"w")) == NULL)
+	{
+      exit(-1);
+	}
+	
+	strcpy(chr_uname,argv[1]);
+	strcpy(chr_passwd,argv[2]);
+   EXEC SQL CONNECT :chr_uname IDENTIFIED BY :chr_passwd;
+
+   if (sqlca.sqlcode)
+   {
+   	fprintf(errfp, "\nError opening connection to Oracle\n");
+		fclose(errfp);
+      exit(-1);
+   }
+
+	
+
+   EXEC SQL SELECT SYS_DATE
+	INTO	:chr_l_sys_date
+	FROM	MT_EOMSYSDATE;
+	if (sqlca.sqlcode <0)
+	{
+   	fprintf(errfp, "\nError in getting system chr_date from CEOMSYSDATE\n");
+		fclose(errfp);
+		exit(-1);
+	}
+
+	chr_l_mon[0] = chr_l_sys_date[3];
+	chr_l_mon[1] = chr_l_sys_date[4];
+	chr_l_mon[2] = '\0';
+	chr_l_year[0] = chr_l_sys_date[6];
+	chr_l_year[1] = chr_l_sys_date[7];
+	chr_l_year[2] = chr_l_sys_date[8];
+	chr_l_year[3] = chr_l_sys_date[9];
+	chr_l_year[4] = '\0';
+	
+	if (strcmp(chr_l_mon,"01")==0)
+	{
+		EXEC SQL DELETE DEAL_COUNT;
+		printf ("The sqlca.sqlcode after delete is %d\n",sqlca.sqlcode);
+		if (sqlca.sqlcode <0)
+		{
+   		fprintf(errfp, "\nError in DELETING LAST YEARS DATA\n");
+			fclose(errfp);
+			exit(-1);
+		}
+	}
+	strcpy(chr_l_rep_dir,getenv("TRANSACTION_REPORT"));
+   strcpy(nameof_file,chr_l_rep_dir);
+   
+	strcat(nameof_file,"/NoTxn");
+	strcat(nameof_file,chr_l_mon);
+	strcat(nameof_file,chr_l_year);
+	strcat(nameof_file,".RPT");
+
+   if ((fp = fopen(nameof_file,"w")) == NULL)
+	{
+   	fprintf(errfp, "\nCouldn't open the Report File Pointer\n");
+		fclose(errfp);
+      exit(-1);
+	}
+
+   EXEC SQL SELECT NATION_CODE,BRNCH_CD
+	INTO	chr_l_country,chr_l_branch_code
+	FROM	MT_COMMON_SYS_PARAMS;
+	if (sqlca.sqlcode <0)
+	{
+   	fprintf(errfp, "\nError in selecting country,branch from COMMON_SYS_PARAMS\n");
+		fclose(errfp);
+		fclose(fp);
+		exit(-1);
+	}
+
+   EXEC SQL SELECT MAP_DESC
+	INTO	chr_l_country_desc
+	FROM	PRO_SGENSTAT
+	WHERE	MAP_TYPE='ISOCOUNTRY'
+	AND	MAP_VAL=:chr_l_country;
+	if (sqlca.sqlcode <0)
+	{
+   	fprintf(errfp, "\nError in selecting CODE_DESC from CSGENSTAT\n");
+		fclose(errfp);
+		fclose(fp);
+		exit(-1);
+	}
+
+	
+
+   EXEC SQL SELECT count(*)
+   INTO 	:int_l_nbr_setledtxns
+   FROM 	DL_HISDEAL, MT_EOMSYSDATE
+   WHERE	DEAL_STAT = 'CS'
+   AND		to_char(ALLOW_DROPDT,'MMYYYY') = to_char(SYS_DATE,'MMYYYY');
+
+
+	if (sqlca.sqlcode <0)
+	{
+   	fprintf(errfp, "\nError in selecting no. of txns from CHISTRADE\n");
+		fclose(errfp);
+		fclose(fp);
+		exit(-1);
+	}
+	
+	EXEC SQL INSERT INTO DEAL_COUNT 
+	VALUES (:chr_l_sys_date,:int_l_nbr_setledtxns);
+
+	if (sqlca.sqlcode <0)
+	{
+		if (sqlca.sqlcode!=-1)
+		{
+			fprintf(errfp, "\nError in inserting no. of txns to TRANSACTION_COUNT\n");
+			fclose(errfp);
+			fclose(fp);
+			exit(-1);
+		}
+	}
+	EXEC SQL COMMIT;
+
+	int_l_ytod = 0;
+	
+	
+	EXEC SQL SELECT NVL(SUM(DEAL_COUNT),0)
+	INTO	:int_l_ytod
+	FROM DEAL_COUNT,MT_EOMSYSDATE
+	WHERE	to_char(DEAL_COUNT.GENERATE_DATE,'YYYY') = to_char(MT_EOMSYSDATE.SYS_DATE,'YYYY');
+	
+	if (sqlca.sqlcode <0)
+	{
+   	fprintf(errfp, "Error in Selecting YtoD total \n");
+		fclose(errfp);
+		fclose(fp);
+		exit(-1);
+	}
+
+   fprintf(fp, "\n");
+   for (i=0;i<64;fprintf(fp, "-"),i++);
+   fprintf(fp, "\n							DC	Report\n");
+   for (i=0;i<64;fprintf(fp, "-"),i++);
+   fprintf(fp, "\n\nBranch Code		  Country		No. of Settled 	 YtoD Total\n");
+   fprintf(fp,"                              Transactions\n");
+   fprintf(fp, "-----------		  -------		--------------     ---------------\n");
+   fprintf(fp,"%3s",chr_l_branch_code);
+   fprintf(fp,"%8s%12s"," ",chr_l_country_desc);
+   fprintf(fp,"      ");
+	sprintf(chr_l_cod_notxn,"%d",int_l_nbr_setledtxns);
+   fprintf(fp,"%s%-18s"," ",chr_l_cod_notxn);
+	sprintf(chr_l_cod_total,"%d",int_l_ytod);
+   fprintf(fp,"%s%-18s"," ",chr_l_cod_total);
+   fprintf(fp, "\n\n");
+   for (i=0;i<64;fprintf(fp, "-"),i++);
+   fprintf(fp, "\n");
+	fclose(fp);
+	fclose(errfp);
+	return(0);
+}

@@ -1,0 +1,884 @@
+
+
+
+
+
+
+
+	#include "CO_Commdef.h"
+	#include "CO_HostStructdef.h"
+	EXEC SQL INCLUDE SQLCA.H;
+
+	#define PAGELENGTH 		50
+	#define APL_REFNO_LENGTH 	17
+	#define NBH_FS 			"999"    
+	#define NBH_APPEND 		"2"
+	#define NBH_BILL 			"2201"
+	#define NBH_INT_DEAL 		"930"
+	#define NBH_IND_T01 		"T1"  	
+	#define NBH_IND_T19 		"T19"  	
+	#define NBH_IND_T26 		"T26"  	
+	#define NBH_HIS_H01 		"H1"  	
+	#define NBH_HIS_H19 		"H19"  	
+	#define NBH_HIS_H26 		"H26"  	
+	#define NBH_IND_BILL 	"BIL"  	
+	#define NBH_IND_CA 		"COR"    
+	#define DEFUALT_CCYCD 	"USD"
+        #define CNTRY_CODE  "HU"
+
+int S_Makefiles(char *p_startdate,char *p_enddate,char **argv,FILE *p_logfile,DEBUG_INFO_STRUCT_H  **l_debug_info_ptr);
+
+int S_GetRecords(char *p_sysdate,char *p_startdate,char *p_enddate,FILE *p_repfile,FILE *p_logfile,DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+int PrntReport(char *chr_l_ind,char *chr_l_client_a,char *p_ibbs,char *p_regname,char *chr_l_ccycode,double l_countervalue,char *l_exec_date,char *chr_l_instrcode_a,double l_quantity,char *chr_l_nbhcode,char *chr_l_refno_a,char *chr_l_append_sign,int *rowcount,FILE *l_repfile,FILE *p_logfile,DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+//Changes done for AIX Migration -START
+int CO_Proc_RptClose(   FILE *p_fhandle, DEBUG_INFO_STRUCT_H **l_debug_info_ptr );
+int CO_SplitStr(        char *p_src,
+                                                char p_separator,
+                                                int *int_p_noelem,
+                                                char ***p_retstr );
+int CO_InsertOraErr(DEBUG_INFO_STRUCT_H **l_debug_info_ptr,
+                    char *ora_msg,
+                    char *h_key1,
+                    char *h_key2,
+                    char *h_key3,
+                    int h_line,
+                    char *h_file );
+extern int ltoa_r(long p_long,char *p_return, int p_length);
+int CO_PadString(char *pc_str_to_conv, char pc_l_or_r, int p_itot_len,\
+                                        char p_cpad_char[2], DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+int IV_Proc_ConvToFxFn(char *p_from_ccy,char *chr_p_to_ccy,char *p_dom_ccy,char *p_dt,
+               double *p_rate,int *int_p_retstat,DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+extern int CO_Rls_Context(void);
+
+//Changes done for AIX Migration - END
+//AIX -Warning Removal - Removed & for l_deug_info_ptr
+int CBNumToStr1( double chr_p_val, int p_declen, char *int_p_retval);
+
+/* OPT:AIX void main(int argc,char **argv) */
+int main(int argc,char **argv)
+{
+   struct sqlca sqlca;
+  // DEBUG_INFO_STRUCT_H *l_debug_info_ptr             =  NULL;Changes done for AIX Migration
+   DEBUG_INFO_STRUCT_H **l_debug_info_ptr             =  NULL;
+   INTL_ENV_DATA_STRUCT_H l_intl_env_data_h;
+   FILE  *l_finifile                      =  NULL;
+   FILE  *l_logfile                       =  NULL;
+   int   int_l_retval                         =  0;
+   char  chr_uname[APL_USERID_LEN]            =  APL_NULL_STRING;
+   char  chr_custody_id_b[APL_USERID_LEN]           =  APL_NULL_STRING;
+   char  chr_passwd[APL_PASSWD_LEN]           =  APL_NULL_STRING;
+   char  chr_l_inifile[PATH_LENGTH]           =  APL_NULL_STRING;
+   char  chr_l_startdate[APL_DATE_LEN]        = APL_NULL_STRING;
+   char  chr_l_enddate[APL_DATE_LEN]          = APL_NULL_STRING;
+   
+   EXEC SQL VAR chr_uname IS STRING;
+   EXEC SQL VAR chr_custody_id_b IS STRING;
+   EXEC SQL VAR chr_passwd IS STRING;
+	
+	int int_num =0;
+	char **temp =NULL;
+	char l_temp_processing_status[51] = APL_NULL_STRING;
+   sqlca.sqlcode = 0;
+
+
+   strcpy(chr_l_inifile,getenv("INTL_ROOT_PATH"));
+   strcat(chr_l_inifile,"/intl_sun.cfg");
+
+   if ( ( l_finifile=fopen(chr_l_inifile,"r") ) == NULL)
+   {
+      APL_GOBACK_FAIL
+   }
+
+
+
+	
+
+   APL_FETCH_DB_LOGIN_DETAILS(l_finifile, chr_custody_id_b, chr_uname, chr_passwd, APL_OUT_FILE, l_debug_info_ptr)
+
+   EXEC SQL CONNECT :chr_uname IDENTIFIED BY :chr_passwd;
+   
+   if (sqlca.sqlcode)
+   {
+      APL_GOBACK_FAIL
+   }
+   else
+   {
+      
+
+      if (APL_FAILURE == CO_Rtv_RptFileName( "3g",
+                                          APL_LOGFILE_DESC,
+                                          100,
+                                          argv[5],
+                                          argv,
+                                          &l_logfile,
+                                          l_debug_info_ptr ) )
+      {
+         APL_GOBACK_FAIL
+      }
+
+
+      
+
+	   EXEC SQL COMMIT WORK;
+
+      if (sqlca.sqlcode)
+      {
+         CO_ProcMonitor(l_logfile, "Could not commit after opening chr_log file", NULL, NULL);
+         CO_Proc_RptClose(l_logfile, l_debug_info_ptr); // AIX - Warnings removal
+         APL_GOBACK_FAIL
+      }
+
+      
+
+      if (APL_FAILURE == CO_RtvSysParams(l_debug_info_ptr))
+      {
+         CO_ProcMonitor(l_logfile, "Error In Getting System Parameters", NULL, NULL);
+         CO_Proc_RptClose(l_logfile, l_debug_info_ptr);
+         APL_GOBACK_FAIL
+      }
+	
+	   
+
+      if (APL_FAILURE == CO_SplitStr( argv[9],
+                                       '|',
+                                       &int_num,
+                                       &temp ))
+      {
+         CO_ProcMonitor(l_logfile, "Failure from StrSplitFn", NULL, NULL);
+         CO_Proc_RptClose(l_logfile, l_debug_info_ptr);
+         APL_GOBACK_FAIL
+      }
+
+      if (int_num != 2)
+      {
+         CO_ProcMonitor(l_logfile, "Improper Number of arguments", NULL, NULL);
+         CO_Proc_RptClose(l_logfile, l_debug_info_ptr);
+         APL_GOBACK_FAIL
+      }
+
+
+      strcpy(chr_l_startdate,	temp[0]);
+      strcpy(chr_l_enddate,		temp[1]);
+
+      
+
+      strcpy(l_intl_env_data_h.usr, 	argv[3]);
+      strcpy(l_intl_env_data_h.h_mode, 		argv[4]);
+      strcpy(l_intl_env_data_h.processtion, 	argv[5]);
+      strcpy(l_intl_env_data_h.auth_req, 	argv[6]);
+      strcpy(l_intl_env_data_h.subprocess, 	argv[7]);
+      strcpy(l_intl_env_data_h.h_process, 	argv[8]);
+
+
+      
+		
+      CO_ProcMonitor(l_logfile, "Calling S_Makefiles", NULL, NULL);
+
+      EXEC SQL SELECT PROCESSING_STATUS into :l_temp_processing_status
+		FROM SYS_BATCHPROC
+		WHERE PROCESS_NAME	=	:argv[0]
+		AND PROC_INIT 			=	:argv[1]
+		AND STARTDATE	=	:argv[2]
+		AND STATUS 		=	'started'
+		FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+      IS_ANY_ORA_ERROR
+
+      int_l_retval = S_Makefiles(chr_l_startdate,chr_l_enddate,argv,l_logfile,l_debug_info_ptr);
+
+      CO_ProcMonitor(l_logfile, "Returned from S_Makefiles", NULL, NULL);
+
+      if ( int_l_retval == APL_FAILURE )
+      {
+         CO_ProcMonitor(l_logfile, "S_Makefiles returned failure", NULL, NULL);
+         CO_Proc_RptClose(l_logfile, l_debug_info_ptr);
+			EXEC SQL ROLLBACK WORK RELEASE;
+         APL_GOBACK_FAIL
+		}
+      else
+      {
+         EXEC SQL UPDATE SYS_BATCHPROC
+         SET  status = 'completed'
+         WHERE PROCESS_NAME=:argv[0]
+         AND   PROC_INIT=:argv[1]
+         AND   STARTDATE=:argv[2]
+         AND   STATUS='started';
+
+			EXEC SQL COMMIT WORK RELEASE;
+         CO_Proc_RptClose(l_logfile, l_debug_info_ptr);
+         APL_GOBACK_SUCCESS
+      }
+   }
+	
+	fclose (l_finifile);
+
+   RETURN_SUCCESS	:	exit(0);
+
+   RETURN_FAILURE 	: 	exit(-1);
+
+} 
+
+
+
+
+int S_Makefiles(char *p_startdate,char *p_enddate,char **argv,FILE *p_logfile,DEBUG_INFO_STRUCT_H  **l_debug_info_ptr) 
+{
+
+	char chr_l_sysdate_b[APL_DATE_LEN] 	= 	APL_NULL_STRING;
+	int int_l_retval 						=	0;
+	FILE *l_repfile 					= 	NULL;
+
+	if(strcmp(p_startdate,APL_NULL_STRING) == 0)
+	{
+ 		APL_DATA_MISSING("START DATE MISSING",APL_NULL_STRING,APL_NULL_STRING)
+	}
+
+	if(strcmp(p_enddate,APL_NULL_STRING) == 0)
+	{
+		APL_DATA_MISSING("END DATE MISSING",APL_NULL_STRING,APL_NULL_STRING)
+	}
+
+	int_l_retval=CO_ProcMonitor(p_logfile,"Entered S_Makefiles Function",NULL,NULL);
+	if(int_l_retval ==APL_FAILURE)
+		APL_GOBACK_FAIL
+
+	
+
+	if(APL_FAILURE ==CO_Rtv_RptFileName("HB","Hungary Central Bank Monthly Report",
+					100,
+					argv[5],
+					argv,
+					&l_repfile,
+					l_debug_info_ptr))
+	{
+      CO_ProcMonitor(p_logfile,"Failure in opening the report h_file ",NULL,NULL);
+		APL_GOBACK_FAIL
+	}
+
+	
+	fprintf(l_repfile,"\n");
+
+	if(APL_FAILURE == CO_RtvSysDt(chr_l_sysdate_b,l_debug_info_ptr))
+	{
+      CO_ProcMonitor(p_logfile,"Failure in getting sysdate",NULL,NULL);
+		APL_GOBACK_FAIL
+	}
+	     
+	if(APL_FAILURE == S_GetRecords(chr_l_sysdate_b,p_startdate,p_enddate,l_repfile,p_logfile,l_debug_info_ptr))
+	{
+		APL_GOBACK_FAIL
+	}
+	
+APL_GOBACK_SUCCESS // AIX - Warnings
+
+	RETURN_SUCCESS:
+	{
+   	CO_Proc_RptClose(l_repfile,l_debug_info_ptr);
+		return(APL_SUCCESS);
+	}
+	RETURN_FAILURE:
+	{
+		CO_ProcMonitor(p_logfile,"Got Errors:",l_debug_info_ptr,NULL);
+		CO_Proc_RptClose(l_repfile,l_debug_info_ptr);
+		return(APL_FAILURE);
+	}
+
+} 
+
+
+
+int S_GetRecords(char *p_sysdate,char *p_startdate,char *p_enddate,FILE *p_repfile,FILE *p_logfile,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+char      chr_l_h_acc[APL_CLIENT_LENGTH] 		= APL_NULL_STRING;
+short     i_acc                  		= 0;
+char      chr_l_h_ccycode[APL_CCYCODE_LEN] = APL_NULL_STRING;
+short     i_currencycode                  	= 0;
+double    l_h_CounterValue             = 0.0;
+short     i_CounterValue             	= 0;
+char      chr_l_h_exec_date[9]           	= APL_NULL_STRING;
+short     i_exec_date                	= 0;
+char      chr_l_h_instrcode_A[APL_INSTRUMENTCODE_LEN]   = APL_NULL_STRING;
+short     i_instr_code                   	= 0;
+double    l_h_quantity_a                      = 0.0;
+short     i_qty                      	= 0;
+char      chr_l_h_sectrcode[5]           	= APL_NULL_STRING;
+short     i_instrdealcd                	= 0;
+char      chr_l_nbhcode[5]               	= APL_NULL_STRING;
+int 		 int_l_count 							= 0;
+char 		 chr_l_ind[4] 							= APL_NULL_STRING;
+char 		 chr_l_h_clhclient[16] 				= APL_NULL_STRING;
+char 		 chr_l_h_domcpac[APL_CLIENT_LENGTH] = APL_NULL_STRING;
+short 	 i_domcpclt_cd 							= 0;
+double 	 l_ae_rate 								= 0.0;
+int 		 int_l_retstat 							= 0;
+double 	 dbl_l_bill_countervalue 		   = 0.0;
+char  	 chr_l_h_nbhcode[5]   				= APL_NULL_STRING;
+short 	 i_nbhcode 							= 0;
+char		 chr_l_derived_nbh[5] 				= APL_NULL_STRING;
+
+char 		 chr_l_h_gl[APL_CLIENT_LENGTH] 	= APL_NULL_STRING;
+char 		 chr_l_h_regname[4] 					= APL_NULL_STRING;
+short 	 i_ibbs 								= 0;
+short 	 i_regclr_name 							= 0;
+
+char	 	 chr_l_h_trcode_a[2]						= APL_NULL_STRING;
+short		 i_dealcd							= 0 ;
+char		 chr_l_append_char[2]					= APL_NULL_STRING;
+char             chr_l_append_sign[2]                                       = APL_NULL_STRING;
+short		 i_flag = 0;
+
+char	chr_l_h_refno_A[APL_REFNO_LENGTH]	= APL_NULL_STRING;
+short 	l_i_refno = 0;
+
+
+char	chr_l_h_ourtheir[APL_FLAG_LENGTH];
+
+
+EXEC SQL VAR chr_l_h_acc     		IS STRING;
+EXEC SQL VAR chr_l_h_ccycode 		IS STRING;
+EXEC SQL VAR chr_l_h_instrcode_A 		IS STRING;
+EXEC SQL VAR chr_l_h_sectrcode 	IS STRING;
+EXEC SQL VAR chr_l_h_clhclient 	IS STRING;
+EXEC SQL VAR chr_l_h_domcpac    	IS STRING;
+
+EXEC SQL VAR chr_l_h_gl 			IS STRING;
+EXEC SQL VAR chr_l_h_regname 		IS STRING;
+EXEC SQL VAR chr_l_h_nbhcode 		IS STRING;
+EXEC SQL VAR chr_l_h_trcode_a 		IS STRING;
+EXEC SQL VAR chr_l_ind 				IS STRING;
+EXEC SQL VAR chr_l_h_refno_A 			IS STRING;
+
+memset(chr_l_h_acc,			APL_NULL_CHAR,	APL_CLIENT_LENGTH);
+memset(chr_l_h_ccycode,		APL_NULL_CHAR,	APL_CCYCODE_LEN);
+memset(chr_l_h_instrcode_A,		APL_NULL_CHAR,	APL_INSTRUMENTCODE_LEN);
+memset(chr_l_h_sectrcode,	APL_NULL_CHAR,	5);
+memset(chr_l_h_clhclient,	APL_NULL_CHAR,	16);
+memset(chr_l_h_domcpac,		APL_NULL_CHAR,	APL_CLIENT_LENGTH);
+memset(chr_l_h_gl,			APL_NULL_CHAR,	APL_CLIENT_LENGTH);
+memset(chr_l_h_regname,		APL_NULL_CHAR,	4);
+memset(chr_l_h_nbhcode,		APL_NULL_CHAR,	5);
+memset(chr_l_h_trcode_a,		APL_NULL_CHAR,	2);
+memset(chr_l_ind,				APL_NULL_CHAR,	4);
+memset(chr_l_h_refno_A,APL_NULL_CHAR,APL_REFNO_LENGTH); 
+strcpy(chr_l_h_ourtheir, APL_NULL_STRING);
+
+
+
+
+
+
+
+	EXEC SQL DECLARE getRecords CURSOR for
+	SELECT  
+		'BIL' Indicator,
+		b.CLIENT clt, 
+		b.B_CCYCD,
+		b.CONF_AMT,
+		TO_CHAR(B.DATEOF_PAYMENT,'YYYYMMDD'),
+		' ',
+		999,
+		' ',
+		' ', 
+		A.CLN_GL_ACCOUNT , 
+		SUBSTR(A.CLN_REG_NAME,1,3)  , 
+		' ',' ' 
+	FROM IV_CHEQUE b,MT_CLIENT a
+	WHERE 
+	b.CLIENT = a.CLN_CODE
+	AND A.CLN_DOMICILE = '2'
+	AND B.DATEOF_PAYMENT >= TO_DATE(:p_startdate,'DD/MM/YYYY') 
+	AND B.DATEOF_PAYMENT <= (TO_DATE(:p_enddate,'DD/MM/YYYY') + 1)
+	AND B.AE_DT IS NOT NULL
+	AND B.CHECKER_DT IS NOT NULL
+	UNION ALL
+	SELECT 
+		'COR' Indicator,
+		B.CLIENT clt,
+		B.PAYMENT_CCY,
+		(B.CURR_PYMT * (100 - b.TAX_RATE)/100 - b.OTHER_CHRGS),
+		TO_CHAR( B.DATEOF_PAYMENT,'YYYYMMDD'),
+		C.INSTR_CODE,
+		B.QUANTITY_RECEIVED,
+		D.SEC_DL_CODE,
+		' ',
+		A.CLN_GL_ACCOUNT , 
+		SUBSTR(A.CLN_REG_NAME,1,3) , 
+		' ',' ' 
+	FROM CACHEQUE B,CAEVENT C,MT_INSTRUMENT D, MT_CLIENT A
+	WHERE 
+	B.CLIENT = A.CLN_CODE 
+	AND   A.CLN_DOMICILE = '2'
+	AND 	B.DATEOF_PAYMENT >= TO_DATE(:p_startdate,'DD/MM/YYYY') 
+	AND 	B.DATEOF_PAYMENT <= (TO_DATE(:p_enddate,'DD/MM/YYYY') + 1)
+	AND   B.CORP_ID = C.CORP_ID
+	AND   C.INSTR_CODE = D.INSTR_CODE
+	AND   B.HF_DATE IS NOT NULL
+	AND   B.CHECKER_DT IS NOT NULL
+	UNION ALL
+	SELECT 
+		'T'||B.DL_CLASS Indicator,
+		B.CLIENT clt,
+		B.CURRENCY_CD,
+		B.AMOUNT,
+		to_char(B.MONEY_SETL_DT,'YYYYMMDD'),
+		B.INSTR_CODE,
+		B.QTY,
+		C.SEC_DL_CODE,
+		b.DOMESTIC_CPCLT ,
+		a.CLN_GL_ACCOUNT , 
+		SUBSTR(a.CLN_REG_NAME,1,3) , 
+		B.DEAL_CD,B.IDENTIY_NO 
+	FROM DL_DEAL B, MT_INSTRUMENT C , MT_CLIENT A
+	WHERE B.CLIENT = A.CLN_CODE
+	AND 	A.CLN_DOMICILE = '2'
+	AND 	B.MONEY_SETL_DT >= TO_DATE(:p_startdate,'DD/MM/YYYY') 
+	AND 	B.MONEY_SETL_DT <= (TO_DATE(:p_enddate,'DD/MM/YYYY') + 1)
+	AND 	B.INSTR_CODE = C.INSTR_CODE
+	AND 	B.DL_CLASS IN ('1','19','26')
+	AND 	B.DEAL_CD IN ('3','4')
+	AND 	B.MONEY_SETL_DT IS NOT NULL
+	AND 	B.CHECKER_DT  IS NOT NULL
+	AND 	B.HOST_DATE IS NOT NULL
+	UNION ALL
+	SELECT 
+		'H'||b.dl_class Indicator,
+		B.CLIENT clt,
+		B.CURRENCY_CD,
+		B.AMOUNT,
+		to_char(B.MONEY_SETL_DT,'YYYYMMDD'),
+		B.INSTR_CODE,
+		B.QTY,
+		C.SEC_DL_CODE,
+		b.DOMESTIC_CPCLT ,
+		' ',
+		' ' , 
+		B.DEAL_CD,B.IDENTIY_NO 
+	FROM DL_HISDEAL B, MT_INSTRUMENT C , MT_CLIENT A
+        WHERE B.CLIENT = A.CLN_CODE
+        AND   A.CLN_DOMICILE = '2'
+	AND	B.MONEY_SETL_DT >= TO_DATE(:p_startdate,'DD/MM/YYYY') 
+	AND 	B.MONEY_SETL_DT <= (TO_DATE(:p_enddate,'DD/MM/YYYY') + 1)
+	AND 	B.INSTR_CODE = C.INSTR_CODE
+	AND 	B.DL_CLASS IN ('1','19','26')
+	AND 	B.DEAL_CD IN ('3','4')
+	AND 	B.MONEY_SETL_DT IS NOT NULL
+	AND 	B.CHECKER_DT  IS NOT NULL
+	AND 	B.HOST_DATE IS NOT NULL
+	ORDER BY CLN_CODE, INDICATOR;
+
+   
+   EXEC SQL OPEN  getRecords ;
+	IS_ANY_ORA_ERROR
+
+   for (;;)
+	{
+		EXEC SQL FETCH getRecords INTO
+                :chr_l_ind:i_flag,
+					 :chr_l_h_acc:i_acc,
+                :chr_l_h_ccycode:i_currencycode,
+                :l_h_CounterValue:i_CounterValue,
+                :chr_l_h_exec_date:i_exec_date,
+                :chr_l_h_instrcode_A:i_instr_code,
+                :l_h_quantity_a:i_qty,
+                :chr_l_h_sectrcode:i_instrdealcd,
+                :chr_l_h_domcpac:i_domcpclt_cd,
+                :chr_l_h_gl:i_ibbs,
+                :chr_l_h_regname:i_regclr_name,
+                :chr_l_h_trcode_a:i_dealcd,
+		:chr_l_h_refno_A:l_i_refno;
+
+
+		IS_ANY_ORA_ERROR;
+
+      
+		if (APL_ZERO_RESULT_SET)
+		{
+			break;
+      }
+
+           
+		strcpy(chr_l_append_sign,"");	
+		strcpy(chr_l_append_char , ""); 
+           
+	
+		if((strcmp(chr_l_ind,NBH_IND_BILL)) && (strcmp(chr_l_ind,NBH_IND_CA)))
+		{
+		if( !strcmp(chr_l_h_trcode_a,"3") ) 
+		{				
+		  strcpy(chr_l_append_char , "2"); 
+		   strcpy(chr_l_append_sign,"");	
+		}									
+		else
+		{
+		  strcpy(chr_l_append_char,"1"); 
+		  strcpy(chr_l_append_sign,"-");
+		}	
+		}
+      	if ( strcmp(chr_l_ind,NBH_IND_BILL) )
+	{
+      		if ( !strcmp(chr_l_ind,NBH_IND_CA) )
+		{
+        		EXEC SQL select MAP_VAL into :chr_l_h_nbhcode:i_nbhcode from PRO_GMATCHVALUE
+        		where MAPTYPE='INDUSTRY_CA'
+        		and MAPVALUE = :chr_l_h_sectrcode;
+		}
+		else
+		{
+        		EXEC SQL select MAP_VAL into :chr_l_h_nbhcode:i_nbhcode from PRO_GMATCHVALUE
+        		where MAPTYPE='INDUSTRY_TR'
+        		and MAPVALUE = :chr_l_h_sectrcode;
+		}
+
+        IS_ANY_ORA_ERROR;
+
+        if ((i_nbhcode == -1) ||sqlca.sqlcode == 1403)
+		  {
+            fprintf(p_logfile,"No NBH Value in GmatchValue for the Instrtor h_code %s\n",chr_l_h_sectrcode);
+        		APL_GOBACK_FAIL
+		  }	
+		  else
+		  { 
+           strcpy(chr_l_derived_nbh,chr_l_h_nbhcode);
+      		
+			  if ( !strcmp(chr_l_ind,NBH_IND_CA) )
+					strcat(chr_l_derived_nbh,NBH_APPEND);
+           else 
+					strcat(chr_l_derived_nbh,chr_l_append_char);
+		  }
+
+		}
+
+
+	
+
+	
+
+      
+      if ((strcmp(chr_l_ind,NBH_IND_T01) == 0) || (strcmp(chr_l_ind,NBH_HIS_H01) == 0) || (strcmp(chr_l_ind,NBH_HIS_H19) == 0) || (strcmp(chr_l_ind,NBH_HIS_H26) == 0))
+      {
+         EXEC SQL select CLN_GL_ACCOUNT,substr(CLN_REG_NAME,1,3) into
+         :chr_l_h_gl:i_ibbs,
+         :chr_l_h_regname:i_regclr_name from MT_CLIENT 
+         where CLN_CODE = :chr_l_h_acc and CLN_DOMICILE = 2;
+
+         IS_ANY_ORA_ERROR
+
+         if(i_ibbs == -1 ||sqlca.sqlcode ==1403)
+         {
+           fprintf(p_logfile,"Could not find Account %s in MT_CLIENT table ",chr_l_h_acc);
+         }
+      } 
+
+	
+	
+
+   if (strcmp(chr_l_ind,NBH_IND_BILL) == 0)
+   {
+     strcpy(chr_l_nbhcode, NBH_BILL);
+   }
+ 
+   if (strcmp(chr_l_ind,NBH_IND_CA) == 0)
+   {
+      if (strcmp(chr_l_h_sectrcode,NBH_FS) == 0)
+      {
+         strcpy( chr_l_nbhcode,NBH_FS) ;
+      }
+      else
+      {
+         strcpy(chr_l_nbhcode,chr_l_derived_nbh);
+      }
+            
+   }
+    
+
+  if ((strcmp(chr_l_ind,NBH_IND_T19) == 0)  || (strcmp(chr_l_ind,NBH_HIS_H19) == 0))
+  {
+     if (strcmp(chr_l_h_sectrcode,NBH_FS) == 0)
+         strcpy( chr_l_nbhcode,NBH_FS) ;
+     else
+	  {
+         strcpy(chr_l_nbhcode,chr_l_derived_nbh);
+	  }
+  }
+      
+  if ((strcmp(chr_l_ind,NBH_IND_T26) == 0)  || (strcmp(chr_l_ind,NBH_HIS_H26) == 0))
+  {
+     if (strcmp(chr_l_h_sectrcode,NBH_FS) == 0)
+     {
+       strcpy( chr_l_nbhcode,NBH_FS) ;
+       
+     }
+     else
+	  {		 
+             strcpy( chr_l_nbhcode,NBH_INT_DEAL) ;
+				 strcat( chr_l_nbhcode,chr_l_append_char);
+           strcpy(chr_l_h_regname,""); 
+		 
+	  }	
+  }
+
+  if ((strcmp(chr_l_ind,NBH_IND_T01) == 0) || (strcmp(chr_l_ind,NBH_HIS_H01) == 0))
+  {
+      if (strcmp(chr_l_h_sectrcode,NBH_FS) == 0)
+      {
+         strcpy( chr_l_nbhcode,NBH_FS) ;
+      }
+      else
+      {
+	       
+	 
+
+         
+        strcpy(chr_l_nbhcode,chr_l_derived_nbh); 
+
+      }
+  }
+
+
+  
+
+
+   
+
+  if (strcmp(chr_l_ind,NBH_IND_BILL) == 0 )
+  {
+     l_ae_rate = 0.0;
+      
+	  if (APL_FAILURE == IV_Proc_ConvToFxFn(chr_l_h_ccycode,DEFUALT_CCYCD,
+                                   (char *)g_mt_commonsys_params_struct_h.dom_ccy,
+                                   p_sysdate,&l_ae_rate,&int_l_retstat,l_debug_info_ptr))
+     { 
+         CO_ProcMonitor(p_logfile,"Failure in ConvToFxFn",NULL,NULL);
+         APL_GOBACK_FAIL
+     }
+
+     dbl_l_bill_countervalue =  l_h_CounterValue * l_ae_rate;
+
+
+	  if(PrntReport(chr_l_ind,chr_l_h_acc,chr_l_h_gl,chr_l_h_regname,chr_l_h_ccycode,
+						 dbl_l_bill_countervalue,chr_l_h_exec_date,chr_l_h_instrcode_A,l_h_quantity_a,
+						 chr_l_nbhcode,chr_l_h_refno_A,chr_l_append_sign,&int_l_count,p_repfile,p_logfile,l_debug_info_ptr)==APL_FAILURE)
+	  {
+         CO_ProcMonitor(p_logfile,"Failure in PrntReport Function",NULL,NULL);
+			APL_GOBACK_FAIL
+	  }
+  }
+  else
+	 
+	  if(PrntReport(chr_l_ind,chr_l_h_acc,chr_l_h_gl,chr_l_h_regname,chr_l_h_ccycode,
+						 l_h_CounterValue,chr_l_h_exec_date,chr_l_h_instrcode_A,l_h_quantity_a,
+						 chr_l_nbhcode,chr_l_h_refno_A,chr_l_append_sign,&int_l_count,p_repfile,p_logfile,l_debug_info_ptr)==APL_FAILURE)
+     {
+         CO_ProcMonitor(p_logfile,"Failure in PrntReport Function",NULL,NULL);
+         APL_GOBACK_FAIL
+     }
+    
+	} 
+
+	EXEC SQL CLOSE getRecords;
+	IS_ANY_ORA_ERROR
+
+APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+	{
+		CO_ProcMonitor(p_logfile,"Exiting successfully from S_GetRecords",NULL,NULL);
+		return(APL_SUCCESS);
+	}
+	
+	RETURN_FAILURE:
+	{
+		CO_ProcMonitor(p_logfile,"Exiting Unsuccessfully from S_GetRecords",l_debug_info_ptr,NULL);
+		return(APL_FAILURE);
+	}
+
+} 
+
+
+	
+int PrntReport(char *chr_l_ind,char *chr_l_client_a,char *p_ibbs,char *p_regname,char *chr_l_ccycode,double l_countervalue,char *l_exec_date,char *chr_l_instrcode_a,double l_quantity,char *chr_l_nbhcode,char *chr_l_refno_a,char *chr_l_append_sign,int *rowcount,FILE *l_repfile,FILE *p_logfile,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	char chr_l_str_countervalue[18] 	= APL_NULL_STRING; 
+	char chr_l_str_qty[18] 				= APL_NULL_STRING;
+
+	CO_ProcMonitor(p_logfile, "Entering PrntReport", NULL, NULL);
+
+   if(APL_FAILURE == CO_PadString(chr_l_client_a,'R' , 10," ",l_debug_info_ptr))
+   {
+     CO_ProcMonitor(p_logfile,"Failure in CO_PadString Function for l_account",NULL,NULL);
+     APL_GOBACK_FAIL
+   } 
+
+   if(APL_FAILURE == CO_PadString(p_ibbs,'R' , 10," ",l_debug_info_ptr))
+   {
+     CO_ProcMonitor(p_logfile,"Failure in CO_PadString Function for p_ibbs",NULL,NULL);
+     APL_GOBACK_FAIL
+   }
+
+   if(APL_FAILURE == CO_PadString(chr_l_ccycode,'R' , 3," ",l_debug_info_ptr))
+   {
+      CO_ProcMonitor(p_logfile,"Failure in CO_PadString Function for l_ccycode",NULL,NULL);
+      APL_GOBACK_FAIL
+   }
+
+   if(APL_FAILURE == (CBNumToStr1(l_countervalue,0,chr_l_str_countervalue)))
+   {
+      CO_ProcMonitor(p_logfile,"Failure in CBNumToStr1 Function for l_CounterValue",NULL,NULL);
+      APL_GOBACK_FAIL
+   } 
+
+   if(strcmp(chr_l_append_sign,"-") == 0)
+   {			
+   	if(APL_FAILURE == CO_PadString(chr_l_str_countervalue,'R' , 14," ",l_debug_info_ptr))
+   	{
+      	CO_ProcMonitor(p_logfile,"Failure in CO_PadString Function for l_str_CounterValue",NULL,NULL);
+      	APL_GOBACK_FAIL
+   	}
+   }
+   else
+   {			
+   	if(APL_FAILURE == CO_PadString(chr_l_str_countervalue,'R' , 15," ",l_debug_info_ptr))
+   	{
+     	 CO_ProcMonitor(p_logfile,"Failure in CO_PadString Function for l_str_CounterValue",NULL,NULL);
+      	APL_GOBACK_FAIL
+   	}
+   }
+
+   if(APL_FAILURE == (CBNumToStr1(l_quantity,4,chr_l_str_qty)))
+   {
+      CO_ProcMonitor(p_logfile,"Failure in CBNumToStr1 Function for l_qty",NULL,NULL);
+      APL_GOBACK_FAIL
+   }
+
+   if(APL_FAILURE == CO_PadString(chr_l_str_qty,'R' , 15," ",l_debug_info_ptr))
+   {
+      CO_ProcMonitor(p_logfile,"Failure in CO_PadString Function for l_str_qty",NULL,NULL);
+      APL_GOBACK_FAIL
+   }
+
+
+   if(APL_FAILURE == CO_PadString(chr_l_instrcode_a,'R' , 8," ",l_debug_info_ptr))
+   {
+      CO_ProcMonitor(p_logfile,"Failure in CO_PadString Function for l_instr_code",NULL,NULL);
+      APL_GOBACK_FAIL
+   }
+
+   if(APL_FAILURE == CO_PadString(chr_l_nbhcode,'R' , 4," ",l_debug_info_ptr))
+   {
+      CO_ProcMonitor(p_logfile,"Failure in CO_PadString Function for l_nbhcode",NULL,NULL);
+      APL_GOBACK_FAIL
+   }
+
+   if (strcmp(p_regname,"") != 0)
+   {
+     if(APL_FAILURE == CO_PadString(p_regname,'R' , 3," ",l_debug_info_ptr))
+     {
+       CO_ProcMonitor(p_logfile,"Failure in CO_PadString Function for p_regname",NULL,NULL);
+       APL_GOBACK_FAIL
+     }
+   }
+ 
+
+   fprintf(l_repfile,"%s",chr_l_client_a);
+   fprintf(l_repfile,",");
+
+   if (strcmp(chr_l_ind,"BIL") != 0)
+   { 
+		fprintf(l_repfile,"%s",p_ibbs); 
+	}
+   else
+   { 
+		fprintf(l_repfile,"%s          ",p_ibbs);  //AIX - Warnings Removal
+	}
+ 
+	fprintf(l_repfile,",");
+   
+	if (strcmp(chr_l_ind,NBH_IND_BILL) != 0)
+   { 
+		fprintf(l_repfile,"%s",chr_l_ccycode);
+	}
+   else
+   {  
+		fprintf(l_repfile,"%s",DEFUALT_CCYCD); 
+	}
+
+ 	fprintf(l_repfile,",");
+	fprintf(l_repfile,"%s",chr_l_append_sign);
+ 	fprintf(l_repfile,"%s",chr_l_str_countervalue);
+ 	fprintf(l_repfile,",");
+ 	fprintf(l_repfile,"%.8s",l_exec_date);
+ 	fprintf(l_repfile,",");
+   
+	if (strcmp(chr_l_ind,"BIL") != 0)
+   {
+      fprintf(l_repfile,"%s",chr_l_instrcode_a);
+   }
+   else
+   {
+		fprintf(l_repfile,"%s        ", chr_l_instrcode_a); //AIX - Warnings Removal
+	}
+ 
+	fprintf(l_repfile,",");
+
+   if (strcmp(chr_l_ind,"BIL") != 0)
+   {
+      fprintf(l_repfile,"%s",chr_l_str_qty);
+   }
+   else 
+   {
+     fprintf(l_repfile,"%s               ",chr_l_str_qty); //AIX - Warnings Removal
+   }
+	
+	fprintf(l_repfile,",");
+   fprintf(l_repfile,"%s",chr_l_nbhcode);
+   fprintf(l_repfile,",");
+
+   if ( strcmp(p_regname,"") == 0)
+      //fprintf(l_repfile,"%s   "); Changes done for AIX Migration
+      fprintf(l_repfile,"  ");
+   else
+      fprintf(l_repfile,"%s",p_regname);
+   fprintf(l_repfile,","); 
+   fprintf(l_repfile,"%s",chr_l_refno_a);
+
+   fprintf(l_repfile,"\n");
+
+
+   APL_GOBACK_SUCCESS
+
+
+	RETURN_SUCCESS:
+	{
+		CO_ProcMonitor(p_logfile,"Exiting successfully from PrntReport",NULL,NULL);
+		return(APL_SUCCESS);
+	}
+
+	RETURN_FAILURE:
+	{
+		CO_ProcMonitor(p_logfile,"Exiting Unsuccessfully from PrntReport",l_debug_info_ptr,NULL);
+		return(APL_FAILURE);
+	}
+
+} 
+
+
+
+int CBNumToStr1( double chr_p_val,
+                                                int      p_declen,
+                                                char    *int_p_retval)
+{
+        char    chr_l_tgt1[30] = "";
+        char    chr_l_fmt[6]   = "";
+
+        sprintf(chr_l_fmt, "%%.%dlf", p_declen);
+        sprintf(chr_l_tgt1, chr_l_fmt, chr_p_val);
+        memset(chr_l_fmt, NULL, 6);
+        strcpy(int_p_retval, chr_l_tgt1);
+        return(APL_SUCCESS);
+
+} 
+
+

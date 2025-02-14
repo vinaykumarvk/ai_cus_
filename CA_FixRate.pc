@@ -1,0 +1,503 @@
+#include <string.h>
+#include <Intellect_Interface.h>
+#include <Intellect_Common.h>
+EXEC SQL INCLUDE SQLCA;
+
+#define  S_YEAR_POS           6
+#define  S_YEAR_LEN           4
+#define  S_MONTH_POS          3
+#define  S_DAY_POS            0
+#define  S_MONTH_LEN          2
+#define  S_DAY_LENGTH         2
+#define  S_DEC_LENGTH         4
+#define  S_DAYS_IN_YEAR       365
+#define  S_LAST_DAY           "31/12/%s 00:00:00"
+#define  S_FIRST_DAY          "01/01/%s 00:00:00"
+
+
+
+/* Added by kotubabu for Linux Migration-Start*/
+#ifdef OS_LINUX
+FILE *l_logfile;
+#else
+FILE *l_logfile = APL_OUT_FILE;
+#endif
+/* Added by kotubabu for Linux Migration-END*/
+static int  CA_CalcDaysInAYear(  int            chr_p_year,
+                                 double            *p_no_days,
+                                 DEBUG_INFO_STRUCT_H  **l_debug_info_ptr)
+
+{
+		/* Added by kotubabu for Linux Migration -Start*/
+		#ifdef OS_LINUX
+        l_logfile=APL_OUT_FILE;
+        #endif
+		/* Added by kotubabu for Linux Migration -END*/
+	APL_FUNCTION_ENTER(l_logfile)
+   *p_no_days = (!(chr_p_year%4)?(!(chr_p_year%100)?(!(chr_p_year%400)?366:365):366):365);
+   APL_GOBACK_SUCCESS
+	
+RETURN_SUCCESS:
+	APL_FUNCTION_RET_SUCCESS(APL_OUT_FILE)
+
+RETURN_FAILURE:
+	APL_FUNCTION_RET_FAILURE(APL_OUT_FILE)
+}
+
+int Process_Year( char *p_from_date,
+						char *p_to_date,
+						DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	struct sqlca sqlca;
+	double l_dbl_year = 0.0;
+	char l_year[S_YEAR_LEN] = APL_NULL_STRING;
+	char l_last_day[APL_DATE_LEN] = APL_NULL_STRING;
+    /* Added by kotubabu for Linux Migration-Start*/
+	#ifdef OS_LINUX
+        l_logfile=APL_OUT_FILE;
+    #endif
+    /* Added by kotubabu for Linux Migration -END*/
+
+	APL_FUNCTION_ENTER(l_logfile)
+	strncpy(l_year, p_from_date + S_YEAR_POS, S_YEAR_LEN);
+	l_dbl_year =  atof(l_year);
+	sprintf(l_last_day,S_LAST_DAY,ltoa(l_dbl_year));
+	if (strncmp(p_from_date + S_YEAR_POS,p_to_date + S_YEAR_POS, S_YEAR_LEN))
+	{
+		strcpy(p_to_date,l_last_day);
+	}
+RETURN_SUCCESS:
+	APL_FUNCTION_RET_SUCCESS(APL_OUT_FILE)
+
+RETURN_FAILURE:
+	APL_FUNCTION_RET_FAILURE(APL_OUT_FILE)
+}
+
+int Rtv_To_Date(	char *p_date,
+						char *p_instr_code,
+						char *p_to_date,
+						DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	struct sqlca sqlca;
+	int l_count = 0;
+	char l_to_date_1[APL_DATE_LEN] = APL_NULL_STRING;
+	char l_to_date_2[APL_DATE_LEN] = APL_NULL_STRING;
+	int l_date_diff = 0;
+	short i_to_date_1 = 0;
+	short i_to_date_2 = 0;
+    /* Added by kotubabu for Linux Migration-Start*/
+	#ifdef OS_LINUX
+        l_logfile=APL_OUT_FILE;
+    #endif
+    /* Added by kotubabu for Linux Migration -END*/
+	APL_FUNCTION_ENTER(l_logfile)
+	printf("From Date |%s| To Date |%s|\n",p_date,p_to_date);
+	EXEC SQL SELECT NVL(COUNT(*),0) 
+				INTO :l_count
+				FROM MT_RESET_DET
+				WHERE INSTR_CODE = :p_instr_code;
+	IS_ANY_ORA_ERROR
+	if(l_count)
+	{
+		EXEC SQL SELECT to_char(reset_todt,'dd/mm/yyyy hh12:mi:ss') reset_todt
+			into :l_to_date_1:i_to_date_1
+			FROM MT_RESET_DET
+			where instr_code = :p_instr_code
+			and reset_frdt = (SELECT Max(RESET_FRDT)
+					FROM MT_RESET_DET
+					WHERE INSTR_CODE = :p_instr_code
+					AND TO_DATE(:p_date,'dd/mm/yyyy hh24:mi:ss') >= RESET_FRDT 
+					AND TO_DATE(:p_date,'dd/mm/yyyy hh24:mi:ss') <= RESET_TODT
+					AND STATUS = 'AA')
+			AND STATUS = 'AA';
+			IS_ANY_ORA_ERROR
+			if(!strlen(l_to_date_1))
+				strcpy(l_to_date_1,p_to_date);
+
+			EXEC SQL SELECT min(RESET_FRDT) - 1
+			into :l_to_date_2:i_to_date_2
+			FROM MT_RESET_DET
+			WHERE INSTR_CODE = :p_instr_code
+			AND TO_DATE(:p_date,'dd/mm/yyyy hh24:mi:ss') < RESET_FRDT
+			AND STATUS = 'AA';
+			IS_ANY_ORA_ERROR
+
+			if(!strlen(l_to_date_2))
+				strcpy(l_to_date_2,p_to_date);
+
+			EXEC SQL SELECT NVL(to_date(:l_to_date_1) - to_date(:l_to_date_2),0)
+			into :l_date_diff
+			FROM DUAL;
+		IS_ANY_ORA_ERROR
+
+	printf("Date 1 |%s| Date 2 |%s|\n",l_to_date_1,l_to_date_2);
+		if(l_date_diff > 0)
+		{
+			strcpy(p_to_date,l_to_date_2);	
+		}
+		else
+		{
+/* If Reset to Date maintain in reset tab is > Payment Date in Event than consider Payment Date */ 			
+			EXEC SQL SELECT NVL(to_date(:p_to_date) - to_date(:l_to_date_1),0)
+                        into :l_date_diff
+                        FROM DUAL;
+                	IS_ANY_ORA_ERROR
+			if(l_date_diff > 0)
+				strcpy(p_to_date,l_to_date_1);	
+/* Chirag 27-11-2006 */
+		}
+
+	}
+	printf("From Date |%s| To Date |%s|\n",p_date,p_to_date);
+	if(Process_Year(	p_date,
+							p_to_date,
+							l_debug_info_ptr) == APL_FAILURE)
+	{
+		APL_GOBACK_FAIL
+	}
+APL_GOBACK_SUCCESS  // AIX -Warnings Reaoval
+RETURN_SUCCESS:
+	APL_FUNCTION_RET_SUCCESS(APL_OUT_FILE)
+
+RETURN_FAILURE:
+	APL_FUNCTION_RET_FAILURE(APL_OUT_FILE)
+}
+
+int Rtv_Int_Rate( char *p_instr_code,
+						char *p_from_date,
+						char *p_to_date,
+						double *p_int_rate,
+						DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	struct sqlca sqlca;
+	int l_count = 0;
+
+	/* Chirag 21-11-2006 */
+	char l_frm_date[11] = APL_NULL_STRING;
+	char l_to_date[11] = APL_NULL_STRING; 
+	/* Chirag 21-11-2006 */
+    /* Added by kotubabu for Linux Migration-Start*/
+	#ifdef OS_LINUX
+        l_logfile=APL_OUT_FILE;
+    #endif
+    /* Added by kotubabu for Linux Migration -END*/
+	
+	APL_FUNCTION_ENTER(l_logfile)
+
+	/** Check whether any Data present in reset interest table **/
+	double l_int_rate = 0.0;/* Temporary variable used to fetch data frm qry */
+	*p_int_rate = 0.0;		
+
+	EXEC SQL SELECT NVL(COUNT(*),0) 
+				INTO :l_count
+				FROM MT_RESET_DET
+				WHERE INSTR_CODE = :p_instr_code;
+	IS_ANY_ORA_ERROR
+
+	Alert("From Date |%s|\n",p_from_date);
+	Alert("To Date |%s|\n",p_to_date);
+	/* Chirag Chngs done for qry time formate was not working in qry thts y only date is kept */ 	
+	strncpy(l_frm_date,p_from_date,10);
+	strncpy(l_to_date,p_to_date,10);
+
+	Alert("From l_frm_date |%s| To l_to_date |%s|\n",l_frm_date,l_to_date);
+	/** Get the interest rate only considering from date **/
+
+	if(l_count)
+	{
+		EXEC SQL SELECT reset_rate
+			into :l_int_rate
+			FROM MT_RESET_DET
+			where instr_code = :p_instr_code
+			and reset_frdt = (SELECT Max(RESET_FRDT)
+					FROM MT_RESET_DET
+					WHERE INSTR_CODE = :p_instr_code
+					AND TO_DATE(:l_frm_date,'dd/mm/yyyy hh24:mi:ss') >= RESET_FRDT 
+					AND TO_DATE(:l_to_date,'dd/mm/yyyy hh24:mi:ss') <= RESET_TODT
+					AND STATUS = 'AA')
+			AND STATUS = 'AA';
+			IS_ANY_ORA_ERROR
+	/* Chirag Chngs done for above qry time formate was not working in qry thts y only date is kept */
+	Alert("Interest Rate from Reset Tab |%lf| \n",l_int_rate);
+	}
+	if(l_int_rate == 0)
+	{
+		/** Select Rate from Instrument table **/
+
+		EXEC SQL SELECT NVL(INSTR_INT_RATE,0.0)
+			INTO :l_int_rate
+			FROM MT_INSTRUMENT
+			WHERE INSTR_CODE = :p_instr_code;
+		IS_ANY_ORA_ERROR
+		Alert("Interest Rate from MT_INSTRUMENT |%lf| \n",l_int_rate);
+	}
+	*p_int_rate = l_int_rate;/* Temporary variable used to fetch data frm qry */
+	Alert("Final Interest Rate |%lf|\n",*p_int_rate);
+
+APL_GOBACK_SUCCESS  // AIX -Warnings Reaoval
+RETURN_SUCCESS:
+	APL_FUNCTION_RET_SUCCESS(APL_OUT_FILE)
+
+RETURN_FAILURE:
+	APL_FUNCTION_RET_FAILURE(APL_OUT_FILE)
+}
+int Rtv_Int_Values(	char *p_from_date,
+							char *p_to_date,
+							double *p_act_days,
+							double *p_calc_days,
+							double *p_days_year,	
+						DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	struct sqlca sqlca;
+	double l_dbl_year = 0.0;
+	double l_dbl_from_month = 0.0;
+	double l_dbl_to_month = 0.0;
+	double l_dbl_from_day = 0.0;
+	double l_dbl_to_day = 0.0;
+
+	/* Chirag 21-11-2006 */
+        char l_frm_date[11] = APL_NULL_STRING;
+        char l_to_date[11] = APL_NULL_STRING;
+        /* Chirag 21-11-2006 */
+
+	char l_year[S_YEAR_LEN + 1] = APL_NULL_STRING;
+	char l_from_month[S_MONTH_LEN + 1] = APL_NULL_STRING;
+	char l_to_month[S_MONTH_LEN + 1] = APL_NULL_STRING;
+	char l_from_day[S_DAY_LENGTH + 1] = APL_NULL_STRING;
+	char l_to_day[S_DAY_LENGTH + 1] = APL_NULL_STRING;
+    /* Added by kotubabu for Linux Migration-Start*/
+	#ifdef OS_LINUX
+        l_logfile=APL_OUT_FILE;
+    #endif
+    /* Added by kotubabu for Linux Migration -END*/
+
+	APL_FUNCTION_ENTER(l_logfile)
+
+	strncpy(l_year, p_from_date + S_YEAR_POS, S_YEAR_LEN);
+	l_dbl_year =  atof(l_year);
+
+	if(CA_CalcDaysInAYear(	atoi(l_year),
+									p_days_year,
+									l_debug_info_ptr)==APL_FAILURE)
+	{
+		APL_GOBACK_FAIL
+	}
+	Alert("TO DATE |%s| FROM DATE |%s|\n",p_to_date,p_from_date);
+	/* Chirag Chngs done for qry time formate was not working in qry thts y only date is kept */
+        strncpy(l_frm_date,p_from_date,10);
+        strncpy(l_to_date,p_to_date,10);
+
+        Alert("From l_frm_date |%s| To l_to_date |%s|\n",l_frm_date,l_to_date);
+	
+	EXEC SQL SELECT NVL(TO_DATE(:l_to_date,'dd/mm/yyyy') - TO_DATE(:l_frm_date,'dd/mm/yyyy'),0.0)
+				INTO :p_act_days
+				FROM DUAL;
+	*p_act_days = *p_act_days + 1;	
+	Alert("Actual Days |%lf| \n",*p_act_days);
+	/** 1 should be added **/
+	strncpy(l_from_month, p_from_date+S_MONTH_POS, S_MONTH_LEN);
+	strncpy(l_to_month, p_to_date+S_MONTH_POS, S_MONTH_LEN);
+	strncpy(l_from_day, p_from_date+S_DAY_POS, S_DAY_LENGTH);
+	strncpy(l_to_day, p_to_date+S_DAY_POS, S_DAY_LENGTH);
+	l_dbl_from_month =  atof(l_from_month);
+	l_dbl_to_month    =  atof(l_to_month);
+	l_dbl_from_day      =  atof(l_from_day);
+	l_dbl_to_day      =  atof(l_to_day);
+
+	Alert("l_dbl_from_month |%lf| l_dbl_to_month |%lf| l_dbl_from_day |%lf| l_dbl_to_day |%lf|\n",l_dbl_from_month,l_dbl_to_month,l_dbl_from_day,l_dbl_to_day);
+
+	*p_calc_days = 30.0 * (l_dbl_to_month - l_dbl_from_month) + (l_dbl_to_day - l_dbl_from_day) ;
+	Alert("p_calc_days |%lf| \n",*p_calc_days);
+	/** 1 should be added **/
+
+APL_GOBACK_SUCCESS  // AIX -Warnings Reaoval
+RETURN_SUCCESS:
+	APL_FUNCTION_RET_SUCCESS(APL_OUT_FILE)
+
+RETURN_FAILURE:
+	APL_FUNCTION_RET_FAILURE(APL_OUT_FILE)
+			
+}
+
+int Process_Calc(	char *l_calc_type,
+						double p_rate,
+						double p_act_days,
+						double p_calc_days,
+						double p_days_year,
+						double *p_value,
+						DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	struct sqlca sqlca;
+    /* Added by kotubabu for Linux Migration-Start*/
+	#ifdef OS_LINUX
+        l_logfile=APL_OUT_FILE;
+    #endif
+    /* Added by kotubabu for Linux Migration -END*/
+
+	APL_FUNCTION_ENTER(l_logfile)
+	switch(l_calc_type[0])
+	{
+		case 'A':
+					*p_value = (p_rate / 100.00) * (p_act_days/360.00);
+					fprintf(l_logfile,"A : value (%lf) = (rate (%lf) /100.00) * (Actual Days (%lf) / 360.00)\n",*p_value,p_rate,p_act_days);
+					break;
+		case 'B':
+					*p_value = (p_rate / 100.00) * (p_act_days/p_days_year);
+					fprintf(l_logfile,"B : value (%lf) = (rate (%lf) /100.00) * (Actual Days (%lf) / Days In Year (%lf) )\n",*p_value,p_rate,p_act_days,p_days_year);
+					break;
+		case 'C':
+					*p_value = (p_rate / 100.00) * (p_calc_days/p_days_year);
+					fprintf(l_logfile,"C : value (%lf) = (rate (%lf) /100.00) * (Calc Days (%lf) / Days In Year (%lf))\n",*p_value,p_rate,p_calc_days,p_days_year);
+					break;
+		case 'D':
+					*p_value = (p_rate / 100.00) * (p_calc_days/360.00);
+					fprintf(l_logfile,"D : value (%lf) = (rate (%lf) /100.00) * (Calc Days (%lf) / 360.00)\n",*p_value,p_rate,p_calc_days);
+					break;
+		case 'E':
+					*p_value = (p_rate / 100.00) * (p_act_days/365.00);
+					fprintf(l_logfile,"E : value (%lf) = (rate (%lf) /100.00) * (Actual Days (%lf) / 365.00)\n",*p_value,p_rate,p_act_days);
+					break;
+		case 'F':
+					*p_value = (p_rate / 100.00) * (p_calc_days/365.00);
+					fprintf(l_logfile,"F : value (%lf) = (rate (%lf) /100.00) * (CAlc Days (%lf) / 365.00)\n",*p_value,p_rate,p_calc_days);
+					break;
+
+	}
+	Alert("  %lf ",*p_value);
+	Alert("  %.10lf ",*p_value);
+
+APL_GOBACK_SUCCESS  // AIX -Warnings Reaoval
+RETURN_SUCCESS:
+	APL_FUNCTION_RET_SUCCESS(APL_OUT_FILE)
+
+RETURN_FAILURE:
+	APL_FUNCTION_RET_FAILURE(APL_OUT_FILE)
+}
+int Rtv_From_Date(char *p_to_date,
+						char *p_from_date,
+						DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	struct sqlca sqlca;
+	char l_from_date[APL_DATE_LEN] = APL_NULL_STRING;
+    /* Added by kotubabu for Linux Migration-Start*/
+	#ifdef OS_LINUX
+        l_logfile=APL_OUT_FILE;
+    #endif
+    /* Added by kotubabu for Linux Migration -END*/
+	APL_FUNCTION_ENTER(l_logfile)
+	EXEC SQL SELECT TO_DATE(:p_to_date,'dd/mm/yyyy hh24:mi:ss') + 1
+				INTO :l_from_date
+				FROM DUAL;
+	IS_ANY_ORA_ERROR
+	strcpy(p_from_date,l_from_date);
+
+APL_GOBACK_SUCCESS  // AIX -Warnings Reaoval
+RETURN_SUCCESS:
+	APL_FUNCTION_RET_SUCCESS(APL_OUT_FILE)
+
+RETURN_FAILURE:
+	APL_FUNCTION_RET_FAILURE(APL_OUT_FILE)
+}
+
+int CalcFixRate(	char *p_basis,	
+						char *p_instr_code,
+						char *p_from_date,
+					 	char *p_to_date,
+					 	double *p_value,
+						DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	struct sqlca sqlca;
+	int l_date_diff  = 0;
+	char l_from_date[APL_DATE_LEN] = APL_NULL_STRING;
+	char l_to_date[APL_DATE_LEN] = APL_NULL_STRING;
+	double l_value = 0.0;
+	double l_act_days	=	0.0;
+	double l_calc_days	=	0.0;
+	double l_days_year	=	0.0;
+	double l_rate	=	0.0;
+    /* Added by kotubabu for Linux Migration-Start*/
+	#ifdef OS_LINUX
+        l_logfile=APL_OUT_FILE;
+    #endif
+    /* Added by kotubabu for Linux Migration -END*/
+
+	APL_FUNCTION_ENTER(l_logfile)
+
+		memset(l_from_date,APL_NULL_CHAR,sizeof(l_from_date));
+		memset(l_to_date,APL_NULL_CHAR,sizeof(l_to_date));
+
+
+	EXEC SQL SELECT TO_DATE(:p_to_date) - TO_DATE(:p_from_date)
+				INTO :l_date_diff
+				FROM DUAL;
+	if(l_date_diff < 0)APL_GOBACK_SUCCESS
+
+
+	strcpy(l_to_date,p_to_date);
+
+
+	if(Rtv_To_Date(	p_from_date,
+							p_instr_code,
+							l_to_date,
+							l_debug_info_ptr) == APL_FAILURE)
+	{
+		APL_GOBACK_FAIL
+	}
+
+	if(Rtv_Int_Rate(	p_instr_code,
+							p_from_date,
+							l_to_date,
+							&l_rate,
+							l_debug_info_ptr) == APL_FAILURE)
+	{
+		APL_GOBACK_FAIL
+	}
+	Alert("Interest rate |%lf|\n",l_rate);
+	if(Rtv_Int_Values(	p_from_date,
+								l_to_date,
+								&l_act_days,
+								&l_calc_days,
+								&l_days_year,
+								l_debug_info_ptr) == APL_FAILURE)
+	{
+		APL_GOBACK_FAIL
+	}
+	if(Process_Calc(	p_basis,
+							l_rate,
+							l_act_days,
+							l_calc_days,
+							l_days_year,
+							&l_value,
+							l_debug_info_ptr) == APL_FAILURE)
+	{
+		APL_GOBACK_FAIL
+	}
+	if(Rtv_From_Date(	l_to_date,
+							l_from_date,
+							l_debug_info_ptr) == APL_FAILURE)
+	{
+		APL_GOBACK_FAIL
+	}
+	printf("\n\n\n\n\n\n\n");
+	fprintf(l_logfile,"Value From |%s| To |%s| Is |%lf| With Rate |%lf|\n",p_from_date,l_to_date,l_value,l_rate);
+	printf("\n\n\n\n\n\n\n");
+	fprintf(l_logfile,"Calculating  From |%s| To |%s| \n",l_from_date,p_to_date);
+	if(CalcFixRate(p_basis,
+						p_instr_code,
+						l_from_date,
+						p_to_date,
+						&l_value,
+						l_debug_info_ptr) == APL_FAILURE)
+	{
+		APL_GOBACK_FAIL
+	}
+
+	*p_value += l_value;
+
+RETURN_SUCCESS:
+	APL_FUNCTION_RET_SUCCESS(APL_OUT_FILE)
+
+RETURN_FAILURE:
+	APL_FUNCTION_RET_FAILURE(APL_OUT_FILE)
+}
+

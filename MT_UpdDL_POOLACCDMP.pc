@@ -1,0 +1,873 @@
+/*
+ *    COPYRIGHT NOTICE
+ *
+ *   Copyright 2005 Polaris Software Lab Limited. All rights reserved.
+ *
+ *   These materials are confidential and proprietary to
+ *    Polaris Software Lab Limited and no part of these materials should
+ *    be reproduced, published, transmitted or distributed in any form or
+ *    by any means, electronic, mechanical, photocopying, recording or
+ *    otherwise, or stored in any information storage or retrieval system
+ *    of any nature nor should the materials be disclosed to third parties
+ *    or used in any other manner for which this is not authorized, without
+ *    the prior express written authorization of Polaris Software Lab Limited.
+*/
+/*********************************************************************
+ *
+ * Module Name         :      Master Maintenance
+ *
+ * File Name           :      MT_UpdDL_POOLACCDMP.pc
+ *
+ * Description         :      This file contains db functions for updating
+ *                            Master Details.
+ *
+ *
+ *            Version Control Block
+ *
+ * Date        Version     Author         Description       RFS No.
+ * ---------   --------  ------------     -------------     ---------
+ * 19/01/2006   1.0       Sundar        New file       HDFCDL_011
+ *
+ *********************************************************************/
+
+
+#include "CO_HostStructdef.h"
+
+EXEC SQL INCLUDE SQLCA.H;
+
+
+
+
+int DL_ModDbDL_PoolAccDmp(DL_POOLACCDMP_STRUCT_H *p_dl_poolaccdmp_struct_h,POOLACDET_STRUCT_H *p_poolacdet_struct_h,
+								INTL_ENV_DATA_STRUCT_H *p_intl_envdatastruct_h,DEBUG_INFO_STRUCT_H **l_debug_info_ptr) 
+{
+	/* Variable Declarations */
+  DL_POOLACCDMP_STRUCT_I *l_dl_poolaccdmp_struct_i;
+  POOLACDET_STRUCT_I *l_poolacdet_struct_i;
+  struct sqlca sqlca;
+
+  /***** vinay ******/
+  int count_row;
+  int chr_batch_no=0;
+  char  chr_l_rec_iexist,chr_l_rec_ideleted,chr_l_rec_iauthorized;
+  
+  char chr_acc_stamp_compare[APL_DATE_LEN] = APL_NULL_STRING;
+  char chr_status_compare[APL_STATUS_LEN] = APL_NULL_STRING;
+  char chr_sys_access_stamp[APL_DATE_LEN] = APL_NULL_STRING;
+  short p_i_maker, p_i_makerdt, p_i_checker, p_i_checkerdt, p_i_access_stamp;
+  short p_i_access_stamp_compare;
+  short p_i_status = 0;
+  int int_error_flag = APL_SUCCESS;
+  int int_l_rowexists = 0;
+   char  *l_key_codes[18];
+   char  *l_key_values[18];
+   char  chr_l_table_name[50] = APL_NULL_STRING;
+	char  chr_l_field_val[40] = APL_NULL_STRING;
+	int	int_retval = APL_SUCCESS;
+	/* Added By Sana for Exch Pool Dump Upld start */
+	double	l_gross_qty=0; /*	Change int to double -	Rohit 20092007	*/
+	short	i_gross_qty=0; //Kalyan
+	char chr_l_buf[10] = APL_NULL_STRING; /* RT FIX - AMISH LOG NO 4 */
+	int l_pool_count = 0;
+	char chr_depo_code[5] = APL_NULL_STRING; 
+	short i_depo_code = 0;
+    	int int_cond_flg = 0; /* ASHISH 24-04-2008 */
+	/* Added By Sana for Exch Pool Dump Upld end */
+
+   double chr_l_val = 0.0;            /* Added by Gouse - Decimal Length for MF- 01/10/2011 */	
+#ifdef APL_THREADS
+    APL_SET_CONTEXT
+    EXEC SQL CONTEXT USE :my_ctx_local;
+#endif
+
+	 APL_FUNCTION_ENTER(APL_OUT_FILE)
+
+	l_dl_poolaccdmp_struct_i=(DL_POOLACCDMP_STRUCT_I*)calloc(1,sizeof(DL_POOLACCDMP_STRUCT_I));
+	 APL_MALLOC_FAIL(l_dl_poolaccdmp_struct_i)
+   l_poolacdet_struct_i=(POOLACDET_STRUCT_I*)calloc(1,sizeof(POOLACDET_STRUCT_I));
+	 APL_MALLOC_FAIL(l_poolacdet_struct_i)
+
+  p_i_maker =0;
+  p_i_makerdt =0;
+  p_i_checker =0;
+  p_i_checkerdt =0;
+  p_i_access_stamp =0;
+  p_i_access_stamp_compare =0;
+
+
+   if((p_dl_poolaccdmp_struct_h ->h_qty) == 0) l_dl_poolaccdmp_struct_i -> i_qty = -1;
+   else
+          l_dl_poolaccdmp_struct_i -> i_qty = 0;
+
+   if(!strlen(p_dl_poolaccdmp_struct_h ->h_settlemt_no))  l_dl_poolaccdmp_struct_i -> i_settlemt_no= -1;
+  else
+	  l_dl_poolaccdmp_struct_i -> i_settlemt_no= 0;
+
+/* Added by Gouse - Decimal Length for MF- 01/10/2011 - Start */
+   IF_COND_EXISTS("QTY_RND_MF_MKT","QTY_RND_FOR_MF_MKT")
+   {
+          CR_Proc_InstrQtyRound_Chk( p_dl_poolaccdmp_struct_h ->h_qty, p_dl_poolaccdmp_struct_h->h_instr_code, &chr_l_val, l_debug_info_ptr );
+
+          p_dl_poolaccdmp_struct_h ->h_qty = chr_l_val;
+   }
+   /* Added by Gouse - Decimal Length for MF- 01/10/2011 - End */
+
+if(CO_RtvSysDtTime(chr_sys_access_stamp,l_debug_info_ptr) !=APL_SUCCESS)
+	{
+		APL_GOBACK_FAIL
+	}
+ if (!strcmp(p_intl_envdatastruct_h->h_mode,APL_FUNC_INPUT))
+{
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Entered Input of Function DL_ModDbDL_PoolAccDmp\n",
+														NULL,p_intl_envdatastruct_h);
+		}
+
+		chr_l_rec_iexist = 'N';
+		chr_l_rec_ideleted = APL_NULL_CHAR;
+		chr_l_rec_iauthorized = APL_NULL_CHAR;
+		
+			sprintf(chr_l_buf, "%d", p_dl_poolaccdmp_struct_h->h_filebatch_no); /* RT FIX - AMISH  LOG 4*/
+
+		l_key_codes[0]="DEPO_CODE";
+		l_key_codes[1]="SETTLEMT_NO";
+		l_key_codes[2]="INSTR_CODE";
+		l_key_codes[3]="MKT_TYPE";
+	    	l_key_codes[4]="FILEBATCH_NO"; /* RT FIX - AMISH LOG 4*/
+		l_key_codes[5]=APL_NULL_STRING;
+
+		l_key_values[0] = p_dl_poolaccdmp_struct_h->h_depo_code;
+		l_key_values[1] = p_dl_poolaccdmp_struct_h->h_settlemt_no;
+		l_key_values[2] = p_dl_poolaccdmp_struct_h->h_instr_code;
+		l_key_values[3] = p_dl_poolaccdmp_struct_h->h_mkt_type;
+		l_key_values[4] = chr_l_buf; 
+		printf("1:  l_key_values[4] = |%s|",l_key_values[4]);
+		l_key_values[5] = APL_NULL_STRING;
+		
+		strcpy(chr_l_table_name,"DL_POOLACCDMP");
+		
+		int_retval = CO_Chk_ChldValid(      l_key_codes,
+	   			                           l_key_values,
+                                          chr_l_rec_iexist,
+			      							      chr_l_rec_iauthorized,
+				                              chr_l_rec_ideleted,
+														NULL,
+                                          NULL,
+                                          NULL,
+                                          chr_l_table_name,
+                                          l_debug_info_ptr);	 
+
+		if ( APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr) )
+		{
+			Alert(" FAILURE FROM CO_Chk_ChldValid ");		     
+				APL_GOBACK_FAIL
+		}	
+	
+		EXEC SQL SELECT SEQ_NO.NEXTVAL INTO :p_dl_poolaccdmp_struct_h->h_seq_no FROM DUAL;
+			Alert(" DUAL QUERY SQLCA.SQLCODE IS |%d|\n",sqlca.sqlcode);		     
+		IS_ANY_ORA_ERROR;
+
+		strcpy(p_dl_poolaccdmp_struct_h->h_status,STATUS_UAUTH);
+      l_dl_poolaccdmp_struct_i->i_status =0;
+   	strcpy(p_dl_poolaccdmp_struct_h->h_maker,p_intl_envdatastruct_h->usr);
+		l_dl_poolaccdmp_struct_i->i_maker=0;
+  	   strcpy(p_dl_poolaccdmp_struct_h->h_maker_dt,chr_sys_access_stamp);
+		l_dl_poolaccdmp_struct_i->i_maker_dt=0;
+		strcpy(p_dl_poolaccdmp_struct_h->h_access_stamp,chr_sys_access_stamp);
+		l_dl_poolaccdmp_struct_i->i_access_stamp =0;
+		
+		EXEC SQL SELECT EXCH_CODE INTO :p_dl_poolaccdmp_struct_h->h_exch_code FROM MT_SETTL_CAL
+			WHERE SETTL_NO=:p_dl_poolaccdmp_struct_h->h_settlemt_no
+                	AND SETTL_TYPE = :p_dl_poolaccdmp_struct_h->h_mkt_type; 
+		/*	AND EXCH_CODE = :p_dl_poolaccdmp_struct_h->h_exch_code;*/ /*Retro with HDFC to add Settl Type in Query - Rahul - 01-Apr-2007*/
+		IS_ANY_ORA_ERROR;
+
+		EXEC SQL SELECT MAP_VAL INTO :p_dl_poolaccdmp_struct_h->h_dp_id FROM PRO_SGENSTAT 
+			WHERE MAP_TYPE=:p_dl_poolaccdmp_struct_h->h_depo_code;
+		IS_ANY_ORA_ERROR;
+
+	  /* Sana -- retro start*/
+	  Alert("\n settlement no is |%s|\n",p_dl_poolaccdmp_struct_h->h_settlemt_no );
+	  Alert("\n instr code is |%s|\n",p_dl_poolaccdmp_struct_h->h_instr_code );
+	  Alert("\n exchange code is |%s|\n",p_dl_poolaccdmp_struct_h->h_exch_code );
+	  Alert("\n market type  is |%s|\n",p_dl_poolaccdmp_struct_h->h_mkt_type );
+
+	/* Netting conditions : ASHISH 24-04-2008 start */
+	 IF_COND_EXISTS("TRADE_NETTING","IN_BOTH_EXCH")
+	 {
+		 printf("\n Netting of Trades in both exchanges \n");
+		 int_cond_flg = 1;
+	 }
+	 IF_COND_EXISTS("TRADE_NETTING","ONLY_IN_NSE")
+	 {
+		 printf("\n Netting of Trades in NSE \n");
+		 if(strcmp(p_dl_poolaccdmp_struct_h->h_exch_code,"NSE") == 0)
+		 {
+			int_cond_flg = 1;
+		 }
+		 else
+		 {
+			int_cond_flg = 0;
+		 }
+	 }
+	 IF_COND_EXISTS("TRADE_NETTING","ONLY_IN_BSE")
+	 {
+		 printf("\n Netting of Trades in BSE \n");
+		 if(strcmp(p_dl_poolaccdmp_struct_h->h_exch_code,"BSE") == 0)
+		 {
+			int_cond_flg = 1;
+		 }
+		 else
+		 {
+			int_cond_flg = 0;
+		 }
+	 }
+	 
+	 Alert("\n Netting Condition Flag = |%d| \n",int_cond_flg);
+
+	/* ASHISH 24-04-2008 end */
+			
+
+	if(int_cond_flg == 1)     /* ASHISH 24-04-2008 */
+	{
+						EXEC SQL SELECT 
+							SUM(QTY) 
+						INTO
+							:l_gross_qty:i_gross_qty
+						FROM 
+							DL_DEAL D 
+						WHERE
+							D.SETTLEMENT_NO=:p_dl_poolaccdmp_struct_h->h_settlemt_no AND
+							D.INSTR_CODE=:p_dl_poolaccdmp_struct_h->h_instr_code AND
+							D.exch_code=:p_dl_poolaccdmp_struct_h->h_exch_code AND
+							D.mkt_type=:p_dl_poolaccdmp_struct_h->h_mkt_type AND
+							D.DEAL_CD='3' AND
+							D.DEAL_STAT in ('SS','CS') AND
+							D.CLH_FLG='C';
+					  
+					  Alert("sqlca.sqlcode for SUM query IN IF LOOP|%d|",sqlca.sqlcode);
+			
+
+								if(sqlca.sqlcode==1403)
+						l_gross_qty=0;
+								
+											IS_ANY_ORA_ERROR
+	}
+			   
+
+
+	Alert("Gross qty is |%lf|",l_gross_qty);
+
+	if(l_gross_qty > 0)
+	{
+				
+					/* SLB CHANGES AMISH - 02/04/2008 */
+					if(((!strcmp(p_dl_poolaccdmp_struct_h->h_mkt_type,"16")|| !strcmp(p_dl_poolaccdmp_struct_h->h_mkt_type,"18") || !strcmp(p_dl_poolaccdmp_struct_h->h_mkt_type,"19") || !strcmp(p_dl_poolaccdmp_struct_h->h_mkt_type,"20")) && !strcmp(p_dl_poolaccdmp_struct_h->h_exch_code,"BSE")) ||
+					   ((!strcmp(p_dl_poolaccdmp_struct_h->h_mkt_type,"22")|| !strcmp(p_dl_poolaccdmp_struct_h->h_mkt_type,"23")||  !strcmp(p_dl_poolaccdmp_struct_h->h_mkt_type,"24") || !strcmp(p_dl_poolaccdmp_struct_h->h_mkt_type,"25")) && !strcmp(p_dl_poolaccdmp_struct_h->h_exch_code,"NSE")))
+					{
+							Alert(" \n trade to trade records ..net off not required \n");
+							l_gross_qty = 0;
+					}
+					else
+					{
+						EXEC SQL SELECT COUNT(*)
+						INTO :l_pool_count
+						FROM 
+						DL_POOLACCDMP  
+						WHERE 
+						SETTLEMT_NO = :p_dl_poolaccdmp_struct_h->h_settlemt_no  AND
+						INSTR_CODE = :p_dl_poolaccdmp_struct_h->h_instr_code AND
+						MKT_TYPE = :p_dl_poolaccdmp_struct_h->h_mkt_type AND
+						ICREL_DATE IS NULL;
+
+						Alert("sqlca.sqlcode for count query |%d|",sqlca.sqlcode);
+		
+						IS_ANY_ORA_ERROR
+		
+							Alert("COUNT IS |%d|",l_pool_count);
+							Alert("Location Code is |%s|",p_dl_poolaccdmp_struct_h->h_depo_code);
+
+							if(l_pool_count == 1)
+							{
+
+								EXEC SQL SELECT DEPO_CODE
+								INTO :chr_depo_code:i_depo_code
+								FROM 
+								DL_POOLACCDMP  
+								WHERE 
+								SETTLEMT_NO = :p_dl_poolaccdmp_struct_h->h_settlemt_no  AND
+								INSTR_CODE = :p_dl_poolaccdmp_struct_h->h_instr_code AND
+								MKT_TYPE = :p_dl_poolaccdmp_struct_h->h_mkt_type AND
+								ICREL_DATE IS NULL;
+
+								Alert("sqlca.sqlcode for location code  |%d|",sqlca.sqlcode);
+
+								IS_ANY_ORA_ERROR
+
+								if((strcmp(p_dl_poolaccdmp_struct_h->h_depo_code,"NSDL") == 0) && (strcmp(chr_depo_code,"CDSL") == 0))
+								{
+									Alert("\n since 1st qty updated is for cdsl...removing the net off qty \n");
+										EXEC SQL UPDATE DL_POOLACCDMP SET QTY = QTY - :l_gross_qty
+										WHERE
+										SETTLEMT_NO = :p_dl_poolaccdmp_struct_h->h_settlemt_no  AND
+										INSTR_CODE = :p_dl_poolaccdmp_struct_h->h_instr_code AND
+										MKT_TYPE = :p_dl_poolaccdmp_struct_h->h_mkt_type AND
+										DEPO_CODE = 'CDSL' AND
+										ICREL_DATE IS NULL;
+									
+											Alert("sqlca.sqlcode for pool update query |%d|",sqlca.sqlcode);
+
+											IS_ANY_ORA_ERROR
+
+								}
+								else if((strcmp(p_dl_poolaccdmp_struct_h->h_depo_code,"CDSL") == 0) && (strcmp(chr_depo_code,"NSDL") == 0))
+								{
+											Alert("\n net off aleady done for NSDL RECORD...no net off required.\n");
+									l_gross_qty = 0;
+								}
+								
+							}
+
+					}
+
+	}		
+
+
+	printf("KS -- Now going for adding qty to net qty to make it gross qty ...\n");
+	printf("KS -- Qty before adding is ...[%lf]\n",p_dl_poolaccdmp_struct_h->h_qty);
+	printf("KS -- l_gross_qty -- Adding value [%lf] to Qty \n",l_gross_qty);
+
+	/* ASHISH 12-03-2008 */
+	/* Pool sale gross quantity will be added to pool quantity when checker of Data is other than "GENERIC1" */
+	if(strcmp(p_dl_poolaccdmp_struct_h->h_checker,"GENERIC1"))
+	{
+			p_dl_poolaccdmp_struct_h->h_qty=p_dl_poolaccdmp_struct_h->h_qty+l_gross_qty;
+	}
+		
+	printf("KS -- Qty after adding is ...[%lf]\n",p_dl_poolaccdmp_struct_h->h_qty);
+	/* Changes by Kalyan on 220607 for getting Gross Qty instead of Net Qty -- End*/
+
+	/* CHANGES BY AMISH 23042008*/
+	/*
+	if (p_dl_poolaccdmp_struct_h->h_qty == 0)
+	{
+				APL_DATA_MISSING("Qty cannot be 0",APL_NULL_STRING,APL_NULL_STRING);
+				 int_error_flag = APL_FAILURE; 
+	}
+	*/
+	/*	Addition of condition after gross qty	-	Rohit	20092007	*/
+		if((p_dl_poolaccdmp_struct_h ->h_qty) == 0) 
+					l_dl_poolaccdmp_struct_i -> i_qty = -1;
+		else
+					l_dl_poolaccdmp_struct_i -> i_qty = 0;
+
+
+		EXEC SQL SELECT count(*)INTO :count_row from DL_ORD_SUMM	
+			      WHERE FILE_NAME=:p_poolacdet_struct_h->h_file_name AND
+							UPLD_DATE=:p_poolacdet_struct_h->h_upld_date AND
+							F_CODE=:p_poolacdet_struct_h->h_f_code;
+		Alert("DL_ORD_SUMM --SQLCA.SQLCODE IS |%d|\n",sqlca.sqlcode);			  /* changes by amish - 10/08/2007 */
+		IS_ANY_ORA_ERROR;
+
+		chr_batch_no=p_dl_poolaccdmp_struct_h->h_filebatch_no;
+		
+		if(!count_row)
+		{
+			Alert("h_maker:|%s|\n",p_dl_poolaccdmp_struct_h->h_maker);
+			Alert("p_poolacdet_struct_h->h_upld_date before 1200:|%s|\n",p_poolacdet_struct_h->h_upld_date);
+			p_poolacdet_struct_h->h_upld_date[11]='1';
+			p_poolacdet_struct_h->h_upld_date[12]='2';
+			p_poolacdet_struct_h->h_upld_date[13]=':';
+			p_poolacdet_struct_h->h_upld_date[14]='0';
+			p_poolacdet_struct_h->h_upld_date[15]='0';
+			p_poolacdet_struct_h->h_upld_date[16]=':';
+			p_poolacdet_struct_h->h_upld_date[17]='0';
+			p_poolacdet_struct_h->h_upld_date[18]='0';
+			Alert("p_poolacdet_struct_h->h_upld_date after 1200:|%s|\n",p_poolacdet_struct_h->h_upld_date);
+	   	    if((strcmp(p_dl_poolaccdmp_struct_h->h_maker,"GFU"))&&(strcmp(p_dl_poolaccdmp_struct_h->h_maker,"gfu")))
+			{
+			EXEC SQL INSERT INTO DL_ORD_SUMM VALUES (:p_poolacdet_struct_h);
+			IS_ANY_ORA_ERROR_AND_DUPLICATE(MAP_DET_EXIST,APL_NULL_STRING,APL_NULL_STRING,APL_NULL_STRING)
+			}
+		}
+		else
+		{
+			EXEC SQL SELECT FILELINKINFO INTO :p_dl_poolaccdmp_struct_h->h_filebatch_no FROM DL_ORD_SUMM
+				WHERE FILE_NAME=:p_poolacdet_struct_h->h_file_name AND
+				 UPLD_DATE=:p_poolacdet_struct_h->h_upld_date AND
+				 F_CODE=:p_poolacdet_struct_h->h_f_code;
+			IS_ANY_ORA_ERROR;
+		
+		}	
+		
+		printf("\n Inserting into DL_POOLACCDMP\n");
+
+		/* Commented By Sana 
+		EXEC SQL SELECT count(*)INTO :count_row from DL_ORD_SUMM	
+			      WHERE FILE_NAME=:p_poolacdet_struct_h->h_file_name AND
+							UPLD_DATE=:p_poolacdet_struct_h->h_upld_date AND
+							F_CODE=:p_poolacdet_struct_h->h_f_code;
+		IS_ANY_ORA_ERROR;
+
+		chr_batch_no=p_dl_poolaccdmp_struct_h->h_filebatch_no;
+		
+		if(!count_row)
+		{
+			Alert("h_maker:|%s|\n",p_dl_poolaccdmp_struct_h->h_maker);
+	   	if((strcmp(p_dl_poolaccdmp_struct_h->h_maker,"GFU"))&&(strcmp(p_dl_poolaccdmp_struct_h->h_maker,"gfu")))
+			{
+			EXEC SQL INSERT INTO DL_ORD_SUMM VALUES (:p_poolacdet_struct_h);
+			IS_ANY_ORA_ERROR_AND_DUPLICATE(MAP_DET_EXIST,APL_NULL_STRING,APL_NULL_STRING,APL_NULL_STRING)
+			}
+		}
+		else
+		{
+			EXEC SQL SELECT FILELINKINFO INTO :p_dl_poolaccdmp_struct_h->h_filebatch_no FROM DL_ORD_SUMM
+				WHERE FILE_NAME=:p_poolacdet_struct_h->h_file_name AND
+				 UPLD_DATE=:p_poolacdet_struct_h->h_upld_date AND
+				 F_CODE=:p_poolacdet_struct_h->h_f_code;
+			IS_ANY_ORA_ERROR;
+		
+		}	
+		
+		printf("\n Inserting into DL_POOLACCDMP\n");
+		if((strcmp(p_dl_poolaccdmp_struct_h->h_maker,"GFU"))&&(strcmp(p_dl_poolaccdmp_struct_h->h_maker,"gfu")))
+		{
+			EXEC SQL INSERT INTO DL_POOLACCDMP VALUES (:p_dl_poolaccdmp_struct_h:l_dl_poolaccdmp_struct_i);
+			IS_ANY_ORA_ERROR_AND_DUPLICATE(MAP_DET_EXIST,APL_NULL_STRING,APL_NULL_STRING,APL_NULL_STRING)
+		}
+		else
+		{
+			strcpy(p_dl_poolaccdmp_struct_h->h_status,STATUS_AUTH); //18-05-2006
+      	l_dl_poolaccdmp_struct_i->i_status =0; //18-05-2006
+			
+			p_dl_poolaccdmp_struct_h->h_filebatch_no=p_poolacdet_struct_h->h_filelinkinfo; //17-05-2006 
+			EXEC SQL INSERT INTO DL_POOLACCDMP VALUES (:p_dl_poolaccdmp_struct_h:l_dl_poolaccdmp_struct_i);
+			IS_ANY_ORA_ERROR_AND_DUPLICATE(MAP_DET_EXIST,APL_NULL_STRING,APL_NULL_STRING,APL_NULL_STRING)
+		} end*/
+
+	/* Above code modified by sana start*/
+	if(p_dl_poolaccdmp_struct_h ->h_qty != 0) 
+	{
+		if((strcmp(p_dl_poolaccdmp_struct_h->h_maker,"GFU"))&&(strcmp(p_dl_poolaccdmp_struct_h->h_maker,"gfu")))
+		{
+			EXEC SQL INSERT INTO DL_POOLACCDMP VALUES (:p_dl_poolaccdmp_struct_h:l_dl_poolaccdmp_struct_i);
+			IS_ANY_ORA_ERROR_AND_DUPLICATE(MAP_DET_EXIST,APL_NULL_STRING,APL_NULL_STRING,APL_NULL_STRING)
+		}
+		else
+		{
+			strcpy(p_dl_poolaccdmp_struct_h->h_status,STATUS_AUTH);
+      	    l_dl_poolaccdmp_struct_i->i_status =0;
+			
+			p_dl_poolaccdmp_struct_h->h_filebatch_no=p_poolacdet_struct_h->h_filelinkinfo;/* 17-05-2006 */	
+			EXEC SQL INSERT INTO DL_POOLACCDMP VALUES (:p_dl_poolaccdmp_struct_h:l_dl_poolaccdmp_struct_i);
+			IS_ANY_ORA_ERROR_AND_DUPLICATE(MAP_DET_EXIST,APL_NULL_STRING,APL_NULL_STRING,APL_NULL_STRING)
+		}
+   }
+   else
+   {
+  			CO_ProcMonitor(APL_OUT_FILE, "There is no pool quantity for this instrument \n",
+													NULL,p_intl_envdatastruct_h);
+			int_error_flag = APL_SUCCESS;
+   }
+	/* Above code modified by sana end*/
+/* APL_FUNC_INPUT ends*/
+
+}
+   else 
+	{
+         memset(chr_l_buf,APL_NULL_CHAR,10); /* RT FIX - LOG NO 51 I AMISH */
+	 sprintf(chr_l_buf, "%d", p_dl_poolaccdmp_struct_h->h_filebatch_no); /* RT FIX - AMISH  LOG 51*/ 
+	l_key_codes[0]="DEPO_CODE";
+	l_key_codes[1]="INSTR_CODE";
+	l_key_codes[2]="SETTLEMT_NO";
+	l_key_codes[3]="MKT_TYPE";
+	l_key_codes[4]="FILEBATCH_NO"; /* RT FIX - AMISH LOG 4*/
+	l_key_codes[5]=APL_NULL_STRING;
+	
+	l_key_values[0] = p_dl_poolaccdmp_struct_h->h_depo_code;
+	l_key_values[1] = p_dl_poolaccdmp_struct_h->h_instr_code;
+	l_key_values[2] = p_dl_poolaccdmp_struct_h->h_settlemt_no;
+	l_key_values[3] = p_dl_poolaccdmp_struct_h->h_mkt_type;
+	l_key_values[4] = chr_l_buf;
+	printf("l_key_values[4]: |%s|",l_key_values[4]);
+	l_key_values[5] = APL_NULL_STRING;
+
+		
+   strcpy(chr_l_table_name,"DL_POOLACCDMP");
+
+    int_retval = CR_Rtv_MastChldChrVal( l_key_codes,
+                                        l_key_values,
+                                        chr_l_table_name,
+                                        "ACCESS_STAMP",
+                                        chr_l_field_val,
+                                        l_debug_info_ptr);
+
+    if (int_retval != APL_SUCCESS)
+         APL_GOBACK_FAIL
+
+		strcpy(chr_acc_stamp_compare,chr_l_field_val);
+    
+		int_retval = CR_Rtv_MastChldChrVal( l_key_codes,
+                                        l_key_values,
+                                        chr_l_table_name,
+                                        "STATUS",
+                                        chr_l_field_val,
+                                        l_debug_info_ptr);
+
+    if (int_retval != APL_SUCCESS)
+         APL_GOBACK_FAIL
+
+		strcpy(chr_status_compare,chr_l_field_val);
+	}
+
+ if (!strcmp(p_intl_envdatastruct_h->h_mode,APL_FUNC_MODIFY))
+	{
+  	p_i_checker =-1;
+  	p_i_checkerdt =-1;
+		strcpy(p_dl_poolaccdmp_struct_h->h_checker,APL_NULL_STRING);
+		strcpy(p_dl_poolaccdmp_struct_h->h_checker_dt,APL_NULL_STRING);
+
+		APL_IF_DEBUG
+ 	{
+  		CO_ProcMonitor(APL_OUT_FILE, "Entered modify of Function MT_ModDBNoDlvDet\n",
+													NULL,p_intl_envdatastruct_h);
+ 	}
+
+	   if (!strcmp(p_dl_poolaccdmp_struct_h->h_access_stamp,chr_acc_stamp_compare))
+	   {
+			strcpy(p_dl_poolaccdmp_struct_h->h_access_stamp,chr_sys_access_stamp);
+			l_dl_poolaccdmp_struct_i->i_access_stamp =0;
+       strcpy(p_dl_poolaccdmp_struct_h->h_status,STATUS_UAUTH);
+			l_dl_poolaccdmp_struct_i->i_status =0;
+
+			EXEC SQL UPDATE DL_POOLACCDMP  SET 
+            	MAKER =:p_intl_envdatastruct_h->usr:p_i_maker,
+					MAKER_DT =:chr_sys_access_stamp:p_i_makerdt,
+					CHECKER =:p_dl_poolaccdmp_struct_h->h_checker:p_i_checker,
+					CHECKER_DT =:p_dl_poolaccdmp_struct_h->h_checker_dt:p_i_checkerdt,
+            	STATUS =:p_dl_poolaccdmp_struct_h->h_status:l_dl_poolaccdmp_struct_i->i_status,
+					FILEBATCH_NO =:p_dl_poolaccdmp_struct_h->h_filebatch_no :l_dl_poolaccdmp_struct_i-> i_filebatch_no,
+					BENEF_ACCTYPE =:p_dl_poolaccdmp_struct_h->h_benef_acctype :l_dl_poolaccdmp_struct_i-> i_benef_acctype,
+					MKT_TYPE =:p_dl_poolaccdmp_struct_h->h_mkt_type :l_dl_poolaccdmp_struct_i-> i_mkt_type,
+					SETTLEMT_NO =:p_dl_poolaccdmp_struct_h->h_settlemt_no :l_dl_poolaccdmp_struct_i-> i_settlemt_no,
+					BL_LC_CODE =:p_dl_poolaccdmp_struct_h->h_bl_lc_code :l_dl_poolaccdmp_struct_i-> i_bl_lc_code,
+					ICREL_DATE =:p_dl_poolaccdmp_struct_h->h_icrel_date :l_dl_poolaccdmp_struct_i-> i_icrel_date,
+					INSTR_CODE =:p_dl_poolaccdmp_struct_h->h_instr_code :l_dl_poolaccdmp_struct_i-> i_instr_code,
+					QTY =:p_dl_poolaccdmp_struct_h->h_qty :l_dl_poolaccdmp_struct_i-> i_qty,
+					DEPO_CODE =:p_dl_poolaccdmp_struct_h->h_depo_code :l_dl_poolaccdmp_struct_i-> i_depo_code,
+					ACCESS_STAMP =:chr_sys_access_stamp:p_i_access_stamp
+				WHERE 
+					SEQ_NO =:p_dl_poolaccdmp_struct_h->h_seq_no; 
+              
+					IS_ANY_ORA_ERROR;	
+	   }
+		else 
+	   {
+			if (CO_InsertErr
+			(l_debug_info_ptr,
+			 ERR_ACCESSSTAMP_CHGD, 
+			 APL_NULL_STRING,
+			 APL_NULL_STRING,
+			 APL_NULL_STRING,
+			 __LINE__,
+			 __FILE__
+			) != APL_SUCCESS)
+			APL_GOBACK_FAIL
+			APL_GOBACK_FAIL
+	   } 
+	}
+
+ if (!strcmp(p_intl_envdatastruct_h->h_mode,APL_FUNC_AUTHORISE))
+	{
+
+		APL_IF_DEBUG
+ 	{
+  		CO_ProcMonitor(APL_OUT_FILE, "Entered authorize of Function MT_ModDBNoDlvDet\n",
+													NULL,p_intl_envdatastruct_h);
+ 	}
+
+		if (!strcmp(p_dl_poolaccdmp_struct_h->h_access_stamp,chr_acc_stamp_compare))
+	   {
+   		if(strcmp(p_dl_poolaccdmp_struct_h->h_status,STATUS_DEL_UAUTH))
+	    	{
+	    		strcpy(p_dl_poolaccdmp_struct_h->h_access_stamp,chr_sys_access_stamp);
+	    		l_dl_poolaccdmp_struct_i->i_access_stamp =0;
+   	    	strcpy(p_dl_poolaccdmp_struct_h->h_checker,p_intl_envdatastruct_h->usr);
+	    		l_dl_poolaccdmp_struct_i->i_checker=0;
+  	    	strcpy(p_dl_poolaccdmp_struct_h->h_checker_dt,chr_sys_access_stamp);
+	    		l_dl_poolaccdmp_struct_i->i_checker_dt=0;
+          strcpy(p_dl_poolaccdmp_struct_h->h_status,STATUS_AUTH);
+	    		l_dl_poolaccdmp_struct_i->i_status =0;
+
+	    		EXEC SQL UPDATE DL_POOLACCDMP SET 
+           	CHECKER =:p_intl_envdatastruct_h->usr:p_i_checker,
+            	CHECKER_DT =:chr_sys_access_stamp:p_i_access_stamp,
+					ACCESS_STAMP =:chr_sys_access_stamp:p_i_access_stamp,
+            	STATUS =:p_dl_poolaccdmp_struct_h->h_status:l_dl_poolaccdmp_struct_i->i_status
+				WHERE 
+				SEQ_NO =:p_dl_poolaccdmp_struct_h->h_seq_no;
+
+				IS_ANY_ORA_ERROR;	
+			}
+   	   else  
+	    	{
+	    		EXEC SQL DELETE DL_POOLACCDMP 
+				WHERE 
+				SEQ_NO =:p_dl_poolaccdmp_struct_h->h_seq_no;
+          
+			   IS_ANY_ORA_ERROR
+	    	}
+	   }
+		else 
+	   {
+			if (CO_InsertErr
+			(l_debug_info_ptr,
+			 ERR_ACCESSSTAMP_CHGD, 
+			 APL_NULL_STRING,
+			 APL_NULL_STRING,
+			 APL_NULL_STRING,
+			 __LINE__,
+			 __FILE__
+			) != APL_SUCCESS)
+			APL_GOBACK_FAIL
+			APL_GOBACK_FAIL
+	   } 
+	}
+
+ if (!strcmp(p_intl_envdatastruct_h->h_mode,APL_FUNC_RESET))
+	{
+
+		APL_IF_DEBUG
+ 	{
+  		CO_ProcMonitor(APL_OUT_FILE, "Entered reset of Function MT_ModDBNoDlvDet\n",
+													NULL,p_intl_envdatastruct_h);
+ 	}
+
+		if (!strcmp(p_dl_poolaccdmp_struct_h->h_access_stamp,chr_acc_stamp_compare))
+	   {
+   		if(!strcmp(p_dl_poolaccdmp_struct_h->h_status,STATUS_DEL_UAUTH))
+	    	{
+	    		strcpy(p_dl_poolaccdmp_struct_h->h_access_stamp,chr_sys_access_stamp);
+	    		l_dl_poolaccdmp_struct_i->i_access_stamp =0;
+   	    	strcpy(p_dl_poolaccdmp_struct_h->h_checker,p_intl_envdatastruct_h->usr);
+	    		l_dl_poolaccdmp_struct_i->i_checker=0;
+  	    	   strcpy(p_dl_poolaccdmp_struct_h->h_checker_dt,chr_sys_access_stamp);
+	    		l_dl_poolaccdmp_struct_i->i_checker_dt=0;
+            strcpy(p_dl_poolaccdmp_struct_h->h_status,STATUS_AUTH);
+	    		l_dl_poolaccdmp_struct_i->i_status =0;
+
+	    		EXEC SQL UPDATE DL_POOLACCDMP SET 
+           	CHECKER =:p_intl_envdatastruct_h->usr:p_i_checker,
+            	CHECKER_DT =:chr_sys_access_stamp:p_i_access_stamp,
+					ACCESS_STAMP =:chr_sys_access_stamp:p_i_access_stamp,
+            	STATUS =:p_dl_poolaccdmp_struct_h->h_status:l_dl_poolaccdmp_struct_i->i_status
+				WHERE 
+				SEQ_NO =:p_dl_poolaccdmp_struct_h->h_seq_no;
+
+				IS_ANY_ORA_ERROR;	
+			}
+	   }
+		else 
+	   {
+			if (CO_InsertErr
+			(l_debug_info_ptr,
+			 ERR_ACCESSSTAMP_CHGD, 
+			 APL_NULL_STRING,
+			 APL_NULL_STRING,
+			 APL_NULL_STRING,
+			 __LINE__,
+			 __FILE__
+			) != APL_SUCCESS)
+			APL_GOBACK_FAIL
+			APL_GOBACK_FAIL
+	   } 
+	}
+
+ if (!strcmp(p_intl_envdatastruct_h->h_mode,APL_FUNC_DELETE))
+	{
+  	p_i_checker =-1;
+  	p_i_checkerdt =-1;
+		strcpy(p_dl_poolaccdmp_struct_h->h_checker,APL_NULL_STRING);
+		strcpy(p_dl_poolaccdmp_struct_h->h_checker_dt,APL_NULL_STRING);
+
+		APL_IF_DEBUG
+ 	{
+  		CO_ProcMonitor(APL_OUT_FILE, "Entered delete of Function MT_ModDBNoDlvDet\n",
+													NULL,p_intl_envdatastruct_h);
+ 	}
+
+	   if (!strcmp(p_dl_poolaccdmp_struct_h->h_access_stamp,chr_acc_stamp_compare))
+	   {
+			strcpy(p_dl_poolaccdmp_struct_h->h_access_stamp,chr_sys_access_stamp);
+			l_dl_poolaccdmp_struct_i->i_access_stamp =0;
+       strcpy(p_dl_poolaccdmp_struct_h->h_status,STATUS_DEL_UAUTH);
+			l_dl_poolaccdmp_struct_i->i_status =0;
+
+			EXEC SQL UPDATE DL_POOLACCDMP SET 
+            	MAKER =:p_intl_envdatastruct_h->usr:p_i_maker,
+					MAKER_DT =:chr_sys_access_stamp:p_i_makerdt,
+					CHECKER =:p_dl_poolaccdmp_struct_h->h_checker:p_i_checker,
+					CHECKER_DT =:p_dl_poolaccdmp_struct_h->h_checker_dt:p_i_checkerdt,
+            	STATUS =:p_dl_poolaccdmp_struct_h->h_status:l_dl_poolaccdmp_struct_i->i_status,
+					ACCESS_STAMP =:chr_sys_access_stamp:p_i_access_stamp
+				WHERE 
+				SEQ_NO =:p_dl_poolaccdmp_struct_h->h_seq_no;
+ 
+              
+					IS_ANY_ORA_ERROR;	
+	   }
+		else 
+	   {
+			if (CO_InsertErr
+			(l_debug_info_ptr,
+			 ERR_ACCESSSTAMP_CHGD, 
+			 APL_NULL_STRING,
+			 APL_NULL_STRING,
+			 APL_NULL_STRING,
+			 __LINE__,
+			 __FILE__
+			) != APL_SUCCESS)
+			APL_GOBACK_FAIL
+			APL_GOBACK_FAIL
+	   } 
+	}
+
+
+ if (int_error_flag == APL_FAILURE)
+	{
+		APL_GOBACK_FAIL
+	}
+ APL_GOBACK_SUCCESS
+
+ RETURN_SUCCESS :
+	{
+		APL_FUNCTION_RET_SUCCESS(APL_OUT_FILE)
+		free(l_dl_poolaccdmp_struct_i);
+		return(APL_SUCCESS);
+	}
+  RETURN_FAILURE :
+	{
+ 	APL_FUNCTION_RET_FAILURE(APL_OUT_FILE)
+		free(l_dl_poolaccdmp_struct_i);
+		return(APL_FAILURE);
+	}
+
+}
+
+
+
+int CR_Chk_ValAtPoolAccDup(DL_POOLACCDMP_STRUCT_H *p_dl_poolaccdmp_struct_h,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	struct sqlca sqlca;
+	char l_chr_p_Instatus[3]=APL_NULL_STRING;
+	char l_chr_p_Clstatus[3]=APL_NULL_STRING;
+	char l_chr_p_Setstatus[3]=APL_NULL_STRING;
+	short l_i_Status=0;
+	short l_i_SetStatus=0;
+	short l_i_CStatus=0;
+	int int_error_flag=APL_SUCCESS;
+
+#ifdef APL_THREADS
+	APL_SET_CONTEXT
+		EXEC SQL CONTEXT USE :my_ctx_local;
+#endif
+
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE, "Entered Function CR_Chk_ValAtPoolAccDupFn \n",
+				NULL,NULL);
+	}
+	memset(l_chr_p_Instatus,NULL,3);
+	memset(l_chr_p_Clstatus,NULL,3);
+	memset(l_chr_p_Setstatus,NULL,3);
+
+	EXEC SQL SELECT STATUS into :l_chr_p_Instatus:l_i_Status
+		FROM MT_INSTRUMENT
+		WHERE INSTR_CODE =:p_dl_poolaccdmp_struct_h->h_instr_code;
+	IS_ANY_ORA_ERROR
+	
+	if (strcmp(l_chr_p_Instatus,STATUS_AUTH))
+	{ 
+		if(CO_InsertErr(
+					l_debug_info_ptr,
+					ERR_POOLACC_INSTRU_CD_NOT_AUTH,
+					APL_NULL_STRING,
+					APL_NULL_STRING,
+					APL_NULL_STRING,
+					__LINE__,
+					__FILE__
+					) == APL_SUCCESS)
+			int_error_flag = APL_FAILURE;
+	}
+
+	/*
+
+	EXEC SQL SELECT STATUS into :l_chr_p_Clstatus:l_i_CStatus
+		FROM MT_CLIENT
+		WHERE CLN_CODE =:p_dl_poolaccdmp_struct_h->h_client_cd;
+
+	IS_ANY_ORA_ERROR
+
+		if (strcmp(l_chr_p_Clstatus,STATUS_AUTH))
+		{
+			if(CO_InsertErr(l_debug_info_ptr,
+						ERR_POOLACC_CLN_CD_NOT_AUTH,
+						APL_NULL_STRING,
+						APL_NULL_STRING,
+						APL_NULL_STRING,
+						__LINE__,
+						__FILE__
+						) == APL_SUCCESS)
+				int_error_flag = APL_FAILURE;	
+		}
+
+		*/
+	
+	EXEC SQL SELECT STATUS into :l_chr_p_Setstatus:l_i_SetStatus
+		FROM MT_SETTL_CAL 
+		WHERE SETTL_NO =:p_dl_poolaccdmp_struct_h->h_settlemt_no
+		AND SETTL_TYPE = :p_dl_poolaccdmp_struct_h->h_mkt_type;
+/* EXCH_CODE not require for Kotak as upload file comes from DP for both exchange Chirag 11042008*/
+/*		AND EXCH_CODE = :p_dl_poolaccdmp_struct_h->h_exch_code; Retro with HDFC to add Settl Type in Query - Rahul - 01-Apr-2007*/
+		
+	printf("\n Settlement number is : |%s|",p_dl_poolaccdmp_struct_h->h_settlemt_no);
+	printf("\n Market Type is : |%s|",p_dl_poolaccdmp_struct_h->h_mkt_type);
+	printf("\n Status is : |%s|",l_chr_p_Setstatus);
+	fflush(stdout);
+
+	IS_ANY_ORA_ERROR
+		if (strcmp(l_chr_p_Setstatus,STATUS_AUTH))
+		{
+			if(CO_InsertErr(
+						l_debug_info_ptr,
+						ERR_POOLACC_SETT_NO_NOT_AUTH,
+						APL_NULL_STRING,
+						APL_NULL_STRING,
+						APL_NULL_STRING,
+						__LINE__,
+						__FILE__
+						) == APL_SUCCESS)
+				int_error_flag = APL_FAILURE;
+		}
+
+	if (int_error_flag == APL_FAILURE)
+	{
+		APL_GOBACK_FAIL
+	}
+	else APL_GOBACK_SUCCESS
+
+	 RETURN_SUCCESS :
+	{
+		APL_FUNCTION_RET_SUCCESS(APL_OUT_FILE)
+		return(APL_SUCCESS);
+	}
+	RETURN_FAILURE :
+	{
+ 	APL_FUNCTION_RET_FAILURE(APL_OUT_FILE)
+		return(APL_FAILURE);
+	}
+
+} 

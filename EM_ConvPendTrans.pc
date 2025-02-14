@@ -1,0 +1,775 @@
+
+
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+
+
+
+
+#include "stdio_64.h"
+#include "CR_Common.h"
+
+/* Bageshri -- 10GM */
+#include "CO_LenConstdef.h"
+
+#define FILEPATH_LEN				80
+#define FILENAME_LEN_A				80
+#define BUFFER_LEN					50
+#define PAGELENGTH				16
+#define COMMIT_COUNT_G				400
+
+EXEC SQL INCLUDE sqlca;
+
+int EM_ConvPendTrans(char **argv,FILE *p_log_file,char *p_flg_genreportonly,INTL_ENV_DATA_STRUCT_H *p_intl_env_data_struct_h_d,DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+//main(int argc,char **argv)
+int main(int argc,char **argv)//Changes done for AIX Migration
+{
+	DEBUG_INFO_STRUCT_H			*l_debug_info_ptr = NULL;
+	/* Added by kotubabu for Linux Migration -Start*/
+    #ifdef OS_LINUX
+	FILE						*l_ptr_ini_file = NULL;
+	FILE						*l_ptr_log_file = NULL;
+   #else
+	FILE *l_ptr_ini_file = APL_OUT_FILE;
+    FILE *l_ptr_log_file = APL_OUT_FILE;
+   #endif
+   #ifdef OS_LINUX
+     l_ptr_ini_file = APL_OUT_FILE;
+	 l_ptr_log_file = APL_OUT_FILE;
+   #endif
+   /* Added by kotubabu for Linux Migration-End*/
+	INTL_ENV_DATA_STRUCT_H	l_intl_envdatastruct_h;
+	char						chr_l_inifile[FILENAME_LEN_A]   = APL_NULL_STRING;
+	char						chr_uname[APL_USERID_LEN]   = APL_NULL_STRING;
+	char						chr_passwd[APL_PASSWD_LEN]  = APL_NULL_STRING;
+	char						chr_custody_id_b[APL_USERID_LEN]  = APL_NULL_STRING;
+	char						chr_l_buf[BUFFER_LEN] = APL_NULL_STRING;
+	short						int_l_cond_exists = 0;
+	int						int_l_flg = 0;
+	int						int_retval = 0;
+	struct sqlca			sqlca;
+
+	memset(&l_intl_envdatastruct_h,NULL,sizeof(INTL_ENV_DATA_STRUCT_H));
+	
+	sqlca.sqlcode = 0;
+
+	
+	strcpy(l_intl_envdatastruct_h.usr, argv[3]);
+	strcpy(l_intl_envdatastruct_h.h_mode, argv[4]);
+	strcpy(l_intl_envdatastruct_h.processtion, argv[5]);
+	strcpy(l_intl_envdatastruct_h.auth_req, argv[6]);
+	strcpy(l_intl_envdatastruct_h.subprocess, argv[7]);
+	strcpy(l_intl_envdatastruct_h.h_process, argv[8]);
+	
+	strcpy(chr_l_inifile,getenv("INTL_ROOT_PATH"));
+	strcat(chr_l_inifile,"intl_sun.cfg");
+
+	if ((l_ptr_ini_file = fopen(chr_l_inifile,"r")) == NULL)
+		exit(-1);
+	
+	APL_FETCH_DB_LOGIN_DETAILS(l_ptr_ini_file,chr_custody_id_b,chr_uname,chr_passwd,APL_OUT_FILE,&l_debug_info_ptr)
+	
+	
+	
+	if (CO_Con_Db(chr_uname,chr_passwd,&l_debug_info_ptr) != APL_SUCCESS)
+		APL_GOBACK_FAIL
+
+	
+
+	int_retval = CO_Rtv_RptFileName("5D",APL_LOGFILE_DESC,100,argv[5],argv,&l_ptr_log_file,&l_debug_info_ptr);
+
+	if (int_retval != APL_SUCCESS)
+	{
+		EXEC SQL ROLLBACK WORK RELEASE;
+		APL_GOBACK_FAIL
+	}
+
+	
+
+	EXEC SQL COMMIT WORK;
+	
+	if (sqlca.sqlcode != 0)
+	{
+		CO_Proc_RptClose(l_ptr_log_file,&l_debug_info_ptr);
+
+		EXEC SQL ROLLBACK WORK RELEASE;
+		APL_GOBACK_FAIL
+	}
+	
+	memset(chr_l_buf,APL_NULL_CHAR,BUFFER_LEN);
+	sprintf(chr_l_buf,"Pending Transactions Conversion - GR");
+	CO_ProcMonitor(l_ptr_log_file,chr_l_buf,NULL,NULL);
+
+	CO_ProcMonitor(l_ptr_log_file,"____________________________________\n",NULL,NULL);
+	
+	
+
+	if (CO_RtvSysParams(&l_debug_info_ptr) != APL_SUCCESS)
+	{
+		CO_ProcMonitor(l_ptr_log_file,"Unable to get system parameters - Rollback done \n",NULL,&l_intl_envdatastruct_h);
+		
+		CO_Proc_RptClose(l_ptr_log_file,&l_debug_info_ptr);
+		
+		EXEC SQL ROLLBACK WORK RELEASE;
+		
+		APL_GOBACK_FAIL	
+	}
+
+	
+	 
+	int_retval = CO_Pro_LocRec(argv,l_ptr_log_file,&l_debug_info_ptr);
+
+	if (int_retval != APL_SUCCESS)
+	{
+		CO_ProcMonitor(l_ptr_log_file,"Unable to lock BATCH_IN_PROC record - Rollback done \n",NULL,&l_intl_envdatastruct_h);
+		
+		CO_Proc_RptClose(l_ptr_log_file,&l_debug_info_ptr);
+
+		EXEC SQL ROLLBACK WORK RELEASE;
+		
+		APL_GOBACK_FAIL
+	}
+
+   if(CO_Chk_CntryEnabled("EMUCONV",
+                       "EMU_CONV_PNDTXN",
+                       &int_l_cond_exists,
+                       &l_debug_info_ptr)==APL_FAILURE)
+   {
+      CO_ProcMonitor(l_ptr_log_file,"cntry_sys_params check failed\n",NULL,&l_intl_envdatastruct_h
+);
+
+      CO_Proc_RptClose(l_ptr_log_file,&l_debug_info_ptr);
+
+      EXEC SQL ROLLBACK WORK RELEASE;
+
+      APL_GOBACK_FAIL
+   }
+
+   if ( int_l_cond_exists > 0 )
+   {
+      fprintf(l_ptr_log_file,"Calling EM_ConvPendTrans for GR\n");
+
+		
+
+		int_retval = EM_ConvPendTrans(argv,
+										l_ptr_log_file,
+										argv[9],
+										&l_intl_envdatastruct_h,
+										&l_debug_info_ptr);
+	}
+   else
+   {
+      fprintf(l_ptr_log_file,"No records in cntry_sys_params\n");
+   }
+
+	if (int_retval != APL_SUCCESS)
+	{
+		int_l_flg = 1;
+
+	   CO_Mod_Batch_Status(argv,l_ptr_log_file,&l_debug_info_ptr,int_l_flg);
+		
+		if (CO_ChkErr(l_debug_info_ptr) == APL_SUCCESS)
+		{
+			
+			CO_ProcMonitor(l_ptr_log_file,APL_NULL_STRING,&l_debug_info_ptr,&l_intl_envdatastruct_h);
+			CO_FreeErrLst(&l_debug_info_ptr);
+
+		}
+
+		CO_ProcMonitor(l_ptr_log_file,"FAILURE from Pending transaction conversion program \n",NULL,&l_intl_envdatastruct_h);
+
+		
+		CO_Proc_RptClose(l_ptr_log_file,&l_debug_info_ptr);
+
+		APL_GOBACK_FAIL	
+	}
+	else
+	{
+		int_l_flg = 0;
+
+		CO_Mod_Batch_Status(argv,l_ptr_log_file,&l_debug_info_ptr,int_l_flg);
+
+		if (CO_ChkErr(l_debug_info_ptr) == APL_SUCCESS)
+		{
+			
+			CO_ProcMonitor(l_ptr_log_file,APL_NULL_STRING,&l_debug_info_ptr,&l_intl_envdatastruct_h);
+			CO_FreeErrLst(&l_debug_info_ptr);
+
+		}
+
+		CO_ProcMonitor(l_ptr_log_file,"SUCCESS from Pending transaction conversion program \n",NULL,&l_intl_envdatastruct_h);
+
+		
+		CO_Proc_RptClose(l_ptr_log_file,&l_debug_info_ptr);
+
+		APL_GOBACK_SUCCESS
+	}
+
+	RETURN_SUCCESS	:
+	{
+		fclose(l_ptr_ini_file);
+	   exit(0);
+	}
+
+	RETURN_FAILURE	:
+	{
+		fclose(l_ptr_ini_file);
+  		exit(-1);
+	}
+}
+
+
+
+int EM_ConvPendTrans(char **argv,FILE *p_log_file,char *p_flg_genreportonly,INTL_ENV_DATA_STRUCT_H *p_intl_env_data_struct_h_d,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+		struct sqlca 		  		sqlca;
+		FILE							*l_fp_ConvPendTrans = NULL;
+
+		char							chr_l_system_date[APL_DATE_LEN]=APL_NULL_STRING;
+		char							h_instr_code[APL_INSTRUMENTCODE_LEN]=APL_NULL_STRING;
+		short							i_instr_code = 0;
+		char							h_typeofinstr[4]=APL_NULL_STRING;
+		short							i_typeofinstr = 0;
+		char							h_currencycode[APL_CCYCODE_LEN]=APL_NULL_STRING;
+		short							i_currencycode = 0;
+		char							h_dl_client[APL_CLIENT_LENGTH]=APL_NULL_STRING;
+		short							i_dl_client = 0;
+		char							h_indentity_no[17]=APL_NULL_STRING;
+		short							i_indentity_no = 0;
+		char							h_ibbsclient[APL_CLIENT_LENGTH]=APL_NULL_STRING;
+		short							i_ibbsclient = 0;
+		char							h_loccode[5]=APL_NULL_STRING;
+		short							i_loccode = 0;
+		char							h_dealcd[2]=APL_NULL_STRING;
+		short							i_dealcd = 0;
+		char							h_deal_status[3]=APL_NULL_STRING;
+		short							i_deal_status = 0;
+		char							h_cash_client[APL_CLIENT_LENGTH]=APL_NULL_STRING;
+		short							i_cash_client = 0;
+		char							h_moneydate[APL_DATE_LEN]=APL_NULL_STRING;
+		short							i_moneydate = 0;
+		char							h_instrdate[APL_DATE_LEN]=APL_NULL_STRING;
+		short							i_instrdate = 0;
+		char							chr_h_emu_ccy_A[APL_CCYCODE_LEN]=APL_NULL_STRING;
+		short							i_emu_ccy = 0;
+
+		int							int_l_retstat = 0,int_l_diff = 0,int_l_pageno = 0;
+		int							int_l_nbr_processed = 0;
+		int							int_flg_moneydtlessthanleweekend = 0; 
+		int							int_flg_instr_dtlessthanleweekend = 0; 
+		double						h_nominal_value = 0;
+		short							i_nominal_value = 0;
+		double						h_amt = 0;
+		short							i_amt = 0;
+		double						h_qty = 0;
+		short							i_qty = 0;
+		double						dbl_h_gross_amount = 0;
+		short							i_gross_amount = 0;
+		double						l_convamount = 0;
+		double						l_convamount1 = 0;
+		double						l_convamount2 = 0;
+		double						l_convquantity = 0;
+		double						l_convquantity_a = 0;
+		double						l_convquantity_b = 0;
+		double						l_ae_rate = 0;
+		double						l_convgrossamount = 0;
+		double						l_convgrossamount1 = 0;
+		double						l_convgrossamount2 = 0;
+
+		char l_temp_processing_status[51] = APL_NULL_STRING;
+
+		EXEC SQL VAR h_dl_client IS STRING;
+		EXEC SQL VAR h_indentity_no IS STRING;
+		EXEC SQL VAR h_currencycode IS STRING;
+		EXEC SQL VAR h_typeofinstr IS STRING;
+		EXEC SQL VAR h_ibbsclient IS STRING;
+		EXEC SQL VAR h_loccode IS STRING;
+		EXEC SQL VAR h_instr_code IS STRING;
+		EXEC SQL VAR h_dealcd IS STRING;
+		EXEC SQL VAR h_deal_status IS STRING;
+		EXEC SQL VAR h_moneydate IS STRING;
+		EXEC SQL VAR h_instrdate IS STRING;
+		EXEC SQL VAR h_cash_client IS STRING;
+
+		CO_ProcMonitor(p_log_file,"Entered processtion EM_ConvPendTrans \n",NULL,p_intl_env_data_struct_h_d);
+
+		sqlca.sqlcode = 0;
+
+      EXEC SQL DECLARE CTrdConvFree CURSOR FOR
+		SELECT A.CLIENT,A.IDENTIY_NO,A.AMOUNT,A.QTY,A.CURRENCY_CD,
+				 B.INSTR_TYPE,C.CLN_GL_ACCOUNT,A.LOCATION_CD,A.INSTR_CODE,
+				 A.DEAL_CD,A.DEAL_STAT,A.MONEY_SETL_DT,A.INSTRUMENT_DT,
+				 A.GL_CLIENT,A.BROKERCOMM
+		FROM  DL_DEAL A,MT_INSTRUMENT B,MT_CLIENT C
+		WHERE	A.CLIENT = C.CLN_CODE
+		AND	A.INSTR_CODE = B.INSTR_CODE
+		AND	A.DEAL_STAT IN ('SS','MS','UU','AA','CC','DU')
+		AND	NOT EXISTS ( SELECT D.CLIENT
+								 FROM PRO_EURO_TEMP D
+								 WHERE A.CLIENT = D.CLIENT
+								 AND	 A.IDENTIY_NO	  = D.DF_IDENTNO)
+		ORDER BY A.INSTR_CODE,A.LOCATION_CD,A.CLIENT;
+
+      EXEC SQL OPEN CTrdConvFree;
+
+      IS_ANY_ORA_ERROR
+
+		sqlca.sqlcode = 0;
+
+   	if (APL_FAILURE == CO_Rtv_RptFileName( "CP", 
+            				"Conversion Of Pending Trades",
+								160,
+								argv[5],
+								argv,
+								&l_fp_ConvPendTrans,
+								l_debug_info_ptr ))
+						{
+							APL_GOBACK_FAIL
+						}
+		int_l_nbr_processed = 0;
+
+		
+		if (APL_FAILURE == CO_RtvSysDt(chr_l_system_date,l_debug_info_ptr) )
+		{
+			APL_GOBACK_FAIL
+		}
+
+		EXEC SQL SELECT FIELD_VAL
+		INTO     :chr_h_emu_ccy_A
+		FROM     PRO_GSSPLVAL
+		WHERE    MAIN_FUN = 'EMUCONV'
+		AND      SUB_PROCESS       = 'EMU_CCY'
+		AND      NATION        = 'GR';
+
+		IS_ANY_ORA_ERROR
+
+		for(;;)
+		{
+			EXEC SQL FETCH CTrdConvFree
+			INTO 	:h_dl_client:i_dl_client,
+					:h_indentity_no:i_indentity_no,
+					:h_amt:i_amt,
+					:h_qty:i_qty,
+					:h_currencycode:i_currencycode,
+					:h_typeofinstr:i_typeofinstr,
+					:h_ibbsclient:i_ibbsclient,
+					:h_loccode:i_loccode,
+					:h_instr_code:i_instr_code,
+					:h_dealcd:i_dealcd,
+					:h_deal_status:i_deal_status,
+					:h_moneydate:i_moneydate,
+					:h_instrdate:i_instrdate,
+					:h_cash_client:i_cash_client,
+					:dbl_h_gross_amount:i_gross_amount;
+
+			IS_ANY_ORA_ERROR
+
+			if (APL_ZERO_RESULT_SET)
+			{
+				if ( (strcmp(p_flg_genreportonly,"N") == 0) &&
+					  (int_l_nbr_processed >0) )
+				{
+					EXEC SQL COMMIT WORK ;
+					IS_ANY_ORA_ERROR
+
+					CO_ProcMonitor(p_log_file, "Record Committed", NULL, NULL);
+
+					EXEC SQL SELECT PROCESSING_STATUS into :l_temp_processing_status
+					FROM SYS_BATCHPROC
+					WHERE PROCESS_NAME=:argv[0]
+					AND   PROC_INIT=:argv[1]
+					AND   STARTDATE=:argv[2]
+					AND   STATUS='started'
+					FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+					if(APL_ZERO_RESULT_SET)
+					{
+						CO_ProcMonitor(p_log_file,"E:No entry in batch_in_proc",NULL,NULL);
+						APL_GOBACK_FAIL
+					}
+				}
+            else if (int_l_nbr_processed == 0)
+            {
+               fprintf(l_fp_ConvPendTrans,"%s","\nNothing to Convert\n");
+            }
+            break;
+			}
+
+			
+			l_ae_rate = 0.0;
+			if (APL_FAILURE == IV_Proc_ConvToFxFn(h_currencycode,
+												  chr_h_emu_ccy_A,
+												  g_mt_commonsys_params_struct_h.dom_ccy,
+												  chr_l_system_date,
+												  &l_ae_rate,&int_l_retstat,l_debug_info_ptr) )
+			{
+					APL_GOBACK_FAIL
+			}
+
+			
+			int_l_diff = 0;
+			int_flg_moneydtlessthanleweekend = 0;
+			int_flg_instr_dtlessthanleweekend = 0;
+			if (strcmp(h_deal_status,"MS") == 0)
+			{
+				if ( APL_FAILURE == CO_Pro_DateComp(h_moneydate,
+													  "31/12/2000 12:00:00",
+													  &int_l_diff,
+													  l_debug_info_ptr) )
+				{
+					APL_GOBACK_FAIL
+				}
+				if (int_l_diff > 0)
+					int_flg_moneydtlessthanleweekend = 1;
+			}
+			else if (strcmp(h_deal_status,"SS") == 0)
+			{
+				if ( APL_FAILURE == CO_Pro_DateComp(h_instrdate,
+													  "31/12/2000 12:00:00",
+													  &int_l_diff,
+													  l_debug_info_ptr) )
+				{
+					APL_GOBACK_FAIL
+				}
+				if (int_l_diff > 0)
+					int_flg_instr_dtlessthanleweekend = 1;
+			}
+
+			int_l_nbr_processed++;
+         if ( (!(int_l_nbr_processed%PAGELENGTH)) ||
+				  (int_l_nbr_processed == 1) )
+			{
+				int_l_pageno++;
+				if (int_l_nbr_processed != 1)
+				{
+					fprintf(l_fp_ConvPendTrans, "\f");
+					fprintf(l_fp_ConvPendTrans, "\n");
+				}	
+				fprintf(l_fp_ConvPendTrans, "                                                                                   Page : %d",int_l_pageno);
+				CBPrintHdrFn(l_fp_ConvPendTrans);
+			}
+			fprintf(l_fp_ConvPendTrans,"%s","Original  Amts:");
+			fprintf(l_fp_ConvPendTrans,
+						"%-10s    %-16s     %-4s     %-2s    %-8s       %-3s     %15.2lf     %-3s      %21.2lf     %15.2lf\n",
+						h_dl_client,
+						h_indentity_no,
+						h_loccode,
+						h_dealcd,
+						h_instr_code,
+						h_typeofinstr,
+						h_amt,
+						h_currencycode,
+						h_qty,
+						dbl_h_gross_amount
+						);
+
+			l_convquantity = l_convquantity_a = l_convquantity_b = 0.0;
+			l_convamount = l_convamount1 = l_convamount2 = 0.0;
+			
+			if ( (strcmp(h_typeofinstr,"FMT") == 0) &&
+				  (strcmp(h_loccode,"BOG") ==0) )
+			{
+				if ( 	(strcmp(h_deal_status,"UU") == 0) ||
+						(strcmp(h_deal_status,"AA") == 0) ||	
+						(strcmp(h_deal_status,"CC") == 0) ||	
+						(strcmp(h_deal_status,"DU") == 0) )
+				{
+					if ( (strcmp(h_dealcd,"1") == 0) ||
+						  (strcmp(h_dealcd,"2") == 0) )
+					{
+						l_convquantity_a = (h_qty * l_ae_rate);
+						if (CO_Round(l_convquantity_a,2,&l_convquantity_b) == APL_FAILURE)
+							APL_GOBACK_FAIL
+						l_convquantity = l_convquantity_b;
+						l_convamount = h_amt;
+						l_convgrossamount = dbl_h_gross_amount;
+					}
+					else 
+					{
+						l_convamount1 = (h_amt * l_ae_rate);
+						if (CO_Round(l_convamount1,2,&l_convamount2) == APL_FAILURE)
+							APL_GOBACK_FAIL
+						l_convamount = l_convamount2;
+						l_convquantity_a = (h_qty * l_ae_rate);
+						if (CO_Round(l_convquantity_a,2,&l_convquantity_b) == APL_FAILURE)
+							APL_GOBACK_FAIL
+						l_convquantity = l_convquantity_b;
+						l_convgrossamount1 = (dbl_h_gross_amount * l_ae_rate);
+						if (CO_Round(l_convgrossamount1,2,&l_convgrossamount2) == APL_FAILURE)
+							APL_GOBACK_FAIL
+						l_convgrossamount = l_convgrossamount2;
+					}
+				}
+				else if (strcmp(h_deal_status,"MS") == 0)
+				{
+				  	if (int_flg_moneydtlessthanleweekend)
+				 	{
+						l_convquantity_a = (h_qty * l_ae_rate);
+						if (CO_Round(l_convquantity_a,2,&l_convquantity_b) == APL_FAILURE)
+							APL_GOBACK_FAIL
+						l_convquantity = l_convquantity_b;
+						l_convamount = h_amt;
+						l_convgrossamount = dbl_h_gross_amount;
+					} 
+					else
+					{
+						l_convquantity = h_qty;
+						l_convamount = h_amt;
+						l_convgrossamount = dbl_h_gross_amount;
+					}
+				}
+				else if (strcmp(h_deal_status,"SS") == 0)
+				{
+				  	if (int_flg_instr_dtlessthanleweekend)
+				 	{
+						l_convamount1 = (h_amt * l_ae_rate);
+						if (CO_Round(l_convamount1,2,&l_convamount2) == APL_FAILURE)
+							APL_GOBACK_FAIL
+						l_convamount = l_convamount2;
+						l_convquantity = h_qty;
+						l_convgrossamount1 = (dbl_h_gross_amount * l_ae_rate);
+						if (CO_Round(l_convgrossamount1,2,&l_convgrossamount2) == APL_FAILURE)
+							APL_GOBACK_FAIL
+						l_convgrossamount = l_convgrossamount2;
+					} 
+					else
+					{
+						l_convquantity = h_qty;
+						l_convamount = h_amt;
+						l_convgrossamount = dbl_h_gross_amount;
+					}
+				}
+			} 
+			else if ( (strcmp(h_typeofinstr,"SHS") == 0) ||
+				  		 (strcmp(h_typeofinstr,"WTS") ==0) ||
+				  		 (strcmp(h_typeofinstr,"RTS") ==0) ||
+				  		 (strcmp(h_typeofinstr,"BON") ==0) )
+			{
+				if ( 	(strcmp(h_deal_status,"UU") == 0) ||
+						(strcmp(h_deal_status,"AA") == 0) ||	
+						(strcmp(h_deal_status,"CC") == 0) ||	
+						(strcmp(h_deal_status,"DU") == 0) )
+				{
+					if ( (strcmp(h_dealcd,"1") == 0) ||
+						  (strcmp(h_dealcd,"2") == 0) )
+					{
+						l_convquantity = h_qty;
+						l_convamount = h_amt;
+						l_convgrossamount = dbl_h_gross_amount;
+					}
+					else 
+					{
+						l_convamount1 = (h_amt * l_ae_rate);
+						if (CO_Round(l_convamount1,2,&l_convamount2) == APL_FAILURE)
+							APL_GOBACK_FAIL
+						l_convamount = l_convamount2;
+						l_convquantity = h_qty;
+						l_convgrossamount1 = (dbl_h_gross_amount * l_ae_rate);
+						if (CO_Round(l_convgrossamount1,2,&l_convgrossamount2) == APL_FAILURE)
+							APL_GOBACK_FAIL
+						l_convgrossamount = l_convgrossamount2;
+					}
+				}
+				else if (strcmp(h_deal_status,"MS") == 0)
+				{
+					l_convquantity = h_qty;
+					l_convamount = h_amt;
+					l_convgrossamount = dbl_h_gross_amount;
+				}
+				else if (strcmp(h_deal_status,"SS") == 0)
+				{
+				  	if (int_flg_instr_dtlessthanleweekend)
+				 	{
+						l_convamount1 = (h_amt * l_ae_rate);
+						if (CO_Round(l_convamount1,2,&l_convamount2) == APL_FAILURE)
+							APL_GOBACK_FAIL
+						l_convamount = l_convamount2;
+						l_convquantity = h_qty;
+						l_convgrossamount1 = (dbl_h_gross_amount * l_ae_rate);
+						if (CO_Round(l_convgrossamount1,2,&l_convgrossamount2) == APL_FAILURE)
+							APL_GOBACK_FAIL
+						l_convgrossamount = l_convgrossamount2;
+					} 
+					else
+					{
+						l_convquantity = h_qty;
+						l_convamount = h_amt;
+						l_convgrossamount = dbl_h_gross_amount;
+					}
+				}
+			} 
+			else 
+			{
+				l_convquantity = h_qty;
+				l_convamount = h_amt;
+				l_convgrossamount = dbl_h_gross_amount;
+			}
+
+			
+			fprintf(l_fp_ConvPendTrans,"%s","Converted Amts:");
+			fprintf(l_fp_ConvPendTrans,
+						"%-10s    %-16s     %-4s     %-2s    %-8s       %-3s     %15.2lf     %-3s      %21.2lf     %15.2lf\n",
+						h_dl_client,
+						h_indentity_no,
+						h_loccode,
+						h_dealcd,
+						h_instr_code,
+						h_typeofinstr,
+						l_convamount,
+						chr_h_emu_ccy_A,
+						l_convquantity,
+						l_convgrossamount
+						);
+
+			if (strcmp(p_flg_genreportonly,"N") == 0)
+			{
+				if (strcmp(h_cash_client,"") == 0)
+				{
+					EXEC SQL UPDATE 	dl_deal
+					SET		AMOUNT 	= :l_convamount,
+								QTY	 	= :l_convquantity,
+								currency_cd	= :chr_h_emu_ccy_A,
+								gl_client = :h_ibbsclient,
+								brokercomm = :l_convgrossamount
+					WHERE		client	= :h_dl_client
+					AND		IDENTIY_NO		= :h_indentity_no
+					AND		location_cd	= :h_loccode;
+
+					IS_ANY_ORA_ERROR
+				}
+				else
+				{
+					EXEC SQL UPDATE 	dl_deal
+					SET		AMOUNT 	= :l_convamount,
+								QTY	 	= :l_convquantity,
+								currency_cd	= :chr_h_emu_ccy_A,
+								brokercomm = :l_convgrossamount
+					WHERE		client	= :h_dl_client
+					AND		IDENTIY_NO		= :h_indentity_no
+					AND		location_cd	= :h_loccode;
+	
+					IS_ANY_ORA_ERROR
+				}
+
+
+				EXEC SQL INSERT INTO PRO_EURO_TEMP
+				(client,instr_code,location_cd,DF_IDENTNO,UROUNDED_EUR,
+				 EUR_AFTER_RND,orig_amt,NEW_AMOUNT,PROC_AREA,INFO)
+				VALUES(:h_dl_client,:h_instr_code,:h_loccode,:h_indentity_no,
+						 :h_qty,:l_convquantity,:h_amt,:l_convamount,'CONV',:h_typeofinstr
+						);
+				IS_ANY_ORA_ERROR
+
+				if ( ((strcmp(h_dealcd,"1") == 0) ||
+					   (strcmp(h_dealcd,"3") == 0)) &&
+					  (strcmp(h_typeofinstr,"FMT") == 0) &&
+					  (strcmp(h_loccode,"BOG") == 0) )
+				{
+					if ( (strcmp(h_deal_status,"UU") == 0) ||
+						  (strcmp(h_deal_status,"AA") == 0) )
+					{
+						EXEC SQL UPDATE 	DL_SAFEK
+						SET		NVALDELIVER = (NVALDELIVER - :h_qty + :l_convquantity)
+						WHERE		instr_code = :h_instr_code
+						AND		location_cd = :h_loccode	
+						AND		client = :h_dl_client;
+					}
+					else if ( (strcmp(h_deal_status,"CC") == 0) ||
+						  		 (strcmp(h_deal_status,"MS") == 0) )
+					{
+						EXEC SQL UPDATE 	DL_SAFEK
+						SET		VAL_DEL = (VAL_DEL - :h_qty + :l_convquantity)
+						WHERE		instr_code = :h_instr_code
+						AND		location_cd = :h_loccode	
+						AND		client = :h_dl_client;
+					}
+				}
+				else if ( ((strcmp(h_dealcd,"2") == 0) ||
+					  		  (strcmp(h_dealcd,"4") == 0)) &&
+							 (strcmp(h_typeofinstr,"FMT") == 0) &&
+							 (strcmp(h_loccode,"BOG") == 0) )
+				{
+					if ( (strcmp(h_deal_status,"UU") == 0) ||
+						  (strcmp(h_deal_status,"AA") == 0) )
+					{
+						EXEC SQL UPDATE 	DL_SAFEK
+						SET		NVALRECEIVE = (NVALRECEIVE - :h_qty + :l_convquantity)
+						WHERE		instr_code = :h_instr_code
+						AND		location_cd = :h_loccode	
+						AND		client = :h_dl_client;
+					}
+					else if ( (strcmp(h_deal_status,"CC") == 0) ||
+						  		 (strcmp(h_deal_status,"MS") == 0) )
+					{
+						EXEC SQL UPDATE 	DL_SAFEK
+						SET		VAL_REC = (VAL_REC - :h_qty + :l_convquantity)
+						WHERE		instr_code = :h_instr_code
+						AND		location_cd = :h_loccode	
+						AND		client = :h_dl_client;
+					}
+				}
+				IS_ANY_ORA_ERROR
+
+				if (!(int_l_nbr_processed%COMMITSIZE))
+				{
+					EXEC SQL COMMIT WORK ;
+					IS_ANY_ORA_ERROR
+					CO_ProcMonitor(p_log_file, "Record Committed", NULL, NULL);
+
+					EXEC SQL SELECT PROCESSING_STATUS into :l_temp_processing_status
+					FROM SYS_BATCHPROC
+					WHERE PROCESS_NAME=:argv[0]
+					AND   PROC_INIT=:argv[1]
+					AND   STARTDATE=:argv[2]
+					AND   STATUS='started'
+					FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+					if(APL_ZERO_RESULT_SET)
+					{
+						CO_ProcMonitor(p_log_file,"E:No entry in batch_in_proc",NULL,NULL);
+						APL_GOBACK_FAIL
+					}
+				}
+			}
+      }
+		
+	fprintf(l_fp_ConvPendTrans,"\n\n%s","******************** End Of Report *********************\n");
+	EXEC SQL CLOSE CTrdConvFree;
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS :
+	{
+		CO_ProcMonitor(p_log_file,"Leaving processtion EM_ConvPendTrans Successfully\n",NULL,p_intl_env_data_struct_h_d);
+		return(APL_SUCCESS);
+	}
+
+	RETURN_FAILURE :
+	{
+		CO_ProcMonitor(p_log_file,"Leaving processtion EM_ConvPendTrans with Failure\n",NULL,p_intl_env_data_struct_h_d);
+		return(APL_FAILURE);
+	}
+}
+int CBPrintHdrFn(FILE *fp)
+{
+   int i;
+   fprintf(fp, "\n");
+   for (i=0;i<132;fprintf(fp, "-"),i++);
+   fprintf(fp, "\n%32sPending Transactions Conversion Report\n"," ");  //AIX - Warnings Removal
+   for (i=0;i<132;fprintf(fp, "-"),i++);
+   fprintf(fp, "\n%15sACCOUNT       REFNO           LOCNCODE  TR CODE     INSTR_CODE     TYPEOFINSTR            AMOUNT     CURRENCY                   QTY           GROSS AMT\n"," ");
+   for (i=0;i<132;fprintf(fp, "-"),i++);
+   fprintf(fp, "\n");
+   return(1);
+}

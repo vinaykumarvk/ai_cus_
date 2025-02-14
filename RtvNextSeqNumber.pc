@@ -1,0 +1,699 @@
+/*
+ *    COPYRIGHT NOTICE
+ *
+ *   Copyright 2005 Polaris Software Lab Limited. All rights reserved.
+ *
+ *   These materials are confidential and proprietary to 
+ *    Polaris Software Lab Limited and no part of these materials should
+ *    be reproduced, published, transmitted or distributed in any form or
+ *    by any means, electronic, mechanical, photocopying, recording or 
+ *    otherwise, or stored in any information storage or retrieval system
+ *    of any nature nor should the materials be disclosed to third parties
+ *    or used in any other manner for which this is not authorized, without
+ *    the prior express written authorization of Polaris Software Lab Limited.
+ */
+/*********************************************************************
+ *
+ * Module Name         :		Maintenance
+ *
+ * File Name           :		RtvNextSeqNumber.pc
+ *
+ * Description         :		Creates next Sequence Number depending on 
+ *										the current Sequence Number in the table
+ *           						or the Oracle Sequence.
+ *
+ *            Version Control Block
+ *
+ * Date        Version		Author         Description				RFS No.
+ * ---------   --------	 ---------------  --------------------	-------------
+ *	10/10/2005	  1.0			Smita Bhat		New File					HDFCMT_003
+ *
+ *********************************************************************/
+
+#include "CR_Common.h"
+#include <CO_HostStructdef.h>
+
+#define S_LEVEL_ZERO					0
+#define S_LEVEL_ONE					1
+#define S_LEVEL_TWO					2
+#define S_LEVEL_THREE				3
+
+EXEC SQL INCLUDE sqlca;
+
+
+/*********************************************************************************************************
+ *                                                                                                       *
+ * Function Name         : CO_RtvNxtSeqNum                                                               *
+ *                                                                                                       *
+ * Description           : This Function Accepts Pro_gseqnum Structure, and debug pointer.               *
+ *									Creates Next Sequence Number depending upon the Sequence Name.						*
+ *                         returns Success/Failure depending upon validn.                                *
+ *                                                                                                       *
+ *                                                                                                       *
+ * Parameter                           Type                             Mode   Description               *
+ * ------------                        --------                         -----  ---------------           *
+ * p_pro_gseqnum_struct_h					PRO_GSEQNUM_STRUCT_H *				I		 Pro_gseqnum Structure     *
+ *																																			*
+ * l_debug_info_ptr                    DEBUG_INFO_STRUCT_H **           I      Debug Info Structure      *
+ *                                                                                                       *
+ * Return Values        :                                                                                *
+ *                                                                                                       *
+ *  APL_SUCCESS  - SUCCESS                                                                               *
+ *  APL_FAILURE  - FAILURE                                                                               *
+ *                                                                                                       *
+ ********************************************************************************************************/
+int CO_RtvNxtSeqNum(PRO_GSEQNUM_STRUCT_H *p_pro_gseqnum_struct_h, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	struct	sqlca	sqlca;
+
+	PRO_GSEQNUM_STRUCT_H   		*l_pro_gseqnumstruct_h = NULL;
+	PRO_GSEQNUM_STRUCT_I			*l_pro_gseqnum_struct_i = NULL;
+	VARCHAR							chr_l_seqname[SEQ_NAME_LEN+1];
+	char						  		chr_l_recycle;
+	int						  		int_l_step_by;
+	int						  		int_l_start_at;
+	int						  		int_l_next_number=0;
+	int						  		int_l_last_number;
+	VARCHAR					  		l_seq_attr1[SEQ_ATTR_LEN+1];
+	VARCHAR					  		l_seq_attr2[SEQ_ATTR_LEN+1];
+	VARCHAR					  		l_seq_attr3[SEQ_ATTR_LEN+1];
+	VARCHAR							chr_l_row_id[APL_ROWID_LEN+1];
+	int						  		int_l_seq_attr_level=S_LEVEL_ZERO;
+	short								l_seq_attr1_ind=-1;
+	short								l_seq_attr2_ind=-1;
+	short								l_seq_attr3_ind=-1;
+
+	EXEC SQL END DECLARE SECTION;
+
+	#ifdef	APL_THREADS
+		APL_SET_CONTEXT
+		EXEC SQL CONTEXT USE	:my_ctx_local;
+	#endif
+
+	fprintf(APL_OUT_FILE,"Entered processtion CO_RtvNxtSeqNum \n");
+
+	if ((p_pro_gseqnum_struct_h->sequencename == NULL) || (strcmp(p_pro_gseqnum_struct_h->sequencename, APL_NULL_STRING)) == 0)
+	{
+		APL_DATA_MISSING("SEQUENCE NAME",APL_NULL_STRING,APL_NULL_STRING)
+
+		APL_GOBACK_FAIL
+	}
+	
+	strcpy((char *)chr_l_seqname.arr, p_pro_gseqnum_struct_h->sequencename);
+	chr_l_seqname.len = (strlen((char *)chr_l_seqname.arr)); //AIX - Warnings Removal
+
+	
+		fprintf(APL_OUT_FILE,"Sequence name is %s \n",p_pro_gseqnum_struct_h->sequencename);
+
+  if( (strcmp(p_pro_gseqnum_struct_h->sequencename,"MSGDAT")) )
+  {
+	if (strcmp(p_pro_gseqnum_struct_h->seq_attrb_a, APL_NULL_STRING) != 0)
+	{
+		int_l_seq_attr_level=S_LEVEL_ONE;
+		l_seq_attr1_ind=0;
+		strcpy((char *)l_seq_attr1.arr, p_pro_gseqnum_struct_h->seq_attrb_a);
+		l_seq_attr1.len =strlen((char *)l_seq_attr1.arr); //AIX - Warnings Removal
+	
+		#ifdef SYS_DEBUG
+			fprintf(APL_OUT_FILE,"Sequence attribute 1 is %s \n",p_pro_gseqnum_struct_h->seq_attrb_a);
+		#endif
+	}
+
+	if (strcmp(p_pro_gseqnum_struct_h->seq_attrb_b, APL_NULL_STRING) != 0)
+	{
+		if (strcmp(p_pro_gseqnum_struct_h->seq_attrb_a, APL_NULL_STRING) == 0) 
+		{
+			fprintf(APL_OUT_FILE,"Level 1 sequence attribute must be specified if Level 2 sequence attribute has been specified \n");
+		
+			APL_DATA_MISSING("SEQUENCE ATTRIBUTE 1",APL_NULL_STRING,APL_NULL_STRING)
+			APL_GOBACK_FAIL
+		}
+		else
+		{
+			int_l_seq_attr_level=S_LEVEL_TWO;
+			l_seq_attr1_ind=0;
+			l_seq_attr2_ind=0;
+			strcpy((char *)l_seq_attr2.arr, p_pro_gseqnum_struct_h->seq_attrb_b);
+			l_seq_attr2.len = strlen((char *)l_seq_attr2.arr);
+		
+			#ifdef SYS_DEBUG
+				fprintf(APL_OUT_FILE,"Sequence attribute 2 is %s \n",p_pro_gseqnum_struct_h->seq_attrb_b);
+			#endif
+		}
+	}
+
+	if (strcmp(p_pro_gseqnum_struct_h->seq_attrb_c, APL_NULL_STRING) != 0)
+	{
+		if ((strcmp(p_pro_gseqnum_struct_h->seq_attrb_b, APL_NULL_STRING) == 0) ||
+				(strcmp(p_pro_gseqnum_struct_h->seq_attrb_a, APL_NULL_STRING) == 0))
+		{
+			fprintf(APL_OUT_FILE,"Level 1 and Level 2 sequence attributes must be specified if Level 3 sequence attribute has been specified \n");
+			
+			APL_DATA_MISSING("SEQUENCE ATTRIBUTE 1","SEQUENCE ATTRIBUTE 2",APL_NULL_STRING)
+			APL_GOBACK_FAIL
+		}
+		else
+	   {	
+			int_l_seq_attr_level=S_LEVEL_THREE;
+			l_seq_attr1_ind=0;
+			l_seq_attr2_ind=0;
+			l_seq_attr3_ind=0;
+			strcpy((char *)l_seq_attr3.arr, p_pro_gseqnum_struct_h->seq_attrb_c);
+			l_seq_attr3.len =strlen((char *)l_seq_attr3.arr); //AIX - Warnings Removal
+			
+			#ifdef SYS_DEBUG
+				fprintf(APL_OUT_FILE,"Sequence attribute 3 is %s \n",p_pro_gseqnum_struct_h->seq_attrb_c);
+			#endif
+		}
+	}
+
+	
+
+	l_pro_gseqnumstruct_h = (PRO_GSEQNUM_STRUCT_H *)calloc(1,sizeof(PRO_GSEQNUM_STRUCT_H));
+	APL_MALLOC_FAIL(l_pro_gseqnumstruct_h)
+
+
+	
+	
+	l_pro_gseqnum_struct_i = (PRO_GSEQNUM_STRUCT_I *)calloc(1,sizeof(PRO_GSEQNUM_STRUCT_I));
+	APL_MALLOC_FAIL(l_pro_gseqnum_struct_i)
+
+	switch(int_l_seq_attr_level)
+	{
+
+	case S_LEVEL_ZERO  :
+		printf("\n Entered LEVEL ZERO \n");
+		EXEC SQL	SELECT ROWID,sequence_name,last_usednum,recycle_ind,seq_stepby,seq_start,NVL(last_seqnum,999999999),seq_attrb_a,seq_attrb_b,seq_attrb_c
+		INTO :chr_l_row_id, :l_pro_gseqnumstruct_h INDICATOR :l_pro_gseqnum_struct_i
+		FROM PRO_GSEQNUM
+		WHERE sequence_name = :chr_l_seqname
+		AND   seq_attrb_a IS NULL
+		AND   seq_attrb_b IS NULL
+		AND   seq_attrb_c IS NULL
+		FOR UPDATE OF last_usednum;
+		
+		break;
+
+	case S_LEVEL_ONE  :
+		printf("\n Entered LEVEL ONE \n");
+		
+		EXEC SQL	SELECT ROWID,sequence_name,last_usednum,recycle_ind,seq_stepby,seq_start,NVL(last_seqnum,999999999),seq_attrb_a,seq_attrb_b,seq_attrb_c
+		INTO :chr_l_row_id,:l_pro_gseqnumstruct_h INDICATOR :l_pro_gseqnum_struct_i
+		FROM PRO_GSEQNUM
+		WHERE sequence_name = :chr_l_seqname
+		AND   seq_attrb_a = :l_seq_attr1
+		AND   seq_attrb_b IS NULL
+		AND   seq_attrb_c IS NULL
+		FOR UPDATE OF last_usednum;
+
+		break;
+	
+	case S_LEVEL_TWO  :
+		printf("\n Entered LEVEL TWO \n");
+	
+		EXEC SQL	SELECT ROWID,sequence_name,last_usednum,recycle_ind,seq_stepby,seq_start,NVL(last_seqnum,999999999),seq_attrb_a,seq_attrb_b,seq_attrb_c
+		INTO :chr_l_row_id,:l_pro_gseqnumstruct_h INDICATOR :l_pro_gseqnum_struct_i
+		FROM PRO_GSEQNUM
+		WHERE sequence_name = :chr_l_seqname
+		AND seq_attrb_a = :l_seq_attr1
+		AND seq_attrb_b = :l_seq_attr2
+		AND seq_attrb_c IS NULL
+		FOR UPDATE OF last_usednum;
+
+		break;
+	
+	case S_LEVEL_THREE :
+		printf("\n Entered LEVEL THREE \n");
+	
+		EXEC SQL	SELECT ROWID,sequence_name,last_usednum,recycle_ind,seq_stepby,seq_start,NVL(last_seqnum,999999999),seq_attrb_a,seq_attrb_b,seq_attrb_c
+		INTO :chr_l_row_id,:l_pro_gseqnumstruct_h INDICATOR :l_pro_gseqnum_struct_i
+		FROM PRO_GSEQNUM
+		WHERE sequence_name = :chr_l_seqname
+		AND seq_attrb_a = :l_seq_attr1
+		AND seq_attrb_b = :l_seq_attr2
+		AND seq_attrb_c = :l_seq_attr3
+		FOR UPDATE OF last_usednum;
+
+		break;
+	}
+	printf("\n Out of levels sqlca.sqlcode is |%d|" ,sqlca.sqlcode );
+    printf("\n SHYAM before (increament)int_l_next_number::<%d>" ,int_l_next_number);
+
+	IS_ANY_ORA_ERROR
+
+	if (sqlca.sqlcode == 0)
+	{
+		if((l_pro_gseqnumstruct_h->last_usednum + l_pro_gseqnumstruct_h->seq_stepby) <= l_pro_gseqnumstruct_h->last_seqnum)
+			int_l_next_number = l_pro_gseqnumstruct_h->last_usednum + l_pro_gseqnumstruct_h->seq_stepby;
+		else
+		{
+			if(toupper(l_pro_gseqnumstruct_h->recycle_ind) == RECYCLE_YES)
+				int_l_next_number = l_pro_gseqnumstruct_h->seq_start;
+			else
+			{
+				fprintf(APL_OUT_FILE,"Error - Limit reached for h_next sequence number\n");
+				CO_InsertErr(l_debug_info_ptr,ERR_NO_NXT_SEQNO,APL_NULL_STRING,APL_NULL_STRING,APL_NULL_STRING,__LINE__,__FILE__);
+				APL_GOBACK_FAIL
+			}
+		}
+
+		/* EXEC SQL UPDATE PRO_GSEQNUM
+		SET last_usednum = :int_l_next_number
+		WHERE ROWID = :chr_l_row_id; 
+		
+		PJ KOTAK AIX UAT getting 2111 heap error */
+
+		/*(ISKB_8994) - Where clause is not proper. Changes by Mrinal - Starts*/
+		
+		/* EXEC SQL UPDATE PRO_GSEQNUM
+		SET last_usednum = last_usednum + SEQ_STEPBY
+		WHERE sequence_name = :p_pro_gseqnum_struct_h->sequencename; */
+
+		EXEC SQL UPDATE PRO_GSEQNUM
+		SET last_usednum = last_usednum + SEQ_STEPBY
+		WHERE sequence_name = :p_pro_gseqnum_struct_h->sequencename
+		AND (seq_attrb_a is NULL or seq_attrb_a = :p_pro_gseqnum_struct_h->seq_attrb_a)
+		AND (seq_attrb_b is NULL or seq_attrb_b = :p_pro_gseqnum_struct_h->seq_attrb_b)
+		AND (seq_attrb_c is NULL or seq_attrb_c = :p_pro_gseqnum_struct_h->seq_attrb_c);
+
+		/*(ISKB_8994) - Where clause is not proper. Changes by Mrinal - Ends*/
+
+		printf("\n After updation of pro_gseqnum sql ca is |%d| next number is |%d| rowid = |%s|\n ",sqlca.sqlcode,int_l_next_number ,chr_l_row_id.arr);
+	
+		IS_ANY_ORA_ERROR;
+
+		APL_GOBACK_SUCCESS
+
+	}
+	else if (sqlca.sqlcode == 1403)
+	{
+		fprintf(APL_OUT_FILE,"Inserting a chr_new record in the GSEQNUM table\n");
+		
+		if(p_pro_gseqnum_struct_h->seq_stepby < 1)
+			p_pro_gseqnum_struct_h->seq_stepby = 1;
+		if(p_pro_gseqnum_struct_h->seq_start < 1)
+			p_pro_gseqnum_struct_h->seq_start = 1;
+		if(p_pro_gseqnum_struct_h->last_seqnum < 1)
+			p_pro_gseqnum_struct_h->last_seqnum = 999999999;
+		if( (toupper(p_pro_gseqnum_struct_h->recycle_ind) != RECYCLE_YES) &&
+			 (toupper(p_pro_gseqnum_struct_h->recycle_ind) != RECYCLE_NO ) &&
+			 (toupper(p_pro_gseqnum_struct_h->recycle_ind) != RECYCLE_EOD) &&
+			 (toupper(p_pro_gseqnum_struct_h->recycle_ind) != RECYCLE_EOM) &&
+			 (toupper(p_pro_gseqnum_struct_h->recycle_ind) != RECYCLE_EOY) )
+			{
+				p_pro_gseqnum_struct_h->recycle_ind = RECYCLE_YES;
+			}
+
+		chr_l_recycle = toupper(p_pro_gseqnum_struct_h->recycle_ind);
+		int_l_step_by = p_pro_gseqnum_struct_h->seq_stepby;
+		int_l_start_at = p_pro_gseqnum_struct_h->seq_start;
+		int_l_last_number = p_pro_gseqnum_struct_h->last_seqnum;
+			
+		#ifdef SYS_DEBUG
+			fprintf(APL_OUT_FILE,"Recycle chr_flag is %c \n",p_pro_gseqnum_struct_h->recycle_ind);
+			fprintf(APL_OUT_FILE,"Step by is %d \n",p_pro_gseqnum_struct_h->seq_stepby);
+			fprintf(APL_OUT_FILE,"Start at is %d \n",p_pro_gseqnum_struct_h->seq_start);
+			fprintf(APL_OUT_FILE,"Last number is %d \n",p_pro_gseqnum_struct_h->last_seqnum);
+		#endif
+
+		EXEC SQL INSERT INTO PRO_GSEQNUM (SEQUENCE_NAME,LAST_USEDNUM,RECYCLE_IND,SEQ_STEPBY,SEQ_START,LAST_SEQNUM,SEQ_ATTRB_A,SEQ_ATTRB_B,SEQ_ATTRB_C)
+		VALUES (:chr_l_seqname,
+				  :int_l_start_at,
+				  :chr_l_recycle,
+				  :int_l_step_by,
+				  :int_l_start_at,
+				  :int_l_last_number,
+				  :l_seq_attr1:l_seq_attr1_ind,
+				  :l_seq_attr2:l_seq_attr2_ind,
+				  :l_seq_attr3:l_seq_attr3_ind);
+		printf("\n After inserting pro_gseqnum is sqlca.sqlcode is |%d| ",sqlca.sqlcode);
+		IS_ANY_ORA_ERROR
+				
+		int_l_next_number = int_l_start_at;
+
+		APL_GOBACK_SUCCESS
+	}
+  }
+  else
+  {
+      int_l_next_number = 0 ;
+
+		EXEC SQL SELECT MSGDATSEQ.NEXTVAL into :int_l_next_number FROM DUAL ;
+	   
+		if(sqlca.sqlcode == -2289)
+		{
+		 printf("sqlca.sqlcode=%d\n",sqlca.sqlcode);
+		 fprintf(APL_OUT_FILE,"Sequence does not exist/Insufficient Priveleges\n");
+		 APL_GOBACK_FAIL
+	   }
+		else if(sqlca.sqlcode == -1031)
+		{
+		 printf("sqlca.sqlcode=%d\n",sqlca.sqlcode);
+		 fprintf(APL_OUT_FILE,"Insufficient Priveleges\n");
+		 APL_GOBACK_FAIL
+	   }
+      else if(sqlca.sqlcode != 0)
+		{
+		 printf("sqlca.sqlcode=%d\n",sqlca.sqlcode);
+		 APL_GOBACK_FAIL
+	   }
+		
+		printf("Successfully got the NextVal from Oracle Sequence MSGDATSEQ\n");
+		printf("Next Sequence Number=%d\n",int_l_next_number);
+	}
+
+   APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS :
+	{
+		free(l_pro_gseqnumstruct_h);
+		free(l_pro_gseqnum_struct_i);
+		fprintf(APL_OUT_FILE,"Leaving processtion CO_RtvNxtSeqNum Successfully\n");
+		printf("\n Before Inside function Returning Next number is |%d| ",int_l_next_number);
+		return(int_l_next_number);
+	}
+
+	RETURN_FAILURE  :
+	{
+		free(l_pro_gseqnumstruct_h);
+		free(l_pro_gseqnum_struct_i);
+		fprintf(APL_OUT_FILE,"Leaving processtion CO_RtvNxtSeqNum Unsuccessfully\n");
+		return(APL_FAILURE);
+	}
+}
+
+/*********************************************************************************************************
+ *                                                                                                       *
+ * Function Name         : CO_RtvNxtSeqNum_OraSeq                                                        *
+ *                                                                                                       *
+ * Description           : This Function Accepts Pro_gseqnum Structure, and debug pointer.               *
+ *                         Creates Next Sequence Number												               *
+ *                         returns Success/Failure depending upon validn.                                *
+ *                                                                                                       *
+ *                                                                                                       *
+ * Parameter                           Type                             Mode   Description               *
+ * ------------                        --------                         -----  ---------------           *
+ * p_pro_gseqnum_struct_h              PRO_GSEQNUM_STRUCT_H *           I      Pro_gseqnum Structure     *
+ *                                                                                                       *
+ * l_debug_info_ptr                    DEBUG_INFO_STRUCT_H **           I      Debug Info Structure      *
+ *                                                                                                       *
+ * Return Values        :                                                                                *
+ *                                                                                                       *
+ *  APL_SUCCESS  - SUCCESS                                                                               *
+ *  APL_FAILURE  - FAILURE                                                                               *
+ *                                                                                                       *
+ ********************************************************************************************************/
+int CO_RtvNxtSeqNum_OraSeq(PRO_GSEQNUM_STRUCT_H *p_pro_gseqnum_struct_h, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	struct	sqlca	sqlca;
+
+	PRO_GSEQNUM_STRUCT_H   		*l_pro_gseqnumstruct_h = NULL;
+	PRO_GSEQNUM_STRUCT_I			*l_pro_gseqnum_struct_i = NULL;
+	VARCHAR							chr_l_seqname[SEQ_NAME_LEN+1];
+	char						  		chr_l_recycle;
+	int						  		int_l_step_by;
+	int						  		int_l_start_at;
+	int						  		int_l_next_number=0;
+	int						  		int_l_last_number;
+	VARCHAR					  		l_seq_attr1[SEQ_ATTR_LEN+1];
+	VARCHAR					  		l_seq_attr2[SEQ_ATTR_LEN+1];
+	VARCHAR					  		l_seq_attr3[SEQ_ATTR_LEN+1];
+	VARCHAR							chr_l_row_id[APL_ROWID_LEN+1];
+	int						  		int_l_seq_attr_level=S_LEVEL_ZERO;
+	short								l_seq_attr1_ind=-1;
+	short								l_seq_attr2_ind=-1;
+	short								l_seq_attr3_ind=-1;
+	char 								chr_l_sql_stmt[200]=APL_NULL_STRING;
+
+	EXEC SQL END DECLARE SECTION;
+	EXEC SQL VAR chr_l_sql_stmt IS STRING;
+
+	#ifdef	APL_THREADS
+		APL_SET_CONTEXT
+		EXEC SQL CONTEXT USE	:my_ctx_local;
+	#endif
+
+	fprintf(APL_OUT_FILE,"Entered processtion CO_RtvNxtSeqNum_OraSeq \n");
+	memset(chr_l_sql_stmt,APL_NULL_CHAR,sizeof(chr_l_sql_stmt));
+
+	if ((p_pro_gseqnum_struct_h->sequencename == NULL) || (strcmp(p_pro_gseqnum_struct_h->sequencename, APL_NULL_STRING)) == 0)
+	{
+		APL_DATA_MISSING("SEQUENCE NAME",APL_NULL_STRING,APL_NULL_STRING)
+
+		APL_GOBACK_FAIL
+	}
+	
+	strcpy((char *)chr_l_seqname.arr, p_pro_gseqnum_struct_h->sequencename);
+	chr_l_seqname.len = strlen((char *)chr_l_seqname.arr); //AIX - Warnings Removal
+
+	strcpy(chr_l_sql_stmt,"SELECT ");
+	strcat(chr_l_sql_stmt,p_pro_gseqnum_struct_h->sequencename);
+	strcat(chr_l_sql_stmt,".NEXTVAL ");
+	strcat(chr_l_sql_stmt,"FROM DUAL");
+
+	EXEC SQL PREPARE s FROM :chr_l_sql_stmt;
+   if(sqlca.sqlcode != 0)
+	{
+		 fprintf(APL_OUT_FILE,"sqlca.sqlcode=%d\n",sqlca.sqlcode);
+		 APL_GOBACK_FAIL
+	} 
+
+	EXEC SQL DECLARE sel_data_cur CURSOR FOR s; 
+	IS_ANY_ORA_ERROR
+
+	EXEC SQL OPEN sel_data_cur;
+	IS_ANY_ORA_ERROR
+
+	EXEC SQL FETCH sel_data_cur INTO :int_l_next_number;
+   IS_ANY_ORA_ERROR
+
+	EXEC SQL CLOSE sel_data_cur;
+	IS_ANY_ORA_ERROR
+
+	printf("Next Sequence Number=%d\n",int_l_next_number);
+
+   APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS :
+	{
+		free(l_pro_gseqnumstruct_h);
+		free(l_pro_gseqnum_struct_i);
+		fprintf(APL_OUT_FILE,"Leaving processtion CO_RtvNxtSeqNum_OraSeq\n");
+		return(int_l_next_number);
+	}
+
+	RETURN_FAILURE  :
+	{
+		free(l_pro_gseqnumstruct_h);
+		free(l_pro_gseqnum_struct_i);
+		fprintf(APL_OUT_FILE,"Leaving processtion CO_RtvNxtSeqNum_OraSeq\n");
+		return(APL_FAILURE);
+	}
+}
+
+/*Smita - HDFCMT_003 - Instrument Master Maintenance*/
+/*********************************************************************************************************
+ *                                                                                                       *
+ * Function Name         : CO_RtvChldNxtSeqNum		                                                      *
+ *                                                                                                       *
+ * Description           : This Function Accepts Key Codes, Key Values, Child Table Name, Field Name,    *
+ *									and debug info Structure.																		*
+ *                         Creates Next Sequence Number for the given Child Table and Key Codes.         *
+ *                         returns Success/Failure depending upon validn.                                *
+ *                                                                                                       *
+ *                                                                                                       *
+ * Parameter                           Type                             Mode   Description               *
+ * ------------                        --------                         -----  ---------------           *
+ * p_key_codes									char *									I		 Array for Key Codes       *
+ *																																			*
+ * p_key_values								char *									I		 Array for Key Values		*
+ *																																			*
+ * p_chld_table_name							char *									I		 Child Table Name				*
+ *																																			*
+ * p_field_name								char *									I		 Field Name in Table			*
+ *																																			*
+ *	p_nxt_seq_num								int *										O		 Sequence No.					*
+ *                                                                                                       *
+ * l_debug_info_ptr                    DEBUG_INFO_STRUCT_H **           I      Debug Info Structure      *
+ *                                                                                                       *
+ * Return Values        :                                                                                *
+ *                                                                                                       *
+ *  APL_SUCCESS  - SUCCESS                                                                               *
+ *  APL_FAILURE  - FAILURE                                                                               *
+ *  p_nxt_seq_num -- Sequence Number
+ *                                                                                                       *
+ ********************************************************************************************************/
+int CO_RtvChldNxtSeqNum 	(char *p_key_codes[],
+                           char *p_key_values[],
+                           char *p_chld_table_name,
+                           char *p_field_name,
+                           int  *p_nxt_seq_num,
+                           DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+   int                     int_next_seq_num = 0;
+   int                     l_count  = 0;
+   int                     l_field_cnt = 0;
+   int                     int_l_num_rows = 0;
+   char                    chr_h_field_val[100];
+   short                   i_field_val;
+   char                    chr_l_buf[BUFFER_LEN];
+   int                     l_nxt_seq_num = 0;
+	char 							*sqlstmt;
+	char							*sqlstmt_append;
+
+   EXEC SQL BEGIN DECLARE SECTION;
+   struct   sqlca sqlca;
+   EXEC SQL END DECLARE SECTION;
+
+   #ifdef   APL_THREADS
+      APL_SET_CONTEXT
+      EXEC SQL CONTEXT USE :my_ctx_local;
+   #endif
+
+   fprintf(APL_OUT_FILE,"Entered processtion CO_RtvChldNxtSeqNum \n");
+
+   APL_IF_DEBUG
+   {
+     CO_ProcMonitor(APL_OUT_FILE,"Entered processtion CO_RtvChldNxtSeqNum \n",NULL,NULL);
+
+     memset(chr_l_buf,APL_NULL_CHAR,BUFFER_LEN);
+     sprintf(chr_l_buf,"Field Name is |%s| \n",p_field_name);
+     CO_ProcMonitor(APL_OUT_FILE,chr_l_buf,NULL,NULL);
+
+     memset(chr_l_buf,APL_NULL_CHAR,BUFFER_LEN);
+     sprintf(chr_l_buf,"Child Table name is |%s| \n",p_chld_table_name);
+     CO_ProcMonitor(APL_OUT_FILE,chr_l_buf,NULL,NULL);
+   }
+   if (strlen(p_chld_table_name) == 0)
+   {
+      APL_DATA_MISSING("Child Table Name",APL_NULL_STRING,APL_NULL_STRING)
+      APL_GOBACK_FAIL
+   }
+
+   memset(chr_h_field_val,APL_NULL_CHAR,sizeof(chr_h_field_val));
+	sqlstmt = (char *)calloc(15000,sizeof(char));
+	sqlstmt_append = (char *)calloc(15000,sizeof(char));
+
+	memset(sqlstmt,APL_NULL_CHAR,15000);
+	memset(sqlstmt_append,APL_NULL_CHAR,15000);
+
+   while(strlen(*(p_key_codes + l_count)))
+   {
+      APL_IF_DEBUG
+      {
+         printf("Count  = |%d|\n",l_count);
+         printf("Key Codes = ||%s||\n",*(p_key_codes + l_count));
+         printf("Key Values = ||%s||\n",*(p_key_values + l_count));
+      }
+      l_count++;
+   }
+
+	sprintf(sqlstmt,"SELECT NVL(MAX(%s),0) FROM %s WHERE %s = '%s'",p_field_name,p_chld_table_name,p_key_codes[0],p_key_values[0]);
+
+	for (l_field_cnt=1;l_field_cnt<l_count;l_field_cnt++)
+	{
+		sprintf(sqlstmt_append," AND %s = '%s'",p_key_codes[l_field_cnt],p_key_values[l_field_cnt]);
+		strcat(sqlstmt,sqlstmt_append);
+	}
+   APL_IF_DEBUG
+   {
+      printf("Query = |%s|\n",sqlstmt);
+   }
+
+   EXEC SQL PREPARE s FROM :sqlstmt;
+   IS_ANY_ORA_ERROR
+
+   EXEC SQL DECLARE cur CURSOR FOR s;
+   IS_ANY_ORA_ERROR
+   EXEC SQL OPEN cur;
+   IS_ANY_ORA_ERROR
+
+   EXEC SQL FETCH cur INTO :l_nxt_seq_num;
+   IS_ANY_ORA_ERROR
+
+   EXEC SQL CLOSE cur;
+   IS_ANY_ORA_ERROR
+
+   *p_nxt_seq_num = l_nxt_seq_num + 1;
+
+   APL_IF_DEBUG
+   {
+      printf("Next Seq Number = |%d|\n",*p_nxt_seq_num);
+   }
+
+   APL_GOBACK_SUCCESS
+
+   RETURN_SUCCESS :
+   {
+      fprintf(APL_OUT_FILE,"Leaving processtion CO_RtvChldNxtSeqNum SUCCESS\n");
+      return(APL_SUCCESS);
+   }
+
+   RETURN_FAILURE  :
+   {
+      fprintf(APL_OUT_FILE,"Leaving processtion CO_RtvChldNxtSeqNum FAILURE\n");
+      return(APL_FAILURE);
+   }
+}
+/* Smita - HDFCMT_003 - Instrument Master Maintenance*/
+/* Ekta - Retro from HDFC ISHB_8740 for ISKB_12286 on 08/08/2019 - START */
+
+/*********************************************************************************************************
+ *                                                                                                       *
+ * Function Name         : CO_RtvNxtEventSeqNum		                                                 *
+ *                                                                                                       *
+ * Description           : This Function returns Next Sequence Number for reference no generation        * 
+ * 						    so that sleep time can be remove											 *
+ *							EVENT_SEQ_REFNO																 *
+ *                          returns Success/Failure depending upon validn.                               *
+ *                                                                                                       *
+ * Parameter                           Type                             Mode   Description               *
+ * ------------                        --------                         -----  ---------------           *
+ * chr_sequence_no					   char *							O	   Sequence number           *
+ * l_debug_info_ptr                    DEBUG_INFO_STRUCT_H **           I      Debug Info Structure      *
+ *                                                                                                       *
+ * Return Values        :                                                                                *
+ *                                                                                                       *
+ *  APL_SUCCESS  - SUCCESS                                                                               *
+ *  APL_FAILURE  - FAILURE          																	 *
+ *  chr_sequence_no - Sequence no.																		 *
+ *                                                                                                       *
+ ********************************************************************************************************/
+
+int CO_RtvNxtEventSeqNum(char *chr_sequence_no, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+   EXEC SQL BEGIN DECLARE SECTION;
+   struct   sqlca sqlca;
+   EXEC SQL END DECLARE SECTION;
+
+   #ifdef   APL_THREADS
+      APL_SET_CONTEXT
+      EXEC SQL CONTEXT USE :my_ctx_local;
+   #endif
+
+	fprintf(APL_OUT_FILE,"Entered procession CO_RtvNxtEventSeqNum \n");
+
+	char chr_next_seq_no[10] = APL_NULL_STRING;		
+		EXEC SQL SELECT LPAD(EVENT_SEQ_REFNO.NEXTVAL,6,0) INTO :chr_next_seq_no FROM DUAL;
+        IS_ANY_ORA_ERROR;
+		
+	strcpy(chr_sequence_no,chr_next_seq_no);
+
+		APL_GOBACK_SUCCESS
+
+        RETURN_SUCCESS :
+        {
+                fprintf(APL_OUT_FILE,"Leaving procession CO_RtvNxtEventSeqNum \n");
+                return(APL_SUCCESS);
+        }
+
+        RETURN_FAILURE  :
+        {
+                fprintf(APL_OUT_FILE,"Leaving procession CO_RtvNxtEventSeqNum \n");
+                return(APL_FAILURE);
+        }		
+}
+/* Ekta - Retro from HDFC ISHB_8740 for ISKB_12286 on 08/08/2019 - END */

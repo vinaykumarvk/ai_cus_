@@ -1,0 +1,552 @@
+
+
+
+
+
+
+#include<string.h>
+#include "IV_Control_A.h"
+
+EXEC SQL INCLUDE SQLCA.H;
+
+int IV_Proc_PrnSAFEKHdrDetInv( FILE *,int *,char *,DEBUG_INFO_STRUCT_H **);
+
+int IV_Proc_PrnSAFEKEMINV( FILE *bill,
+					FILE *fl_userlog,
+					char *chr_p_billdt,
+					char *chr_p_client,
+					IV_CLIENTSETUP_STRUCT l_iv_clt_setup_struct,
+					char p_mastsub,
+					int *int_currpos,
+					double *p_tot_portf,
+					DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+
+struct sqlca sqlca;
+PRO_SGENSTAT_STRUCT l_pro_sgenstat_struct;
+
+char  *y=NULL,*v=NULL,*a,*b;
+int int_counter=0;
+int int_headerlen = 6;
+int int_ret = 0;
+int i =0;
+int int_newlen;
+int int_period_flg1 =0;
+int int_ccyreturn =0;
+int int_posreturn =0;
+int int_retstat =0;
+
+char chr_l_instrdesc[36]; 
+char chr_l_instrdesc1[31];
+char *chr_f_mktprice;
+char *chr_f_mktprice1;
+char *chr_f_positions;
+char *chr_f_positions1;
+
+char chr_f_positions2[30];
+char *chr_f_portfolio;
+char *chr_f_portfolio1;
+char chr_l_amtstr[30]; 
+char chr_l_temp_mkt[30];
+double roundedsafekeep_pos = 0.0; 
+double roundedamount = 0.0; 
+double l_portfolio_amt_value = 0.0;
+double l_doub=0.0;
+double h_exchgrt = 0.0;
+int int_retstatus;
+double l_tot_portfolio_amt = 0.0 ;
+
+int int_l_pagelength = 0;
+short int_l_condexists = 0;
+
+EXEC SQL BEGIN DECLARE SECTION;
+
+	
+	char 		chr_h_param_code[121];
+	char 		chr_h_param_val[121];
+ 	char *chr_h_param_code_temp;
+ 	char *chr_h_param_val_temp;
+
+	char		h_typeofinstr[4];
+	double  	h_mktcost=0;
+	double 	h_safekeep_pos=0;
+	char 		h_instr_code[9];
+	char 		chr_t_param_code[121];
+	char 		chr_t_param_val[121];
+	char 		h_instr_name[131];
+	char 		h_locdetail[31];
+	char 		chr_h_codedesc[41];
+	char 		chr_h_instr_ccy[APL_CCYCODE_LEN];
+	int 		count=0;
+	char     h_instr_isin[13];						
+	char 		*h_data_sep; /* HDFCIV_004 PJ */
+
+	
+	short i_parameter_cd=0;
+	short i_proc_data_val=0;
+	short i_typeofinstr=0;
+	short i_mktpr=0;
+	short i_safekeep_pos=0;
+	short i_instr_code=0;
+	short i_instr_name=0;
+	short i_locdetail=0;
+	short i_codedesc=0;
+	short i_instr_ccy=0;					
+
+
+
+
+EXEC SQL VAR g_mt_commonsys_params_struct_h.ca_identname IS STRING;
+EXEC SQL VAR g_mt_commonsys_params_struct_h.ca_address IS STRING;
+EXEC SQL VAR g_mt_commonsys_params_struct_h.nation_code IS  STRING;
+EXEC SQL VAR g_mt_commonsys_params_struct_h.dom_ccy IS STRING;
+EXEC SQL VAR l_iv_clt_setup_struct.b_ccycd IS STRING;
+EXEC SQL VAR l_pro_sgenstat_struct.map_desc IS STRING;
+EXEC SQL VAR h_instr_code IS STRING;
+EXEC SQL VAR h_instr_name IS STRING;
+EXEC SQL VAR h_typeofinstr IS STRING;
+EXEC SQL VAR chr_h_codedesc IS STRING;
+EXEC SQL VAR chr_h_instr_ccy IS STRING;
+EXEC SQL VAR h_locdetail IS STRING;
+EXEC SQL VAR chr_t_param_code IS STRING;
+EXEC SQL VAR chr_t_param_val IS STRING;
+EXEC SQL VAR chr_h_param_code IS STRING;
+EXEC SQL VAR chr_h_param_val IS STRING;
+EXEC SQL VAR h_instr_isin IS STRING;					
+
+EXEC SQL END DECLARE SECTION;
+
+
+
+chr_f_mktprice = (char*)calloc(20,sizeof(char));
+chr_f_mktprice1 = (char*)calloc(35,sizeof(char));
+chr_f_positions1 = (char*)calloc(20,sizeof(char));
+chr_f_positions = (char *)calloc(20,sizeof(char));
+chr_f_portfolio = (char *)calloc(35,sizeof(char));
+chr_f_portfolio1 = (char *)calloc(35,sizeof(char));
+chr_h_param_code_temp = (char *)calloc(121,sizeof(char));
+chr_h_param_val_temp = (char *)calloc(121,sizeof(char));
+a = (char *)calloc(IV_PARAM_LEN,sizeof(char));
+b = (char *)calloc(IV_PARAM_LEN,sizeof(char));
+
+h_data_sep = (char *)calloc(1,sizeof(char));
+strcpy(h_data_sep, ";");  /* HDFCIV_004 PJ */
+
+
+
+if (APL_FAILURE == IV_Proc_PrnSAFEKHdrDetInv(bill,int_currpos,l_iv_clt_setup_struct.fees_ccy,l_debug_info_ptr))
+{
+	fprintf(fl_userlog,"Could not print chr_header for the safekeeping charges\n");
+	
+	APL_GOBACK_FAIL;
+
+}
+
+   
+   if ( APL_FAILURE == CO_Chk_CntryEnabled( "BILL_PRINTING",
+                                          "PAGE_LENGTH",
+                                          &int_l_condexists,
+                                          l_debug_info_ptr) )
+   {
+      APL_GOBACK_FAIL
+   }
+
+   if (int_l_condexists)
+      int_l_pagelength = 70;
+   else  int_l_pagelength = 58;
+
+EXEC SQL DECLARE cursafek CURSOR FOR
+SELECT rtrim(PARAMETER_CD),rtrim(PROC_DATA_VAL),rtrim(INSTR_CODE),MKRTPR,SAFEKEEP_POS,CURRENCY_CD
+FROM IV_CLIENTHOLDING
+WHERE CLIENT=:chr_p_client AND CONS_FLAG =:p_mastsub AND DATEOF_BILLING=:chr_p_billdt
+ORDER BY PROC_DATA_VAL,INSTR_CODE;
+
+EXEC SQL OPEN cursafek ;
+
+if (sqlca.sqlcode < 0)
+{
+	fprintf(fl_userlog,"Db Error (BACCTSAFEK)\n");
+	APL_GOBACK_FAIL
+
+}
+
+int_counter = 0;
+for(;;)
+{
+	memset(chr_h_param_code, APL_NULL_CHAR, 121); 
+	memset(chr_h_param_val, APL_NULL_CHAR, 121);
+	memset(h_instr_code, APL_NULL_CHAR, APL_INSTRUMENTCODE_LEN);
+	memset(chr_h_instr_ccy, APL_NULL_CHAR, APL_CCYCODE_LEN);
+	memset(chr_f_mktprice, APL_NULL_CHAR, 20);
+	memset(chr_f_mktprice1, APL_NULL_CHAR, 20);
+	memset(h_instr_isin,APL_NULL_CHAR,13);			
+	h_mktcost = 0.0;
+	h_safekeep_pos = 0.0;
+
+		strcpy(chr_h_param_code_temp,APL_NULL_STRING);
+		strcpy(chr_h_param_val_temp,APL_NULL_STRING);
+	EXEC SQL FETCH cursafek INTO
+	:chr_h_param_code:i_parameter_cd,:chr_h_param_val:i_proc_data_val,
+	:h_instr_code:i_instr_code, h_mktcost:i_mktpr,
+	:h_safekeep_pos:i_safekeep_pos,chr_h_instr_ccy:i_instr_ccy;
+
+		
+	if (sqlca.sqlcode == 1403)
+	{
+		break;
+	}		
+	int_counter++;
+		strcpy(chr_h_param_code_temp,chr_h_param_code);
+		strcpy(chr_h_param_val_temp,chr_h_param_val);
+
+	if (strcmp(chr_t_param_code,chr_h_param_code)!=0 ||
+            strcmp(chr_t_param_val,chr_h_param_val) !=0 )
+   {
+		strcpy(chr_t_param_code,chr_h_param_code);
+		strcpy(chr_t_param_val,chr_h_param_val);
+      y = strtok_r(chr_h_param_code_temp,";",&a);
+      v = strtok_r(chr_h_param_val_temp,";",&b);
+		while ( y != NULL || v != NULL )
+		{
+		if ((!strcmp(y,APL_NULL_STRING)) && (!strcmp(v,APL_NULL_STRING)))
+			break;
+		else
+		{
+			if (!strcmp(y,"LOCATION"))
+			{
+				fprintf(bill,"%s:",y);
+				fprintf(bill,"%2s%s"," ",v);
+				
+				EXEC SQL SELECT LOCATION_DESC INTO
+        		:h_locdetail:i_locdetail FROM MT_LOCATION
+				WHERE LOCATION_CD = :v;
+
+				IS_ANY_ORA_ERROR
+				if (sqlca.sqlcode ==1403)
+				{
+					fprintf(fl_userlog,"Location detail not found for location:%s\n",v);
+					CO_InsertErr(l_debug_info_ptr,ERR_LOCN_NOTFND,APL_NULL_STRING,
+										APL_NULL_STRING,APL_NULL_STRING,
+										__LINE__,__FILE__);
+					APL_GOBACK_FAIL
+				}
+           	fprintf(bill,"%s%s\n"," ",h_locdetail);
+				(*int_currpos)++;
+
+				
+
+				if ((*int_currpos) + 1 > int_l_pagelength)
+				{
+					fprintf(bill,"^pg\n");
+					(*int_currpos) =1;
+					if (APL_FAILURE == IV_Proc_PrnSAFEKHdrDetInv(bill,int_currpos,l_iv_clt_setup_struct.fees_ccy,l_debug_info_ptr))
+					{
+						fprintf(fl_userlog,"Could not print chr_header for the safekeeping charges\n");
+	
+						APL_GOBACK_FAIL;
+					}
+			
+				}
+			}
+
+			if (!strcmp(y,"PRODUCT"))
+			{
+				 fprintf(bill,"%s :",y);
+				 if (APL_FAILURE == BBDbSelCSGENSTAT("PROD_CLASS",v,g_mt_commonsys_params_struct_h.nation_code,&l_pro_sgenstat_struct,&int_retstat,l_debug_info_ptr))
+					{
+						if (int_retstat == IV_CRITCAL_ERROR_IND)
+						{
+							fprintf(fl_userlog,"DB ERROR occured in CSGENSTAT\n");
+							APL_GOBACK_FAIL
+						}
+						else if (int_retstat == IV_NO_DATA_FOUND_ERR)
+						{
+							strcpy(l_pro_sgenstat_struct.map_desc," ");
+
+						}
+					}
+
+				fprintf(bill,"  %s\n",l_pro_sgenstat_struct.map_desc); 			
+				(*int_currpos)++;
+	
+				
+
+				if ((*int_currpos) + 1 > int_l_pagelength)
+				{
+					fprintf(bill,"^pg\n");
+					(*int_currpos) =1;
+					if (APL_FAILURE == IV_Proc_PrnSAFEKHdrDetInv(bill,int_currpos,l_iv_clt_setup_struct.fees_ccy,l_debug_info_ptr))
+					{
+						fprintf(fl_userlog,"Could not print chr_header for the safekeeping charges\n");
+	
+						APL_GOBACK_FAIL;
+					}
+			
+				}
+			}
+			if(a == NULL)
+				strcpy(y, APL_NULL_STRING);
+			else		
+				y = strtok_r(NULL,h_data_sep,&a);
+
+			if(b == NULL)
+				strcpy(v, APL_NULL_STRING);
+			else		
+				v = strtok_r(NULL,h_data_sep,&b);	
+		 /* if(a == (char *)NULL)
+      strcpy(y, APL_NULL_STRING);
+		else		
+			y = strtok_r(NULL,';',&a);
+
+		 if(b == (char *)NULL)
+      strcpy(v, APL_NULL_STRING);
+		else		
+			v = strtok_r(NULL,';',&b);  HDFCIV_004 PJ Commented 64 Bit changes */
+		} 
+		} 
+    } 
+	
+	
+
+
+	
+
+	EXEC SQL SELECT INSTR_NAME, INSTR_TYPE,INSTR_ISIN
+	INTO :h_instr_name:i_instr_name, :h_typeofinstr:i_typeofinstr,:h_instr_isin
+	FROM  MT_INSTRUMENT WHERE INSTR_CODE=:h_instr_code;
+	
+
+
+	if (sqlca.sqlcode ==1403)
+	{
+		CO_InsertErr(l_debug_info_ptr,ERR_INSTR_NOTFND,APL_NULL_STRING ,
+							APL_NULL_STRING, APL_NULL_STRING,
+							__LINE__,__FILE__);
+		 APL_GOBACK_FAIL
+	}
+
+	 
+
+ 
+	
+	 
+	
+
+
+	
+
+	memset(chr_l_instrdesc, APL_NULL_CHAR, 36);
+	memset(chr_l_instrdesc1, APL_NULL_CHAR, 31);
+	strncpy(chr_l_instrdesc,h_instr_name,35);  
+
+
+  
+	if(APL_FAILURE == CO_PadString(chr_l_instrdesc,'R',30," ",l_debug_info_ptr))
+						APL_GOBACK_FAIL
+   fprintf(bill,"%.30s",chr_l_instrdesc); 
+   fprintf(bill,"\t%s",h_instr_isin); 				
+	
+	
+
+	if ( !strcmp(h_typeofinstr, "FMT") ) 
+	{
+		h_mktcost *= 100;
+		memset(chr_f_mktprice, APL_NULL_CHAR, 20);
+		
+	
+		
+	   sprintf(chr_f_mktprice, "%6.3lf", h_mktcost);
+
+         CO_Trim(chr_f_mktprice,' ','L',chr_f_mktprice1,l_debug_info_ptr);
+				if(APL_FAILURE == CO_PadString(chr_f_mktprice1,'L',8," ",l_debug_info_ptr))
+										APL_GOBACK_FAIL
+				fprintf(bill,"\t%s %%", chr_f_mktprice1); 
+      roundedamount = 0;
+		roundedamount = h_mktcost/100;
+	}
+	else
+	{
+		int_ccyreturn = IV_Proc_Round(&h_mktcost,chr_h_instr_ccy,chr_f_mktprice,l_debug_info_ptr);
+
+		if (int_ccyreturn == 1)
+		{
+			
+			roundedamount = 0.0;
+			memset(chr_l_amtstr, APL_NULL_CHAR, 30);
+			memset(chr_l_temp_mkt, APL_NULL_CHAR, 30);
+			sscanf(chr_f_mktprice, "%lf", &roundedamount);
+			printf("%lf",roundedamount);
+			printf("Problem");
+
+			 
+		   CO_Rtv_FormatAmtCcy(roundedamount, chr_l_amtstr, 'Y', 'Y', chr_h_instr_ccy,l_debug_info_ptr); 
+				
+         
+
+         CO_Trim(chr_l_amtstr,' ','L',chr_f_mktprice1,l_debug_info_ptr); 
+
+			if(roundedamount < 1)
+			{
+			   memset(chr_l_temp_mkt, APL_NULL_CHAR, 30);
+				sprintf(chr_l_temp_mkt,"0%s",chr_f_mktprice1);
+				if(APL_FAILURE == CO_PadString(chr_l_temp_mkt,'L',8," ",l_debug_info_ptr))
+										APL_GOBACK_FAIL
+				fprintf(bill,"\t%s", chr_l_temp_mkt); 
+			}
+			else
+			{
+				if(APL_FAILURE == CO_PadString(chr_f_mktprice1,'L',8," ",l_debug_info_ptr))
+										APL_GOBACK_FAIL
+				fprintf(bill,"\t%s", chr_f_mktprice1); 
+			}
+				
+			
+		}
+		else
+		{
+			APL_GOBACK_FAIL
+		}
+
+		
+	}
+
+	int_l_condexists=0;
+	
+	
+   if ( APL_FAILURE == CO_Chk_CntryEnabled( "BILL_PRINTING",
+                                          "QTY_ALL_DEC",
+                                          &int_l_condexists,
+                                          l_debug_info_ptr) )
+   {
+      APL_GOBACK_FAIL
+   }
+
+
+	int_posreturn = IV_Proc_Round(&h_safekeep_pos,l_iv_clt_setup_struct.fees_ccy,chr_f_positions,l_debug_info_ptr);
+	if (int_posreturn == 1)
+	{
+		
+
+		memset(chr_f_positions2, APL_NULL_CHAR, 30);
+               int_period_flg1=0;							
+               if ( CO_Chk_CcyConvDt("",&int_period_flg1,l_debug_info_ptr) == APL_FAILURE )
+                  APL_GOBACK_FAIL
+
+		if (int_l_condexists==0 || int_period_flg1 == 0 )
+			sscanf(chr_f_positions, "%lf", &roundedsafekeep_pos);
+		else
+			roundedsafekeep_pos = h_safekeep_pos;
+
+		
+		CO_Rtv_FormatAmt(roundedsafekeep_pos, chr_f_positions2, 'Y', 'Y', l_debug_info_ptr); 
+		
+
+		
+	 	strcpy(chr_f_positions, chr_f_positions2+5); 
+
+		 
+		 fprintf(bill,"%6s"," ");
+       CO_Trim(chr_f_positions,' ','L',chr_f_positions1,l_debug_info_ptr);
+            if(APL_FAILURE == CO_PadString(chr_f_positions1,'L',10," ",l_debug_info_ptr))
+                              APL_GOBACK_FAIL
+		fprintf(bill,"\t%s",chr_f_positions1);
+
+	}
+	else
+		APL_GOBACK_FAIL
+
+
+ 
+	
+   if(APL_FAILURE ==	ConvToFxFn_GR(chr_h_instr_ccy,l_iv_clt_setup_struct.fees_ccy,g_mt_commonsys_params_struct_h.dom_ccy,chr_p_billdt,&h_exchgrt,&int_retstatus,l_debug_info_ptr))
+	{
+		APL_GOBACK_FAIL
+	}
+	else
+	{
+		fprintf(APL_OUT_FILE,"%lf\n%lf\n%lf",roundedsafekeep_pos,roundedamount,h_exchgrt);
+		l_portfolio_amt_value = roundedsafekeep_pos*roundedamount*h_exchgrt;
+
+		int_posreturn = 0;
+     int_posreturn = IV_Proc_Round(&l_portfolio_amt_value,l_iv_clt_setup_struct.fees_ccy,chr_f_portfolio,l_debug_info_ptr);
+		if (int_posreturn == 1)
+		{
+   		sscanf(chr_f_portfolio, "%lf", &l_doub);
+      	strcpy(chr_f_portfolio,APL_NULL_STRING);	
+	    
+		printf("%s\n",chr_f_portfolio);
+		printf("%d",*int_currpos);
+	   CO_Rtv_FormatAmtCcy(l_doub, chr_f_portfolio, 'Y', 'Y', l_iv_clt_setup_struct.fees_ccy,l_debug_info_ptr); 
+      printf("p_tot_portf :%lf",(*p_tot_portf));
+		fflush(stdout);
+		*p_tot_portf = (*p_tot_portf) + l_portfolio_amt_value ;
+	  if(APL_FAILURE == CO_PadString(chr_f_portfolio,'L',10," ",l_debug_info_ptr))
+		{
+		fflush(stdout);
+			APL_GOBACK_FAIL
+		}
+
+     	fprintf(bill,"\t%s\n",chr_f_portfolio);
+		strcpy(chr_f_portfolio,APL_NULL_STRING);
+  	     (*int_currpos)++;
+
+
+      if ((*int_currpos) + 1 > int_l_pagelength)
+      {
+         fprintf(bill,"^pg\n");
+         (*int_currpos) =1;
+         if (APL_FAILURE == IV_Proc_PrnSAFEKHdrDetInv(bill,int_currpos,l_iv_clt_setup_struct.fees_ccy,l_debug_info_ptr))
+         {
+            fprintf(fl_userlog,"Could not print chr_header for the safekeeping charges\n");
+            APL_GOBACK_FAIL;
+         }
+
+      }
+	 } 
+	}
+
+} 
+
+
+int_posreturn = IV_Proc_Round(p_tot_portf,l_iv_clt_setup_struct.fees_ccy,chr_f_portfolio,l_debug_info_ptr);
+sscanf(chr_f_portfolio, "%lf", p_tot_portf);
+strcpy(chr_f_portfolio,APL_NULL_STRING);
+
+if (int_counter ==0) {
+fprintf(bill,"\n\tNO SAFEKEEPINGS FOR ACCOUNT %s\n",chr_p_client);
+(*int_currpos)++;
+(*int_currpos)++;
+}
+fprintf(bill,"\n\n");
+(*int_currpos)++;
+(*int_currpos)++;
+
+
+free(chr_f_mktprice);
+free(chr_f_mktprice1);
+free(chr_f_positions1);
+free(chr_f_positions);
+free(chr_f_portfolio);
+free(chr_f_portfolio1);
+	
+
+
+{
+	RETURN_SUCCESS:
+		APL_IF_DEBUG
+		{
+				CO_ProcMonitor(APL_OUT_FILE,"Exiting peacefully out of IV_Proc_PrnSAFEKEMINV\n",NULL,NULL);
+
+		}
+      return(APL_SUCCESS);
+
+   RETURN_FAILURE:
+      APL_IF_DEBUG
+		{
+				CO_ProcMonitor(APL_OUT_FILE,"Exiting unsuccessfully out of IV_Proc_PrnSAFEKEMINV\n",NULL,NULL);
+		}
+      return (APL_FAILURE);
+}
+}
+

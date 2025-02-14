@@ -1,0 +1,529 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#include <CO_HostStructdef.h>
+#include "MS_Swift.h"
+
+#define 	REPLEN 55
+#define	REPWIDTH 100
+#define	INSTR_CD_LEN_C	9
+#define  TEMP_BUFF_LEN     101
+
+
+EXEC SQL INCLUDE sqlca;
+ //AIX -Warning Removal -- commented unused variables and removed '&' for l_debug_info_ptr
+int main(int argc,char **argv) // AIX - Warnings removal
+{
+	struct sqlca	sqlca;
+	DEBUG_INFO_STRUCT_H	*l_debug_info_ptr	= NULL;
+	INTL_ENV_DATA_STRUCT_H l_intl_envdatastruct_h;
+	FILE  *l_ptr_log_file               =  NULL;
+	FILE  *l_ptr_ini_file            	=  NULL;
+ 	//char  chr_l_logfile_name[PATH_LENGTH]   =  APL_NULL_STRING;
+	char  chr_uname[APL_USERID_LEN]         =  APL_NULL_STRING;
+	char  chr_custody_id_b[APL_USERID_LEN]        =  APL_NULL_STRING;
+	char  chr_passwd[APL_PASSWD_LEN]        =  APL_NULL_STRING;
+	char  chr_l_inifile[PATH_LENGTH]        =  APL_NULL_STRING;
+	char  chr_l_buf[TEMP_BUFF_LEN]           	=  APL_NULL_STRING;
+	char	**temp								=	NULL;
+	char	chr_l_fromdate[APL_DATE_LEN]		=	APL_NULL_STRING;
+	char	chr_l_todate[APL_DATE_LEN]			=	APL_NULL_STRING;
+
+	int	int_num	=	0;
+	int   int_retval	=  0;
+	int   int_l_flg		=  0;
+
+	EXEC SQL VAR chr_uname   IS STRING;
+	EXEC SQL VAR chr_custody_id_b  IS STRING;
+	EXEC SQL VAR chr_passwd  IS STRING;
+
+	sqlca.sqlcode = 0;
+	
+	memset(&l_intl_envdatastruct_h,NULL,sizeof(INTL_ENV_DATA_STRUCT_H));
+
+   
+   strcpy(l_intl_envdatastruct_h.usr, argv[3]);
+   strcpy(l_intl_envdatastruct_h.h_mode, argv[4]);
+   strcpy(l_intl_envdatastruct_h.processtion, argv[5]);
+   strcpy(l_intl_envdatastruct_h.auth_req, argv[6]);
+   strcpy(l_intl_envdatastruct_h.subprocess, argv[7]);
+   strcpy(l_intl_envdatastruct_h.h_process, argv[8]);
+
+	strcpy(chr_l_inifile,getenv("INTL_ROOT_PATH"));
+	strcat(chr_l_inifile,"intl_sun.cfg");
+	if ( ( l_ptr_ini_file=fopen(chr_l_inifile,"r") ) == NULL)
+	{
+		APL_GOBACK_FAIL
+	}
+
+	APL_FETCH_DB_LOGIN_DETAILS(l_ptr_ini_file,chr_custody_id_b, chr_uname, chr_passwd, APL_OUT_FILE, &l_debug_info_ptr)
+
+	EXEC SQL CONNECT :chr_uname IDENTIFIED BY :chr_passwd;
+
+	if (sqlca.sqlcode)
+   {
+      APL_GOBACK_FAIL
+   }
+	
+	if (APL_FAILURE == CO_Rtv_RptFileName( "3r",
+                                        APL_LOGFILE_DESC,
+                                        100,
+                                        argv[5],
+                                        argv,
+                                        &l_ptr_log_file,
+                                        &l_debug_info_ptr) )
+   {
+		EXEC SQL ROLLBACK WORK RELEASE;
+      APL_GOBACK_FAIL
+   }
+	
+	EXEC SQL COMMIT WORK;
+	
+	if (sqlca.sqlcode != 0)
+   {
+      CO_Proc_RptClose(l_ptr_log_file,&l_debug_info_ptr);
+
+      EXEC SQL ROLLBACK WORK RELEASE;
+      APL_GOBACK_FAIL
+   }
+	
+	if (CO_SplitStr(argv[9],'|',&int_num,&temp) != APL_SUCCESS)
+   {
+      CO_Proc_RptClose(l_ptr_log_file,&l_debug_info_ptr);
+
+      EXEC SQL ROLLBACK WORK RELEASE;
+      APL_GOBACK_FAIL
+   }
+	
+	if( int_num != 2 )
+      APL_GOBACK_FAIL
+	
+	strcpy(chr_l_fromdate, temp[0]);
+	strcpy(chr_l_todate, temp[1]);
+	
+	printf("From chr_date is %s \n To Date is : %s\n", chr_l_fromdate, chr_l_todate);
+
+	memset(chr_l_buf,APL_NULL_CHAR,TEMP_BUFF_LEN);
+	sprintf(chr_l_buf, "From chr_date is %s \n To Date is : %s\n ", chr_l_fromdate, chr_l_todate);
+	CO_ProcMonitor(l_ptr_log_file, chr_l_buf,  NULL, &l_intl_envdatastruct_h);
+		
+	
+   if ( CO_RtvSysParams(&l_debug_info_ptr) == APL_FAILURE)
+      APL_GOBACK_FAIL
+
+	
+   int_retval = CO_Pro_LocRec(argv,l_ptr_log_file,&l_debug_info_ptr);
+   if (int_retval != APL_SUCCESS)
+   {
+      CO_ProcMonitor(l_ptr_log_file,"Unable to lock BATCH_IN_PROC record - Rollback done \n",NULL,&l_intl_envdatastruct_h);
+
+      CO_Proc_RptClose(l_ptr_log_file,&l_debug_info_ptr);
+
+      EXEC SQL ROLLBACK WORK RELEASE;
+
+      APL_GOBACK_FAIL
+   }
+	
+   int_retval = CR_Proc_WithHoldTaxRpt(argv, l_ptr_log_file, &l_intl_envdatastruct_h, &l_debug_info_ptr);
+	if(int_retval != APL_SUCCESS)
+   {
+      int_l_flg = 1;
+      CO_Mod_Batch_Status(argv,l_ptr_log_file,&l_debug_info_ptr,int_l_flg);
+      if (CO_ChkErr(l_debug_info_ptr) == APL_SUCCESS)
+      {
+         
+         CO_ProcMonitor(l_ptr_log_file,APL_NULL_STRING,&l_debug_info_ptr,&l_intl_envdatastruct_h);
+         CO_FreeErrLst(&l_debug_info_ptr);
+      }
+
+      CO_ProcMonitor(l_ptr_log_file,"FAILURE from Withholding Tax Report h_file generation program \n",NULL,&l_intl_envdatastruct_h);
+
+      
+      CO_Proc_RptClose(l_ptr_log_file,&l_debug_info_ptr);
+
+      APL_GOBACK_FAIL
+   }
+   else
+   {
+      int_l_flg = 0;
+
+      CO_Mod_Batch_Status(argv,l_ptr_log_file,&l_debug_info_ptr,int_l_flg);
+      if (CO_ChkErr(l_debug_info_ptr) == APL_SUCCESS)
+      {
+         
+         CO_ProcMonitor(l_ptr_log_file,APL_NULL_STRING,&l_debug_info_ptr,&l_intl_envdatastruct_h);
+         CO_FreeErrLst(&l_debug_info_ptr);
+      }
+		CO_ProcMonitor(l_ptr_log_file,"SUCCESS from  Withholding Tax Report h_file generation program \n",NULL,&l_intl_envdatastruct_h);
+
+      
+      CO_Proc_RptClose(l_ptr_log_file,&l_debug_info_ptr);
+
+      APL_GOBACK_SUCCESS
+   }
+
+   RETURN_SUCCESS  :
+   {
+      fclose(l_ptr_ini_file);
+      return(0);
+   }
+
+   RETURN_FAILURE :
+   {
+      fclose(l_ptr_ini_file);
+      return(-1);
+   }	
+
+}
+
+
+int CR_Proc_WithHoldTaxRpt(char **argv,FILE *p_ptr_log_file,INTL_ENV_DATA_STRUCT_H *p_intl_env_data_struct_h_d,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	struct sqlca   sqlca;
+	FILE           *l_ptr_log_file      =  NULL;
+
+	int	int_num                  =  0;
+	char	**temp               =  NULL;
+	char 	chr_l_fromdate[APL_DATE_LEN]	=  APL_NULL_STRING;
+   char 	chr_l_todate[APL_DATE_LEN]  	=  APL_NULL_STRING;
+	char	chr_l_sys_date[APL_DATE_LEN]	=	APL_NULL_STRING;
+	//char  chr_l_buf[TEMP_BUFF_LEN]         	=  APL_NULL_STRING;
+	char	chr_l_dvp[APL_FLAG_LENGTH]			=	APL_NULL_STRING;
+	char	chr_l_rvp[APL_FLAG_LENGTH]			=	APL_NULL_STRING;
+	char	chr_l_cd[APL_FLAG_LENGTH]			=	APL_NULL_STRING;
+	char	chr_l_cr[APL_FLAG_LENGTH]			=	APL_NULL_STRING;
+	char	chr_l_dcd[APL_FLAG_LENGTH]			=	APL_NULL_STRING;
+	char	chr_l_rcr[APL_FLAG_LENGTH]			=	APL_NULL_STRING;
+	char	chr_l_broker[APL_CLIENT_LENGTH]	=	APL_NULL_STRING;
+	char	chr_l_str_temp[TEMP_BUFF_LEN]		=	APL_NULL_STRING;
+	char	chr_l_msgstatus_flag[APL_FLAG_LENGTH]	=	APL_NULL_STRING;
+
+	int	int_l_diff	=  0;
+	int 	int_retval	=	0;
+	int   int_l_int_page	=  0;
+	int   int_l_int_line  =  0;	
+	double	l_dbl_brokercomm	=	0.0;
+	double	l_dbl_commtax	=	0.0;
+	double	l_debit_indl_brktot	=	0.0;
+	double	l_debit_indl_grdtot	=	0.0;
+
+	FILE	*l_wittax_rep_file   =  NULL;
+
+	char	chr_l_h_client_a[APL_CLIENT_LENGTH]	=	APL_NULL_STRING;
+	char  chr_l_h_refno_A[LOC_IDENT_LEN]		=	APL_NULL_STRING;
+	char  chr_l_h_cname[CNAME_LEN_A]			=	APL_NULL_STRING;
+	char  chr_l_h_instrcode_A[INSTR_CD_LEN_C]		=	APL_NULL_STRING;
+	char	chr_l_h_domcpac[APL_CLIENT_LENGTH]	=	APL_NULL_STRING;
+	char	chr_l_h_brokername[CNAME_LEN_A]	=	APL_NULL_STRING;
+	
+	short	l_i_account	=	0;
+	short l_i_refno	=	0;
+	short l_i_cname	=	0;
+	short l_i_instr_code	=	0;
+	short l_i_brkcomm	=	0;
+	short l_i_commtax	=	0;
+	short	l_i_domcpac	=	0;
+	short	l_i_brokername	=	0;
+
+	EXEC SQL VAR chr_l_h_client_a	IS STRING;
+	EXEC SQL VAR chr_l_h_refno_A		IS STRING;
+	EXEC SQL VAR chr_l_h_cname		IS STRING;
+	EXEC SQL VAR chr_l_h_instrcode_A		IS STRING;
+
+	memset(chr_l_h_client_a, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+	memset(chr_l_h_refno_A, APL_NULL_CHAR, LOC_IDENT_LEN);
+	memset(chr_l_h_cname, APL_NULL_CHAR, CNAME_LEN_A);
+	memset(chr_l_h_instrcode_A, APL_NULL_CHAR, INSTR_CD_LEN_C);
+	memset(chr_l_h_domcpac, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+
+	CO_ProcMonitor(p_ptr_log_file,"Entered processtion CR_Proc_WithHoldTaxRpt \n",NULL,p_intl_env_data_struct_h_d);
+	sqlca.sqlcode = 0;
+
+	
+   if (CO_SplitStr(argv[9],'|',&int_num,&temp) != APL_SUCCESS)
+   {
+      CO_Proc_RptClose(l_ptr_log_file,&l_debug_info_ptr);
+
+      EXEC SQL ROLLBACK WORK RELEASE;
+      APL_GOBACK_FAIL
+   }
+   if( int_num != 2 )
+      APL_GOBACK_FAIL
+  
+   strcpy(chr_l_fromdate, temp[0]);
+   strcpy(chr_l_todate, temp[1]);
+
+	
+	if(!strlen(chr_l_fromdate))
+		APL_DATA_MISSING("From Date",APL_NULL_STRING,APL_NULL_STRING)
+
+	if(!strlen(chr_l_todate))
+		APL_DATA_MISSING("To Date",APL_NULL_STRING,APL_NULL_STRING)
+
+	 
+   if (CO_ChkErr(*l_debug_info_ptr) == APL_SUCCESS)
+      return(APL_FAILURE);
+
+	
+   if (CO_RtvSysDt(chr_l_sys_date,l_debug_info_ptr) != APL_SUCCESS)
+      return(APL_FAILURE);
+
+   
+	int_l_diff = 0;
+	if (CO_Pro_DateComp(chr_l_fromdate, chr_l_sys_date, &int_l_diff, l_debug_info_ptr) != APL_SUCCESS)
+		return(APL_FAILURE);
+	if(int_l_diff < 0)
+   {
+		CO_ProcMonitor(p_ptr_log_file,"From Date Cannot be > Today's chr_date.\n",NULL,p_intl_env_data_struct_h_d);
+      return(APL_FAILURE);
+   }
+
+	int_l_diff = 0;
+	if (CO_Pro_DateComp(chr_l_todate, chr_l_sys_date, &int_l_diff, l_debug_info_ptr) != APL_SUCCESS)
+      return(APL_FAILURE);
+   if(int_l_diff < 0)
+   {
+     	CO_ProcMonitor(p_ptr_log_file,"To Date Cannot be > Today's chr_date.\n",NULL,p_intl_env_data_struct_h_d);
+     	return(APL_FAILURE);
+   }
+
+	int_l_diff = 0;
+   if (CO_Pro_DateComp(chr_l_fromdate, chr_l_todate, &int_l_diff, l_debug_info_ptr) != APL_SUCCESS)
+      return(APL_FAILURE);
+   if(int_l_diff < 0)
+   {
+      CO_ProcMonitor(p_ptr_log_file,"To Date Cannot be < From chr_date.\n",NULL,p_intl_env_data_struct_h_d);
+      return(APL_FAILURE);
+   }
+
+	if(APL_FAILURE == CO_Rtv_RptFileName("WT" ,
+                                "Withholding Tax Report" ,
+                                REPWIDTH ,
+                                p_intl_env_data_struct_h_d->processtion ,
+                                argv ,
+                                &l_wittax_rep_file,
+                                l_debug_info_ptr) )
+	{
+      EXEC SQL ROLLBACK WORK RELEASE ;
+      APL_GOBACK_FAIL
+   }
+   if(sqlca.sqlcode)
+   {
+      CO_Proc_RptClose(l_wittax_rep_file,l_debug_info_ptr);
+      APL_GOBACK_FAIL
+   }
+
+	int_l_int_page++;
+	int_retval = CR_Prnt_WithHoldTaxRptHdr(p_ptr_log_file, p_intl_env_data_struct_h_d, l_debug_info_ptr, l_wittax_rep_file, int_l_int_page);
+	if(int_retval != APL_SUCCESS)
+      APL_GOBACK_FAIL
+	int_l_int_line = 9;	
+
+	strcpy(chr_l_dvp, APL_DEAL_DVP);
+	strcpy(chr_l_rvp, APL_DEAL_RVP);
+	strcpy(chr_l_cd, APL_DEAL_CD);
+	strcpy(chr_l_cr, APL_DEAL_CR);
+	strcpy(chr_l_dcd, APL_DEAL_DCD);
+	strcpy(chr_l_rcr, APL_DEAL_RCR);
+
+	strtok(chr_l_fromdate, " ");
+	strtok(chr_l_todate, " ");
+	strcpy(chr_l_msgstatus_flag, FLG_WITTAXREP);
+
+	EXEC SQL DECLARE cur_wittaxrep CURSOR FOR
+		SELECT A.CLIENT, A.IDENTIY_NO, A.INSTR_CODE, A.BROKERCOMM, ( (C.COMM_TAX_RT * A.BROKERCOMM) / 100) COMMTAX
+			, REPLACE(REPLACE(B.CLN_NAME, CHR(10), ' '), CHR(13), ' ') CLN_NAME, A.DOMESTIC_CPCLT, 
+			REPLACE(REPLACE(D.CLN_NAME, CHR(10), ' ' ), CHR(13), ' ' ) BRK
+		FROM DL_DEAL A, MT_CLIENT B, MT_CORE_SYS_PARAMS C, MT_CLIENT D
+		WHERE A.CLIENT=B.CLN_CODE
+			AND A.DOMESTIC_CPCLT = D.CLN_CODE
+			AND A.CLIENT <> NVL(C.BROKERAGE_CD, ' ')
+			AND A.DEAL_CD IN (:chr_l_dvp, :chr_l_rvp, :chr_l_cd, :chr_l_cr, :chr_l_dcd, :chr_l_rcr)
+			AND A.INSTRUMENT_DT IS NOT NULL
+			AND A.MONEY_SETL_DT IS NOT NULL
+			AND A.BROKERCOMM > 0
+			AND ((INSTR(A.MSG_STAT, :chr_l_msgstatus_flag) = 0) OR A.MSG_STAT IS NULL)
+		 	AND TO_DATE(TO_CHAR(A.MONEY_SETL_DT, 'DD/MM/YYYY'), 'DD/MM/YYYY') >= TO_DATE(:chr_l_fromdate, 'DD/MM/YYYY')
+			AND TO_DATE(TO_CHAR(A.MONEY_SETL_DT, 'DD/MM/YYYY'), 'DD/MM/YYYY') <= TO_DATE(:chr_l_todate, 'DD/MM/YYYY')
+		ORDER BY BRK, A.CLIENT;
+
+	EXEC SQL OPEN cur_wittaxrep;
+
+	IS_ANY_ORA_ERROR
+	
+	for(;;)
+	{
+		EXEC SQL FETCH cur_wittaxrep INTO :chr_l_h_client_a:l_i_account, :chr_l_h_refno_A:l_i_refno,
+			:chr_l_h_instrcode_A:l_i_instr_code, :l_dbl_brokercomm:l_i_brkcomm, :l_dbl_commtax:l_i_commtax,
+			:chr_l_h_cname:l_i_cname, :chr_l_h_domcpac:l_i_domcpac, :chr_l_h_brokername:l_i_brokername;
+		
+		IS_ANY_ORA_ERROR
+
+		if((strcmp(chr_l_broker, chr_l_h_domcpac)) || APL_ZERO_RESULT_SET)
+		{
+				if(strcmp(chr_l_broker, APL_NULL_STRING))
+				{
+					memset( chr_l_str_temp, APL_NULL_CHAR, TEMP_BUFF_LEN);
+   				memset(chr_l_str_temp, '-', 20);
+					fprintf(l_wittax_rep_file, "%79s%s\n", " ", chr_l_str_temp);
+					int_l_int_line++;
+					fprintf(l_wittax_rep_file, "%15s%64s%20.2lf\n", "*** Total ***", " ", l_debit_indl_brktot);
+					int_l_int_line++;
+					memset( chr_l_str_temp, APL_NULL_CHAR, TEMP_BUFF_LEN);
+        			memset(chr_l_str_temp, '-', 20);
+        			fprintf(l_wittax_rep_file, "%79s%s\n", " ", chr_l_str_temp);
+					int_l_int_line++;
+					l_debit_indl_grdtot += l_debit_indl_brktot;
+					l_debit_indl_brktot = 0.0;
+				}
+				if(APL_ZERO_RESULT_SET)
+					break;
+				else
+				{
+					fprintf(l_wittax_rep_file, "BROKER : %s %s\n", chr_l_h_domcpac, chr_l_h_brokername);
+					int_l_int_line++;
+					strcpy(chr_l_broker, chr_l_h_domcpac);
+				} 
+			}
+
+			if((REPLEN - 9) < int_l_int_line)
+			{
+				fprintf(l_wittax_rep_file ,"\f\n");
+				int_l_int_page++;
+				int_retval = CR_Prnt_WithHoldTaxRptHdr(p_ptr_log_file, p_intl_env_data_struct_h_d, l_debug_info_ptr, l_wittax_rep_file, int_l_int_page);
+				if(int_retval != APL_SUCCESS)
+            	APL_GOBACK_FAIL
+				int_l_int_line = 9;	
+			}
+			fprintf(l_wittax_rep_file, "%-11s", chr_l_h_client_a);
+			memset(chr_l_str_temp, APL_NULL_CHAR, TEMP_BUFF_LEN);
+			strncpy(chr_l_str_temp, chr_l_h_cname, 20);
+			fprintf(l_wittax_rep_file, "%-21s", chr_l_str_temp);
+			fprintf(l_wittax_rep_file, "%-17s", chr_l_h_refno_A);
+			fprintf(l_wittax_rep_file, "%-9s", chr_l_h_instrcode_A);
+			fprintf(l_wittax_rep_file, "%20.2lf ", l_dbl_brokercomm);
+			l_debit_indl_brktot += l_dbl_commtax;
+			fprintf(l_wittax_rep_file, "%20.2lf\n", l_dbl_commtax);
+			int_l_int_line++;
+
+			EXEC SQL UPDATE DL_DEAL 
+				SET MSG_STAT = MSG_STAT || :chr_l_msgstatus_flag
+				WHERE CLIENT = :chr_l_h_client_a
+					AND IDENTIY_NO = :chr_l_h_refno_A;
+	}	
+
+	EXEC SQL CLOSE cur_wittaxrep;
+
+	if(strcmp(chr_l_broker, APL_NULL_STRING))
+	{
+		memset( chr_l_str_temp, APL_NULL_CHAR, TEMP_BUFF_LEN);
+   	memset(chr_l_str_temp, '-', 20);
+   	fprintf(l_wittax_rep_file, "%79s%s\n", " ", chr_l_str_temp);
+   	fprintf(l_wittax_rep_file, "%20s%59s%20.2lf\n", "*** Grand Total ***", " ", l_debit_indl_grdtot);
+   	memset( chr_l_str_temp, APL_NULL_CHAR, TEMP_BUFF_LEN);
+   	memset(chr_l_str_temp, '-', 20);
+   	fprintf(l_wittax_rep_file, "%79s%s\n", " ", chr_l_str_temp);
+	}
+	else
+		fprintf(l_wittax_rep_file,"%42s%s", " ", "NOTHING TO REPORT");
+	
+	APL_GOBACK_SUCCESS
+
+   RETURN_SUCCESS :
+   {
+      CO_ProcMonitor(p_ptr_log_file,"Leaving processtion CR_Proc_WithHoldTaxRpt Successfully\n",NULL,p_intl_env_data_struct_h_d);
+      return(APL_SUCCESS);
+   }
+
+   RETURN_FAILURE :
+   {
+      CO_ProcMonitor(p_ptr_log_file,"Leaving processtion CR_Proc_WithHoldTaxRpt with failure\n",NULL,p_intl_env_data_struct_h_d);
+      return(APL_FAILURE);
+
+   }
+}
+
+
+
+int CR_Prnt_WithHoldTaxRptHdr(FILE *p_ptr_log_file, INTL_ENV_DATA_STRUCT_H *p_intl_env_data_struct_h_d, DEBUG_INFO_STRUCT_H **l_debug_info_ptr, FILE *p_ptr_rep_file, int p_int_page)
+{
+   int   int_l_int_temp  =  0;
+   //int   int_l_loop      =  0;
+
+   char  chr_l_str_temp[TEMP_BUFF_LEN]  =  APL_NULL_STRING;
+   char  chr_l_sys_date[APL_DATE_LEN]   =  APL_NULL_STRING;
+	char	chr_l_reportname[TEMP_BUFF_LEN]	=	APL_NULL_STRING;
+
+	memset(chr_l_reportname, APL_NULL_CHAR, TEMP_BUFF_LEN);
+    
+   if (CO_RtvSysDt(chr_l_sys_date,l_debug_info_ptr) != APL_SUCCESS)
+      return(APL_FAILURE);
+  
+	if ( CO_RtvSysParams(l_debug_info_ptr) == APL_FAILURE)
+		APL_GOBACK_FAIL
+
+	strtok(chr_l_sys_date, " ");
+	strcpy(chr_l_reportname, "WITHHOLDING TAX REPORT");
+
+   fprintf(p_ptr_rep_file, "\n");
+   int_l_int_temp = (REPWIDTH / 2) - (strlen(chr_l_reportname)/2);
+   strcpy(chr_l_str_temp, "%");
+   strcat(chr_l_str_temp, ltoa(int_l_int_temp));
+   strcat(chr_l_str_temp, "s");
+   fprintf(p_ptr_rep_file, chr_l_str_temp, " ");
+   fprintf(p_ptr_rep_file, "%s\n", chr_l_reportname);
+	fprintf(p_ptr_rep_file, chr_l_str_temp, " ");
+	memset( chr_l_str_temp, APL_NULL_CHAR, TEMP_BUFF_LEN);
+	memset(chr_l_str_temp, '-', strlen(chr_l_reportname));
+	fprintf(p_ptr_rep_file, "%s\n",chr_l_str_temp);
+   memset( chr_l_str_temp, APL_NULL_CHAR, TEMP_BUFF_LEN);
+	int_l_int_temp = (REPWIDTH / 2) - (strlen(g_mt_commonsys_params_struct_h.ca_identname)/2);
+	strcpy(chr_l_str_temp, "%");
+	strcat(chr_l_str_temp, ltoa(int_l_int_temp));
+	strcat(chr_l_str_temp, "s");
+	fprintf(p_ptr_rep_file, chr_l_str_temp, " ");
+	fprintf(p_ptr_rep_file, "%s\n",g_mt_commonsys_params_struct_h.ca_identname);
+	memset(chr_l_str_temp, '-', REPWIDTH);
+   fprintf(p_ptr_rep_file, "%s\n",chr_l_str_temp);
+   fprintf(p_ptr_rep_file, "DATE: %s", chr_l_sys_date);
+   int_l_int_temp = (REPWIDTH - 12) - 16;
+   strcpy(chr_l_str_temp, "%");
+   strcat(chr_l_str_temp, ltoa(int_l_int_temp));
+   strcat(chr_l_str_temp, "s");
+   fprintf(p_ptr_rep_file, chr_l_str_temp, " ");
+   fprintf(p_ptr_rep_file, "Page: %d\n", p_int_page);
+   memset( chr_l_str_temp, APL_NULL_CHAR, TEMP_BUFF_LEN);
+	memset(chr_l_str_temp, '-', REPWIDTH);
+   fprintf(p_ptr_rep_file, "%s\n", chr_l_str_temp);
+	fprintf(p_ptr_rep_file, "%-11s", "CLIENT");
+	fprintf(p_ptr_rep_file, "%-21s","CLR_NAME");
+	fprintf(p_ptr_rep_file, "%-17s", "REFERENCE NUMBER");
+	fprintf(p_ptr_rep_file, "%-9s", "INSTRUMENT");
+	fprintf(p_ptr_rep_file, "%20s ", "BRK. COMMISSION");
+	fprintf(p_ptr_rep_file, "%20s\n", "COMMISSION TAX");
+	memset( chr_l_str_temp, APL_NULL_CHAR, TEMP_BUFF_LEN);
+	memset(chr_l_str_temp, '-', REPWIDTH);
+	fprintf(p_ptr_rep_file, "%s\n", chr_l_str_temp);
+
+   APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS :
+      return(APL_SUCCESS);
+   RETURN_FAILURE :
+      return(APL_FAILURE);
+}

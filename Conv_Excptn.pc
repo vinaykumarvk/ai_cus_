@@ -1,0 +1,736 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#include "CO_HostStructdef.h"
+#include "MT_Interface.h"
+#include "CA_InterFace.h"
+#include "CA_Common.h"
+#include "Intellect_Common.h"
+
+
+EXEC SQL INCLUDE SQLCA.H;
+
+#define	RTV_SYSTEM_DATA
+
+
+/* Added by kotubabu for Linux Migration -Start*/
+#ifdef OS_LINUX
+FILE*						g_inifile;
+FILE*						g_logfile;
+FILE*						l_filept = NULL;
+#else
+FILE *g_inifile = APL_OUT_FILE;
+FILE *g_logfile = APL_OUT_FILE;
+FILE *l_filept = APL_OUT_FILE;
+#endif
+/* Added by kotubabu  for Linux Migration -END*/
+char						chr_g_progname			[APL_BATCH_PROGNAME_LEN]= APL_NULL_STRING;
+char						chr_g_key					[APL_BATCH_KEY_LEN]= APL_NULL_STRING;
+char						chr_g_start_date		[APL_DATE_LEN]= APL_NULL_STRING;
+char						chr_g_funccode			[CA_FUNC_CD_LEN]= APL_NULL_STRING;
+char						chr_g_sys_date			[APL_DATE_LEN]= APL_NULL_STRING;
+char						chr_g_sys_date_time	[APL_DATE_LEN]= APL_NULL_STRING;
+char						chr_g_restart_data_h	[APL_RESTARTDATA_LENGTH]= APL_NULL_STRING;
+char						chr_g_client			[APL_CLIENT_LENGTH]= APL_NULL_STRING;
+char						chr_g_log_buff[MSG_LENGTH]= APL_NULL_STRING;
+
+char                 chr_g_old_ccy      [4]         = APL_NULL_STRING;
+
+char     				chr_l_buf[261]           = APL_NULL_STRING;
+
+
+
+
+int    Conv_Exceptions( INTL_ENV_DATA_STRUCT_H *p_intlenv_data_struct_h, DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+
+
+
+//main(int argc, char **argv)
+int main(int argc,char **argv)//Changes done for AIX Migration
+{
+	/* Added by kotubabu for Linux Migration -Start*/
+   #ifdef OS_LINUX
+   g_inifile = APL_OUT_FILE;
+   g_logfile = APL_OUT_FILE;
+   l_filept = APL_OUT_FILE;
+   #endif
+   /* Added by kotubabu for Linux Migration -END*/
+	struct sqlca sqlca;
+	DEBUG_INFO_STRUCT_H			**l_debug_info_ptr=NULL,
+								*l_debug_info_struct=NULL;
+	INTL_ENV_DATA_STRUCT_H	p_intlenv_data_struct_h;
+	char						chr_inifile[PATH_LENGTH]= APL_NULL_STRING;
+	char						chr_logfile[PATH_LENGTH]= APL_NULL_STRING;
+	char						chr_custody_id_b[APL_USERID_LEN];
+
+	EXEC SQL BEGIN DECLARE SECTION;
+		char chr_uname[APL_USERID_LEN];
+		char chr_passwd[APL_PASSWD_LEN];
+	EXEC SQL END DECLARE SECTION; 
+
+	EXEC SQL VAR chr_uname IS STRING;
+	EXEC SQL VAR chr_passwd IS STRING;
+	
+	l_debug_info_ptr = &l_debug_info_struct;
+	
+	
+	strcpy(chr_inifile,getenv("INTL_ROOT_PATH"));
+	strcat(chr_inifile,"/intl_sun.cfg");
+	
+	if ( ( g_inifile=fopen(chr_inifile,"r") ) == NULL)
+		exit(-1);	
+
+	
+
+	
+	APL_FETCH_DB_LOGIN_DETAILS(g_inifile,chr_custody_id_b,chr_uname,chr_passwd,APL_OUT_FILE,l_debug_info_ptr)
+	EXEC SQL CONNECT :chr_uname IDENTIFIED BY :chr_passwd;
+	IS_ANY_ORA_ERROR
+	
+
+	
+   if ( CO_Rtv_RptFileName("Excptn",
+								APL_LOGFILE_DESC,
+								100,
+								argv[5],
+								argv,
+								&g_logfile,
+								l_debug_info_ptr) ==APL_FAILURE) 
+	{
+		exit(-1);
+	}
+
+   if ( CO_Rtv_RptFileName("EXCEPTIONS",
+								"Exceptions Report",
+								100,
+								argv[5],
+								argv,
+								&l_filept,
+								l_debug_info_ptr) ==APL_FAILURE) 
+	{
+		exit(-1);
+	}
+	
+	EXEC SQL COMMIT;
+	IS_ANY_ORA_ERROR
+
+	
+   if ( argc < 4 )
+   {
+      CO_ProcMonitor(g_logfile,"All Arguments expected by  program not passed \n", NULL, NULL);
+      APL_GOBACK_FAIL
+   }
+	strcpy(chr_g_progname,	argv[0]);
+	strcpy(chr_g_key,			argv[1]);
+	strcpy(chr_g_start_date,	argv[2]);
+	strcpy(chr_g_funccode,argv[5]);
+	
+	if (CO_RtvSysParams(l_debug_info_ptr) == APL_FAILURE)
+		APL_GOBACK_FAIL
+	if(CO_RtvSysDt(chr_g_sys_date,l_debug_info_ptr)==APL_FAILURE)
+		APL_GOBACK_FAIL
+
+	
+	if (Conv_Exceptions(&p_intlenv_data_struct_h,l_debug_info_ptr) == APL_FAILURE)
+		APL_GOBACK_FAIL
+
+	
+	APL_GOBACK_SUCCESS
+
+   RETURN_SUCCESS:
+   {
+		EXEC SQL UPDATE SYS_BATCHPROC
+		SET status 			= 'completed'
+		WHERE process_name		=	RTRIM(:argv[0])
+		AND	proc_init			=	RTRIM(:argv[1])
+		AND	STARTDATE	=	:argv[2]
+		AND	status		=	'started';
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"BATCH_IN_PROC",chr_g_progname,chr_g_key)
+		
+		EXEC SQL COMMIT;
+		IS_ANY_ORA_ERROR
+		
+		CO_ProcMonitor(g_logfile,"RECORD COMMITTED \n",NULL,NULL);
+
+		   APL_IF_DEBUG
+   		{
+      		CO_ProcMonitor(   APL_OUT_FILE,
+                  "Leaving Exceptions program successfully\n",
+                  NULL,
+                  NULL);
+   		}
+		
+		sprintf(chr_g_log_buff,"No exceptions int_found in the system\n");
+		CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+		sprintf(chr_g_log_buff,"Can proceed now with currency conversion\n");
+		CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+		sprintf(chr_g_log_buff,"Pre-conversion check program exiting successfully\n");
+		CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+		fclose(g_logfile);
+		fclose(l_filept);
+		exit(0);
+	}
+	RETURN_FAILURE:
+	{
+		EXEC SQL ROLLBACK;
+		IS_ANY_ORA_ERROR
+
+		CO_ProcMonitor(g_logfile,"ROLLING BACK \n",NULL,NULL);
+
+		APL_IF_DEBUG
+		{
+				CO_ProcMonitor(   APL_OUT_FILE,
+            "Leaving Exceptions program with errors\n",
+				NULL,
+				NULL);
+		}
+
+		sprintf(chr_g_log_buff,"One or more exceptions int_found in the system\n");
+		CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+		sprintf(chr_g_log_buff,"Exceptions reported should be rectified before currency conversion\n");
+		CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+		sprintf(chr_g_log_buff,"Pre-conversion check program exiting unsuccessfully\n");
+		CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+		fclose(g_logfile);
+		fclose(l_filept);
+		exit(-1);
+	}
+}
+
+
+int   Conv_Exceptions( INTL_ENV_DATA_STRUCT_H *p_intlenv_data_struct_h, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	struct sqlca sqlca;
+	
+	char chr_l_client_a[APL_CLIENT_LENGTH]	=	APL_NULL_STRING;
+	char chr_l_refno_a[APL_DATE_LEN]			=	APL_NULL_STRING;
+	char chr_l_trcode_a[2]						=	APL_NULL_STRING;
+	char chr_l_trddt[APL_DATE_LEN]			=	APL_NULL_STRING;
+	char chr_l_instrcode_a[APL_INSTRUMENTCODE_LEN]		=	APL_NULL_STRING;
+	char chr_l_locncode_c[APL_LOCNCODE_LENGTH]=	APL_NULL_STRING;
+	char chr_l_typeofinstr[4]						=	APL_NULL_STRING;
+	char chr_l_cetyp[3]						=	APL_NULL_STRING;
+	char chr_l_decldt[APL_DATE_LEN]		=	APL_NULL_STRING;
+	char chr_l_paydt[APL_DATE_LEN]			=	APL_NULL_STRING;        
+	double l_nominal_value						=	0.0;
+	int int_l_eventno							=  0;
+
+
+	short i_dl_client 	= 0;
+	short i_indentity_no		= 0;
+	short i_dealcd 	= 0;
+	short i_trddt 		= 0;
+	short i_instr_code		= 0;
+	short i_loccode	= 0;
+	short i_typeofinstr	= 0;
+	short i_cetyp		= 0;
+	short i_decldt		= 0;
+	short i_paydt		= 0;
+	short i_nominal_value		= 0;
+	short i_evntno		= 0;
+
+
+	int int_l_count_excptn = 0;
+	int int_l_excptn_stat = 0;
+
+	
+	EXEC SQL VAR chr_l_client_a IS STRING;
+	EXEC SQL VAR chr_l_refno_a IS STRING;
+	EXEC SQL VAR chr_l_trcode_a IS STRING;
+	EXEC SQL VAR chr_l_trddt IS STRING;
+	EXEC SQL VAR chr_l_instrcode_a IS STRING;
+	EXEC SQL VAR chr_l_locncode_c IS STRING;
+	EXEC SQL VAR chr_l_typeofinstr IS STRING;
+	EXEC SQL VAR chr_l_cetyp IS STRING;
+	EXEC SQL VAR chr_l_decldt IS STRING;
+	EXEC SQL VAR chr_l_paydt IS STRING;
+
+
+	EXEC SQL VAR chr_g_old_ccy IS STRING;
+	strcpy(chr_g_old_ccy, CONV_FROM_TRL);
+	
+	#ifdef APL_THREADS
+   	APL_SET_CONTEXT
+   	EXEC SQL CONTEXT USE :my_ctx_local;
+   #endif
+
+
+	sqlca.sqlcode = 0;
+
+   APL_IF_DEBUG
+   {
+      CO_ProcMonitor(   APL_OUT_FILE,
+                  "Entered Function Conv_Exceptions \n",
+                  NULL,
+                  NULL);
+   }
+
+
+
+	EXEC SQL COMMIT;
+	IS_ANY_ORA_ERROR
+
+	
+	
+	int_l_count_excptn = 0;
+
+	sqlca.sqlcode = 0;
+
+	EXEC SQL SELECT COUNT(*) INTO :int_l_count_excptn 
+				FROM IV_CHEQUE
+				WHERE B_CCYCD = :chr_g_old_ccy
+				AND AE_DT is NULL;	
+
+	IS_ANY_ORA_ERROR
+	
+	if ( int_l_count_excptn > 0 )
+	{
+		int_l_excptn_stat = 1;
+
+		fprintf(l_filept,"\n***********************************************************************************************\n");
+		sprintf( chr_l_buf, "EXCEPTION: Accounting Entries not passed for billing payments with bill ccy as %s\n", chr_g_old_ccy);
+		CO_ProcMonitor(g_logfile,chr_l_buf,NULL,NULL);
+
+		fprintf(l_filept,"\n%s\n",chr_l_buf);		
+
+		EXEC SQL DECLARE payment CURSOR FOR
+					SELECT CLIENT, DATEOF_PAYMENT  
+					FROM IV_CHEQUE
+					WHERE B_CCYCD = :chr_g_old_ccy
+					AND AE_DT is NULL;
+
+		IS_ANY_ORA_ERROR
+
+		fprintf(l_filept, "%-15s\t%-15s\n", "Account Number", "Payment Date");
+		fprintf(l_filept,"----------------------------------------------------------------------------------------------\n");
+	
+		EXEC SQL OPEN payment;
+		IS_ANY_ORA_ERROR	
+
+		for(;;)
+		{
+			EXEC SQL FETCH payment
+					INTO :chr_l_client_a:i_dl_client, :chr_l_paydt:i_paydt;
+			
+			IS_ANY_ORA_ERROR		
+			if (APL_ZERO_RESULT_SET)
+				break;
+		
+			fprintf(l_filept, "%-15s\t%-15s\n", chr_l_client_a, chr_l_paydt);
+		}
+		
+		EXEC SQL CLOSE payment;
+		fprintf(l_filept,"----------------------------------------------------------------------------------------------\n");
+		fprintf(l_filept,"\n***********************************************************************************************\n");
+		
+	}
+
+
+	
+	
+	
+	
+	int_l_count_excptn = 0;
+	sqlca.sqlcode = 0;
+
+	EXEC SQL SELECT COUNT(*) INTO :int_l_count_excptn 
+				FROM IV_CLIENTSETUP
+				WHERE CLIENT IN (SELECT CLIENT FROM MT_CLIENT WHERE STATUS NOT IN ('CA','FA')) AND
+				(B_CCYCD = :chr_g_old_ccy
+				OR FEES_CCY = :chr_g_old_ccy);	
+
+	IS_ANY_ORA_ERROR
+	
+	if ( int_l_count_excptn > 0 )
+	{
+		int_l_excptn_stat = 1;
+		fprintf(l_filept,"\n***********************************************************************************************\n");
+		sprintf( chr_l_buf, "EXCEPTION: Billing setup for various customers still in %s\n", chr_g_old_ccy);
+		CO_ProcMonitor(g_logfile,chr_l_buf,NULL,NULL);
+
+		fprintf(l_filept,"\n%s\n",chr_l_buf);		
+
+		EXEC SQL DECLARE custsetup CURSOR FOR
+					SELECT CLIENT  
+					FROM IV_CLIENTSETUP
+					WHERE CLIENT IN (SELECT CLIENT FROM MT_CLIENT WHERE STATUS NOT IN ('CA','FA')) AND
+					(B_CCYCD = :chr_g_old_ccy
+					OR FEES_CCY = :chr_g_old_ccy);
+
+		IS_ANY_ORA_ERROR
+
+		fprintf(l_filept, "%-15s\n", "Account Number");
+		fprintf(l_filept,"----------------------------------------------------------------------------------------------\n");
+	
+		EXEC SQL OPEN custsetup;
+		IS_ANY_ORA_ERROR	
+
+		for(;;)
+		{
+			EXEC SQL FETCH custsetup
+					INTO :chr_l_client_a:i_dl_client;
+			
+			IS_ANY_ORA_ERROR		
+			if (APL_ZERO_RESULT_SET)
+				break;
+		
+			fprintf(l_filept, "%-15s\n", chr_l_client_a);
+		}
+		
+		EXEC SQL CLOSE custsetup;
+		fprintf(l_filept,"----------------------------------------------------------------------------------------------\n");
+		fprintf(l_filept,"\n***********************************************************************************************\n");
+		
+	}
+	
+
+
+	
+	
+	int_l_count_excptn = 0;
+	sqlca.sqlcode = 0;
+
+	EXEC SQL SELECT COUNT(*) INTO :int_l_count_excptn 
+				FROM CAEVENT
+				WHERE CA_EVENT IN ('RE','PP');
+
+
+	IS_ANY_ORA_ERROR
+	
+	if ( int_l_count_excptn > 0 )
+	{
+		int_l_excptn_stat = 1;
+		fprintf(l_filept,"\n***********************************************************************************************\n");
+		strcpy( chr_l_buf, "EXCEPTION: CA events are still in 'Ready for Entitilement' or 'Partly Paid' status_ind\n");
+		CO_ProcMonitor(g_logfile,chr_l_buf,NULL,NULL);
+
+		fprintf(l_filept,"\n%s\n",chr_l_buf);
+
+		EXEC SQL DECLARE event CURSOR FOR
+					SELECT INSTR_CODE, CA_EVENT, DECLARE_DT, EVNT_INDNT  
+					FROM CAEVENT
+					WHERE CA_EVENT IN ('RE','PP');
+
+		IS_ANY_ORA_ERROR
+
+		fprintf(l_filept, "%-15s\t%-10s\t%-20s\t%-10s\n", "Instrurity Code","Event Type","Declaration Date","Event No.");
+		fprintf(l_filept,"----------------------------------------------------------------------------------------------\n");
+	
+		EXEC SQL OPEN event;
+		IS_ANY_ORA_ERROR	
+
+		for(;;)
+		{
+			EXEC SQL FETCH event
+					INTO :chr_l_instrcode_a:i_instr_code, :chr_l_cetyp:i_cetyp, :chr_l_decldt:i_decldt, :int_l_eventno:i_evntno;
+			
+			IS_ANY_ORA_ERROR		
+			if (APL_ZERO_RESULT_SET)
+				break;
+		
+			fprintf(l_filept, "%-15s\t%-10s\t%-20s\t%-10d\n", chr_l_instrcode_a, chr_l_cetyp, chr_l_decldt, int_l_eventno);
+		}
+		
+		EXEC SQL CLOSE event;
+		fprintf(l_filept,"----------------------------------------------------------------------------------------------\n");
+		fprintf(l_filept,"\n***********************************************************************************************\n");
+		
+	}
+
+
+	
+
+	  
+	
+	int_l_count_excptn = 0;
+	sqlca.sqlcode = 0;
+
+	EXEC SQL SELECT COUNT(*) INTO :int_l_count_excptn 
+				FROM CARTSPROC
+				WHERE STATUS IN ('UU','DU');
+
+	IS_ANY_ORA_ERROR
+	
+	if ( int_l_count_excptn > 0 )
+	{
+		int_l_excptn_stat = 1;
+		fprintf(l_filept,"\n***********************************************************************************************\n");
+		strcpy( chr_l_buf, "EXCEPTION: Un-authorized l_ca_cartsproc_struct_ha processing entries present\n");
+		CO_ProcMonitor(g_logfile,chr_l_buf,NULL,NULL);
+
+		fprintf(l_filept,"\n%s\n",chr_l_buf);
+
+		EXEC SQL DECLARE rightspro CURSOR FOR
+					SELECT CLIENT, INSTR_CODE, CA_EVENT, DECLARE_DT, EVNT_INDNT  
+					FROM CARTSPROC 
+					WHERE STATUS  NOT IN ('AA');
+
+		IS_ANY_ORA_ERROR
+
+		fprintf(l_filept, "%-10s\t%-15s\t%-10s\t%-20s\t%-10s\n", 
+				  "Account", "Instrurity Code","Event Type","Declaration Date","Event No.");
+		fprintf(l_filept,"----------------------------------------------------------------------------------------------\n");
+	
+		EXEC SQL OPEN rightspro;
+		IS_ANY_ORA_ERROR	
+
+		for(;;)
+		{
+			EXEC SQL FETCH rightspro
+					INTO :chr_l_client_a:i_dl_client, :chr_l_instrcode_a:i_instr_code, :chr_l_cetyp:i_cetyp, :chr_l_decldt:i_decldt, :int_l_eventno:i_evntno;
+			
+			IS_ANY_ORA_ERROR		
+			if (APL_ZERO_RESULT_SET)
+				break;
+		
+			fprintf(l_filept, "%-10s\t%-15s\t%-10s\t%-20s\t%-10d\n", chr_l_client_a, chr_l_instrcode_a, chr_l_cetyp, chr_l_decldt, int_l_eventno);
+		}
+		
+		EXEC SQL CLOSE rightspro;
+		fprintf(l_filept,"----------------------------------------------------------------------------------------------\n");
+		fprintf(l_filept,"\n***********************************************************************************************\n");
+		
+	}
+
+
+
+		
+	  
+	
+	int_l_count_excptn = 0;
+	sqlca.sqlcode = 0;
+
+	EXEC SQL SELECT COUNT(*) INTO :int_l_count_excptn 
+				FROM MT_INSTRUMENT
+				WHERE INSTR_TYPE IN ('FMT', 'BON') AND STATUS NOT IN ('FA')
+				AND NOMINAL_VALUE != 1; 
+
+	IS_ANY_ORA_ERROR
+	
+	if ( int_l_count_excptn > 0 )
+	{
+		int_l_excptn_stat = 1;
+		fprintf(l_filept,"\n***********************************************************************************************\n");
+		strcpy( chr_l_buf, "EXCEPTION: FMT/BON type of instrument int_found with nominal chr_value not equal to 1\n");
+		CO_ProcMonitor(g_logfile,chr_l_buf,NULL,NULL);
+
+		fprintf(l_filept,"\n%s\n",chr_l_buf);
+
+		EXEC SQL DECLARE INSTRUMENT CURSOR FOR
+					SELECT INSTR_CODE, LOCATION_CD, NOMINAL_VALUE, INSTR_TYPE  
+					FROM MT_INSTRUMENT
+					WHERE INSTR_TYPE IN ('FMT', 'BON') AND STATUS NOT IN ('FA')
+					AND NOMINAL_VALUE != 1;	
+				
+		IS_ANY_ORA_ERROR
+
+		fprintf(l_filept, "%-15s\t%-15s\t%-20s\t%-15s\n", 
+				  "Instrurity Code","Location Code","Nominal Value","Type of Instr");
+		fprintf(l_filept,"----------------------------------------------------------------------------------------------\n");
+	
+		EXEC SQL OPEN INSTRUMENT;
+		IS_ANY_ORA_ERROR	
+
+		for(;;)
+		{
+			EXEC SQL FETCH INSTRUMENT
+					INTO :chr_l_instrcode_a:i_instr_code, :chr_l_locncode_c:i_loccode, :l_nominal_value:i_nominal_value, :chr_l_typeofinstr:i_typeofinstr;
+			
+			IS_ANY_ORA_ERROR		
+			if (APL_ZERO_RESULT_SET)
+				break;
+			
+         fprintf(l_filept, "%-15s\t%-15s\t%-20f\t%-15s\n", chr_l_instrcode_a, chr_l_locncode_c, l_nominal_value, chr_l_typeofinstr);
+      }
+
+      EXEC SQL CLOSE INSTRUMENT;	
+		fprintf(l_filept,"----------------------------------------------------------------------------------------------\n");
+		fprintf(l_filept,"\n***********************************************************************************************\n");
+			
+	}
+
+	  
+	
+	int_l_count_excptn = 0;
+	sqlca.sqlcode = 0;
+
+	EXEC SQL SELECT COUNT(*) INTO :int_l_count_excptn 
+				FROM MT_INSTRUMENT
+				WHERE INSTR_TYPE NOT IN ('FMT', 'BON','SHS','RTS') AND STATUS NOT IN ('FA')
+				AND NOMINAL_VALUE != 1; 
+
+	IS_ANY_ORA_ERROR
+	
+	if ( int_l_count_excptn > 0 )
+	{
+		int_l_excptn_stat = 1;
+		fprintf(l_filept,"\n***********************************************************************************************\n");
+		strcpy( chr_l_buf, "EXCEPTION: Type of instrument other than SHS/RTS/FMT/BON int_found in the system\n");
+		CO_ProcMonitor(g_logfile,chr_l_buf,NULL,NULL);
+
+		fprintf(l_filept,"\n%s\n",chr_l_buf);
+
+		EXEC SQL DECLARE instrument_1 CURSOR FOR
+					SELECT INSTR_CODE, LOCATION_CD, NOMINAL_VALUE, INSTR_TYPE  
+					FROM MT_INSTRUMENT
+					WHERE INSTR_TYPE NOT IN ('FMT', 'BON','SHS','RTS') AND STATUS NOT IN ('FA')
+					AND NOMINAL_VALUE != 1;	
+				
+		IS_ANY_ORA_ERROR
+
+		fprintf(l_filept, "%-15s\t%-15s\t%-20s\t%-15s\n", 
+				  "Instrurity Code","Location Code","Nominal Value","Type of Instr");
+		fprintf(l_filept,"----------------------------------------------------------------------------------------------\n");
+	
+		EXEC SQL OPEN instrument_1;
+		IS_ANY_ORA_ERROR	
+
+		for(;;)
+		{
+			EXEC SQL FETCH instrument_1
+					INTO :chr_l_instrcode_a:i_instr_code, :chr_l_locncode_c:i_loccode, :l_nominal_value:i_nominal_value, :chr_l_typeofinstr:i_typeofinstr;
+			
+			IS_ANY_ORA_ERROR		
+			if (APL_ZERO_RESULT_SET)
+				break;
+			
+         fprintf(l_filept, "%-15s\t%-15s\t%-20f\t%-15s\n", chr_l_instrcode_a, chr_l_locncode_c, l_nominal_value, chr_l_typeofinstr);
+      }
+
+      EXEC SQL CLOSE instrument_1;	
+		fprintf(l_filept,"----------------------------------------------------------------------------------------------\n");
+		fprintf(l_filept,"\n***********************************************************************************************\n");
+			
+	}
+
+		
+	  
+	
+	int_l_count_excptn = 0;
+	sqlca.sqlcode = 0;
+
+	EXEC SQL SELECT COUNT(*) INTO :int_l_count_excptn 
+				FROM DL_DEALREPAIR;
+
+	IS_ANY_ORA_ERROR
+	
+	if ( int_l_count_excptn > 0 )
+	{
+		int_l_excptn_stat = 1;
+		fprintf(l_filept,"\n***********************************************************************************************\n");
+		strcpy( chr_l_buf, "EXCEPTION: Records present in repair queue\n");
+		CO_ProcMonitor(g_logfile,chr_l_buf,NULL,NULL);
+
+		fprintf(l_filept,"\n%s\n",chr_l_buf);
+
+      EXEC SQL DECLARE trdrepair CURSOR FOR
+               SELECT CLIENT, IDENTIY_NO, DEAL_CD, DEAL_DATE, INSTR_CODE
+               FROM DL_DEALREPAIR;
+
+      IS_ANY_ORA_ERROR
+
+      fprintf(l_filept, "%-10s\t%-20s\t%-10s\t%-20s\t%-15s\n",
+              "Account", "Reference No","Trade Code","Trade Date","Instrurity Code");
+		fprintf(l_filept,"----------------------------------------------------------------------------------------------\n");
+
+      EXEC SQL OPEN trdrepair;
+      IS_ANY_ORA_ERROR
+
+      for(;;)
+      {
+         EXEC SQL FETCH trdrepair
+               INTO :chr_l_client_a:i_dl_client, :chr_l_refno_a:i_indentity_no, :chr_l_trcode_a:i_dealcd, :chr_l_trddt:i_trddt, :chr_l_instrcode_a:i_instr_code;
+
+         IS_ANY_ORA_ERROR
+         if (APL_ZERO_RESULT_SET)
+            break;
+
+         fprintf(l_filept, "%-10s\t%-20s\t%-10s\t%-20s\t%-15s\n", chr_l_client_a, chr_l_refno_a, chr_l_trcode_a, chr_l_trddt, chr_l_instrcode_a);
+      }
+
+      EXEC SQL CLOSE INSTRUMENT;	
+		fprintf(l_filept,"----------------------------------------------------------------------------------------------\n");
+		fprintf(l_filept,"\n***********************************************************************************************\n");
+	}	
+
+
+	  
+	
+	int_l_count_excptn = 0;
+	sqlca.sqlcode = 0;
+
+	EXEC SQL SELECT COUNT(*) INTO :int_l_count_excptn 
+				FROM SYS_IVCONTROLPARAM WHERE B_UPTO_DATE < (SELECT SYS_DATE FROM PRO_SYS_DATE);
+
+	IS_ANY_ORA_ERROR
+	
+	if ( int_l_count_excptn > 0 )
+	{
+		int_l_excptn_stat = 1;
+		fprintf(l_filept,"\n***********************************************************************************************\n");
+		strcpy( chr_l_buf, "EXCEPTION: Bill Delivery Not Done\n");
+		CO_ProcMonitor(g_logfile,chr_l_buf,NULL,NULL);
+
+		fprintf(l_filept,"\n%s\n",chr_l_buf);
+
+		fprintf(l_filept,"\n***********************************************************************************************\n");
+	}	
+
+
+	if (int_l_excptn_stat == 1)
+	{
+		CO_ProcMonitor(g_logfile,
+					"Above Exception(s) Found in system. For details check the exceptions reports\n", 
+					 NULL,NULL);	
+					
+		APL_GOBACK_FAIL	
+	}
+
+	
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+	{
+		APL_IF_DEBUG
+		{
+				CO_ProcMonitor(   APL_OUT_FILE,
+				"Leaving Function Conv_Exceptions successfully\n",
+				NULL,
+				NULL);
+		}
+		return (APL_SUCCESS);
+	}
+	RETURN_FAILURE:
+	{
+		APL_IF_DEBUG
+		{
+				CO_ProcMonitor(   APL_OUT_FILE,
+				"Leaving Function Conv_Exceptions unsuccessfully\n",
+				NULL,
+				NULL);
+		}
+		return (APL_FAILURE);
+	}
+
+}

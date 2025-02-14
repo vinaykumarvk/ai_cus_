@@ -1,0 +1,1679 @@
+
+
+
+
+
+
+
+#include "CR_Common.h"
+#include "CO_HostStructdef.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+#define	QUANTITY_LEN	25
+#define	AMOUNT_LEN_B	18
+#define	PAGELENGTH	50
+#define	CNAME_LEN_A	66
+#define	INSTR_ISIN_LEN_F	13
+#define VAL_RECDEAL(chr_p_key_a)	chr_p_key_a == '2' || chr_p_key_a == '4'
+#define VAL_DELIVER_DEAL(chr_p_key_a)	chr_p_key_a == '1' || chr_p_key_a == '3'
+#define	EXEC_ALL_CLI 1
+#define	EXEC_SEL_CLI 2
+#define	CANCEL_ALL_CLIENT_IND 3 
+#define	CANCEL_SEL_CLIENT_IND 4 
+#define EXP_ALL_CLI 5
+#define EXP_SEL_CLI 6
+
+int	MS_Proc_Msg512(
+						char * chr_p_client,
+						char **chr_param_arr,
+						char *proc_data,
+						short int_cursor_flag,
+						DEBUG_INFO_STRUCT_H ** l_debug_info_ptr
+						);
+
+
+int	MS_Proc_599ExpMsg(
+						char * chr_p_client,
+						char **chr_param_arr,
+						char *proc_data,
+						short int_cursor_flag,
+						DEBUG_INFO_STRUCT_H ** l_debug_info_ptr
+						);
+
+
+
+int MS_Prnt_52xMsgRptHdr(FILE *p_fptr, int p_pageno, char *p_sysdate,  DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	
+	short int_l_cond = 0;
+	int i=0;
+
+
+	if (APL_FAILURE == CO_Chk_CntryEnabled(	"MSG_52X",
+														"GEN_52X_FOR_BOG",
+														&int_l_cond,
+														l_debug_info_ptr ))
+	{
+		APL_GOBACK_FAIL
+	}
+
+	if (int_l_cond > 0 )
+	{
+	fprintf(p_fptr, "%24sTRANSACTIONS FOR WHICH BOG MESSAGE WAS SENT ON %.10s\n", " ", p_sysdate);
+	fprintf(p_fptr, "%24s---------------------------------------------------------\n", " ");
+	fprintf(p_fptr, "%.10s%29sCITIBANK N.A. ATHENS - GREECE%30sPage %2d\n\n", p_sysdate, " ", " ", p_pageno);
+	for (i=0; i<122; fprintf(p_fptr, "="), i++);
+	fprintf(p_fptr, "\nACCOUNT    COUNTERPARTY ISIN CODE    ");
+	fprintf(p_fptr, "                 QUANTITY             AMOUNT S/D        BOG REF.NO");
+	fprintf(p_fptr, "       MSG.IDENT.\n");
+	for (i=0; i<122; fprintf(p_fptr, "="), i++);
+	fprintf(p_fptr, "\n");
+	}
+
+	int_l_cond = 0;
+		 
+	if (APL_FAILURE == CO_Chk_CntryEnabled(	"MSG_52X",
+														"GEN_52X_FOR_VTB",
+														&int_l_cond,
+														l_debug_info_ptr ))
+	{
+		APL_GOBACK_FAIL
+	}
+  
+	if (int_l_cond > 0 )
+	{
+	fprintf(p_fptr, "%24sTRANSACTIONS FOR WHICH VTB MESSAGE WAS SENT ON %.10s\n", " ", p_sysdate);
+	fprintf(p_fptr, "%24s---------------------------------------------------------\n", " ");
+	fprintf(p_fptr, "%.10s%29sCITIBANK T/O MOSCOW - RUSSIA%30sPage %2d\n\n", p_sysdate, " ", " ", p_pageno);
+	for (i=0; i<122; fprintf(p_fptr, "="), i++);
+	fprintf(p_fptr, "\nACCOUNT    COUNTERPARTY ISIN CODE    ");
+	fprintf(p_fptr, "                 QUANTITY             AMOUNT S/D        VTB REF.NO");
+	fprintf(p_fptr, "       MSG.IDENT.\n");
+	for (i=0; i<122; fprintf(p_fptr, "="), i++);
+	fprintf(p_fptr, "\n");
+	}
+
+
+	RETURN_SUCCESS:
+		return(APL_SUCCESS);
+
+	RETURN_FAILURE:
+		return(APL_FAILURE);
+
+}
+
+
+
+int MS_Prnt_52xMsgRptFtr(FILE *p_fptr, double p_deb_tot, double p_cred_tot)
+{
+	int i=0;
+
+	for (i=0; i<122; fprintf(p_fptr, "-"), i++);
+	fprintf(p_fptr, "\n\n");
+	for (i=0; i<73; fprintf(p_fptr, "-"), i++);
+	fprintf(p_fptr, "\n------------------------------ TOTAL DVP (INFLOW)  : %20.3f\n", p_deb_tot);
+	fprintf(p_fptr, "------------------------------ TOTAL RVP (OUTFLOW) : %20.3f\n", p_cred_tot);
+	for (i=0; i<73; fprintf(p_fptr, "-"), i++);
+	fprintf(p_fptr, "\n------------------------------ NET TOTAL (IN/OUT)  : %20.3f\n", (p_deb_tot-p_cred_tot));
+	for (i=0; i<73; fprintf(p_fptr, "-"), i++);
+	fprintf(p_fptr, "\n\n%15s", " ");
+	for (i=0; i<30; fprintf(p_fptr, "-"), i++);
+	fprintf(p_fptr, " End Of Report ");
+	for (i=0; i<30; fprintf(p_fptr, "-"), i++);
+	fprintf(p_fptr, "\n");
+
+	return(APL_SUCCESS);
+}
+
+
+
+int MS_Prnt_52xMsgRpt(char *chr_p_filename_a, char **argv, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	struct sqlca sqlca;
+
+	static FILE *l_prepfile 				= (FILE *) NULL;
+	static int 	int_l_pageno 					= 1;
+	static int 	int_l_linecount					= 0;
+	static char chr_l_sysdate_b[APL_DATE_LEN] = APL_NULL_STRING;
+	static char chr_l_datadir[PATH_LENGTH]	= APL_NULL_STRING;
+	static double	l_cred_tot				= 0.0;
+	static double	l_deb_tot				= 0.0;
+
+   char 		chr_l_inifile[PATH_LENGTH]				= APL_NULL_STRING;
+   char 		chr_l_datafile[PATH_LENGTH]				= APL_NULL_STRING;
+	char 		chr_l_trd_rowid[APL_ROWID_LEN]			= APL_NULL_STRING;
+	char		chr_l_h_client_a[APL_CLIENT_LENGTH]		= APL_NULL_STRING;
+	char		chr_l_h_countaccnm[CNAME_LEN_A]		= APL_NULL_STRING;
+	char		chr_l_h_isincode[INSTR_ISIN_LEN_F]			= APL_NULL_STRING;
+	char		chr_l_h_settledt_a[APL_DATE_LEN]			= APL_NULL_STRING;
+	char		chr_l_h_locrefno_a[APL_TXNREFNO_LEN]	= APL_NULL_STRING;
+	char		chr_l_h_ccycode[APL_CCYCODE_LEN]		= APL_NULL_STRING;
+	char		chr_l_h_trcode_a[APL_FLAG_LENGTH]			= APL_NULL_STRING;
+	char		chr_l_rep_qty[QUANTITY_LEN]					= APL_NULL_STRING;
+	char		chr_l_rep_amt[AMOUNT_LEN_B]					= APL_NULL_STRING;
+	char		chr_l_rowid_id[10]							= APL_NULL_STRING;
+	char		chr_l_h_instrcode_A[APL_INSTRUMENTCODE_LEN]			= APL_NULL_STRING;
+	int		int_l_amt_declen							= 0;
+	int		int_l_rcount									= 0;
+	double	l_h_quantity_a									= 0.0;
+	double	chr_l_h_amount								= 0.0;
+	long int int_l_h_msgseq                       = 0;
+	short		l_i_account								= 0;
+	short		l_i_countaccnm							= 0;
+	short		l_i_isincode							= 0;
+	short		int_l_i_qty									= 0;
+	short		l_i_amount								= 0;
+	short		l_i_settledt							= 0;
+	short		l_i_locrefno							= 0;
+	short		l_i_ccycode								= 0;
+	short		int_l_i_trcode								= 0;
+	short    l_i_msgseq                       = 0;
+	short		l_i_instr_code								= 0;
+	FILE 	  *l_finifile								= (FILE *) NULL;
+	FILE 	  *l_pdatfile								= (FILE *) NULL;
+	short		int_l_cond									= 0;
+
+	EXEC SQL VAR	chr_l_h_client_a		IS STRING;
+	EXEC SQL VAR	chr_l_h_countaccnm	IS STRING;
+	EXEC SQL VAR	chr_l_h_isincode	IS STRING;
+	EXEC SQL VAR	chr_l_h_settledt_a	IS STRING;
+	EXEC SQL VAR	chr_l_h_locrefno_a	IS STRING;
+	EXEC SQL VAR	chr_l_h_ccycode		IS STRING;
+	EXEC SQL VAR	chr_l_h_trcode_a		IS STRING;
+
+	sqlca.sqlcode = 0;
+
+	
+
+	if (!strlen(chr_l_sysdate_b))
+	{
+		if (APL_FAILURE == CO_RtvSysDt(chr_l_sysdate_b, l_debug_info_ptr))
+		{
+			APL_GOBACK_FAIL
+		}
+	}
+
+	
+
+	if (l_prepfile == (FILE *)NULL)
+	{
+	   int_l_cond = 0;
+		if (APL_FAILURE == CO_Chk_CntryEnabled( "MSG_52X",
+														  "GEN_52X_FOR_VTB",
+														  &int_l_cond,
+														  l_debug_info_ptr))
+			{
+				APL_GOBACK_FAIL
+			}
+		
+		if (int_l_cond > 0 )     
+		{	
+															 
+		if (APL_FAILURE == CO_Rtv_RptFileName(	"VT", 
+														"VTB Transmission Msgs Report",
+														 100,
+														 argv[5],
+														 argv,
+														 &l_prepfile,
+														 l_debug_info_ptr ))
+			{
+				APL_GOBACK_FAIL
+			}
+		}
+
+	   int_l_cond = 0;
+		if (APL_FAILURE == CO_Chk_CntryEnabled( "MSG_52X",
+														  "GEN_52X_FOR_BOG",
+														  &int_l_cond,
+														  l_debug_info_ptr))
+		{
+			APL_GOBACK_FAIL
+		}
+		
+		if (int_l_cond > 0 )     
+		{	
+															 
+		if (APL_FAILURE == CO_Rtv_RptFileName(	"BG",
+														"BOG Transmission Msgs Report",
+														100,
+														argv[5],
+														argv,
+														&l_prepfile,
+														l_debug_info_ptr ))
+			{
+				APL_GOBACK_FAIL
+			}
+
+		}
+
+		MS_Prnt_52xMsgRptHdr(l_prepfile, int_l_pageno, chr_l_sysdate_b,l_debug_info_ptr);
+	}
+
+	
+
+	if (!strcmp(chr_p_filename_a, "FINAL"))
+	{
+		
+
+		MS_Prnt_52xMsgRptFtr(l_prepfile, l_deb_tot, l_cred_tot);
+
+		
+
+		if (APL_FAILURE == CO_Proc_RptClose(l_prepfile, l_debug_info_ptr))
+		{
+			APL_GOBACK_FAIL
+		}
+		APL_GOBACK_SUCCESS
+	}
+
+	
+
+	if (!strlen(chr_l_datadir))
+	{
+   	strcpy(chr_l_inifile,getenv("INTL_ROOT_PATH"));
+   	strcat(chr_l_inifile,"intl_sun.cfg");
+
+ 	  if ( ( l_finifile=fopen(chr_l_inifile,"r") ) == NULL)
+   	{
+   		APL_GOBACK_FAIL
+   	}
+
+		if (APL_FAILURE == CO_ReadToken(	l_finifile,
+													"INTL_MS_DATA_PATH",
+													chr_l_datadir,
+													l_debug_info_ptr ))
+		{
+			APL_GOBACK_FAIL
+		}
+
+		fclose(l_finifile);
+	}
+
+	sprintf(chr_l_datafile, "%s/%s", chr_l_datadir, chr_p_filename_a);
+	if ((l_pdatfile = fopen(chr_l_datafile, "r")) == (FILE *)NULL)
+	{
+		APL_GOBACK_FAIL
+	}
+
+	while (!feof(l_pdatfile))
+	{
+		memset(chr_l_trd_rowid, NULL, APL_ROWID_LEN);
+		memset(chr_l_rowid_id, NULL, 10);
+
+		strcpy(chr_l_rowid_id, ltoa(++int_l_rcount));
+		strcat(chr_l_rowid_id, "TRDROWID");
+		
+		if (APL_FAILURE == CO_Rtv_Token(	0,l_pdatfile,
+													chr_l_rowid_id,
+													chr_l_trd_rowid,
+													l_debug_info_ptr ))
+		{
+			APL_GOBACK_FAIL
+		}
+
+		
+
+		if (!strlen(chr_l_trd_rowid))
+		{
+			break;
+		}
+
+		
+
+		EXEC SQL UPDATE DL_DEAL 
+		SET TRANS_DATE = :chr_l_sysdate_b
+		WHERE ROWID = CHARTOROWID(:chr_l_trd_rowid);   
+																
+
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_DEAL_NF,
+															chr_l_trd_rowid,
+															APL_NULL_STRING,
+															APL_NULL_STRING )
+
+		
+
+		
+
+		
+		EXEC SQL SELECT 	a.CLIENT, a.CP_CLTNAME, b.INSTR_ISIN, 
+								a.QTY, NVL(a.AMOUNT, 0), a.SETL_DATE, 
+								a.LCL_IDENTNO, a.CURRENCY_CD, a.DEAL_CD, a.INSTR_CODE
+		INTO	:chr_l_h_client_a:l_i_account,
+				:chr_l_h_countaccnm:l_i_countaccnm,
+				:chr_l_h_isincode:l_i_isincode,
+				:l_h_quantity_a:int_l_i_qty,
+				:chr_l_h_amount:l_i_amount,
+				:chr_l_h_settledt_a:l_i_settledt,
+				:chr_l_h_locrefno_a:l_i_locrefno,
+				:chr_l_h_ccycode:l_i_ccycode,
+				:chr_l_h_trcode_a:int_l_i_trcode,
+				:chr_l_h_instrcode_A:l_i_instr_code
+		FROM DL_DEAL a, MT_INSTRUMENT b
+		WHERE a.ROWID = CHARTOROWID(:chr_l_trd_rowid) 
+		AND 	a.INSTR_CODE = b.INSTR_CODE;
+
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_DEAL_NF,
+															chr_l_trd_rowid,
+															APL_NULL_STRING,
+															APL_NULL_STRING )
+		
+		if (chr_l_h_trcode_a[0]=='2' || chr_l_h_trcode_a[0]=='4' || chr_l_h_trcode_a[0]=='5' || chr_l_h_trcode_a[0]=='7')
+		{
+			l_cred_tot += chr_l_h_amount;
+		}
+		else
+		{
+			l_deb_tot += chr_l_h_amount;
+		}
+
+		
+
+		if (APL_FAILURE == CR_Proc_InstrQtyRoundToStr(	l_h_quantity_a,
+																QUANTITY_LEN,
+																chr_l_h_instrcode_A,
+																chr_l_rep_qty,
+																l_debug_info_ptr ))
+		{
+			APL_GOBACK_FAIL
+		}
+
+		EXEC SQL SELECT DEC_LEN
+		INTO	:int_l_amt_declen
+		FROM DL_CURRENCY
+		WHERE	CURRENCY_CD = :chr_l_h_ccycode;
+
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_CCY_NOTFND,
+															chr_l_h_ccycode,
+															APL_NULL_STRING,
+															APL_NULL_STRING )
+
+		CO_ToStr(chr_l_h_amount, AMOUNT_LEN_B, int_l_amt_declen, chr_l_rep_amt);
+		
+
+		EXEC SQL SELECT SWIFT_MSG_SEQNO
+		INTO :int_l_h_msgseq:l_i_msgseq
+		FROM MS_MSGENT
+		WHERE INFO_FILE = :chr_p_filename_a
+		AND ROWNUM < 2;
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET( ERR_REC_NOTFND,
+															"datafile_rec",
+															chr_p_filename_a,
+															APL_NULL_STRING )
+
+		fprintf(	l_prepfile,
+					"%-10s %-12s \n%24s%-12s %s %s %.10s %-16s %10ld\n",
+					chr_l_h_client_a,
+					chr_l_h_countaccnm,
+					" ",
+					chr_l_h_isincode,
+					chr_l_rep_qty,
+					chr_l_rep_amt,
+					chr_l_h_settledt_a,
+					chr_l_h_locrefno_a,
+					int_l_h_msgseq );
+
+		if (++int_l_linecount == PAGELENGTH)
+		{
+			fprintf(l_prepfile, "\f");
+			MS_Prnt_52xMsgRptHdr(l_prepfile, int_l_pageno, chr_l_sysdate_b,l_debug_info_ptr);
+			int_l_linecount = 7;
+			int_l_pageno++;
+		}
+	}
+
+	RETURN_SUCCESS:
+		return(APL_SUCCESS);
+
+	RETURN_FAILURE:
+		return(APL_FAILURE);
+
+}
+
+int MS_Proc_MsgEnt(char **argv, FILE *p_logfile, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+ 
+ short int_l_cond = 0;
+ short l_cond_vtb = 0;
+ int int_paramnum,int_l_ctr,int_accnum,i;
+
+
+ char chr_l_now[APL_DATE_LEN]            = APL_NULL_STRING;
+ char h_msg_ident_no[4]                     = APL_NULL_STRING;
+ char chr_h_acc_proc[APL_CLIENT_LENGTH]    = APL_NULL_STRING;
+ char chr_h_crfno[3]                     = APL_NULL_STRING;
+ char chr_l_h_posdate[APL_DATE_LEN]  = APL_NULL_STRING;
+ char chr_l_zeromov_flg              = APL_NULL_CHAR;
+ char chr_l_msgopt_ind                   = APL_NULL_CHAR;
+ char chr_sys_access_stamp[APL_DATE_LEN] =APL_NULL_STRING; 
+ 
+ int int_l_h_dayofweek     = 0;
+ int count             = 0;
+ int int_l_int_selacc      = 0;
+ short i_h_dayofweek   = 0;
+ short l_cz_schchk     = 0;
+ short i_acc_proc      = 0;
+ short l_i_posdate  = 0;
+ short i_dl_client       = 0;
+
+ char **chr_param_arr; 
+ char **chr_client_arr;   
+ char *chr_p_msgno; 
+ char *chr_p_key;
+ char  *p_client; 
+ char chr_p_autotransmit = APL_NULL_CHAR; 
+ char *chr_p_param_str;
+ struct sqlca sqlca;
+
+	int	int_cursor_flag =0;
+	char	chr_from_dt[APL_DATE_LEN] =APL_NULL_STRING;
+
+
+  MT_SCHDET_STRUCT_H *l_mt_schdet_struct_h = NULL;
+  MT_SCHDET_STRUCT_I *l_mt_schdet_struct_i = NULL;
+
+
+char chr_l_h_new_currclient[APL_CLIENT_LENGTH] =  APL_NULL_STRING;
+char chr_l_h_new_prevclient[APL_CLIENT_LENGTH] =  APL_NULL_STRING;
+
+char chr_l_acc_status[3] =  APL_NULL_STRING;
+char  chr_l_client_a[APL_CLIENT_LENGTH] = APL_NULL_STRING;
+char  chr_l_buf[BUFFER_LEN]           = APL_NULL_STRING;
+char  chr_l_typeofinstr[2]               = APL_NULL_STRING;
+char l_temp_processing_status[51] = APL_NULL_STRING;
+
+
+   EXEC SQL VAR h_msg_ident_no IS STRING;
+   EXEC SQL VAR chr_h_acc_proc IS STRING;
+   EXEC SQL VAR chr_h_crfno IS STRING;
+   EXEC SQL VAR l_mt_schdet_struct_h->h_dl_client IS STRING;
+   EXEC SQL VAR l_mt_schdet_struct_h->h_msg_ident_no IS STRING;
+   EXEC SQL VAR l_mt_schdet_struct_h->h_eom_msg_ind IS STRING;
+   EXEC SQL VAR l_mt_schdet_struct_h->h_generate_day IS STRING;
+   EXEC SQL VAR l_mt_schdet_struct_h->h_pos_txn_ind IS STRING;
+   EXEC SQL VAR l_mt_schdet_struct_h->h_nil_mov_ind IS STRING;
+   EXEC SQL VAR l_mt_schdet_struct_h->h_msg_opt IS STRING;
+   EXEC SQL VAR l_mt_schdet_struct_h->h_loc_stat IS STRING;
+   EXEC SQL VAR l_mt_schdet_struct_h->h_access_stamp IS STRING;
+	EXEC SQL VAR chr_l_client_a IS STRING;
+
+
+   EXEC SQL VAR chr_l_h_new_currclient IS STRING;
+   EXEC SQL VAR chr_l_h_new_prevclient IS STRING;
+
+
+        
+   chr_p_msgno = (char *) calloc(10,sizeof(char));
+   chr_p_key   = (char *) calloc(61,sizeof(char));
+   p_client = (char *) calloc(APL_CLIENT_LENGTH,sizeof(char));
+   chr_p_param_str = (char *) calloc(201,sizeof(char));
+	memset(chr_p_msgno,APL_NULL_CHAR,10);
+	memset(chr_p_key,APL_NULL_CHAR,61);
+	memset(p_client,APL_NULL_CHAR,11);
+	memset(chr_p_param_str,APL_NULL_CHAR,201);
+   EXEC SQL SELECT PROCESSING_STATUS into :l_temp_processing_status
+   FROM SYS_BATCHPROC
+   WHERE PROCESS_NAME=:argv[0]
+   AND   PROC_INIT=:argv[1]
+   AND   STARTDATE=:argv[2]
+   AND   STATUS='started'
+   FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+   if(APL_ZERO_RESULT_SET)
+   {
+      CO_ProcMonitor(p_logfile,"E:No entry in batch_in_proc",NULL,NULL);
+      APL_GOBACK_FAIL
+   }
+
+	
+
+	if (APL_FAILURE == CO_Chk_CntryEnabled(	"MSG_52X",
+														"GEN_52X_FOR_BOG",
+														&int_l_cond,
+														l_debug_info_ptr ))
+	{
+		APL_GOBACK_FAIL
+	}
+
+	 
+if (APL_FAILURE == CO_Chk_CntryEnabled( "MSG_52X", "GEN_52X_FOR_VTB", &l_cond_vtb, l_debug_info_ptr ))
+	{
+		APL_GOBACK_FAIL
+	}
+			
+
+	
+
+    if(CO_Chk_CntryEnabled("SCH_MSGS",
+                          "SCH_CHK_RQD",
+                           &l_cz_schchk,
+                           l_debug_info_ptr) == APL_FAILURE)
+     {
+       APL_GOBACK_FAIL
+      }
+
+
+ if (APL_FAILURE == CO_SplitStr( argv[9],
+                ';',
+                &int_paramnum,
+                &chr_param_arr) )
+        {
+                fprintf(p_logfile,"Failed to split input string\n");
+                APL_GOBACK_FAIL;
+        }
+
+        if (int_paramnum ==0 )
+        {
+                fprintf(p_logfile,"No Parameters were passed to the processtion\n"
+);
+                APL_GOBACK_FAIL
+        }
+
+
+        strcpy(chr_p_msgno,chr_param_arr[0]);
+        strcpy(chr_p_key,chr_param_arr[1]);
+        chr_p_autotransmit = chr_param_arr[3][0];
+		
+			if(int_paramnum >= 5)
+			{
+        		strcpy(chr_p_param_str,chr_param_arr[4]);
+		  		strcpy(chr_from_dt,chr_param_arr[4]);
+			}
+        	strcat(chr_p_param_str,";");
+			strcat(chr_p_param_str,APL_NULL_STRING);
+        i = 5;
+        for(i=5;i<int_paramnum;i++)
+        {
+           strcat(chr_p_param_str,chr_param_arr[i]);
+           strcat(chr_p_param_str,";");
+			strcat(chr_p_param_str,APL_NULL_STRING);
+        } 
+			
+			if(int_paramnum >= 6)
+		  		strcpy(chr_l_typeofinstr,chr_param_arr[5]);
+			else
+				strcpy(chr_l_typeofinstr,APL_NULL_STRING);
+
+		
+		if ( !strcmp(chr_p_msgno,"512") 	)
+		{
+			if ( strlen(chr_param_arr[2]) == 0 )
+			{
+				strcpy(p_client,APL_NULL_STRING);	
+					int_cursor_flag= EXEC_ALL_CLI;
+				if ( MS_Proc_Msg512(
+										p_client,
+										chr_param_arr,
+										chr_p_param_str,
+										int_cursor_flag,
+										l_debug_info_ptr
+										) == APL_FAILURE
+					)
+				{
+					APL_GOBACK_FAIL
+				}
+				
+					int_cursor_flag= CANCEL_ALL_CLIENT_IND;
+				if ( MS_Proc_Msg512(
+										p_client,
+										chr_param_arr,
+										chr_p_param_str,
+										int_cursor_flag,
+										l_debug_info_ptr
+										) == APL_FAILURE
+					)
+				{
+					APL_GOBACK_FAIL
+				}
+
+
+			}	
+			else
+			{
+							
+              if (APL_FAILURE == CO_SplitStr(chr_param_arr[2],
+                '|',
+                &int_accnum,
+                &chr_client_arr))
+              {
+                       fprintf(p_logfile,"Failed to split input string\n");
+                       APL_GOBACK_FAIL;
+              }
+              for(int_l_ctr = 0;int_l_ctr < int_accnum;int_l_ctr++)
+              {
+                strcpy(p_client,chr_client_arr[int_l_ctr]);
+								
+							int_cursor_flag= EXEC_SEL_CLI;
+	
+						if ( MS_Proc_Msg512(
+												p_client,
+												chr_param_arr,
+												chr_p_param_str,
+												int_cursor_flag,
+												l_debug_info_ptr
+											) == APL_FAILURE
+							)
+						{
+							APL_GOBACK_FAIL
+						}
+					
+							int_cursor_flag= CANCEL_SEL_CLIENT_IND;
+	
+						if ( MS_Proc_Msg512(
+												p_client,
+												chr_param_arr,
+												chr_p_param_str,
+												int_cursor_flag,
+												l_debug_info_ptr
+											) == APL_FAILURE
+							)
+						{
+							APL_GOBACK_FAIL
+						}
+
+
+					}
+			}
+		}
+
+		
+	
+		else if ( !strcmp(chr_p_msgno,"599EXP") 	)
+		{
+			if ( strlen(chr_param_arr[2]) == 0 )
+			{
+				strcpy(p_client,APL_NULL_STRING);	
+					int_cursor_flag= EXP_ALL_CLI;
+				if ( MS_Proc_599ExpMsg(
+										p_client,
+										chr_param_arr,
+										chr_p_param_str,
+										int_cursor_flag,
+										l_debug_info_ptr
+										) == APL_FAILURE
+					)
+				{
+					APL_GOBACK_FAIL
+				}
+			}
+			else
+			{
+              if (APL_FAILURE == CO_SplitStr(chr_param_arr[2],
+                '|',
+                &int_accnum,
+                &chr_client_arr))
+              {
+                       fprintf(p_logfile,"Failed to split input string\n");
+                       APL_GOBACK_FAIL;
+              }
+              for(int_l_ctr = 0;int_l_ctr < int_accnum;int_l_ctr++)
+              {
+                strcpy(p_client,chr_client_arr[int_l_ctr]);
+								
+							int_cursor_flag= EXP_SEL_CLI;
+	
+						if ( MS_Proc_599ExpMsg(
+												p_client,
+												chr_param_arr,
+												chr_p_param_str,
+												int_cursor_flag,
+												l_debug_info_ptr
+											) == APL_FAILURE
+							)
+						{
+							APL_GOBACK_FAIL
+						}
+					}			
+	
+			}				
+
+
+		}	
+
+	else 
+		{
+		 
+
+		  if (l_cz_schchk > 0 && 
+		  ((!strcmp(chr_p_msgno,"571"))||(!strcmp(chr_p_msgno,"572"))||(!strcmp(chr_p_msgno,"573"))))
+        {
+				int_l_int_selacc = 1;  
+			}
+			else
+			{
+				int_l_int_selacc =0;
+         }
+
+        	if ((strlen(chr_param_arr[2]) == 0) && (int_l_int_selacc == 0))
+        	{ 
+			
+
+				 if(!strcmp(chr_p_msgno, "53x"))
+				 {	
+							sprintf(chr_l_buf,"Entered Loop for 53x Generation");
+         	        	CO_ProcMonitor(p_logfile,chr_l_buf,l_debug_info_ptr,NULL);
+
+							strcpy(chr_l_acc_status,STATUS_CLS_AUTH);
+							memset(chr_l_client_a,APL_NULL_CHAR,APL_CLIENT_LENGTH);
+
+			     			if (APL_FAILURE == CO_RtvSysDt(chr_l_now, l_debug_info_ptr))
+              			{
+      		 	 			APL_GOBACK_FAIL
+   			  			}
+
+							if ( !strcmp(chr_l_typeofinstr,"B") ) 
+							{
+								
+
+								EXEC SQL DECLARE C53XGEN1 CURSOR FOR 
+								SELECT DISTINCT A.CLIENT FROM DL_DEAL A,MT_INSTRUMENT C
+								WHERE A.INSTR_CODE = C.INSTR_CODE AND 
+								( ( (A.DEAL_CD = 3 OR A.DEAL_CD = 4 OR A.DEAL_CD = 7 OR A.DEAL_CD = 8) 
+										AND A.INSTRUMENT_DT <= :chr_l_now AND A.MONEY_SETL_DT <= :chr_l_now ) OR
+								( (A.DEAL_CD = 5 OR A.DEAL_CD = 6) AND A.MONEY_SETL_DT <= :chr_l_now ) OR
+								( (A.DEAL_CD = 1 OR A.DEAL_CD = 2) AND A.INSTRUMENT_DT <= :chr_l_now )	) AND
+								INSTR(NVL(A.MSG_STAT,' ') , 'A') = 0 AND 
+								C.INSTR_TYPE IN ('BON','FMT');
+
+								IS_ANY_ORA_ERROR
+
+								EXEC SQL OPEN C53XGEN1 ;
+								IS_ANY_ORA_ERROR
+
+							}
+							else if (  !strcmp(chr_l_typeofinstr,"S") )
+							{
+								EXEC SQL DECLARE C53XGEN2 CURSOR FOR 
+								SELECT DISTINCT A.CLIENT FROM DL_DEAL A,MT_CLIENT B,MT_INSTRUMENT C
+								WHERE A.INSTR_CODE = C.INSTR_CODE AND 
+								( ( (A.DEAL_CD = 3 OR A.DEAL_CD = 4 OR A.DEAL_CD = 7 OR A.DEAL_CD = 8) 
+										AND A.INSTRUMENT_DT <= :chr_l_now AND A.MONEY_SETL_DT <= :chr_l_now ) OR
+								( (A.DEAL_CD = 5 OR A.DEAL_CD = 6) AND A.MONEY_SETL_DT <= :chr_l_now ) OR
+								( (A.DEAL_CD = 1 OR A.DEAL_CD = 2) AND A.INSTRUMENT_DT <= :chr_l_now )	) AND
+								INSTR(NVL(A.MSG_STAT,' ') , 'A') = 0 AND 
+								C.INSTR_TYPE IN ('SHS','RTS');
+
+								IS_ANY_ORA_ERROR
+
+								EXEC SQL OPEN C53XGEN2 ;
+								IS_ANY_ORA_ERROR
+							}
+							else if (  !strcmp(chr_l_typeofinstr,"A") )
+							{
+
+								EXEC SQL DECLARE C53XGEN3 CURSOR FOR 
+								SELECT DISTINCT A.CLIENT FROM DL_DEAL A
+								WHERE 
+								( ( (A.DEAL_CD = 3 OR A.DEAL_CD = 4 OR A.DEAL_CD = 7 OR A.DEAL_CD = 8) 
+										AND A.INSTRUMENT_DT <= :chr_l_now AND A.MONEY_SETL_DT <= :chr_l_now ) OR
+								( (A.DEAL_CD = 5 OR A.DEAL_CD = 6) AND A.MONEY_SETL_DT <= :chr_l_now ) OR
+								( (A.DEAL_CD = 1 OR A.DEAL_CD = 2) AND A.INSTRUMENT_DT <= :chr_l_now )	) AND
+								INSTR(NVL(A.MSG_STAT,' ') , 'A') = 0 ORDER BY A.CLIENT ;
+								
+								IS_ANY_ORA_ERROR
+
+								EXEC SQL OPEN C53XGEN3 ;
+								IS_ANY_ORA_ERROR
+							
+							
+							}
+							else
+							{
+								APL_GOBACK_FAIL
+							}
+						
+						
+							for( ; ; )
+							{
+								strcpy(chr_l_client_a,APL_NULL_STRING);
+
+								if ( !strcmp(chr_l_typeofinstr,"B") )
+								{
+									EXEC SQL FETCH C53XGEN1 INTO :chr_l_client_a:i_dl_client ;
+								}
+								else if ( !strcmp(chr_l_typeofinstr,"S") )
+								{
+									EXEC SQL FETCH C53XGEN2 INTO :chr_l_client_a:i_dl_client ;
+								}
+								else if ( !strcmp(chr_l_typeofinstr,"A") )
+								{
+									EXEC SQL FETCH C53XGEN3 INTO :chr_l_client_a:i_dl_client ;
+								}
+								IS_ANY_ORA_ERROR
+								
+								if(APL_ZERO_RESULT_SET)
+									break ;
+
+								sprintf(chr_l_buf,"Started Processing For Account = %s",chr_l_client_a);
+         	         	CO_ProcMonitor(p_logfile,chr_l_buf,l_debug_info_ptr,NULL);
+
+   	    if( GBDbInsIMSGENT(chr_p_msgno, chr_p_key, chr_l_client_a, chr_p_autotransmit, chr_p_param_str, l_debug_info_ptr)   == APL_FAILURE)
+      	    {
+         	         		CO_ProcMonitor(p_logfile,APL_NULL_STRING,l_debug_info_ptr,NULL);
+            	      		fprintf(p_logfile,"Failed to Update IMSGENT TABLE\n");
+               	        	APL_GOBACK_FAIL
+                			}
+			
+							else
+								{
+
+									EXEC SQL COMMIT WORK;
+									IS_ANY_ORA_ERROR 
+
+   								EXEC SQL SELECT PROCESSING_STATUS into :l_temp_processing_status FROM SYS_BATCHPROC WHERE PROCESS_NAME=:argv[0]
+   								AND   PROC_INIT=:argv[1] AND   STARTDATE=:argv[2] AND   STATUS='started' 
+									FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+   								if(APL_ZERO_RESULT_SET)
+   								{
+      								CO_ProcMonitor(p_logfile,"E:No entry in batch_in_proc",NULL,NULL);
+      								APL_GOBACK_FAIL
+   								}
+										 
+									sprintf(chr_l_buf,"Completed Processing For Account = %s",chr_l_client_a);
+         	         		CO_ProcMonitor(p_logfile,chr_l_buf,l_debug_info_ptr,NULL);
+								
+									
+
+							   }
+							   APL_GOBACK_SUCCESS
+								//RETURN_SUCCESS :
+		               //     CO_ProcMonitor(p_logfile, "SUCESS IN", l_debug_info_ptr, NULL);
+
+						   }
+
+							if ( !strcmp(chr_l_typeofinstr,"B") )
+							{
+								EXEC SQL CLOSE C53XGEN1 ;
+							}
+							else if ( !strcmp(chr_l_typeofinstr,"S") )
+							{
+								EXEC SQL CLOSE C53XGEN2 ;
+							}
+							else if ( !strcmp(chr_l_typeofinstr,"A") )
+							{
+								EXEC SQL CLOSE C53XGEN3 ;
+							}
+							IS_ANY_ORA_ERROR
+									
+							sprintf(chr_l_buf,"Leaving Loop For 53x Generation");
+         	        	CO_ProcMonitor(p_logfile,chr_l_buf,l_debug_info_ptr,NULL);
+								
+
+				 }
+				 else
+				 {
+					 memset(p_client,APL_NULL_CHAR,11);
+ 	          strcpy(p_client,APL_NULL_STRING);
+				 strcat(chr_p_param_str,APL_NULL_STRING);
+				 if(strlen(chr_p_key)==0)
+				 {
+					 strcpy(chr_p_key,APL_NULL_STRING);
+				 }
+   	        if( GBDbInsIMSGENT(chr_p_msgno, 
+							  				chr_p_key, 
+											p_client, 
+											chr_p_autotransmit, 
+											chr_p_param_str, 
+											l_debug_info_ptr)   == APL_FAILURE)
+      	          {
+         	         CO_ProcMonitor(p_logfile,APL_NULL_STRING,l_debug_info_ptr,NULL);
+            	      fprintf(p_logfile,"Failed to Update IMSGENT TABLE\n");
+               	        APL_GOBACK_FAIL;
+                   
+                	}
+ 				 }
+				  
+
+					 
+					 
+						 if ((strcmp(chr_p_msgno, MS_MSGNO_52X)==0 || strcmp(chr_p_msgno, MS_SWIFT_BOG_NO)==0) && (int_l_cond))
+						 {
+							if (APL_FAILURE == MS_Prnt_52xMsgRpt(	chr_p_param_str, 
+																		argv,
+																		l_debug_info_ptr ))
+							{
+								APL_GOBACK_FAIL
+							}
+					 	}
+
+			 
+			
+					 
+                if (((!strcmp(chr_p_msgno, MS_MSGNO_52X))||(strcmp(chr_p_msgno, MS_SWIFT_BOG_NO)==0)) && (l_cond_vtb))
+                {
+                  if (APL_FAILURE == MS_Prnt_52xMsgRpt( chr_p_param_str, 
+                                                   argv,
+                                                   l_debug_info_ptr ))
+                  {
+                     APL_GOBACK_FAIL
+                  }
+                }
+        	}
+        	else
+        	{
+		   
+				if((int_l_int_selacc == 1) && (strlen(chr_param_arr[2]) == 0))
+				{
+               l_mt_schdet_struct_h = (MT_SCHDET_STRUCT_H *)calloc(1, sizeof(MT_SCHDET_STRUCT_H));
+               APL_MALLOC_FAIL(l_mt_schdet_struct_h);
+               l_mt_schdet_struct_i = (MT_SCHDET_STRUCT_I *)calloc(1, sizeof(MT_SCHDET_STRUCT_I));
+               APL_MALLOC_FAIL(l_mt_schdet_struct_i);
+					
+					strcpy(h_msg_ident_no,chr_p_msgno);
+					EXEC SQL SELECT RTRIM(MSG_MAP_NO) INTO :chr_h_crfno FROM MS_MSGCRF
+					WHERE SWIFT_MSG_NO=:h_msg_ident_no;
+
+					IS_ANY_ORA_ERROR
+
+					
+              
+			     if (APL_FAILURE == CO_RtvSysDt(chr_l_now, l_debug_info_ptr ))
+              {
+      		 	 APL_GOBACK_FAIL
+   			  }	
+
+	 		   	EXEC SQL SELECT TO_NUMBER(TO_CHAR(TO_DATE(:chr_l_now),'D'))
+  		 	      INTO :int_l_h_dayofweek:i_h_dayofweek
+               FROM DUAL ;
+
+					IS_ANY_ORA_ERROR
+				
+
+	    			EXEC SQL DECLARE account_cursor CURSOR FOR SELECT A.*,B.CLN_POS_DT FROM MT_SCHDET_VEW A,MT_CLIENT B
+               WHERE A.CLIENT=B.CLN_CODE AND
+				   A.MSG_IDENT_NO=:chr_h_crfno AND
+               SUBSTR(A.GENERATE_DAY,:int_l_h_dayofweek,1) ='Y'
+			      ORDER BY A.CLIENT ;
+
+             
+                 memset(chr_l_h_new_prevclient,APL_NULL_CHAR,APL_CLIENT_LENGTH);
+             
+               EXEC SQL OPEN account_cursor;
+				   IS_ANY_ORA_ERROR
+				   if (CO_RtvSysDtTime(chr_sys_access_stamp, l_debug_info_ptr) != APL_SUCCESS)
+                    {
+                     APL_GOBACK_FAIL
+                    }
+               
+
+		   		for(count=1;;count++)
+	 		   	{
+				   	
+						memset(l_mt_schdet_struct_h, NULL, sizeof(MT_SCHDET_STRUCT_H));
+                  memset(l_mt_schdet_struct_i, NULL, sizeof(MT_SCHDET_STRUCT_I));
+						memset(chr_l_h_posdate, NULL, APL_DATE_LEN);
+						l_i_posdate     = 0;
+						
+						EXEC SQL FETCH account_cursor INTO :l_mt_schdet_struct_h:l_mt_schdet_struct_i,
+						:chr_l_h_posdate:l_i_posdate;
+
+
+					   IS_ANY_ORA_ERROR
+			 
+					   if(APL_ZERO_RESULT_SET)
+						 break;
+
+          
+                 if(!strlen(chr_l_h_new_prevclient))
+                       strcpy(chr_l_h_new_prevclient,l_mt_schdet_struct_h->h_dl_client);
+
+                  memset(chr_l_h_new_currclient,APL_NULL_CHAR,APL_CLIENT_LENGTH);
+                  strcpy(chr_l_h_new_currclient,l_mt_schdet_struct_h->h_dl_client);
+           
+
+					if(chr_h_crfno[0] == '4')
+					{
+         			if (((!strcmp(l_mt_schdet_struct_h->h_nil_mov_ind, "Y")) &&
+              		     (!strncmp(chr_l_h_posdate, chr_l_now, 10)) ||
+              		     (!strcmp(l_mt_schdet_struct_h->h_pos_txn_ind, "Y"))) ||
+             		    ((!strncmp(chr_l_h_posdate, chr_l_now, 10)) &&
+              		     (!strcmp(l_mt_schdet_struct_h->h_pos_txn_ind, "Y"))))
+         			{
+            			chr_l_zeromov_flg = 'Y';
+         			}
+         			else
+         			{
+            			chr_l_zeromov_flg = 'N';
+         			}
+
+         			memset(chr_p_param_str, NULL, 200);
+                  
+         			
+         			sprintf( chr_p_param_str,
+                  	"%s;N;%c;%s;%s;%d;N;%s;N;",
+                  	chr_l_now,
+                  	chr_l_zeromov_flg,
+                  	APL_NULL_STRING,
+                  	l_mt_schdet_struct_h->h_loc_stat, l_mt_schdet_struct_h->h_schsequence_num,APL_NULL_STRING );
+
+      			}
+				   if(chr_h_crfno[0]=='5')
+					{
+
+                  memset(chr_p_param_str, NULL, 200);
+                  sprintf( chr_p_param_str,
+                     "%s;%s;%d;N;",
+                     chr_l_now,
+                     l_mt_schdet_struct_h->h_pos_txn_ind,  l_mt_schdet_struct_h->h_schsequence_num );	
+					}
+					if(chr_h_crfno[0] == '6')
+					{
+						switch (l_mt_schdet_struct_h->h_msg_opt[0])
+         			{
+            			case '1':   chr_l_msgopt_ind = 'P';  break;
+            		   case '2':   chr_l_msgopt_ind = 'F';  break;
+							case '3':   chr_l_msgopt_ind = 'C';  break;
+          			   case '4':   chr_l_msgopt_ind = 'M';  break;
+            			case '5':   chr_l_msgopt_ind = 'S';  break;
+                     case '6':   chr_l_msgopt_ind = 'A';  break;
+         			}
+
+                  memset(chr_p_param_str, NULL, 200);
+    sprintf( chr_p_param_str,"%c;%s;%d;N;",chr_l_msgopt_ind,l_mt_schdet_struct_h->h_pend_ind, l_mt_schdet_struct_h->h_schsequence_num);
+               }
+	 
+               	 strcpy(p_client,l_mt_schdet_struct_h->h_dl_client);
+                    printf("the client :[%s], param :[%s]\n",p_client,chr_p_param_str);
+                   if( GBDbInsIMSGENT(chr_p_msgno, APL_NULL_STRING, p_client, chr_p_autotransmit, chr_p_param_str, l_debug_info_ptr)   == APL_FAILURE)
+                   {
+                    	CO_ProcMonitor(p_logfile,APL_NULL_STRING,l_debug_info_ptr,NULL);
+                  	fprintf(p_logfile,"Failed to Update IMSGENT TABLE\n");
+                     APL_GOBACK_FAIL
+                   }
+                  
+
+                  if(chr_h_crfno[0]=='5')
+                  {
+                     if ( strcmp(chr_l_h_new_prevclient,l_mt_schdet_struct_h->h_dl_client) != 0 )
+                     {
+                        EXEC SQL UPDATE DL_DEAL
+                        SET MSG_STAT = ltrim(rtrim(MSG_STAT))||'B',
+								access_stamp=:chr_sys_access_stamp
+                        WHERE CLIENT=:chr_l_h_new_prevclient
+                        AND INSTR(NVL(MSG_STAT,' '),'I') <> 0
+                        AND INSTR(NVL(MSG_STAT,' '),'B') = 0;
+
+                        IS_ANY_ORA_ERROR
+
+                        memset(chr_l_h_new_prevclient,APL_NULL_CHAR,APL_CLIENT_LENGTH);
+                        strcpy(chr_l_h_new_prevclient,l_mt_schdet_struct_h->h_dl_client);
+                     }
+
+                  }
+
+                  
+				  }
+				  EXEC SQL CLOSE account_cursor;
+				  IS_ANY_ORA_ERROR
+
+               
+               if(chr_h_crfno[0]=='5')
+               {
+                  if (!strcmp(chr_l_h_new_prevclient,chr_l_h_new_currclient))
+                  {
+                     EXEC SQL UPDATE DL_DEAL
+                     SET MSG_STAT = ltrim(rtrim(MSG_STAT))||'B',
+							access_stamp = :chr_sys_access_stamp
+                     WHERE CLIENT=:chr_l_h_new_currclient
+                     AND INSTR(NVL(MSG_STAT,' '),'I') <> 0
+                     AND INSTR(NVL(MSG_STAT,' '),'B') = 0;
+
+                     IS_ANY_ORA_ERROR
+                  }
+               }
+               
+              APL_FREE(l_mt_schdet_struct_h);
+              APL_FREE(l_mt_schdet_struct_i);
+
+			
+			
+				 if ((strcmp(chr_p_msgno, MS_MSGNO_52X)==0 || strcmp(chr_p_msgno, MS_SWIFT_BOG_NO)==0) && (int_l_cond))
+				 {
+					if (APL_FAILURE == MS_Prnt_52xMsgRpt(	chr_p_param_str, 
+															argv,
+															l_debug_info_ptr ))
+					{
+						APL_GOBACK_FAIL
+					}
+			 	 }
+
+
+		  
+				
+					 
+                if (((!strcmp(chr_p_msgno, MS_MSGNO_52X))||(strcmp(chr_p_msgno, MS_SWIFT_BOG_NO)==0)) && (l_cond_vtb))
+                {
+                  if (APL_FAILURE == MS_Prnt_52xMsgRpt( chr_p_param_str, 
+                                                   argv,
+                                                   l_debug_info_ptr ))
+                  {
+                     APL_GOBACK_FAIL
+                  }
+                }
+				}
+        else
+        {
+              if (APL_FAILURE == CO_SplitStr(chr_param_arr[2],
+                '|',
+                &int_accnum,
+                &chr_client_arr))
+              {
+                       fprintf(p_logfile,"Failed to split input string\n");
+                       APL_GOBACK_FAIL;
+              }
+              for(int_l_ctr = 0;int_l_ctr < int_accnum;int_l_ctr++)
+              {
+                strcpy(p_client,chr_client_arr[int_l_ctr]);
+                if( GBDbInsIMSGENT(chr_p_msgno, chr_p_key, p_client, chr_p_autotransmit, chr_p_param_str, l_debug_info_ptr)   == APL_FAILURE)
+                {
+                  CO_ProcMonitor(p_logfile,APL_NULL_STRING,l_debug_info_ptr,NULL);
+                  fprintf(p_logfile,"Failed to Update IMSGENT TABLE\n");
+                       APL_GOBACK_FAIL
+                }
+				
+				
+                
+					 
+
+					
+			
+	 if (((strcmp(chr_p_msgno, MS_MSGNO_52X)==0) && (int_l_cond || l_cond_vtb)) || (strcmp(chr_p_msgno, MS_SWIFT_BOG_NO)==0 && (int_l_cond||l_cond_vtb)))
+					 {
+						if (APL_FAILURE == MS_Prnt_52xMsgRpt(	chr_p_param_str, 
+																	argv,
+																	l_debug_info_ptr ))
+						{
+							APL_GOBACK_FAIL
+						}
+					 }
+              }
+ 
+        }
+		}
+
+		  
+
+					
+			
+		  if (((strcmp(chr_p_msgno, MS_MSGNO_52X)==0) && (int_l_cond || l_cond_vtb)) || (strcmp(chr_p_msgno, MS_SWIFT_BOG_NO)==0 && (int_l_cond||l_cond_vtb)))
+		  {
+				if (APL_FAILURE == MS_Prnt_52xMsgRpt(	"FINAL",
+															argv,
+															l_debug_info_ptr ))
+				{
+					APL_GOBACK_FAIL
+				}
+		  }
+	}
+
+       APL_GOBACK_SUCCESS;
+RETURN_SUCCESS :
+    printf("Leaving IMSGENT With Success \n");
+    return(APL_SUCCESS);
+
+RETURN_FAILURE :
+	 CO_ProcMonitor(p_logfile, "Got Errors :", l_debug_info_ptr, NULL);
+	 CO_FreeErrLst(l_debug_info_ptr);
+    printf("Leaving IMSGENT With Failure \n");
+    return(APL_FAILURE);
+}
+
+int	MS_Proc_Msg512(
+						char * chr_p_client,
+						char **chr_param_arr,
+						char *proc_data,
+						short int_cursor_flag,
+						DEBUG_INFO_STRUCT_H ** l_debug_info_ptr
+						)
+{
+	char	h_dl_client[APL_CLIENT_LENGTH] = APL_NULL_STRING;
+	char	chr_l_client_a[APL_CLIENT_LENGTH] = APL_NULL_STRING;
+	char	h_indentity_no[APL_TXNREFNO_LEN] = APL_NULL_STRING;
+	char	chr_from_dt[APL_DATE_LEN]=APL_NULL_STRING;
+	static char chr_sys_dt[APL_DATE_LEN]=APL_NULL_STRING;
+
+	
+	EXEC SQL VAR chr_p_client is string;	
+	EXEC SQL VAR h_dl_client is string;	
+	EXEC SQL VAR chr_l_client_a is string;	
+	EXEC SQL VAR h_indentity_no is string;	
+	
+
+	
+
+	if (!strlen(chr_sys_dt))
+	{
+		if (APL_FAILURE == CO_RtvSysDt(chr_sys_dt, l_debug_info_ptr))
+		{
+			APL_GOBACK_FAIL
+		}
+	}
+
+	strcpy(chr_from_dt,chr_param_arr[4]);	
+	strcpy(chr_l_client_a,chr_p_client);
+
+	EXEC SQL DECLARE EXEC_ALL_CUR  CURSOR
+	FOR
+	SELECT DISTINCT(client) from DL_DEAL
+	WHERE client in
+	(
+	SELECT client
+	FROM DL_DEAL
+	WHERE
+		deal_date     <= TO_DATE(:chr_from_dt)
+	AND	DEAL_FRM_ORD ='Y'
+	AND	NOT EXISTS ( select client from MS_MSGSTAT
+							 where client=dl_deal.client AND
+										proc_init=dl_deal.IDENTIY_NO	AND
+										swift_msg_rep = '512_E'
+							)
+	)
+	ORDER BY client;
+
+	IS_ANY_ORA_ERROR
+
+	
+	EXEC SQL DECLARE EXEC_SEL_CUR  CURSOR
+	FOR
+   SELECT DISTINCT(client) from DL_DEAL
+   WHERE
+	client= :chr_l_client_a
+	AND
+	 client in
+	(
+	SELECT client
+	FROM DL_DEAL
+	WHERE
+		deal_date     <= TO_DATE(:chr_from_dt)
+	AND	DEAL_FRM_ORD ='Y'
+	AND	NOT EXISTS ( select client from MS_MSGSTAT
+							 where client=dl_deal.client AND
+										proc_init=dl_deal.IDENTIY_NO	AND
+										swift_msg_rep = '512_E'
+							)
+	);
+	
+
+	IS_ANY_ORA_ERROR
+	
+	EXEC SQL DECLARE CANCEL_ALL_CUR  CURSOR
+	FOR
+   SELECT DISTINCT(client) from DL_HISDEAL
+   WHERE
+	client in
+	(
+	SELECT client
+	FROM DL_HISDEAL
+	WHERE
+		deal_date     <= TO_DATE(:chr_from_dt)
+	AND	DEAL_FRM_ORD ='Y'
+	AND EXISTS ( select ORD_REFNO from OR_ORDERDETAILS
+						where ORD_REFNO=DL_HISDEAL.ORIG_REFNO
+				)
+	AND	NOT EXISTS ( select client from MS_MSGSTAT
+							 where client=DL_HISDEAL.client AND
+										proc_init=DL_HISDEAL.IDENTIY_NO	AND
+										swift_msg_rep = '512_C'
+							)
+	AND	 EXISTS ( select client from MS_MSGSTAT
+						 where client=DL_HISDEAL.client AND
+									proc_init=DL_HISDEAL.IDENTIY_NO	AND
+									swift_msg_rep = '512_E'
+							)
+	)
+	ORDER BY CLIENT;
+
+	IS_ANY_ORA_ERROR
+
+
+	EXEC SQL DECLARE CANCEL_SEL_CUR  CURSOR
+	FOR
+   SELECT DISTINCT(client) from DL_HISDEAL
+   WHERE
+	client = :chr_l_client_a
+	AND
+	client IN
+	(
+	SELECT client
+	FROM DL_HISDEAL
+	WHERE
+		deal_date     <= TO_DATE(:chr_from_dt)
+	AND	DEAL_FRM_ORD ='Y'
+	AND EXISTS ( select ORD_REFNO from OR_ORDERDETAILS
+						where ORD_REFNO=DL_HISDEAL.ORIG_REFNO 
+				)
+	AND	NOT EXISTS ( select client from MS_MSGSTAT
+							 where client=DL_HISDEAL.client AND
+										proc_init=DL_HISDEAL.IDENTIY_NO	AND
+										swift_msg_rep = '512_C'
+							)
+	AND	 EXISTS ( select client from MS_MSGSTAT
+						 where client=DL_HISDEAL.client AND
+									proc_init=DL_HISDEAL.IDENTIY_NO	AND
+									swift_msg_rep = '512_E'
+							)
+	)
+	ORDER BY client;
+
+	IS_ANY_ORA_ERROR
+
+	switch(int_cursor_flag)
+	{
+		case  EXEC_SEL_CLI: 
+			EXEC SQL OPEN exec_sel_cur;
+			IS_ANY_ORA_ERROR
+			for (;;)
+			{
+				strcpy(h_dl_client,chr_p_client);			
+				strcpy(h_indentity_no,APL_NULL_STRING);
+				EXEC SQL FETCH exec_sel_cur
+				INTO	:h_dl_client;
+
+				IS_ANY_ORA_ERROR_CURSOR
+				
+    	   if( GBDbInsIMSGENT("512_E", h_indentity_no, h_dl_client, chr_param_arr[3][0], proc_data, l_debug_info_ptr)   == APL_FAILURE)
+				APL_GOBACK_FAIL
+			}
+			break;	
+
+		case  EXEC_ALL_CLI :
+			EXEC SQL OPEN exec_all_cur;
+			IS_ANY_ORA_ERROR
+			for (;;)
+			{
+				strcpy(h_dl_client,APL_NULL_STRING);			
+				strcpy(h_indentity_no,APL_NULL_STRING);
+				EXEC SQL FETCH exec_all_cur
+				INTO	:h_dl_client;
+
+				IS_ANY_ORA_ERROR_CURSOR
+				
+    	   if( GBDbInsIMSGENT("512_E", h_indentity_no, h_dl_client, chr_param_arr[3][0], proc_data, l_debug_info_ptr)   == APL_FAILURE)
+				APL_GOBACK_FAIL
+			}
+			break;	
+
+		case  CANCEL_SEL_CLIENT_IND  : 
+			EXEC SQL OPEN cancel_sel_cur;
+			IS_ANY_ORA_ERROR
+			for (;;)
+			{
+				strcpy(h_indentity_no,APL_NULL_STRING);
+				strcpy(h_dl_client,chr_p_client);			
+				EXEC SQL FETCH cancel_sel_cur
+				INTO	:h_dl_client;
+
+				IS_ANY_ORA_ERROR_CURSOR
+				
+    	   if( GBDbInsIMSGENT("512_C", h_indentity_no, h_dl_client, chr_param_arr[3][0], proc_data, l_debug_info_ptr)   == APL_FAILURE)
+				APL_GOBACK_FAIL
+			}
+			break;	
+
+		 case CANCEL_ALL_CLIENT_IND  : 
+			EXEC SQL OPEN cancel_all_cur;
+			IS_ANY_ORA_ERROR
+			for (;;)
+			{
+				strcpy(h_indentity_no,APL_NULL_STRING);
+				strcpy(h_dl_client,APL_NULL_STRING);			
+				EXEC SQL FETCH cancel_all_cur
+				INTO	:h_dl_client;
+
+				IS_ANY_ORA_ERROR_CURSOR
+				
+    	   if( GBDbInsIMSGENT("512_C", h_indentity_no, h_dl_client, chr_param_arr[3][0], proc_data, l_debug_info_ptr)   == APL_FAILURE)
+				APL_GOBACK_FAIL
+			}
+			break;	
+
+
+		default :
+				printf("invalid argument call\n");
+				APL_GOBACK_FAIL
+								break;
+	}	
+       APL_GOBACK_SUCCESS;
+RETURN_SUCCESS :
+    return(APL_SUCCESS);
+
+RETURN_FAILURE :
+    return(APL_FAILURE);
+
+
+
+}
+
+
+int	MS_Proc_599ExpMsg(
+						char * chr_p_client,
+						char **chr_param_arr,
+						char *proc_data,
+						short int_cursor_flag,
+						DEBUG_INFO_STRUCT_H ** l_debug_info_ptr
+						)
+{
+	char	h_dl_client[APL_CLIENT_LENGTH] = APL_NULL_STRING;
+	char	chr_l_client_a[APL_CLIENT_LENGTH] = APL_NULL_STRING;
+	char	h_orderindentity_no[APL_TXNREFNO_LEN] = APL_NULL_STRING;
+	static char chr_sys_dt[APL_DATE_LEN]=APL_NULL_STRING;
+
+	
+	EXEC SQL VAR chr_p_client is string;	
+	EXEC SQL VAR h_dl_client is string;	
+	EXEC SQL VAR chr_l_client_a is string;	
+	EXEC SQL VAR h_orderindentity_no is string;	
+	
+
+	
+
+	if (!strlen(chr_sys_dt))
+	{
+		if (APL_FAILURE == CO_RtvSysDt(chr_sys_dt, l_debug_info_ptr))
+		{
+			APL_GOBACK_FAIL
+		}
+	}
+
+	strcpy(chr_l_client_a,chr_p_client);
+
+
+	EXEC SQL DECLARE EXP_599_ALL_CUR
+	CURSOR FOR
+	SELECT
+	DISTINCT ( client )
+	FROM OR_ORDERDETAILS
+	WHERE client in
+	(
+	 select client from OR_ORDERDETAILS	
+	WHERE
+	((
+		NVL(EXEC_QTY,0) < ORD_QTY
+	AND
+		( (EXP_DATE is NOT NULL) AND (EXP_DATE <= :chr_sys_dt) )
+	)
+		OR
+	(
+		DATEOF_CANCEL is not null and checker is not null
+	))
+	AND	NOT EXISTS ( select client from MS_MSGSTAT
+							 where client=OR_ORDERDETAILS.client AND
+										proc_init=OR_ORDERDETAILS.ORD_REFNO	AND
+										swift_msg_rep = '599EXP'
+							)
+
+	)
+	ORDER BY client;
+
+	EXEC SQL DECLARE EXP_599_SEL_CUR
+	CURSOR FOR
+	SELECT
+	DISTINCT(client) 
+	FROM OR_ORDERDETAILS
+	WHERE client = :chr_p_client and
+	client in
+	(
+	 select client from OR_ORDERDETAILS	
+	WHERE
+	((
+		NVL(EXEC_QTY,0) < ORD_QTY
+	AND
+		( (EXP_DATE is NOT NULL) AND (EXP_DATE <= :chr_sys_dt) )
+	)
+		OR
+	(
+		DATEOF_CANCEL is not null and checker is not null
+	))
+	AND	NOT EXISTS ( select client from MS_MSGSTAT
+							 where client=OR_ORDERDETAILS.client AND
+										proc_init=OR_ORDERDETAILS.ORD_REFNO	AND
+										swift_msg_rep = '599EXP'
+							)
+	)
+	ORDER BY client;
+
+	switch(int_cursor_flag)
+	{
+		case  EXP_ALL_CLI: 
+			EXEC SQL OPEN EXP_599_ALL_CUR;
+			IS_ANY_ORA_ERROR
+			for (;;)
+			{
+				strcpy(h_dl_client,chr_p_client);			
+				strcpy(h_orderindentity_no,APL_NULL_STRING);
+				EXEC SQL FETCH EXP_599_ALL_CUR
+				INTO	:h_dl_client;
+
+				IS_ANY_ORA_ERROR_CURSOR
+				
+    	   if( GBDbInsIMSGENT("599EXP", h_orderindentity_no, h_dl_client, chr_param_arr[3][0], proc_data, l_debug_info_ptr)   == APL_FAILURE)
+				APL_GOBACK_FAIL
+			}
+			break;	
+
+		case  EXP_SEL_CLI :
+			EXEC SQL OPEN EXP_599_SEL_CUR;
+			IS_ANY_ORA_ERROR
+			for (;;)
+			{
+				strcpy(h_dl_client,APL_NULL_STRING);			
+				strcpy(h_orderindentity_no,APL_NULL_STRING);
+				EXEC SQL FETCH EXP_599_SEL_CUR
+				INTO	:h_dl_client;
+
+				IS_ANY_ORA_ERROR_CURSOR
+				
+    	   if( GBDbInsIMSGENT("599EXP", h_orderindentity_no, h_dl_client, chr_param_arr[3][0], proc_data, l_debug_info_ptr)   == APL_FAILURE)
+				APL_GOBACK_FAIL
+			}
+			break;	
+		
+		default :
+				printf("invalid argument call\n");
+				APL_GOBACK_FAIL
+								break;
+	}	
+
+
+     APL_GOBACK_SUCCESS;
+RETURN_SUCCESS :
+    return(APL_SUCCESS);
+
+RETURN_FAILURE :
+    return(APL_FAILURE);
+
+}
+ 
+
+
+int main(int argc,char **argv) //AIX - Warnings Removal
+{
+   //DEBUG_INFO_STRUCT_H *l_debug_info_ptr =  NULL ;
+	DEBUG_INFO_STRUCT_H     **l_debug_info_ptr  =  NULL, *l_debug_info_struct=NULL ; // AIX - Warnings removal
+	l_debug_info_ptr = &l_debug_info_struct;
+        FILE *l_finifile = NULL;
+
+   int int_l_retval=0;
+        int int_num = 0;
+
+   char chr_uname[APL_USERID_LEN]   = APL_NULL_STRING;
+   char chr_passwd[APL_PASSWD_LEN]  = APL_NULL_STRING;
+   char chr_custody_id_b[APL_PASSWD_LEN]  = APL_NULL_STRING;
+
+        char chr_l_logdir[PATH_LENGTH]      = APL_NULL_STRING;
+        char chr_l_logname[PATH_LENGTH]     = APL_NULL_STRING;
+        char chr_l_inifile[PATH_LENGTH]     = APL_NULL_STRING;
+
+        FILE *l_flogfile = NULL;
+  EXEC SQL VAR chr_uname IS STRING;
+   EXEC SQL VAR chr_passwd IS STRING;
+        printf("Param String is %s\n",argv[9]);
+        strcpy(chr_l_inifile,getenv("INTL_ROOT_PATH"));
+        strcat(chr_l_inifile,"intl_sun.cfg");
+
+        if ( ( l_finifile=fopen(chr_l_inifile,"r") ) == NULL)
+        {
+                exit(-1);
+        }
+
+	
+
+   
+
+
+APL_FETCH_DB_LOGIN_DETAILS(l_finifile,chr_custody_id_b,chr_uname,chr_passwd,APL_OUT_FILE,l_debug_info_ptr)
+   EXEC SQL CONNECT :chr_uname IDENTIFIED BY :chr_passwd;
+   IS_ANY_ORA_ERROR
+
+   
+
+   if (APL_FAILURE == CO_Rtv_RptFileName("4X",
+                                       APL_LOGFILE_DESC,
+                                       100,
+                                       argv[5],
+                                       argv,
+                                       &l_flogfile,
+                                       l_debug_info_ptr) )
+   {
+      exit(-1);
+   }
+
+   EXEC SQL COMMIT;
+   IS_ANY_ORA_ERROR	
+
+	
+	if ( CO_RtvSysParams(l_debug_info_ptr) == APL_FAILURE)
+   	   APL_GOBACK_FAIL
+
+
+   if(APL_SUCCESS ==MS_Proc_MsgEnt( argv, l_flogfile, l_debug_info_ptr))
+   {
+         EXEC SQL UPDATE SYS_BATCHPROC
+         SET  status = 'completed'
+         WHERE PROCESS_NAME=:argv[0]
+         AND   PROC_INIT=:argv[1]
+         AND   STARTDATE=:argv[2]
+         AND   STATUS='started';
+         if (sqlca.sqlcode)
+         {
+            CO_ProcMonitor(l_flogfile, "Could not update batch_in_proc", NULL, NULL);
+            EXEC SQL ROLLBACK;
+            APL_GOBACK_FAIL
+         }
+         EXEC SQL COMMIT WORK;
+    }
+    else
+    {
+         EXEC SQL ROLLBACK;
+    }
+RETURN_SUCCESS :
+    fclose(l_flogfile);
+    return(APL_SUCCESS);
+
+RETURN_FAILURE :
+    fclose(l_flogfile);
+    return(APL_FAILURE);
+
+}

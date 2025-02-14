@@ -1,0 +1,734 @@
+/*
+ *    COPYRIGHT NOTICE
+ *
+ *   Copyright 2005 Polaris Software Lab Limited. All rights reserved.
+ *
+ *   These materials are confidential and proprietary to 
+ *    Polaris Software Lab Limited and no part of these materials should
+ *    be reproduced, published, transmitted or distributed in any form or
+ *    by any means, electronic, mechanical, photocopying, recording or 
+ *    otherwise, or stored in any information storage or retrieval system
+ *    of any nature nor should the materials be disclosed to third parties
+ *    or used in any other manner for which this is not authorized, without
+ *    the prior express written authorization of Polaris Software Lab Limited.
+ */
+/*********************************************************************
+ *
+ * Module Name         :		Deal
+ *
+ * File Name           :		BCN_FailUpd.pc
+ *
+ * Description         :		Contains progrgsm for BCN Fail Reason Update
+ *           
+ *
+ *            Version Control Block
+ *
+ * Date        Version		Author               Description			RFS No.
+ * ---------   --------	 ---------------  ---------------------	-----------
+ *	13/12/2006	1.00	 Amol Kulkarni	  BCN Fail Reson Update
+ *********************************************************************/
+
+#include "CO_HostStructdef.h"
+#include "SMI_InterFace.h"
+#include "SMI_Common.h"
+EXEC SQL INCLUDE sqlca.h;
+
+extern int DL_Chk_DLDet_BCN(	char *p_client, 
+		char *p_ident, 
+		char p_exist, 
+		char p_auth, 
+		char p_del, 
+		char p_conf, 
+		char p_parconf, 
+		char p_instrsetl, 
+		char p_moneysetl,
+		char p_manifld, 
+		DEBUG_INFO_STRUCT_H **l_debug_info_ptr );
+
+int DL_Mod_MultReas_BCN(	DL_DEAL_FAIL_STRUCT_H *p_dl_deal_fail_struct_h,int	p_snd_msg,
+		INTL_ENV_DATA_STRUCT_H *p_intl_envdatastruct_h,	
+		DEBUG_INFO_STRUCT_H **l_debug_info_ptr )
+{
+
+	/******************Variable Declaration******************************/
+	short   l_flag1=0;
+	short	i_old_failcode = 0;
+	short	i_single548_support_ind;
+	
+	char	chr_l_buf[BUFFER_LEN] = APL_NULL_STRING;
+	char  	chr_l_rowid_A[APL_ROWID_LEN] = APL_NULL_STRING;
+	char 	chr_l_be_access_stamp[APL_DATE_LEN] = APL_NULL_STRING;
+	char  	chr_l_instrcode_a[APL_INSTRUMENTCODE_LEN] = APL_NULL_STRING;
+	char  	chr_l_now[APL_DATE_LEN] = APL_NULL_STRING;
+	char    chr_l_trade_status[APL_STATUS_LEN]       = APL_NULL_STRING; 
+	char	chr_h_old_failcode[3] = APL_NULL_STRING;
+	char	chr_l_support_single_548[2]	=	APL_NULL_STRING;
+	char	l_param[201]	=APL_NULL_STRING;
+	char	chr_l_stat_blck_num[4]	=	APL_NULL_STRING;
+	char chr_l_param_str[200]	=	APL_NULL_STRING;
+
+	int	int_l_error_flag = APL_SUCCESS;
+	int int_h_old_subfailcode =  0 ;
+	int	int_l_count	= 0;
+
+	struct sqlca sqlca;	
+	sqlca.sqlcode = 0;
+	
+	
+	/*****************Parameter Value Printing******************************/
+	APL_IF_DEBUG
+	{
+		printf("Entered Function DL_Mod_MultReas_BCN");
+		printf("The Account is  : %s", p_dl_deal_fail_struct_h->h_dl_client);
+		printf("The RefNo is    : %s", p_dl_deal_fail_struct_h->h_indentity_no);
+		printf("The Failcode is : %s", p_dl_deal_fail_struct_h->h_fail_cd);
+		printf("The Custnote is : %s", p_dl_deal_fail_struct_h->h_custinfo);
+		printf("The Failnote is : %s", p_dl_deal_fail_struct_h->h_failinfo);
+		printf("The Subfailcode is : %d", p_dl_deal_fail_struct_h->h_subfailreas_cd);
+	}
+
+	/*Mandatory Checks*/
+	if (!strlen(p_dl_deal_fail_struct_h->h_dl_client))
+	{
+		APL_DATA_MISSING("Account", APL_NULL_STRING, APL_NULL_STRING);
+		int_l_error_flag = APL_FAILURE;
+	} 
+	if (!strlen(p_dl_deal_fail_struct_h->h_indentity_no))
+	{
+		APL_DATA_MISSING("RefNo", APL_NULL_STRING, APL_NULL_STRING);
+		int_l_error_flag = APL_FAILURE;
+	} 
+	if (APL_FAILURE == int_l_error_flag) APL_GOBACK_FAIL
+	
+	/*Row ID Retrieval*/
+	EXEC SQL SELECT ROWID INTO :chr_l_rowid_A FROM DL_BCN 
+		WHERE CLIENT_CD = RTRIM(:p_dl_deal_fail_struct_h->h_dl_client) AND CONTRACT_CD = RTRIM(:p_dl_deal_fail_struct_h->h_indentity_no)
+		FOR UPDATE OF access_stamp;
+
+	APL_IF_DEBUG
+	{
+		printf("\nRowid is  : |%s|", chr_l_rowid_A);
+	}
+
+	/*DL_Chk_DLDet_BCN Function calling*/
+	if (APL_FAILURE == DL_Chk_DLDet_BCN(  p_dl_deal_fail_struct_h->h_dl_client,
+				p_dl_deal_fail_struct_h->h_indentity_no,
+				'Y',
+				NULL,
+				'N',
+				NULL,
+				NULL,
+				'N',
+				'N',
+				NULL,
+				l_debug_info_ptr ))
+	{
+		int_l_error_flag = APL_FAILURE;
+		APL_GOBACK_FAIL
+	}
+
+	/*Mandatory Check for Fail Code*/
+	if ((!strlen(p_dl_deal_fail_struct_h->h_fail_cd)) && (!strcmp(p_intl_envdatastruct_h->h_mode, UFL_MODE)))
+	{
+		APL_DATA_MISSING("Failcode", APL_NULL_STRING, APL_NULL_STRING);
+		APL_GOBACK_FAIL;
+	}
+	
+	/*Access Stamp Retrival*/
+	EXEC SQL SELECT ACCESS_STAMP INTO :chr_l_be_access_stamp FROM DL_BCN 
+		WHERE CLIENT_CD = RTRIM(:p_dl_deal_fail_struct_h->h_dl_client) AND CONTRACT_CD = RTRIM(:p_dl_deal_fail_struct_h->h_indentity_no);
+
+	APL_IF_DEBUG
+	{
+		printf("\nchr_l_be_access_stamp is  : |%s| \tRetrieved Access Stamp is : |%s|", chr_l_be_access_stamp,p_dl_deal_fail_struct_h->h_access_stamp);
+	}
+
+	/*Access Stamp Comparison*/
+	if (strcmp(chr_l_be_access_stamp, p_dl_deal_fail_struct_h->h_access_stamp))
+	{
+		CO_InsertErr(	l_debug_info_ptr,
+				ERR_ACCESSSTAMP_CHGD,
+				APL_NULL_STRING,
+				APL_NULL_STRING,
+				APL_NULL_STRING,
+				__LINE__,
+				__FILE__ );
+		APL_GOBACK_FAIL
+	}
+
+	/*Checks related to Client Code*/
+	if ( APL_FAILURE == CO_Chk_AccValid( p_dl_deal_fail_struct_h->h_dl_client,
+				'Y',
+				'C',
+				NULL,
+				NULL,
+				'Y',
+				'N',
+				'N',
+				'N',
+				l_debug_info_ptr) )
+	{
+		int_l_error_flag = APL_FAILURE;
+	}
+
+
+	/*Instrument Code Retrieval*/
+	EXEC SQL SELECT INSTR_CD INTO :chr_l_instrcode_a 
+		FROM DL_BCN 
+		WHERE CLIENT_CD = RTRIM(:p_dl_deal_fail_struct_h->h_dl_client) AND CONTRACT_CD = RTRIM(:p_dl_deal_fail_struct_h->h_indentity_no);
+
+	APL_IF_DEBUG
+	{
+		printf("\nInstr_Code is  : |%s|", chr_l_instrcode_a);
+	}
+
+	/*Checks related to Instr Code*/
+	if ( APL_FAILURE == CO_Chk_InstrValid(	chr_l_instrcode_a, 
+				'Y', 
+				'Y', 
+				'N', 
+				'N', 
+				NULL, 
+				'N', 
+				l_debug_info_ptr ) )
+	{
+		int_l_error_flag = APL_FAILURE;
+	}
+
+	/*Retrieval of System Date - Time*/
+	if (APL_FAILURE == CO_RtvSysDtTime(chr_l_now, l_debug_info_ptr))
+	{
+		APL_GOBACK_FAIL
+	}
+
+	APL_IF_DEBUG
+	{
+		printf("\nSystem Date is  : |%s|", chr_l_now);
+	}
+
+	/*Retrieval of BCN Status*/
+	memset(chr_l_trade_status, NULL, APL_STATUS_LEN);
+	EXEC SQL SELECT STATUS INTO :chr_l_trade_status
+	FROM DL_BCN WHERE rowid=:chr_l_rowid_A;
+	IS_ANY_ORA_ERROR
+
+	APL_IF_DEBUG
+	{
+		printf("\nBCN Status is  : |%s|", chr_l_trade_status);
+	}
+
+	/*Retrieval of Failreason CD and SUB_FAIL_CD*/
+	EXEC SQL SELECT FAILREASON_CD,nvl(SUB_FAIL_CD,-1)
+	INTO :chr_h_old_failcode:i_old_failcode,:int_h_old_subfailcode			
+	FROM DL_BCN WHERE rowid=:chr_l_rowid_A;
+	IS_ANY_ORA_ERROR
+
+	APL_IF_DEBUG
+	{
+		printf("\nFAILREASON_CD is  : |%s|\nSUB_FAIL_CD is  : |%d|", chr_h_old_failcode,int_h_old_subfailcode);
+	}
+
+	if(i_old_failcode == -1)
+		strcpy(chr_h_old_failcode,APL_NULL_STRING);
+
+	/*BCN Table Updation -- Column FailreasonCD*/
+	EXEC SQL UPDATE DL_BCN
+	SET	failreason_cd     = :p_dl_deal_fail_struct_h->h_fail_cd,
+		sub_fail_cd	 =	:p_dl_deal_fail_struct_h->h_subfailreas_cd,
+		access_stamp = :chr_l_now
+	WHERE rowid = :chr_l_rowid_A;
+
+
+	/*CO_Chk_CntryEnabled Function calling*/
+	l_flag1 = 0;
+	if (APL_FAILURE == CO_Chk_CntryEnabled(  "TRD_PMT",
+				"NO_534_SENT",
+				&l_flag1,
+				l_debug_info_ptr ))
+	{
+		APL_GOBACK_FAIL
+	}
+
+	/*Checkin Failreason CD with NULL String*/
+	if(strcmp(p_dl_deal_fail_struct_h->h_fail_cd,APL_NULL_STRING))
+	{
+
+		APL_IF_DEBUG
+		{	
+			printf("p_snd_msg is %d\n",p_snd_msg);
+		}
+		
+		/*Checkin Failreason CD with NULL String*/
+		if((strcmp(chr_h_old_failcode,p_dl_deal_fail_struct_h->h_fail_cd) || int_h_old_subfailcode != p_dl_deal_fail_struct_h->h_subfailreas_cd || p_snd_msg ==1 ) && (strcmp(p_intl_envdatastruct_h->h_process,"N")))
+		{
+			/*Retrieval of CLN_SINGLE548_SUPPORT_IND from MT_Client*/
+			EXEC SQL SELECT CLN_SINGLE548_SUPPORT_IND 
+				INTO :chr_l_support_single_548:i_single548_support_ind
+				FROM MT_CLIENT
+				WHERE	CLN_CODE=:p_dl_deal_fail_struct_h->h_dl_client;
+			IS_ANY_ORA_ERROR
+
+			APL_IF_DEBUG
+			{
+				printf("\nCLN_SINGLE548_SUPPORT_IND is  : |%s|", chr_l_support_single_548);
+			}
+
+			if(strcmp(chr_l_support_single_548,"N")==0)
+			{
+				APL_IF_DEBUG
+				{
+					printf("\nl_flag1 is  : |%d|", l_flag1);
+				}				
+
+				if((l_flag1==0))
+				{
+					memset(l_param,APL_NULL_CHAR,201);
+					if ( APL_FAILURE == GBDbInsIMSGENT( MS_MSGNO_534,
+                     	                                 p_dl_deal_fail_struct_h->h_indentity_no,
+                        	                              p_dl_deal_fail_struct_h->h_dl_client,
+                           	                           'Y',
+                              	                        l_param,
+                                 	                     l_debug_info_ptr ) )
+                  	{
+                     	APL_GOBACK_FAIL;
+                  	}
+				}
+				else
+				{
+				   if(strcmp(p_dl_deal_fail_struct_h->h_fail_cd,"95"))
+					{
+						memset(l_param,APL_NULL_CHAR,201);
+						if ( APL_FAILURE == GBDbInsIMSGENT( MS_MSGNO_534,
+							p_dl_deal_fail_struct_h->h_indentity_no,
+							p_dl_deal_fail_struct_h->h_dl_client,
+							'Y',
+							l_param,
+							l_debug_info_ptr ) )
+						{
+							APL_GOBACK_FAIL
+						}
+					}
+				}
+				
+				APL_IF_DEBUG
+				{
+					printf("\nBefore CMULTREAS_CUR");
+				}
+
+				EXEC SQL DECLARE CMULTREAS_CUR  CURSOR FOR
+				SELECT STAT_BLCKNO FROM DL_MULT_REAS_CODES
+				WHERE CLIENT=:p_dl_deal_fail_struct_h->h_dl_client
+				AND IDENTIY_NO =:p_dl_deal_fail_struct_h->h_indentity_no
+				AND FAILREASON_CD =:p_dl_deal_fail_struct_h->h_fail_cd
+				AND nvl(SUB_FAIL_CD,0) =nvl(:p_dl_deal_fail_struct_h->h_subfailreas_cd,0)
+				AND STAT_BLCKNO !=11
+				AND ACCESS_STAMP = (SELECT MAX(ACCESS_STAMP) 
+				FROM DL_MULT_REAS_CODES 
+				WHERE CLIENT=:p_dl_deal_fail_struct_h->h_dl_client
+				AND   IDENTIY_NO =:p_dl_deal_fail_struct_h->h_indentity_no
+				AND FAILREASON_CD =:p_dl_deal_fail_struct_h->h_fail_cd
+				AND nvl(SUB_FAIL_CD,0) =nvl(:p_dl_deal_fail_struct_h->h_subfailreas_cd,0));
+				IS_ANY_ORA_ERROR
+			
+				EXEC SQL OPEN CMULTREAS_CUR;
+				IS_ANY_ORA_ERROR
+				
+				int_l_count=0;
+				for(;;)
+				{
+					
+					sleep(1);
+					memset(chr_l_stat_blck_num,APL_NULL_CHAR,4);
+					memset(chr_l_param_str,APL_NULL_CHAR,200);
+					EXEC SQL FETCH CMULTREAS_CUR INTO :chr_l_stat_blck_num;
+
+					if(sqlca.sqlcode==1403)
+					break;
+
+					APL_IF_DEBUG
+					{
+						printf("\nCMULTREAS_CUR is  : |%s|\n", chr_l_stat_blck_num);/*** Added %s for AIX Migration****/
+					}
+					
+					strncpy(chr_l_param_str,chr_l_stat_blck_num,2);
+					strcat(chr_l_param_str,";");
+						 	
+   					if((l_flag1==0))
+         			{
+            			if ( APL_FAILURE == GBDbInsIMSGENT( MS_MSGNO_534,
+                  			p_dl_deal_fail_struct_h->h_indentity_no,
+                           	p_dl_deal_fail_struct_h->h_dl_client,
+                            'Y',
+                            chr_l_param_str,
+                            l_debug_info_ptr ) )
+            			{
+		               		APL_GOBACK_FAIL;
+            			}
+          			}
+          			else
+          			{
+            			if(strcmp(p_dl_deal_fail_struct_h->h_fail_cd,"95"))
+            			{
+               				if ( APL_FAILURE == GBDbInsIMSGENT( MS_MSGNO_534,
+                     			p_dl_deal_fail_struct_h->h_indentity_no,
+                              	p_dl_deal_fail_struct_h->h_dl_client,
+                                'Y',
+                                chr_l_param_str,
+                                l_debug_info_ptr ) )
+               				{
+                  				APL_GOBACK_FAIL
+               				}
+            			}
+          			}
+         		}
+			}
+			else if(strcmp(chr_l_support_single_548,"Y")==0)
+			{
+				strcpy(chr_l_param_str,"ALL;");
+			
+      			if((l_flag1==0))
+         		{
+            		if ( APL_FAILURE == GBDbInsIMSGENT( MS_MSGNO_534,
+						p_dl_deal_fail_struct_h->h_indentity_no,
+                  	   	p_dl_deal_fail_struct_h->h_dl_client,
+                        'Y',
+                        chr_l_param_str,
+                        l_debug_info_ptr ) )
+            		{
+               			APL_GOBACK_FAIL;
+            		}
+          		}
+          		else
+          		{
+            		if(strcmp(p_dl_deal_fail_struct_h->h_fail_cd,"95"))
+            		{
+               			if ( APL_FAILURE == GBDbInsIMSGENT( MS_MSGNO_534,
+                     		p_dl_deal_fail_struct_h->h_indentity_no,
+                           	p_dl_deal_fail_struct_h->h_dl_client,
+                            'Y',
+                            chr_l_param_str,
+                            l_debug_info_ptr ) )
+               			{
+                  			APL_GOBACK_FAIL
+               			}
+            		}
+          		}
+         		
+				if(strcmp(chr_l_support_single_548,"N")==0)
+         		{
+					EXEC SQL CLOSE CMULTREAS_CUR;
+					IS_ANY_ORA_ERROR
+				}
+			}
+    	}
+	}
+	
+	APL_GOBACK_SUCCESS
+
+		RETURN_SUCCESS :
+		APL_IF_DEBUG
+		CO_ProcMonitor(APL_OUT_FILE,
+				"Leaving Function DL_Mod_MultReas successfully",
+				NULL,
+				p_intl_envdatastruct_h);
+	return(APL_SUCCESS);
+
+RETURN_FAILURE :
+	APL_IF_DEBUG
+		CO_ProcMonitor(APL_OUT_FILE,
+				"Leaving Function DL_Mod_MultReas with errors",
+				NULL,
+				p_intl_envdatastruct_h);
+	return(APL_FAILURE);
+
+}
+
+int DL_Chk_DLDet_BCN(	char *p_client, 
+		char *p_ident, 
+		char p_exist, 
+		char p_auth, 
+		char p_del, 
+		char p_conf, 
+		char p_parconf, 
+		char p_instrsetl, 
+		char p_moneysetl,
+		char p_manifld, 
+		DEBUG_INFO_STRUCT_H **l_debug_info_ptr )
+{
+
+	struct sqlca sqlca;	
+	SYS_DL_DEAL_STRUCT_H l_sys_dl_deal_struct_hc;
+	SYS_DL_DEAL_STRUCT_I l_sys_dl_deal_struct_ij;
+	DL_BCN_STRUCT_H l_dl_bcn_struct_h;
+	DL_BCN_STRUCT_I l_dl_bcn_struct_i;
+
+	char chr_h_manif_print = NULL;
+	char chr_l_buf[BUFFER_LEN] = APL_NULL_STRING;
+	int int_l_error_flag = APL_SUCCESS;
+
+#ifdef APL_THREADS
+	APL_SET_CONTEXT
+		EXEC SQL CONTEXT USE :my_ctx_local;
+#endif
+
+	APL_IF_DEBUG
+	{
+		printf("Entered Function DL_Chk_DLDet\n");
+		printf("The Account is : %s\n", p_client);
+		printf("The Reference No. is : %s\n", p_ident);
+		printf("The Exist Flag. is : %c\n", p_exist);
+		printf("The Authorisation Flag is : %c\n", p_auth);
+		printf("The Delete Flag is : %c\n", p_del);
+		printf("The Confirmed Flag is : %c\n", p_conf);
+		printf("The Partial Confirmed Flag is : %c\n", p_parconf);
+		printf("The Instrurity Settlement Flag is : %c\n", p_instrsetl);
+		printf("The Money Settlement Flag is : %c\n", p_moneysetl);
+		printf("The Manifold Flag is : %c\n", p_manifld);
+	}
+
+	if (!strlen(p_client))
+	{
+		APL_DATA_MISSING(	"Account", 
+				APL_NULL_STRING, 
+				APL_NULL_STRING );
+		int_l_error_flag = APL_FAILURE;
+	}
+	if (!strlen(p_ident))
+	{
+		APL_DATA_MISSING(	"Reference No.", 
+				APL_NULL_STRING, 
+				APL_NULL_STRING );
+		int_l_error_flag = APL_FAILURE;
+	}
+	if (APL_FAILURE == int_l_error_flag) APL_GOBACK_FAIL
+
+
+
+
+		if (p_exist == NULL) p_exist = 'Y';
+
+
+	EXEC SQL SELECT manifld_print_ind INTO :chr_h_manif_print FROM MT_CORE_SYS_PARAMS;
+	IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET( ERR_VAL_NF, APL_NULL_STRING, APL_NULL_STRING, APL_NULL_STRING );
+	printf("manifld_print_ind is : |%c|\n", chr_h_manif_print);
+	
+	EXEC SQL SELECT * INTO :l_dl_bcn_struct_h:l_dl_bcn_struct_i FROM dl_bcn 
+	WHERE CLIENT_CD = RTRIM(:p_client) AND CONTRACT_CD = RTRIM(:p_ident);
+	IS_ANY_ORA_ERROR;
+
+	printf("After Retrieving Value from BCN  sqlcode is : |%d| and p_exist is %c\n", sqlca.sqlcode,p_exist);
+
+	if ((sqlca.sqlcode == 1403) && (p_exist == 'Y'))
+	{
+		CO_InsertErr(	l_debug_info_ptr, 
+				ERR_DEAL_NF, 
+				p_client, 
+				p_ident, 
+				APL_NULL_STRING, 
+				__LINE__, 
+				__FILE__ );
+		APL_GOBACK_FAIL
+	}	
+
+	if ((sqlca.sqlcode == 0) && (p_exist == 'N'))
+	{
+		if (APL_FAILURE == CO_InsertErr(	l_debug_info_ptr, 
+					ERR_DEAL_EXIST, 
+					p_client, 
+					p_ident, 
+					APL_NULL_STRING, 
+					__LINE__, 
+					__FILE__ ))
+		{
+			APL_GOBACK_FAIL
+		}   
+		int_l_error_flag = APL_FAILURE;
+	}
+
+
+
+	l_dl_bcn_struct_h.h_status[2]='\0';	
+	if ((l_dl_bcn_struct_i.i_checker_dt == -1) && (p_auth=='Y'))
+	{
+		if (APL_FAILURE == CO_InsertErr(	l_debug_info_ptr, 
+					ERR_DEAL_UNAUTH, 
+					p_client, 
+					p_ident, 
+					APL_NULL_STRING, 
+					__LINE__, 
+					__FILE__ ))
+		{
+			APL_GOBACK_FAIL
+		}
+		int_l_error_flag = APL_FAILURE;
+	}
+
+
+	if ((l_dl_bcn_struct_i.i_checker_dt == 0) && (p_auth=='N') &&
+			(strcmp(l_dl_bcn_struct_h.h_status,"SA") != 0) &&
+			(strcmp(l_dl_bcn_struct_h.h_status,"DA") != 0) &&
+			(strcmp(l_dl_bcn_struct_h.h_status,"CD") != 0) &&
+			(strcmp(l_dl_bcn_struct_h.h_status,"CQ") != 0))
+	{	
+		if (APL_FAILURE == CO_InsertErr(	l_debug_info_ptr, 
+					ERR_DEAL_AUTH, 
+					p_client, 
+					p_ident, 
+					APL_NULL_STRING, 
+					__LINE__, 
+					__FILE__ ))
+		{
+			APL_GOBACK_FAIL
+		}
+		int_l_error_flag = APL_FAILURE;
+	}
+
+
+
+	if ( (strcmp(l_dl_bcn_struct_h.h_status, STATUS_DEL_UAUTH)) && 
+			(strcmp(l_dl_bcn_struct_h.h_status, STATUS_SMI_DELAUTH)) && 
+			(strcmp(l_dl_bcn_struct_h.h_status, STATUS_SMI_DELUAUTH)) && 
+			(p_del=='Y') )
+	{
+		if (APL_FAILURE == CO_InsertErr(	l_debug_info_ptr, 
+					ERR_DEAL_NMARKDEL, 
+					p_client, 
+					p_ident, 
+					APL_NULL_STRING, 
+					__LINE__, 
+					__FILE__ ))
+		{
+			APL_GOBACK_FAIL
+		}
+		int_l_error_flag = APL_FAILURE;
+	}
+
+	if ((!strcmp(l_dl_bcn_struct_h.h_status, STATUS_DEL_UAUTH)) && (p_del=='N'))
+	{
+		if (APL_FAILURE == CO_InsertErr(	l_debug_info_ptr, 
+					ERR_DEAL_MARKDEL, 
+					p_client, 
+					p_ident, 
+					APL_NULL_STRING, 
+					__LINE__, 
+					__FILE__ ))
+		{
+			APL_GOBACK_FAIL
+		}
+		int_l_error_flag = APL_FAILURE;
+	}
+
+	printf( "At Line No 406\n");
+	
+	if (chr_h_manif_print == 'Y')
+	{
+		switch(p_manifld)
+		{
+			case 'R' : 	if ((l_sys_dl_deal_struct_ij.i_delrecdate==-1) && 
+							((!strcmp(l_sys_dl_deal_struct_hc.h_dealcd, "2")) || 
+							 (!strcmp(l_sys_dl_deal_struct_hc.h_dealcd, "4")) ||
+							 (!strcmp(l_sys_dl_deal_struct_hc.h_dealcd, "6")) ||
+							 (!strcmp(l_sys_dl_deal_struct_hc.h_dealcd, "8"))))
+						{
+							if (APL_FAILURE == CO_InsertErr(	l_debug_info_ptr, 
+										ERR_DEAL_RCVTKT_NPRINT, 
+										p_client, 
+										p_ident, 
+										APL_NULL_STRING, 
+										__LINE__, 
+										__FILE__ ))
+							{
+								APL_GOBACK_FAIL
+							}
+							int_l_error_flag = APL_FAILURE;
+						}
+					break;
+
+			case 'D' : 	if ((l_sys_dl_deal_struct_ij.i_delrecdate==-1) && 
+							((!strcmp(l_sys_dl_deal_struct_hc.h_dealcd, "1")) || 
+							 (!strcmp(l_sys_dl_deal_struct_hc.h_dealcd, "3")) ||
+							 (!strcmp(l_sys_dl_deal_struct_hc.h_dealcd, "5")) ||
+							 (!strcmp(l_sys_dl_deal_struct_hc.h_dealcd, "7"))))
+						{
+							if (APL_FAILURE == CO_InsertErr(	l_debug_info_ptr, 
+										ERR_DEAL_DELTKT_NPRINT, 
+										p_client, 
+										p_ident, 
+										APL_NULL_STRING, 
+										__LINE__, 
+										__FILE__ ))
+							{
+								APL_GOBACK_FAIL
+							}
+							int_l_error_flag = APL_FAILURE;
+						}
+					break;
+
+			case 'O' : 	if ((l_sys_dl_deal_struct_ij.i_tmpoutdate==-1) && 
+							((!strcmp(l_sys_dl_deal_struct_hc.h_dealcd, "2")) || 
+							 (!strcmp(l_sys_dl_deal_struct_hc.h_dealcd, "4")) ||
+							 (!strcmp(l_sys_dl_deal_struct_hc.h_dealcd, "6")) ||
+							 (!strcmp(l_sys_dl_deal_struct_hc.h_dealcd, "8"))))
+						{
+							if (APL_FAILURE == CO_InsertErr(	l_debug_info_ptr, 
+										ERR_DEAL_TMPOUTTKT_NPRINT, 
+										p_client, 
+										p_ident, 
+										APL_NULL_STRING, 
+										__LINE__, 
+										__FILE__ ))
+							{
+								APL_GOBACK_FAIL
+							}
+							int_l_error_flag = APL_FAILURE;
+						}
+					break;
+
+			case 'T' : 	if ((l_sys_dl_deal_struct_ij.i_tmpretdate==-1) && 
+							((!strcmp(l_sys_dl_deal_struct_hc.h_dealcd, "2")) || 
+							 (!strcmp(l_sys_dl_deal_struct_hc.h_dealcd, "4")) ||
+							 (!strcmp(l_sys_dl_deal_struct_hc.h_dealcd, "6")) ||
+							 (!strcmp(l_sys_dl_deal_struct_hc.h_dealcd, "8"))))
+						{
+							if (APL_FAILURE == CO_InsertErr(	l_debug_info_ptr, 
+										ERR_DEAL_TMPRETTKT_NPRINT, 
+										p_client, 
+										p_ident, 
+										APL_NULL_STRING, 
+										__LINE__, 
+										__FILE__ ))
+							{
+								APL_GOBACK_FAIL
+							}
+							int_l_error_flag = APL_FAILURE;
+						}
+					break;
+		}
+	}
+
+
+
+	if (APL_FAILURE == int_l_error_flag) APL_GOBACK_FAIL
+	else APL_GOBACK_SUCCESS
+
+		RETURN_SUCCESS :
+			APL_IF_DEBUG
+			{
+				CO_ProcMonitor(	APL_OUT_FILE,
+						"Leaving Function DL_Chk_DLDet with success\n",
+						NULL,
+						NULL);
+			}
+	return(APL_SUCCESS);
+
+RETURN_FAILURE :
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(	APL_OUT_FILE,
+				"Leaving Function DL_Chk_DLDet with errors\n",
+				NULL,
+				NULL);
+	}
+	return(APL_FAILURE);
+
+}

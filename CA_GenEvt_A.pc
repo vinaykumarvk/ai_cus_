@@ -1,0 +1,808 @@
+/*
+ *    COPYRIGHT NOTICE
+ *
+ *   Copyright 2005 Polaris Software Lab Limited. All rights reserved.
+ *
+ *   These materials are confidential and proprietary to
+ *    Polaris Software Lab Limited and no part of these materials should
+ *    be reproduced, published, transmitted or distributed in any form or
+ *    by any means, electronic, mechanical, photocopying, recording or
+ *    otherwise, or stored in any information storage or retrieval system
+ *    of any nature nor should the materials be disclosed to third parties
+ *    or used in any other manner for which this is not authorized, without
+ *    the prior express written authorization of Polaris Software Lab Limited.
+ */
+/*********************************************************************
+ *
+ * Module Name         :      Corporate Actions
+ *
+ * File Name           :      CA_GenEvt_A.pc
+ *
+ * Description         :      Contains Functions Related to Event Gen
+ *
+ *
+ *
+ *            Version Control Block
+ * ------------------------------------------------------------------------
+ *
+ * Date        Version     Author           Description        RFS No.
+ * ---------   --------  ---------------  ------------------   ---------
+ * 18/01/2006  1.2       Smita Bhat       New File             Base Version
+ * ------------------------------------------------------------------------
+ * 08/02/2006  1.3       Smita Bhat       Chgs related to      Base Version
+ *                                        Col Names 
+ * ------------------------------------------------------------------------
+ * 08/03/2006  1.6       Biju             Changes For          HDFCCA_035
+ *                                        Auto Event 
+ *                                        Schedule for
+ *                                        RD Event			
+ * ------------------------------------------------------------------------
+ * 17/02/2010  1.0.4.3   Naren V          Modified the source  ISKB_3162
+ *                                        1. To fix  infinite 
+ *                                        loop problem due to 
+ *                                        improper aurguments
+ *                                        aurguments  passage 
+ *                                        to the  strtok func  
+ *                                        tion & memseted few
+ *                                        host vars to handle
+ *                                        junk values.       
+ *                                        2. Production issue  
+ *                                        log  no   ISKB_3162
+ *                                        Evnt not being gene 
+ *                                        rated as expected        
+ *
+ *************************************************************************/
+#include "CR_Common.h"
+#include "CA_Common.h"
+#include "MT_Interface.h"
+#include "CO_IndStructdef.h"
+
+EXEC SQL INCLUDE SQLCA.H;
+/** Not sure Why this RTV_SYSTEM_DATA is defined -- Biju **/
+#define	RTV_SYSTEM_DATA
+#define	S_RESTART_SEP_TOKEN	"|"
+#define	S_HIGHEST_CHAR			'z'
+#define	S_LOWEST_CHAR			" "
+#define  S_LEVEL_T1           1
+#define  S_LEVEL_T2           2
+#define CMEMSET(z)       memset(z,'\0',sizeof(z)) /* Added for ISKB_3162 Prodn Fix - Naren V */
+
+
+#define  CLS_LOG_ARRAY  memset(chr_g_log_buff,NULL,sizeof(chr_g_log_buff));
+#define MAIN_ARG \
+{\
+	int i = 0;\
+	for(i = 0; i< argc; i++)\
+	{\
+		fprintf(APL_OUT_FILE,"Arguement [%d] = [%s]\n",i,argv[i]);\
+	}\
+}
+
+FILE*	g_inifile	=	(FILE *)NULL;
+FILE*	g_logfile	=	(FILE *)NULL;
+char	chr_g_progname				[APL_BATCH_PROGNAME_LEN]	=	APL_NULL_STRING;
+char	chr_g_key					[APL_BATCH_KEY_LEN]			=	APL_NULL_STRING;
+char	chr_g_start_date			[APL_DATE_LEN]					=	APL_NULL_STRING;
+char	chr_g_restart_autoevent [EVT_CLASS_ + APL_PRODTYPE_LEN + APL_INSTRU_TYPE_LEN -2]	=	APL_NULL_STRING;
+char	chr_g_restart_instrcode	[APL_INSTRUMENTCODE_LEN]	=	APL_NULL_STRING;
+char	chr_g_restart_data_h		[APL_RESTARTDATA_LENGTH]	=	APL_NULL_STRING;
+short	g_restart_data_i;
+char	chr_g_tmp_restart_data	[APL_RESTARTDATA_LENGTH]	=	APL_NULL_STRING;
+char	chr_g_log_buff				[MSG_LENGTH]					=	APL_NULL_STRING;
+char	chr_g_event_interest		[EVT_CLASS_]					=	APL_NULL_STRING;
+char	chr_g_event_red			[EVT_CLASS_]					=	APL_NULL_STRING;
+char	chr_g_funccode				[CA_FUNC_CD_LEN]				= 	APL_NULL_STRING;
+char  chr_g_sys_date				[APL_DATE_LEN]					=	APL_NULL_STRING;
+const int   int_g_aut_event_span									=	AUTO_EVT_WAIT_PERIOD;
+CA_AUTOEVENT_STRUCT_H		g_ca_autoevent_struct_h;
+CA_AUTOEVT_STRUCT_I			g_ca_autoevt_struct_i;
+MT_INSTRUMENT_STRUCT_H		l_mt_instrument_struct_h;
+MT_INSTRUMENT_STRUCT_I		l_mt_instrument_struct_i;
+CA_CANOTIFY_STRUCT_H			l_ca_canotify_struct_h;
+CA_CALOGAUTOEVENT_STRUCT_H l_ca_calogautoevent_struct_h;
+CA_CALOGAUTOEVENT_STRUCT_I l_ca_calogautoevent_struct_i;
+
+static	int	CA_SetEvent( 	INTL_ENV_DATA_STRUCT_H   *p_intlenv_data_struct_h,	
+										DEBUG_INFO_STRUCT_H		**l_debug_info_ptr); 
+
+static	int	CA_Proc_AutoEvent(	INTL_ENV_DATA_STRUCT_H	*p_intlenv_data_struct_h,
+												DEBUG_INFO_STRUCT_H			**l_debug_info_ptr); 
+
+int	CA_Commit(	int	p_commit_status,
+						int	p_commit_level,
+						DEBUG_INFO_STRUCT_H	**l_debug_info_ptr);
+
+int	CA_CO_GetNextBusinessDt(const	char		*p_date,
+										char	*p_out_date,
+										DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+int Chk_Sys_Date( DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	struct sqlca sqlca;
+	int l_cond = 0;
+	APL_FUNCTION_ENTER(APL_OUT_FILE)
+
+	if(!strcmp(g_ca_autoevent_struct_h.h_evt_class,chr_g_event_interest))
+	{
+		EXEC SQL SELECT 1 
+					INTO :l_cond
+					FROM DUAL WHERE (TO_DATE(:chr_g_sys_date) 
+					BETWEEN 	TO_DATE(:l_mt_instrument_struct_h.h_next_pay_date) - :g_ca_autoevent_struct_h.h_no_days_pymtdt
+					AND		TO_DATE(:l_mt_instrument_struct_h.h_next_pay_date) + :int_g_aut_event_span)
+					AND TO_DATE(:chr_g_sys_date) <= TO_DATE(:l_mt_instrument_struct_h.h_mature_dt) + :int_g_aut_event_span;
+		IS_ANY_ORA_ERROR
+	}
+	else
+	{
+		/** Its Assumed as Redeption **/
+		/* 1. Check Whether Any Data Present in MT_RED_DET
+		 * 2. Check Whether Data present in MT_RED_DET satisfies System Date Check.
+		 * 3. If No Data present check with insrtument Table.
+		 */
+		EXEC SQL SELECT NVL(COUNT (*),0) 
+					INTO :l_cond
+					FROM MT_RED_DET
+					WHERE INSTR_CODE = :l_mt_instrument_struct_h.h_instr_code
+					AND (
+							TO_DATE(:chr_g_sys_date)
+							BETWEEN RED_DT - :g_ca_autoevent_struct_h.h_no_days_pymtdt
+							AND	RED_DT + :int_g_aut_event_span
+						 )
+					AND STATUS = 'AA';
+		IS_ANY_ORA_ERROR
+		if(!l_cond)
+		{
+			EXEC SQL SELECT 1 
+					INTO :l_cond
+					FROM DUAL WHERE (TO_DATE(:chr_g_sys_date) 
+					BETWEEN 	TO_DATE(:l_mt_instrument_struct_h.h_mature_dt) - :g_ca_autoevent_struct_h.h_no_days_pymtdt
+					AND		TO_DATE(:l_mt_instrument_struct_h.h_mature_dt) + :int_g_aut_event_span)
+					AND TO_DATE(:chr_g_sys_date) <= TO_DATE(:l_mt_instrument_struct_h.h_mature_dt) + :int_g_aut_event_span;
+			IS_ANY_ORA_ERROR
+		}
+
+	}
+	if(!l_cond)
+	{
+		fprintf(g_logfile,"Processing For Instrument |%s| wont be done Today |%s| -- Skipping\n",l_mt_instrument_struct_h.h_instr_code,chr_g_sys_date);
+		APL_GOBACK_FAIL
+	}
+
+APL_GOBACK_SUCCESS /* Added for ISKB_3162 Prodn Fix - Naren V */ 
+
+RETURN_SUCCESS:
+APL_FUNCTION_RET_SUCCESS(APL_OUT_FILE)
+
+RETURN_FAILURE:
+APL_FUNCTION_RET_FAILURE(APL_OUT_FILE)
+
+	
+}
+
+int Chng_MaturDate(DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	struct sqlca sqlca;
+	char l_red_date[APL_DATE_LEN] = APL_NULL_STRING;
+	short i_red_date = 0;
+	APL_FUNCTION_ENTER(APL_OUT_FILE)
+	/**1. If its Bond interest No change in Maturity Date... 
+	 * 2. If it Redemption Take maturity date from MT_RED_DET table if Data is prsent there.
+	 * 3. If Data is not prersent in table... No Change is to be done to the stucture, It will
+	 * have maturity Date from MT_INSTRUMENT already populated...
+	 */
+		if( strcmp(g_ca_autoevent_struct_h.h_evt_class,chr_g_event_interest))
+		{
+			EXEC SQL SELECT MIN(RED_DT)
+						INTO :l_red_date:i_red_date
+						FROM MT_RED_DET
+						WHERE INSTR_CODE = :l_mt_instrument_struct_h.h_instr_code
+						AND (
+								TO_DATE(:chr_g_sys_date)
+								BETWEEN RED_DT - :g_ca_autoevent_struct_h.h_no_days_pymtdt
+								AND	RED_DT + :int_g_aut_event_span
+						 	)
+						AND STATUS = 'AA';
+			IS_ANY_ORA_ERROR /* Added for ISKB_3162 Prodn Fix - Naren V */
+			if(i_red_date != -1)
+			{
+				strcpy(l_mt_instrument_struct_h.h_mature_dt,l_red_date);
+				fprintf(g_logfile,"Maturity Date Used Will be |%s|\n",l_mt_instrument_struct_h.h_mature_dt);
+			}
+		}
+
+APL_GOBACK_SUCCESS /* Added for ISKB_3162 Prodn Fix - Naren V */
+
+/* LBL_SUCCESS: */
+RETURN_SUCCESS: /* Added for ISKB_3162 Prodn Fix - Naren V */ 
+APL_FUNCTION_RET_SUCCESS(APL_OUT_FILE)
+
+/* LBL_FAILURE: */
+RETURN_FAILURE: /* Added for ISKB_3162 Prodn Fix - Naren V */
+APL_FUNCTION_RET_FAILURE(APL_OUT_FILE)
+}
+
+//main(int argc, char ** argv)
+int main(int argc,char **argv)//Changes done for AIX Migration
+{
+	DEBUG_INFO_STRUCT_H	**l_debug_info_ptr	=	(DEBUG_INFO_STRUCT_H  **)NULL,
+								*l_debug_info_struct = 	(DEBUG_INFO_STRUCT_H  *)NULL;
+	INTL_ENV_DATA_STRUCT_H	l_intlenv_datastruct_h;
+	struct sqlca sqlca;	/**Struct Declared : Changed For HDFCCA_035 -- Biju **/
+	/**char						chr_inifile[PATH_LENGTH];	Changed For HDFCCA_035 -- Biju **/
+	/**char						chr_logfile[PATH_LENGTH];	Changed For HDFCCA_035 -- Biju **/
+	/**int						int_retval=0;					Changed For HDFCCA_035 -- Biju **/
+   /**char                 chr_custody_id_b[APL_USERID_LEN];	Changed For HDFCCA_035 -- Biju **/
+
+	/**EXEC SQL BEGIN DECLARE SECTION;
+		char chr_uname[APL_USERID_LEN];
+		char chr_passwd[APL_PASSWD_LEN];
+	EXEC SQL END DECLARE SECTION; 
+
+	EXEC SQL VAR chr_uname IS STRING;
+	EXEC SQL VAR chr_passwd IS STRING; Changed For HDFCCA_035 -- Biju **/
+	APL_FUNCTION_ENTER(APL_OUT_FILE)
+	MAIN_ARG	/**Added : Changed For HDFCCA_035 -- Biju **/
+
+	l_debug_info_ptr = & l_debug_info_struct;
+	/**
+	 * strcpy(chr_inifile,getenv("INTL_ROOT_PATH"));
+	strcat(chr_inifile,"/intl_sun.cfg");
+	if ( ( g_inifile=fopen(chr_inifile,"r") ) == NULL)
+	 exit (-1);	
+	 Changed For HDFCCA_035 -- Biju **/
+
+	
+
+	
+
+	
+   /**APL_FETCH_DB_LOGIN_DETAILS(g_inifile,chr_custody_id_b,chr_uname,chr_passwd,APL_OUT_FILE,l_debug_info_ptr)
+	 * Changed For HDFCCA_035 -- Biju **/
+   /**EXEC SQL CONNECT :chr_uname IDENTIFIED BY :chr_passwd;
+   IS_ANY_ORA_ERROR
+	Changed For HDFCCA_035 -- Biju **/
+
+	/* ISKB_3162 Prodn Fix - Naren V - Start */
+
+	/* Memory Initialization For Global Variables */
+	CMEMSET( chr_g_progname          );
+	CMEMSET( chr_g_key               );
+	CMEMSET( chr_g_start_date        );
+	CMEMSET( chr_g_funccode          );
+	CMEMSET( chr_g_restart_autoevent );
+	CMEMSET( chr_g_restart_instrcode );
+	CMEMSET( chr_g_restart_data_h    );
+	CMEMSET( chr_g_tmp_restart_data  );
+	CMEMSET( chr_g_log_buff          );
+	CMEMSET( chr_g_event_interest    );
+	CMEMSET( chr_g_event_red         );
+	CMEMSET( chr_g_funccode          );
+	CMEMSET( chr_g_sys_date          );
+
+	/* ISKB_3162 Prodn Fix - Naren V - End   */
+	
+	/** Connecting To DB **/
+	if(CO_Get_DBConnect(l_debug_info_ptr) == APL_FAILURE)
+	{
+		APL_GOBACK_FAIL
+   	CO_ProcMonitor(APL_OUT_FILE,"Failed To Connect DataBase",NULL,NULL);
+	}
+
+
+	/** Create Logfile **/	
+   if ( CO_Rtv_RptFileName("2D",
+									APL_LOGFILE_DESC,
+									100,
+									argv[5],
+									argv,
+									&g_logfile,
+									l_debug_info_ptr) == APL_FAILURE ) 
+	{
+		exit(-1);
+	}
+	/** Not sure about this commit, Not commenting as there is no problem because of that - -- Biju **/
+	EXEC SQL COMMIT;
+	IS_ANY_ORA_ERROR
+	
+	/** Retrieve System Date **/	
+   if ( CO_RtvSysDtTime(	chr_g_sys_date,
+									l_debug_info_ptr) == APL_FAILURE )
+         APL_GOBACK_FAIL
+				
+   CLS_LOG_ARRAY
+   sprintf(chr_g_log_buff,"\nAutomatic Event Generation Phase 1 Started On\t:\t[%s]\n",chr_g_sys_date);
+   CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+  
+  	/** Removinmg time and appending Null time to the Date **/	
+	strcpy(chr_g_sys_date,strtok(chr_g_sys_date," "));
+   strcat(chr_g_sys_date,APL_NULL_TIME);
+
+   CLS_LOG_ARRAY
+   sprintf(chr_g_log_buff,"System Date Is\t:\t[%s]\n",chr_g_sys_date);
+   CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+
+   
+	if ( argc <  4 )
+	{
+		CO_ProcMonitor(g_logfile,"All Arguements Expected By Program Not Passed \n",NULL,NULL);
+		APL_GOBACK_FAIL
+	}
+
+	strcpy(chr_g_progname,	argv[0]);
+	strcpy(chr_g_key,			argv[1]);
+	strcpy(chr_g_start_date,	argv[2]);
+	strcpy(l_intlenv_datastruct_h.usr, argv[3]);
+	strcpy(chr_g_funccode,argv[5]);
+
+  /** 
+   EXEC SQL VAR   l_ca_calogautoevent_struct_h.h_instr_code IS STRING;
+   EXEC SQL VAR   l_ca_calogautoevent_struct_h.h_corp_id  IS STRING;
+   EXEC SQL VAR   l_mt_instrument_struct_h.h_instr_code IS STRING;
+   EXEC SQL VAR   g_ca_autoevent_struct_h.h_prodateype  IS STRING;
+   EXEC SQL VAR   chr_g_key  IS STRING;
+   EXEC SQL VAR   chr_g_restart_autoevent  IS STRING;
+   EXEC SQL VAR   chr_g_restart_instrcode  IS STRING;
+   EXEC SQL VAR   chr_g_restart_data_h  IS STRING;
+	Changed For HDFCCA_035 -- Biju **/
+
+	
+	if ( CO_RtvSysParams(l_debug_info_ptr) == APL_FAILURE)
+		APL_GOBACK_FAIL
+
+	
+	strcpy(chr_g_event_interest,EVT_BOND);
+   strcpy(chr_g_event_red,EVT_BOND_REDMP);
+
+	if	(	CA_Proc_AutoEvent(	&l_intlenv_datastruct_h,
+										l_debug_info_ptr )	==	APL_FAILURE)
+		APL_GOBACK_FAIL
+
+	
+	APL_GOBACK_SUCCESS
+	RETURN_SUCCESS:
+		CO_ProcMonitor(g_logfile,"\n Automatic Event Generation Phase 1 completed successfully",l_debug_info_ptr,NULL);
+		CO_FreeErrLst(l_debug_info_ptr);
+		exit(0);
+	RETURN_FAILURE:
+		EXEC SQL ROLLBACK;
+     	if ( sqlca.sqlcode < 0 )
+		{ CO_ProcMonitor(g_logfile,"\n ROLLBACK FAILED IN EXIT BLOCK \n",NULL,NULL);
+		}
+		else
+		{
+		 CO_ProcMonitor(g_logfile,"ROLLING BACK \n",NULL,NULL);
+		}
+		CO_ProcMonitor(g_logfile,"\n Automatic Event Generation Phase 1 exiting unsuccessfully",l_debug_info_ptr,NULL);
+		CO_FreeErrLst(l_debug_info_ptr);
+		exit(-1);
+} /* End Of Main() fn */
+
+
+static	int	CA_Proc_AutoEvent(	INTL_ENV_DATA_STRUCT_H	*p_intlenv_data_struct_h,
+												DEBUG_INFO_STRUCT_H		**l_debug_info_ptr) 
+{
+	int	int_commit_status = 0;/** Initialised : Changed For HDFCCA_035 -- Biju **/
+	int	int_init_flg 		= 1;
+	struct sqlca sqlca;	/**Struct Declared : Changed For HDFCCA_035 -- Biju **/
+
+	APL_FUNCTION_ENTER(APL_OUT_FILE)
+
+	/** Select Requested Row from sys_batchproc table **/
+		
+	EXEC SQL SELECT processing_status 
+				INTO :chr_g_restart_data_h:g_restart_data_i
+				FROM SYS_BATCHPROC
+				WHERE process_name	=:chr_g_progname
+				AND	proc_init		=:chr_g_key
+				AND	STARTDATE=:chr_g_start_date
+				AND 	status	='started'
+				FOR UPDATE OF processing_status,status;
+
+	IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"SYS_BATCHPROC",chr_g_progname,chr_g_key)
+
+	if (g_restart_data_i == -1)
+	{
+		strcpy(chr_g_restart_autoevent,S_LOWEST_CHAR);
+		strcpy(chr_g_restart_instrcode,S_LOWEST_CHAR);
+	}
+	else
+	{
+		strcpy(chr_g_tmp_restart_data,chr_g_restart_data_h);
+		strcpy(chr_g_restart_autoevent,strtok(chr_g_tmp_restart_data,S_RESTART_SEP_TOKEN));
+		strcpy(chr_g_restart_instrcode,strtok(NULL,S_RESTART_SEP_TOKEN));
+	}
+	
+	
+	EXEC SQL DECLARE	AutoEvntCursor_ge	CURSOR	
+				FOR
+				SELECT	CAAUTOEVENT.*,INSTR_TYPE||prod_class||CA_EVENT 
+				FROM 	CAAUTOEVENT	
+				WHERE	nation_cd	=	:g_mt_commonsys_params_struct_h.nation_code
+				AND	INSTR_TYPE||prod_class||CA_EVENT	>= :chr_g_restart_autoevent
+				/* FOR UPDATE  ** Commented For ISKB_3162 Prodn Fix - Naren V */
+				ORDER BY	INSTR_TYPE,
+							prod_class,
+							CA_EVENT;
+
+	IS_ANY_ORA_ERROR	/**Added : Changed For HDFCCA_035 -- Biju **/
+	
+	EXEC SQL DECLARE	AutoEvntCursor_gt	CURSOR	
+				FOR
+				SELECT	CAAUTOEVENT.*,INSTR_TYPE||prod_class||CA_EVENT 
+				FROM CAAUTOEVENT	
+				WHERE	nation_cd	=	:g_mt_commonsys_params_struct_h.nation_code
+				AND	INSTR_TYPE||prod_class||CA_EVENT	> :chr_g_restart_autoevent
+				/* FOR 	UPDATE ** Commented For ISKB_3162 Prodn Fix - Naren V */ 
+				ORDER BY	INSTR_TYPE,
+							prod_class,
+							CA_EVENT;
+
+	IS_ANY_ORA_ERROR	/**Added : Changed For HDFCCA_035 -- Biju **/
+	
+	
+	/**
+	 * EXEC SQL DECLARE InstrCursor CURSOR 
+				FOR
+				SELECT MT_INSTRUMENT.*,
+						 instr_code 
+				FROM MT_INSTRUMENT 
+  	 			WHERE
+				INSTR_TYPE	=		:g_ca_autoevent_struct_h.h_typeofinstr	
+				AND PROD_CLASS	=	:g_ca_autoevent_struct_h.h_prodateype
+				AND ( TO_DATE(:chr_g_sys_date) 
+						BETWEEN 
+							( DECODE(:g_ca_autoevent_struct_h.h_evt_class,
+										:chr_g_event_interest,
+										NEXT_PAY_DATE,
+										MATURE_DT) - :g_ca_autoevent_struct_h.h_no_days_pymtdt) 
+						AND 
+							DECODE(	:g_ca_autoevent_struct_h.h_evt_class,
+										:chr_g_event_interest,
+										NEXT_PAY_DATE,
+										MATURE_DT)  +	:int_g_aut_event_span )
+				AND TO_DATE(:chr_g_sys_date) <= MATURE_DT + :int_g_aut_event_span 
+				AND instr_code > :chr_g_restart_instrcode
+				AND DISCT_IND	=	DECODE(	:g_ca_autoevent_struct_h.h_evt_class,
+													:chr_g_event_interest,
+													'N',
+													DISCT_IND)
+				FOR UPDATE 
+				ORDER	BY MT_INSTRUMENT.INSTR_CODE;
+				-- Changed cursor
+				Changed For HDFCCA_035 -- Biju **/
+		EXEC SQL DECLARE InstrCursor CURSOR
+					FOR
+					SELECT MT_INSTRUMENT.*,
+							 instr_code
+					FROM MT_INSTRUMENT
+					WHERE INSTR_TYPE  = :g_ca_autoevent_struct_h.h_typeofinstr
+					AND 	PROD_CLASS 	= :g_ca_autoevent_struct_h.h_prodateype
+					AND 	instr_code 	> :chr_g_restart_instrcode
+					AND   nvl(DISCT_IND,'N')   = DECODE(:g_ca_autoevent_struct_h.h_evt_class,
+														:chr_g_event_interest,
+														'N',
+														nvl(DISCT_IND,'N'))
+					FOR 	UPDATE
+					ORDER BY MT_INSTRUMENT.INSTR_CODE;
+	IS_ANY_ORA_ERROR	/**Added : Changed For HDFCCA_035 -- Biju **/
+
+	EXEC SQL OPEN AutoEvntCursor_ge;
+	IS_ANY_ORA_ERROR
+
+	memset(&g_ca_autoevent_struct_h,NULL,sizeof(CA_AUTOEVENT_STRUCT_H));
+	memset(&g_ca_autoevt_struct_i,NULL,sizeof(CA_AUTOEVT_STRUCT_I));
+
+	for(;;)
+	{
+		if ( int_init_flg == 1 )
+		{
+			EXEC SQL FETCH AutoEvntCursor_ge 
+						INTO 	:g_ca_autoevent_struct_h:g_ca_autoevt_struct_i,
+			     		 		:chr_g_restart_autoevent;
+			IS_ANY_ORA_ERROR_CURSOR
+			int_init_flg = 0;
+		}
+		else
+		{
+			EXEC SQL FETCH AutoEvntCursor_gt 
+						INTO 	:g_ca_autoevent_struct_h:g_ca_autoevt_struct_i,
+			         		:chr_g_restart_autoevent;
+			IS_ANY_ORA_ERROR_CURSOR
+		}
+
+     	CLS_LOG_ARRAY
+     	sprintf(chr_g_log_buff,"\nFetching Record From CAAUTOEVENT Table\nIt has attributes :");
+     	CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+
+     	CLS_LOG_ARRAY
+     	sprintf(chr_g_log_buff,"Type of Instrument\t:\t[%s]",g_ca_autoevent_struct_h.h_typeofinstr);
+     	CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+  
+     	CLS_LOG_ARRAY
+     	sprintf(chr_g_log_buff,"Product Type\t:\t[%s]",g_ca_autoevent_struct_h.h_prodateype);
+     	CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+     	
+		CLS_LOG_ARRAY
+     	sprintf(chr_g_log_buff,"Event Type\t:\t[%s]",g_ca_autoevent_struct_h.h_evt_class);
+     	CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+  
+     	CLS_LOG_ARRAY
+     	sprintf(chr_g_log_buff,"No Of Days Before To Create Event\t:\t[%d]",g_ca_autoevent_struct_h.h_no_days_pymtdt);
+     	CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+	
+		EXEC SQL OPEN InstrCursor;
+		IS_ANY_ORA_ERROR
+
+		for (;;)
+		{
+			EXEC SQL FETCH InstrCursor 
+						INTO 	:l_mt_instrument_struct_h:l_mt_instrument_struct_i,
+								:chr_g_restart_instrcode;
+			IS_ANY_ORA_ERROR_CURSOR
+
+      	CLS_LOG_ARRAY
+      	sprintf(chr_g_log_buff,"Instrument Record Selected\t:\t[%s]",l_mt_instrument_struct_h.h_instr_code);
+			CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+
+			/**Added Function: Changed For HDFCCA_035 -- Biju **/
+			if(Chk_Sys_Date(l_debug_info_ptr) == APL_FAILURE)
+			{
+				IS_ANY_ERROR_FATAL
+				continue;
+			}
+			/**Added Function: Changed For HDFCCA_035 -- Biju **/
+			if(Chng_MaturDate(l_debug_info_ptr) == APL_FAILURE)
+			{
+				IS_ANY_ERROR_FATAL
+				continue;
+			}
+
+			if ( (CA_SetEvent(	p_intlenv_data_struct_h,
+										l_debug_info_ptr) == APL_SUCCESS) )
+			{
+				int_commit_status = APL_SUCCESS;
+			}
+			else
+			{
+				IS_ANY_ERROR_FATAL
+				int_commit_status = APL_FAILURE;
+			}
+			
+			if ( CA_Commit(	int_commit_status,
+									S_LEVEL_T2,
+									l_debug_info_ptr) == APL_FAILURE )
+			APL_GOBACK_FAIL
+
+		} /* End Of Instr fetch for loop */
+
+		strcpy(chr_g_restart_instrcode,S_LOWEST_CHAR);
+		if ( CA_Commit(	APL_SUCCESS,
+								S_LEVEL_T1,
+								l_debug_info_ptr) == APL_FAILURE )
+		APL_GOBACK_FAIL
+
+	} /* End Of CAAUTOEVENT fetch for loop */
+
+	EXEC SQL UPDATE SYS_BATCHPROC
+  				SET 	STATUS ='completed'
+  				WHERE PROCESS_NAME	=:chr_g_progname
+  				AND	PROC_INIT	=	:chr_g_key
+  				AND	STARTDATE	=	:chr_g_start_date
+  				AND 	STATUS		=	'started';
+	IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"BATCH IN PROC",chr_g_progname,chr_g_key)
+
+	EXEC SQL COMMIT;
+	IS_ANY_ORA_ERROR
+   CO_ProcMonitor(g_logfile,"RECORD COMMITTED \n",NULL,NULL);
+
+	
+	APL_GOBACK_SUCCESS
+RETURN_SUCCESS:
+	APL_FUNCTION_RET_SUCCESS(APL_OUT_FILE)
+
+RETURN_FAILURE:
+	APL_FUNCTION_RET_FAILURE(APL_OUT_FILE)
+}
+
+
+
+static	int	CA_SetEvent( 	INTL_ENV_DATA_STRUCT_H	*p_intlenv_data_struct_h,
+										DEBUG_INFO_STRUCT_H			**l_debug_info_ptr)
+{
+   
+	char  chr_nxt_date[APL_DATE_LEN]		=	APL_NULL_STRING;
+	char  chr_nxt_date1[APL_DATE_LEN]   =  APL_NULL_STRING; 
+	char 	chr_warn_cd_instrunauth[CA_ALERT_CODE_LEN] ={ALERT_INSTR_UAUTH};
+	int	int_h_count 	=	0;
+	struct sqlca sqlca;	/**Struct Declared : Changed For HDFCCA_035 -- Biju **/
+
+	APL_FUNCTION_ENTER(APL_OUT_FILE)
+
+	/* ISKB_3162 Prodn Fix - Naren V - Start */
+
+	CMEMSET( chr_nxt_date            );
+	CMEMSET( chr_nxt_date1           );
+	CMEMSET( chr_warn_cd_instrunauth );
+
+	/* ISKB_3162 Prodn Fix - Naren V - End   */
+	
+	if	( strcmp(l_mt_instrument_struct_h.h_status,APL_STS_AUTH) )
+	{
+		
+		EXEC SQL ROLLBACK;
+		CA_WriteAlert((&l_ca_canotify_struct_h),
+							chr_g_funccode,
+							chr_warn_cd_instrunauth,
+							APL_NULL_STRING,
+							APL_NULL_STRING,
+							l_mt_instrument_struct_h.h_instr_code)
+		EXEC SQL COMMIT;
+
+		CLS_LOG_ARRAY
+   	sprintf(chr_g_log_buff,"Instrument [%s] is unauthorised",l_mt_instrument_struct_h.h_instr_code);
+		CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+		APL_GOBACK_FAIL
+	}
+
+	if	(	!strcmp(g_ca_autoevent_struct_h.h_evt_class,chr_g_event_interest)	)
+	{
+		strcpy(chr_nxt_date,l_mt_instrument_struct_h.h_next_pay_date);
+	}
+	else if  (  !strcmp(g_ca_autoevent_struct_h.h_evt_class,chr_g_event_red) )
+	{
+		strcpy(chr_nxt_date,l_mt_instrument_struct_h.h_mature_dt);
+	}
+
+/* SGS UAT Fix	
+	if(	CA_CO_GetNextBusinessDt((char *)chr_nxt_date,
+											(char *)chr_nxt_date1,
+											l_debug_info_ptr)	==	APL_FAILURE)
+	{
+		APL_GOBACK_FAIL
+	}*/
+
+	strcpy(chr_nxt_date1,chr_nxt_date);
+
+
+	sprintf(chr_g_log_buff,"Pay Date\t:\t[%s]", chr_nxt_date1);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+	
+
+	
+	int_h_count = 0;
+	EXEC SQL SELECT NVL(count(*),0)
+				INTO :int_h_count
+				FROM 	CALOGAUTOEVENT
+				WHERE INSTR_CODE = :l_mt_instrument_struct_h.h_instr_code
+				AND	CA_EVENT = :g_ca_autoevent_struct_h.h_evt_class
+				AND	DATEOF_PAYMENT = :chr_nxt_date1
+				AND	ROWNUM < 2;
+
+	IS_ANY_ORA_ERROR	
+
+	if	( int_h_count == 0 )
+	{
+		EXEC SQL INSERT INTO CALOGAUTOEVENT
+					VALUES(	:l_mt_instrument_struct_h.h_instr_code,
+								:g_ca_autoevent_struct_h.h_evt_class,
+								:chr_nxt_date1,
+								NULL);
+		IS_ANY_ORA_ERROR
+   	CO_ProcMonitor(g_logfile,"Created New Record In CALOGAUTOEVENT",NULL,NULL);
+	}
+	
+	APL_GOBACK_SUCCESS
+RETURN_SUCCESS:
+	APL_FUNCTION_RET_SUCCESS(APL_OUT_FILE)
+
+RETURN_FAILURE:
+	APL_FUNCTION_RET_FAILURE(APL_OUT_FILE)
+
+}
+
+
+
+int CA_Commit ( 	int	p_commit_status,
+						int	p_commit_level,
+						DEBUG_INFO_STRUCT_H	**l_debug_info_ptr)
+{
+
+	APL_FUNCTION_ENTER(APL_OUT_FILE)
+
+	if (p_commit_status == APL_FAILURE)
+	{
+		EXEC SQL ROLLBACK;
+		IS_ANY_ORA_ERROR
+      CO_ProcMonitor(g_logfile,"ROLLING BACK \n",NULL,NULL);
+	}
+
+	/* sprintf(chr_g_restart_data_h,"%s%s%s", chr_g_restart_autoevent,S_RESTART_SEP_TOKEN,chr_g_restart_instrcode);
+	   ** Commented For ISKB_3162 Prodn Fix - Naren V */
+
+	/* ISKB_3162 Prodn Fix - Naren V - Start */
+
+	/* Added the data seperator at the end of the string to facilitate the strtok fn call */
+	CMEMSET( chr_g_restart_data_h );
+	sprintf( chr_g_restart_data_h, "%s%s%s%s", chr_g_restart_autoevent, S_RESTART_SEP_TOKEN,
+						   chr_g_restart_instrcode, S_RESTART_SEP_TOKEN );
+	strcat ( chr_g_restart_data_h, APL_NULL_STRING );
+	CO_ProcMonitor(g_logfile, chr_g_restart_data_h, NULL, NULL);
+
+	/* ISKB_3162 Prodn Fix - Naren V - End   */
+
+	EXEC SQL UPDATE SYS_BATCHPROC
+  				SET processing_status = :chr_g_restart_data_h
+  				WHERE PROCESS_NAME	=:chr_g_progname
+  				AND	PROC_INIT		=:chr_g_key
+  				AND	STARTDATE=:chr_g_start_date
+  				AND STATUS		='started';
+	IS_ANY_ORA_ERROR
+
+	EXEC SQL COMMIT;
+	IS_ANY_ORA_ERROR
+   CO_ProcMonitor(g_logfile,"RECORD COMMITTED \n",NULL,NULL);
+
+	switch ( p_commit_level)
+	{
+		case (S_LEVEL_T1) :
+		{
+			EXEC SQL OPEN AutoEvntCursor_gt;
+			IS_ANY_ORA_ERROR
+			break;
+		}
+		case (S_LEVEL_T2) :
+		{
+			EXEC SQL OPEN InstrCursor;
+			IS_ANY_ORA_ERROR
+			break;
+		}
+	}
+
+	APL_GOBACK_SUCCESS
+RETURN_SUCCESS:
+	APL_FUNCTION_RET_SUCCESS(APL_OUT_FILE)
+
+RETURN_FAILURE:
+	APL_FUNCTION_RET_FAILURE(APL_OUT_FILE)
+
+}
+
+
+int	CA_CO_GetNextBusinessDt(const	char		*p_date,
+								char				*p_out_date,
+								DEBUG_INFO_STRUCT_H   **l_debug_info_ptr
+								)
+{
+	char	l_out_date[APL_DATE_LEN]	=	APL_NULL_STRING;
+	short	i_out_date	=	0;
+
+	APL_FUNCTION_ENTER(APL_OUT_FILE)
+
+	EXEC SQL SELECT MAX(H_DATE) +  1
+				INTO	:l_out_date:i_out_date
+				FROM MT_HOLIDAY
+				WHERE STATUS='AA'
+				AND BANK_IND='Y'
+				CONNECT BY PRIOR	H_DATE + 1 = H_DATE
+				AND 		PRIOR STATUS = STATUS
+				AND 		PRIOR BANK_IND = BANK_IND
+				START WITH H_DATE=:p_date and STATUS='AA'
+				AND BANK_IND='Y';
+
+	IS_ANY_ORA_ERROR
+
+	if	(i_out_date	==	-1)
+	{
+		strcpy(l_out_date,p_date);
+	}
+
+	strcpy(p_out_date,l_out_date);
+	
+	
+	APL_GOBACK_SUCCESS
+RETURN_SUCCESS:
+	APL_FUNCTION_RET_SUCCESS(APL_OUT_FILE)
+
+RETURN_FAILURE:
+	APL_FUNCTION_RET_FAILURE(APL_OUT_FILE)
+}

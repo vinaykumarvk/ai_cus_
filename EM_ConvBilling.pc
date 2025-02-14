@@ -1,0 +1,566 @@
+
+
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+
+
+
+
+#include "stdio_64.h"
+#include "CR_Common.h"
+#include "IV_Control_A.h"
+
+ /* Bageshri -- 10GM */
+#include "CO_LenConstdef.h"
+
+#define FILEPATH_LEN				70
+#define FILENAME_LEN_A				80
+/* OPT:AIX */
+#ifdef BUFFER_LEN
+#undef BUFFER_LEN
+#endif
+#define BUFFER_LEN					50
+/* OPT:AIX */
+#ifdef PAGELENGTH
+#undef PAGELENGTH
+#endif
+#define PAGELENGTH				22
+#define COMMIT_COUNT_G				400
+
+EXEC SQL INCLUDE sqlca;
+
+int EM_ConvBilling(char **argv,FILE *p_log_file,char *p_flg_genreportonly,INTL_ENV_DATA_STRUCT_H *p_intl_env_data_struct_h_d,DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+//main(int argc,char **argv)
+int main(int argc,char **argv)//Changes done for AIX Migration
+{
+	DEBUG_INFO_STRUCT_H			**l_debug_info_ptr = NULL, *l_debug_info = NULL;
+	/* Added by kotubabu for Linux Migration -Start*/
+    #ifdef OS_LINUX
+	FILE						*l_ptr_ini_file = NULL;
+	FILE						*l_ptr_log_file = NULL;
+    #else
+	FILE *l_ptr_ini_file = APL_OUT_FILE;
+    FILE *l_ptr_log_file = APL_OUT_FILE;
+    #endif
+    #ifdef OS_LINUX
+     l_ptr_ini_file = APL_OUT_FILE;
+	 l_ptr_log_file = APL_OUT_FILE;
+    #endif
+   /* Added by kotubabu for Linux Migration-End*/
+	INTL_ENV_DATA_STRUCT_H	l_intl_envdatastruct_h;
+	char						chr_l_inifile[FILENAME_LEN_A]   = APL_NULL_STRING;
+	char						chr_uname[APL_USERID_LEN]   = APL_NULL_STRING;
+	char						chr_passwd[APL_PASSWD_LEN]  = APL_NULL_STRING;
+	char						chr_custody_id_b[APL_USERID_LEN]  = APL_NULL_STRING;
+	int						int_l_flg = 0;
+	int						int_retval = 0;
+   short                int_l_cond_exists                    = 0;
+	char						chr_l_buf[BUFFER_LEN] = APL_NULL_STRING;
+	struct sqlca			sqlca;
+
+	memset(&l_intl_envdatastruct_h,NULL,sizeof(INTL_ENV_DATA_STRUCT_H));
+	
+	sqlca.sqlcode = 0;
+
+	
+	strcpy(l_intl_envdatastruct_h.usr, argv[3]);
+	strcpy(l_intl_envdatastruct_h.h_mode, argv[4]);
+	strcpy(l_intl_envdatastruct_h.processtion, argv[5]);
+	strcpy(l_intl_envdatastruct_h.auth_req, argv[6]);
+	strcpy(l_intl_envdatastruct_h.subprocess, argv[7]);
+	strcpy(l_intl_envdatastruct_h.h_process, argv[8]);
+	
+	strcpy(chr_l_inifile,getenv("INTL_ROOT_PATH"));
+	strcat(chr_l_inifile,"intl_sun.cfg");
+	l_debug_info_ptr = &l_debug_info;
+
+	if ((l_ptr_ini_file = fopen(chr_l_inifile,"r")) == NULL)
+		exit(-1);
+	
+	APL_FETCH_DB_LOGIN_DETAILS(l_ptr_ini_file,chr_custody_id_b,chr_uname,chr_passwd,APL_OUT_FILE,l_debug_info_ptr)
+	
+	
+	
+	if (CO_Con_Db(chr_uname,chr_passwd,l_debug_info_ptr) != APL_SUCCESS)
+		APL_GOBACK_FAIL
+
+	
+
+	int_retval = CO_Rtv_RptFileName("5C",APL_LOGFILE_DESC,100,argv[5],argv,&l_ptr_log_file,l_debug_info_ptr);
+
+	if (int_retval != APL_SUCCESS)
+	{
+		EXEC SQL ROLLBACK WORK RELEASE;
+		APL_GOBACK_FAIL
+	}
+
+	
+
+	EXEC SQL COMMIT WORK;
+	
+	if (sqlca.sqlcode != 0)
+	{
+		CO_Proc_RptClose(l_ptr_log_file,l_debug_info_ptr);
+
+		EXEC SQL ROLLBACK WORK RELEASE;
+		APL_GOBACK_FAIL
+	}
+	
+	memset(chr_l_buf,APL_NULL_CHAR,BUFFER_LEN);
+	sprintf(chr_l_buf,"Billing Tables Conversion - EMU GR");
+	CO_ProcMonitor(l_ptr_log_file,chr_l_buf,NULL,NULL);
+
+	CO_ProcMonitor(l_ptr_log_file,"__________________________________\n",NULL,NULL);
+	
+	
+
+	if (CO_RtvSysParams(l_debug_info_ptr) != APL_SUCCESS)
+	{
+		CO_ProcMonitor(l_ptr_log_file,"Unable to get system parameters - Rollback done \n",NULL,&l_intl_envdatastruct_h);
+		
+		CO_Proc_RptClose(l_ptr_log_file,l_debug_info_ptr);
+		
+		EXEC SQL ROLLBACK WORK RELEASE;
+		
+		APL_GOBACK_FAIL	
+	}
+
+	
+	 
+	int_retval = CO_Pro_LocRec(argv,l_ptr_log_file,l_debug_info_ptr);
+
+	if (int_retval != APL_SUCCESS)
+	{
+		CO_ProcMonitor(l_ptr_log_file,"Unable to lock BATCH_IN_PROC record - Rollback done \n",NULL,&l_intl_envdatastruct_h);
+		
+		CO_Proc_RptClose(l_ptr_log_file,l_debug_info_ptr);
+
+		EXEC SQL ROLLBACK WORK RELEASE;
+		
+		APL_GOBACK_FAIL
+	}
+
+   if(CO_Chk_CntryEnabled("EMUCONV",
+                       "EMU_CONV_BILLING",
+                       &int_l_cond_exists,
+                       l_debug_info_ptr)==APL_FAILURE)
+	{
+		CO_ProcMonitor(l_ptr_log_file,"cntry_sys_params check failed\n",NULL,&l_intl_envdatastruct_h);
+		
+		CO_Proc_RptClose(l_ptr_log_file,l_debug_info_ptr);
+
+		EXEC SQL ROLLBACK WORK RELEASE;
+		
+		APL_GOBACK_FAIL
+	}
+
+
+	
+   if ( int_l_cond_exists > 0 )
+   {
+      fprintf(l_ptr_log_file,"Calling EM_ConvBilling for GR\n");
+
+		int_retval = EM_ConvBilling(argv,
+									l_ptr_log_file,
+									argv[9],
+									&l_intl_envdatastruct_h,
+									l_debug_info_ptr);
+	}
+	else
+	{
+		fprintf(l_ptr_log_file,"No records in cntry_sys_params\n");
+	}
+	if (int_retval != APL_SUCCESS)
+	{
+		int_l_flg = 1;
+
+	   CO_Mod_Batch_Status(argv,l_ptr_log_file,l_debug_info_ptr,int_l_flg);
+		
+		if (CO_ChkErr(*l_debug_info_ptr) == APL_SUCCESS)
+		{
+			
+			CO_ProcMonitor(l_ptr_log_file,APL_NULL_STRING,l_debug_info_ptr,&l_intl_envdatastruct_h);
+			CO_FreeErrLst(l_debug_info_ptr);
+
+		}
+
+		CO_ProcMonitor(l_ptr_log_file,"FAILURE from Billing tables conversion program \n",NULL,&l_intl_envdatastruct_h);
+
+		
+		CO_Proc_RptClose(l_ptr_log_file,l_debug_info_ptr);
+
+		APL_GOBACK_FAIL	
+	}
+	else
+	{
+		int_l_flg = 0;
+
+		CO_Mod_Batch_Status(argv,l_ptr_log_file,l_debug_info_ptr,int_l_flg);
+
+		if (CO_ChkErr(*l_debug_info_ptr) == APL_SUCCESS)
+		{
+			
+			CO_ProcMonitor(l_ptr_log_file,APL_NULL_STRING,l_debug_info_ptr,&l_intl_envdatastruct_h);
+			CO_FreeErrLst(l_debug_info_ptr);
+
+		}
+
+		CO_ProcMonitor(l_ptr_log_file,"SUCCESS from Billing tables conversion program \n",NULL,&l_intl_envdatastruct_h);
+
+		
+		CO_Proc_RptClose(l_ptr_log_file,l_debug_info_ptr);
+
+		APL_GOBACK_SUCCESS
+	}
+
+	RETURN_SUCCESS	:
+	{
+		fclose(l_ptr_ini_file);
+	   exit(0);
+	}
+
+	RETURN_FAILURE	:
+	{
+		fclose(l_ptr_ini_file);
+  		exit(-1);
+	}
+}
+
+
+
+int EM_ConvBilling(char **argv,FILE *p_log_file,char *p_flg_genreportonly,INTL_ENV_DATA_STRUCT_H *p_intl_env_data_struct_h_d,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+		struct sqlca 		  		sqlca;
+		FILE							*l_fp_ConvBilling = NULL;
+
+		char							chr_l_system_date[APL_DATE_LEN]=APL_NULL_STRING;
+		char							chr_h_bl_ccycode[APL_CCYCODE_LEN]=APL_NULL_STRING;
+		short							i_bl_currencycode = 0;
+		char							h_dl_client[APL_CLIENT_LENGTH]=APL_NULL_STRING;
+		short							i_dl_client = 0;
+		char							chr_h_emu_ccy_A[APL_CCYCODE_LEN]=APL_NULL_STRING;
+		short							i_emu_ccy = 0;
+		char							chr_h_fee_ccycode[APL_CCYCODE_LEN]=APL_NULL_STRING;
+		short							i_fee_currencycode = 0;
+		char							chr_h_lst_pm_ccycode[APL_CCYCODE_LEN]=APL_NULL_STRING;
+		short							i_lst_pm_currencycode = 0;
+		char							chr_l_convlstpmccycode[APL_CCYCODE_LEN]
+																	=APL_NULL_STRING;
+
+		int							int_l_retstat = 0,int_l_diff = 0,int_l_pageno = 0;
+		int							int_l_nbr_processed = 0;
+		double						h_tot_os_amount = 0;
+		short							i_tot_os_amount = 0;
+		double						h_lstdlosamount = 0;
+		short							i_lstdlosamount = 0;
+		double						h_lst_pm_amount = 0;
+		short							i_lst_pm_amount = 0;
+		double						l_ae_rate = 0;
+		double						l_convtotosamount = 0;
+		double						l_convlstpmamount = 0;
+		double						l_convlstdlosamount = 0;
+	   double						l_convlstdlosamount1 = 0;
+	   double						l_convlstdlosamount2 = 0;
+		char							int_h_serv_code[21] = APL_NULL_STRING;
+		short							i_service_cd = 0;
+		long							l_serv_code = 0;
+
+		char l_temp_processing_status[51] = APL_NULL_STRING;
+
+		IV_CHEQUE_STRUCT 			l_iv_cheque_structb;
+		double						l_creditamount = 0.0;
+
+		EXEC SQL VAR h_dl_client IS STRING;
+		EXEC SQL VAR chr_h_bl_ccycode IS STRING;
+		EXEC SQL VAR chr_h_emu_ccy_A IS STRING;
+		EXEC SQL VAR chr_h_fee_ccycode IS STRING;
+		EXEC SQL VAR chr_h_lst_pm_ccycode IS STRING;
+
+		CO_ProcMonitor(p_log_file,"Entered processtion EM_ConvBilling \n",NULL,p_intl_env_data_struct_h_d);
+
+		sqlca.sqlcode = 0;
+
+      EXEC SQL DECLARE CBillingConv CURSOR FOR
+		SELECT CLIENT,B_CCYCD,TOTAL_OSAMOUNT,LAST_PYMT_AMT,LAST_PYMT_CCY,
+				 LAST_LOST_AMT,FEES_CCY
+		FROM  IV_CLIENTSETUP
+		ORDER BY CLIENT;
+
+      EXEC SQL OPEN CBillingConv;
+
+      IS_ANY_ORA_ERROR
+
+		sqlca.sqlcode = 0;
+
+   	if (APL_FAILURE == CO_Rtv_RptFileName("CB", 
+            				"Conversion Of Billing Tables",
+								160,
+								argv[5],
+								argv,
+								&l_fp_ConvBilling,
+								l_debug_info_ptr ))
+						{
+							APL_GOBACK_FAIL
+						}
+		int_l_nbr_processed = 0;
+
+		
+		if (APL_FAILURE == CO_RtvSysDt(chr_l_system_date,l_debug_info_ptr) )
+		{
+			APL_GOBACK_FAIL
+		}
+
+		EXEC SQL SELECT FIELD_VAL
+		INTO		:chr_h_emu_ccy_A
+		FROM 		PRO_GSSPLVAL
+		WHERE		MAIN_FUN = 'EMUCONV'
+		AND		SUB_PROCESS			= 'EMU_CCY'
+		AND		NATION			= 'GR';
+
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"GSSPLVAL","EMUCONV","EMU_CCY");
+
+		EXEC SQL SELECT FIELD_VAL
+		INTO		:int_h_serv_code:i_service_cd
+		FROM 		PRO_GSSPLVAL
+		WHERE		MAIN_FUN = 'EMUCONV'
+		AND		SUB_PROCESS			= 'CR_SERV_CODE'
+		AND		NATION			= 'GR';
+
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"GSSPLVAL","EMUCONV","CR_SERV_CODE");
+		l_serv_code = atoi(int_h_serv_code);
+
+		for(;;)
+		{
+			EXEC SQL FETCH CBillingConv
+			INTO 	:h_dl_client:i_dl_client,
+					:chr_h_bl_ccycode:i_bl_currencycode,
+					:h_tot_os_amount:i_tot_os_amount,
+					:h_lst_pm_amount:i_lst_pm_amount,
+					:chr_h_lst_pm_ccycode:i_lst_pm_currencycode,
+					:h_lstdlosamount:i_lstdlosamount,
+					:chr_h_fee_ccycode:i_fee_currencycode;
+
+			IS_ANY_ORA_ERROR
+
+			if (APL_ZERO_RESULT_SET)
+			{
+				if ( (strcmp(p_flg_genreportonly,"N") == 0) &&
+					  (int_l_nbr_processed >0) )
+				{
+					EXEC SQL COMMIT WORK ;
+					IS_ANY_ORA_ERROR
+
+					CO_ProcMonitor(p_log_file, "Record Committed", NULL, NULL);
+
+					EXEC SQL SELECT PROCESSING_STATUS into :l_temp_processing_status
+					FROM SYS_BATCHPROC
+					WHERE PROCESS_NAME=:argv[0]
+					AND   PROC_INIT=:argv[1]
+					AND   STARTDATE=:argv[2]
+					AND   STATUS='started'
+					FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+					if(APL_ZERO_RESULT_SET)
+					{
+						CO_ProcMonitor(p_log_file,"E:No entry in batch_in_proc",NULL,NULL);
+						APL_GOBACK_FAIL
+					}
+				}
+				else if (int_l_nbr_processed == 0)
+				{
+					fprintf(l_fp_ConvBilling,"%s","\nNothing to Convert\n");
+				}
+				break;
+			}
+
+			
+			l_ae_rate = 0.0;
+			if (APL_FAILURE == IV_Proc_ConvToFxFn(chr_h_bl_ccycode,
+												  chr_h_emu_ccy_A,
+												  g_mt_commonsys_params_struct_h.dom_ccy,
+												  chr_l_system_date,
+												  &l_ae_rate,&int_l_retstat,l_debug_info_ptr) )
+			{
+					APL_GOBACK_FAIL
+			}
+
+			int_l_nbr_processed++;
+         if ( (!(int_l_nbr_processed%PAGELENGTH)) ||
+				  (int_l_nbr_processed == 1) )
+			{
+				int_l_pageno++;
+				if (int_l_nbr_processed != 1)
+				{
+					fprintf(l_fp_ConvBilling, "\f");
+					fprintf(l_fp_ConvBilling, "\n");
+				}	
+            fprintf(l_fp_ConvBilling,"                                                                                  Page : %d",int_l_pageno);
+				CBPrintHdrFn(l_fp_ConvBilling);
+			}
+			fprintf(l_fp_ConvBilling,
+						"Before Conversion:%-10s     %15.2lf          %-3s    %-3s    %15.2lf     %15.2lf     %-3s\n",
+						h_dl_client,
+						h_tot_os_amount,
+						chr_h_bl_ccycode,
+						chr_h_fee_ccycode,
+						h_lstdlosamount,
+						h_lst_pm_amount,
+						chr_h_lst_pm_ccycode
+						);
+			if (h_tot_os_amount > 0.00)
+			{
+				l_convtotosamount = 0.00;
+				l_convlstpmamount = h_tot_os_amount;
+				strcpy(chr_l_convlstpmccycode,chr_h_bl_ccycode);
+			}
+			else if (h_tot_os_amount < 0.00)
+			{
+				l_convtotosamount = 0.00;
+				l_convlstpmamount = h_lst_pm_amount;
+				strcpy(chr_l_convlstpmccycode,chr_h_lst_pm_ccycode);
+			}
+			else
+			{
+				l_convtotosamount = h_tot_os_amount;
+				l_convlstpmamount = h_lst_pm_amount;
+				strcpy(chr_l_convlstpmccycode,chr_h_lst_pm_ccycode);
+			}
+
+
+			fprintf(l_fp_ConvBilling,
+						"After Conversion :%-10s     %15.2lf          %-3s    %-3s    %15.2lf     %15.2lf     %-3s\n\n",
+						h_dl_client,
+						l_convtotosamount,
+						chr_h_bl_ccycode,
+						chr_h_fee_ccycode,
+						h_lstdlosamount,
+						l_convlstpmamount,
+						chr_l_convlstpmccycode
+						);
+			
+
+			if (strcmp(p_flg_genreportonly,"N") == 0)
+			{
+				if (h_tot_os_amount > 0)
+				{
+					
+
+					memset(&l_iv_cheque_structb,NULL,sizeof(IV_CHEQUE_STRUCT));
+					strcpy(l_iv_cheque_structb.client,h_dl_client);
+					strcpy(l_iv_cheque_structb.dateof_payment,chr_l_system_date);
+					strcpy(l_iv_cheque_structb.b_ccycd,chr_h_bl_ccycode);
+					l_iv_cheque_structb.conf_amt = h_tot_os_amount;
+					strcpy(l_iv_cheque_structb.maker,argv[3]);
+					strcpy(l_iv_cheque_structb.maker_dt,argv[3]);
+					strcpy(l_iv_cheque_structb.checker,"SYSTEM");
+					strcpy(l_iv_cheque_structb.pymt_clt,"1");
+					
+					int_l_retstat = 0;
+
+					if ( APL_FAILURE == IV_Proc_MakeDirectDebitPymt(
+										 &l_iv_cheque_structb,
+										 &int_l_retstat,
+										 l_debug_info_ptr) )
+					{
+						APL_GOBACK_FAIL
+					}
+				}
+				if (h_tot_os_amount < 0)
+				{
+					
+					if ( APL_FAILURE == IV_Proc_PassBillLedgerEntry(
+											chr_l_system_date,
+											h_dl_client,
+           								l_serv_code,
+											-h_tot_os_amount,
+           								chr_h_bl_ccycode,
+											l_debug_info_ptr) )
+					{
+						APL_GOBACK_FAIL
+					}
+					
+					if ( APL_FAILURE == IV_Proc_PassCreditLedgerEntry(
+											h_dl_client,
+											chr_l_system_date,
+             							0.0,
+											chr_h_bl_ccycode,
+             							l_debug_info_ptr) )
+					{
+						APL_GOBACK_FAIL
+					}
+				}
+
+				
+
+				EXEC SQL UPDATE IV_CLIENTSETUP
+				SET		total_osamount 		= :l_convtotosamount,
+							
+							last_lost_amt		= :l_convlstdlosamount,
+							last_pymt_amt		= :l_convlstpmamount,
+							last_pymt_ccy	= :chr_l_convlstpmccycode
+				WHERE		client 			= :h_dl_client
+				AND		b_ccycd 		= :chr_h_bl_ccycode;
+
+				IS_ANY_ORA_ERROR
+
+				if (!(int_l_nbr_processed%COMMITSIZE))
+				{
+					EXEC SQL COMMIT WORK ;
+					IS_ANY_ORA_ERROR
+					CO_ProcMonitor(p_log_file, "Record Committed", NULL, NULL);
+
+					EXEC SQL SELECT PROCESSING_STATUS into :l_temp_processing_status
+					FROM SYS_BATCHPROC
+					WHERE PROCESS_NAME=:argv[0]
+					AND   PROC_INIT=:argv[1]
+					AND   STARTDATE=:argv[2]
+					AND   STATUS='started'
+					FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+					if(APL_ZERO_RESULT_SET)
+					{
+						CO_ProcMonitor(p_log_file,"E:No entry in batch_in_proc",NULL,NULL);
+						APL_GOBACK_FAIL
+					}
+				}
+			}
+      }
+		
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS :
+	{
+		CO_ProcMonitor(p_log_file,"Leaving processtion EM_ConvBilling Successfully\n",NULL,p_intl_env_data_struct_h_d);
+		return(APL_SUCCESS);
+	}
+
+	RETURN_FAILURE :
+	{
+		CO_ProcMonitor(p_log_file,"Leaving processtion EM_ConvBilling with Failure\n",NULL,p_intl_env_data_struct_h_d);
+		return(APL_FAILURE);
+	}
+}
+int CBPrintHdrFn(FILE *fp)
+{
+   int i;
+   fprintf(fp, "\n");
+   for (i=0;i<108;fprintf(fp, "-"),i++);
+   fprintf(fp, "\n%42sBilling Tables Conversion Report\n", " ");//AIX Warning Removal
+   for (i=0;i<108;fprintf(fp, "-"),i++);
+   fprintf(fp, "\n");
+   fprintf(fp, "\n%18sACCOUNT        TOTAL OS AMOUNT   BILLING CCY   FEE CCY    LAST DEL OS AMT    LAST PAY AMT    LAST PAY CCY\n"," ");//AIX Warning Removal
+   for (i=0;i<108;fprintf(fp, "-"),i++);
+   fprintf(fp, "\n");
+   return(1);
+}

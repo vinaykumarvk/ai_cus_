@@ -1,0 +1,529 @@
+
+
+
+
+#include <CO_Commdef.h> 
+#include <string.h>
+#include "IV_Control_A.h"
+EXEC SQL INCLUDE SQLCA.H;
+extern int int_g_eu_condexists;
+
+int IV_Proc_PrnHeaderWeb(FILE *bill,
+					 FILE *fl_userlog,	
+					char *chr_p_billdt,
+					char *chr_p_client,
+					SYS_IVCONTROLPARAM_STRUCT l_sys_ivcntl_param_struct,
+					IV_CLIENTSETUP_STRUCT l_iv_clt_setup_struct ,
+					char p_mastsub,
+					int  *int_currpos,
+					DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+
+char *chr_dupaddr;
+
+char chr_tmpaddr[181]; 
+char chr_l_h_corporate_addr[321];
+int int_ilen;
+int i;
+int int_newlen =0;
+char chr_t_billdt[11];
+char chr_t_prevbilldt[APL_DATE_LEN];
+char chr_f_prevbilldt[APL_DATE_LEN];
+char chr_l_sysdate_b[APL_DATE_LEN];
+char chr_t_nxtbilldt[11];
+double dbl_i_outstanding=0;
+
+double h_bill_os_amount = 0;
+char *chr_f_outst;
+int int_headerlen = 15;
+int int_ret= 0;
+int int_outstret = 0;
+int int_retstat =0;
+char chr_l_cname[CNAME_LEN_A]; 
+char chr_l_cname1[CNAME_LEN_A]; 
+char chr_l_cname2[CNAME_LEN_A]; 
+int int_nlength = 0;
+char chr_prev[1];
+int int_icount;
+int int_jcount;
+char chr_new[CNAME_LEN_A];
+double int_num = 20;
+double roundedoutst = 0.0;
+char chr_f_outst_str[30];
+static int int_l_populated = 0;  
+char **chr_l_tmpaddr  = NULL;
+int  number_a = 0;
+int int_l_lines = 0;
+char chr_l_codedesc[41];
+
+char chr_l_vatcode[51];
+char chr_l_vatfootnote[121];
+char chr_l_client_a[APL_CLIENT_LENGTH];
+short i_l_vatcode;
+short i_l_vatfootnote;
+char **chr_l_tmpfoot  = NULL;
+char chr_l_temp_footer1[241]               =  APL_NULL_STRING;
+int int_l_len_footer                       =  0;
+int int_l_lines_footer                     =  0;
+char *chr_l_temp_footer2                   =  NULL;
+int int_l_counter                          =  0;
+char chr_l_line_footer[241]         =  APL_NULL_STRING;
+char chr_l_footnote[241];
+
+double l_taxfee = TAXFEE;
+
+
+char chr_p_invoiceno[14];
+
+EXEC SQL BEGIN DECLARE SECTION;
+	char chr_p_dismast[APL_CLIENT_LENGTH];
+	char chr_p_dismast2[APL_CLIENT_LENGTH];
+	int     int_p_diff =0;
+	int 	  int_p_diff1	= 0;	
+	short i_mstclt;
+	short i_diff;
+	
+   double dbl_h_schdl_fee = 0.0;
+   short i_schdl_fee = 0;
+
+
+EXEC SQL VAR l_sys_ivcntl_param_struct.b_prev_date IS STRING;
+EXEC SQL VAR chr_p_dismast IS STRING;
+EXEC SQL VAR chr_p_dismast2 IS STRING;
+EXEC SQL VAR l_sys_ivcntl_param_struct.b_upto_date IS STRING;
+EXEC SQL VAR l_iv_clt_setup_struct.client IS STRING;
+EXEC SQL VAR l_iv_clt_setup_struct.b_ccycd IS STRING;
+EXEC SQL VAR chr_l_h_corporate_addr IS STRING; 
+EXEC SQL VAR chr_l_cname2 IS STRING;
+
+EXEC SQL VAR chr_l_vatcode IS STRING;
+EXEC SQL VAR chr_l_vatfootnote IS STRING;
+EXEC SQL VAR chr_l_client_a IS STRING;
+EXEC SQL VAR chr_l_footnote IS STRING;
+
+
+
+EXEC SQL END DECLARE SECTION;
+
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Entering IV_Proc_PrnHeader\n",NULL,NULL);
+	}
+
+
+
+chr_f_outst = (char *)calloc(20,sizeof(char));
+
+	
+	EXEC SQL SELECT REPLACE(REPLACE(ca_address,CHR(13),'|') ,CHR(10),'|') || '|' as corporate 
+	INTO :chr_l_h_corporate_addr 
+	FROM MT_COMMON_SYS_PARAMS;
+
+	IS_ANY_ORA_ERROR
+
+	if (APL_FAILURE == CO_SplitStr( chr_l_h_corporate_addr,'|',&number_a, &chr_l_tmpaddr))
+	{
+		fprintf(fl_userlog,"Failure  while splitting %s \n",chr_l_h_corporate_addr);
+      APL_GOBACK_FAIL
+   }	
+	fprintf(fl_userlog,"num1 chr_value is: %d\n",number_a);
+	
+	int_l_lines = number_a/2;
+	int_l_lines = int_l_lines+1;
+	fprintf(fl_userlog,"l_lines chr_value is: %d\n",int_l_lines);
+
+	
+	
+	memset(chr_l_cname, APL_NULL_CHAR, CNAME_LEN_A);
+	memset(chr_l_cname1, APL_NULL_CHAR, CNAME_LEN_A);
+	memset(chr_l_cname2, APL_NULL_CHAR, CNAME_LEN_A);
+	memset(chr_new, APL_NULL_CHAR, CNAME_LEN_A);
+  
+   memset(chr_l_vatcode,APL_NULL_CHAR,50);
+   memset(chr_l_vatfootnote,APL_NULL_CHAR,120);
+   memset(chr_l_client_a, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+   memset(chr_l_footnote, APL_NULL_CHAR, 241);
+  
+  
+   memset(chr_p_invoiceno,APL_NULL_CHAR,14); 
+
+	EXEC SQL SELECT TO_CHAR(TO_DATE(:chr_p_billdt,'dd/mm/yyyy hh:mi:ss'),'dd/mm/yyyy') INTO :chr_l_sysdate_b  FROM DUAL;
+
+   fprintf(bill,"\n<table class='normal' cellSpacing='0' cellPadding='0' width='100%%' border='0'>\n<tr>");
+	fprintf(bill,"<td class=\'hot\' >BANK STATEMENT </td></tr>");
+	fprintf(bill,"</table></br>");
+
+	(*int_currpos)++;
+	(*int_currpos)++;
+	(*int_currpos)++;
+
+	fprintf(bill,"\n<table class='normal' cellSpacing='0' cellPadding='0' width='100%%' border='0'>\n<tr>");
+	if (l_iv_clt_setup_struct.send_to_master_ind =='S')
+	{
+		if ( APL_FAILURE == IV_Rtv_GetCnameWeb(chr_p_client, chr_l_cname, &int_retstat, 
+												  l_debug_info_ptr) )
+		{
+			fprintf(stderr, "Cannot get Corporate Name for %s\n", chr_p_client);
+			APL_GOBACK_FAIL
+		}
+		
+		int_nlength = strlen(chr_l_cname); 
+      for (int_icount=0,int_jcount=0;int_icount<=int_nlength;)
+      {
+      	if (chr_l_cname[int_icount] == ' ' )
+      	{
+         	if (chr_prev[0] != ' ')
+         	{
+            	chr_new[int_jcount]=chr_l_cname[int_icount];
+            	int_jcount=int_jcount+1;
+         	}
+         	chr_prev[0] = chr_l_cname[int_icount];
+         	chr_prev[1] = '\0';
+      	}
+      	else
+      	{
+         	chr_new[int_jcount] = chr_l_cname[int_icount];
+         	chr_prev[0] = 'u';
+         	chr_prev[1] = '\0';
+         	int_jcount=int_jcount+1;
+      	}
+      	int_icount= int_icount+1;
+   	}
+      sprintf(chr_l_cname1,"%s",chr_new);
+		fprintf(bill,"\n<tr><td class=\'ez10\' >FEE STATEMENT FOR </td><td class=\'ez3\' >%s</td></tr>",chr_l_cname1);
+		
+		(*int_currpos)++;
+		(*int_currpos)++;
+	}
+	else 
+	{
+
+		if (APL_FAILURE == IV_Rtv_Dist_MastAcc(chr_p_client,chr_p_dismast,chr_p_billdt,&int_retstat,l_debug_info_ptr))
+		{
+			
+			if (int_retstat == IV_CRITCAL_ERROR_IND)
+			{
+				APL_GOBACK_FAIL
+			}
+			else if (int_retstat == IV_NO_DATA_FOUND_ERR)
+			{
+				EXEC SQL SELECT cln_master into :chr_p_dismast
+							  FROM MT_CLIENT
+                      WHERE cln_code = :chr_p_client ;
+				
+				IS_ANY_ORA_ERROR
+			}
+		}
+
+		 
+		if ( APL_FAILURE == IV_Rtv_GetCnameWeb(chr_p_dismast, chr_l_cname, &int_retstat, 
+												  l_debug_info_ptr) )
+		{
+			fprintf(stderr, "Cannot get Corporate Name for %s\n", chr_p_dismast);
+			APL_GOBACK_FAIL
+		}
+
+      int_nlength = strlen(chr_l_cname);
+      for (int_icount=0,int_jcount=0;int_icount<=int_nlength;)
+      {
+         if (chr_l_cname[int_icount] == ' ' )
+         {
+            if (chr_prev[0] != ' ')
+            {
+               chr_new[int_jcount]=chr_l_cname[int_icount];
+               int_jcount=int_jcount+1;
+            }
+            chr_prev[0] = chr_l_cname[int_icount];
+            chr_prev[1] = '\0';
+         }
+         else
+         {
+            chr_new[int_jcount] = chr_l_cname[int_icount];
+            chr_prev[0] = 'u';
+            chr_prev[1] = '\0';
+            int_jcount=int_jcount+1;
+         }
+         int_icount= int_icount+1;
+      }
+      sprintf(chr_l_cname1,"%s",chr_new);
+		fprintf(bill,"\n<tr><td class=\'ez10\' >FEE STATEMENT FOR </td><td class=\'ez3\'>%s</td></tr>",chr_l_cname1);
+		
+		(*int_currpos)++;
+		(*int_currpos)++;
+		
+	}
+
+	fprintf(bill,"\n<tr><td>&nbsp;</td></tr>");
+	EXEC SQL SELECT cln_code, rtrim(SUBSTR(cln_name,1,35)),cln_master INTO :chr_p_dismast2, :chr_l_cname2, :chr_l_client_a
+		      FROM MT_CLIENT
+		     WHERE cln_code = :chr_p_client;
+   IS_ANY_ORA_ERROR
+	
+   EXEC SQL SELECT MAP_DESC INTO :chr_l_codedesc
+				  FROM PRO_SGENSTAT A, MT_COMMON_SYS_PARAMS B
+			    WHERE A.MAP_TYPE='ISOCOUNTRY'
+					AND A.MAP_VAL = B.NATION_CODE
+					AND A.NATION_CODE='XX';
+
+   IS_ANY_ORA_ERROR
+	
+  
+if ( int_g_eu_condexists != 0)
+{
+
+/*** SUBU - Commented Below for AIX ***/
+ /* if ( APL_FAILURE == IV_Rtv_IVNo(chr_p_client,p_mastsub,&chr_p_invoiceno,chr_p_billdt,l_iv_clt_setup_struct.b_gen_ind,&int_retstat,l_debug_info_ptr)) */
+  if ( APL_FAILURE == IV_Rtv_IVNo(chr_p_client,p_mastsub,chr_p_invoiceno,chr_p_billdt,l_iv_clt_setup_struct.b_gen_ind,&int_retstat,l_debug_info_ptr)) 
+   {
+      fprintf(stderr, "Cannot get Invoice No for %s\n", chr_p_client);
+      APL_GOBACK_FAIL
+   }
+
+   if (strlen(chr_p_invoiceno) > 0)
+   {
+		fprintf(bill,"\n<tr><td class=\'ez9\'>INVOICE NO:</td><td class=\'ez11\'>%s</td></tr>",chr_p_invoiceno);
+   }
+}
+ 
+
+   fprintf(bill,"\n<tr><td class=\'ez9\'>ACCOUNT NUMBER </td><td class=\'ez11\'>%s</td></tr>",chr_p_client);
+   fprintf(bill,"\n<tr><td class=\'ez9\'>ACCOUNT NAME </td><td class=\'ez11\'>%s</td></tr>",chr_l_cname2);
+   fprintf(bill,"\n<tr><td class=\'ez9\'>COUNTRY </td><td class=\'ez11\'>%s</td></tr>",chr_l_codedesc);
+
+   if ( int_g_eu_condexists != 0)
+   {
+      if ( p_mastsub == 'C' || (strcmp(chr_p_client,chr_l_client_a) != 0  && l_iv_clt_setup_struct.b_gen_ind == 'S'))
+      {
+          EXEC SQL SELECT VAT_CD,VAT_NOTE
+          INTO :chr_l_vatcode:i_l_vatcode,:chr_l_vatfootnote:i_l_vatfootnote
+          FROM IV_CLIENTSETUP
+          WHERE CLIENT = :chr_p_client;
+
+          IS_ANY_ORA_ERROR;
+
+          if(sqlca.sqlcode < 0)
+          {
+             fprintf(stderr,"Error in accessing table IV_CLIENTSETUP.\n");
+             fflush(stderr);
+             APL_GOBACK_FAIL
+          }
+			    fprintf(bill,"\n<tr><td class=\'ez9\'>VAT CODE </td>");
+             if (i_l_vatcode != -1)
+             {
+					 fprintf(bill,"<td class=\'ez11\'>%s</td></tr>",chr_l_vatcode);
+             }
+				 else
+				 {
+					 fprintf(bill,"<td>&nbsp;</td></tr>");
+				 }		
+				 fprintf(bill,"\n<tr><td class=\'ez9\'>VAT FOOTNOTE</td>");
+             if (i_l_vatfootnote != -1)
+             {
+                EXEC SQL SELECT REPLACE(REPLACE(:chr_l_vatfootnote, CHR(13),'<BR>') ,CHR(10),'<BR>') || '<BR>' as information
+                into :chr_l_footnote
+                FROM DUAL;
+  
+                IS_ANY_ORA_ERROR
+
+					 fprintf(bill,"<td class=\'ez11\'>%s</td></tr>",chr_l_footnote);
+             }
+             else
+             {
+					 fprintf(bill,"<td>&nbsp;</td></tr>");
+             }
+      }
+  }
+
+(*int_currpos)++;
+(*int_currpos)++;
+(*int_currpos)++;
+(*int_currpos)++;
+
+	if (APL_FAILURE == CO_Pro_DateComp(l_sys_ivcntl_param_struct.b_prev_date,chr_p_billdt,&int_p_diff,l_debug_info_ptr))
+	{	
+		fprintf(fl_userlog,"Failed to compare bill prv chr_date and input chr_date\n");	
+      APL_GOBACK_FAIL
+	}
+	fprintf(bill,"\n<tr><td class=\'ez9\'>PERIOD INVOICED </td>");
+	if (int_p_diff <=0)
+	{
+		strncpy(chr_t_billdt,chr_p_billdt,10);
+		chr_t_billdt[10] = '\0';
+		fprintf(bill,"<td class=\'ez11\'>%s</td></tr>",chr_t_billdt);
+	}
+	else
+	{
+		
+		if (APL_FAILURE == CO_Pro_AddDate(l_sys_ivcntl_param_struct.b_prev_date,1,chr_f_prevbilldt,l_debug_info_ptr))
+		{
+			fprintf(fl_userlog,"Failed to add to bill prv chr_date\n");	
+			APL_GOBACK_FAIL
+		}
+		strncpy(chr_t_prevbilldt,chr_f_prevbilldt,10);
+		chr_t_prevbilldt[10] ='\0';
+		strncpy(chr_t_nxtbilldt,l_sys_ivcntl_param_struct.b_upto_date,10);
+		chr_t_nxtbilldt[10] = '\0';
+		fprintf(bill,"<td class=\'ez11\'>%s     -      %s</td></tr>",chr_t_prevbilldt,chr_t_nxtbilldt);
+	}
+(*int_currpos)++;
+   fprintf(bill,"\n</table>\n<BR>");
+
+	EXEC SQL SELECT cln_master INTO :chr_p_dismast2
+		      FROM MT_CLIENT
+		     WHERE cln_code = :chr_p_client;
+				IS_ANY_ORA_ERROR
+				
+   fprintf(bill,"\n<table class='normal' cellSpacing='0' cellPadding='0' width='75%%' border='0'>");
+	
+	if ((p_mastsub=='C') || ((strcmp(chr_p_dismast2,chr_p_client) && l_iv_clt_setup_struct.b_gen_ind == 'S')))
+	{
+		fprintf(bill,"\n<tr><td>THIS IS THE CONSOLIDATED BILL FOR ALL YOUR ACCOUNTS</td></tr>");
+		(*int_currpos)++;
+		(*int_currpos)++;
+		(*int_currpos)++;
+	}
+	
+   if (APL_FAILURE == CO_Pro_DateComp(l_sys_ivcntl_param_struct.b_upto_date,chr_p_billdt,&int_p_diff1,l_debug_info_ptr))
+   {
+      fprintf(fl_userlog,"Failed to compare bill prv chr_date and input chr_date\n");
+      APL_GOBACK_FAIL
+   }
+	
+	
+	 if ((l_sys_ivcntl_param_struct.generate_ind =='N') || (int_p_diff1 < 0)) 
+		{
+		printf(" entering N & int_p_diff1 < 0 :: l_iv_clt_setup_struct.last_lost_amt is |%lf|\n",l_iv_clt_setup_struct.last_lost_amt);
+		EXEC SQL SELECT B_OUTS_AMOUNT into :h_bill_os_amount  from IV_OUTSTANDINGAMT
+		where client = :l_iv_clt_setup_struct.client
+		and dateof_billing = :chr_p_billdt ;
+
+		 IS_ANY_ORA_ERROR
+		if (sqlca.sqlcode == 1403)
+			dbl_i_outstanding = l_iv_clt_setup_struct.last_lost_amt; 
+		else
+			dbl_i_outstanding = h_bill_os_amount;	
+		}
+	else 
+		dbl_i_outstanding = l_iv_clt_setup_struct.total_osamount;	
+
+	
+	
+
+	if((p_mastsub == 'C') || ( (strcmp(chr_p_dismast2,chr_p_client) && l_iv_clt_setup_struct.b_gen_ind == 'S')))
+	{
+		if (dbl_i_outstanding >=0)
+			   fprintf(bill,"\n<tr><td>OUTSTANDING BALANCE ");
+		else
+		{
+			fprintf(bill,"\n<tr><td>CREDIT BALANCE ");
+			dbl_i_outstanding = -dbl_i_outstanding; 
+		}
+
+		fprintf(bill," %s ",l_iv_clt_setup_struct.b_ccycd);
+		int_outstret = IV_Proc_Round(&dbl_i_outstanding,l_iv_clt_setup_struct.b_ccycd,chr_f_outst,l_debug_info_ptr);
+		if (int_outstret == 1)
+		{
+		   memset(chr_f_outst_str, APL_NULL_CHAR, 30);
+			sscanf(chr_f_outst,"%lf",&roundedoutst);
+	      
+			
+			CO_Rtv_FormatAmtCcy(roundedoutst, chr_f_outst_str, 'Y', 'Y', l_iv_clt_setup_struct.b_ccycd,l_debug_info_ptr) ;
+			strcpy(chr_f_outst, chr_f_outst_str + 10); 
+			if ( roundedoutst != 0)
+				 fprintf(bill," %s </td></tr>",chr_f_outst);
+		   else
+				 fprintf(bill," 0.00 </td></tr>");
+			(*int_currpos)++;
+		}
+		else
+			APL_GOBACK_FAIL
+	}
+	
+
+/* Bageshri for taxfee setup */	
+
+/*if(l_iv_clt_setup_struct.comm_tax_amt > 0) 
+  {
+  fprintf(bill,"\n<tr><td>TAX AT %.2lf PERCENT IS INCLUDED IN THE BILL</td></tr>",l_iv_clt_setup_struct.comm_tax_amt);
+  (*int_currpos)++;
+  }*/
+
+EXEC SQL SELECT SCHDL_FEE
+INTO :dbl_h_schdl_fee:i_schdl_fee
+FROM IV_DEAL_FEE
+WHERE CLIENT =:chr_p_client AND DATEOF_BILLING = :chr_p_billdt
+AND CONS_FLAG = :p_mastsub
+AND SERVICE_CD =:l_taxfee;
+
+IS_ANY_ORA_ERROR
+
+if(dbl_h_schdl_fee > 0)
+{
+  fprintf(bill,"\n<tr><td>TAX AT %.2lf PERCENT IS INCLUDED IN THE BILL</td></tr>",dbl_h_schdl_fee);
+}
+
+fprintf(bill,"\n<tr><td>CURRENT PROCEEDS</td></tr>\n</table>\n<BR>");
+
+
+	{
+	RETURN_SUCCESS:
+        APL_IF_DEBUG
+		  {
+				CO_ProcMonitor(APL_OUT_FILE,"Exiting peacefully out of IV_Proc_PrnHeader\n",NULL,NULL);
+		  }
+        	return(APL_SUCCESS);
+
+	RETURN_FAILURE:
+        APL_IF_DEBUG
+		  {
+				CO_ProcMonitor(APL_OUT_FILE,"Exiting unsuccessfully out of IV_Proc_PrnHeader\n",NULL,NULL);
+
+		  }
+       		return (APL_FAILURE);
+	}
+
+}
+int IV_Rtv_GetCnameWeb(char *chr_p_client, char *chr_p_cname, int *int_p_retstat, DEBUG_INFO_STRUCT_H *l_debug_info_ptr)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+
+		char h_clnt_clr_name[CNAME_LEN_A];
+		short int i_clnt_clr_name = 0;
+		struct sqlca sqlca;
+
+	EXEC SQL END DECLARE SECTION;
+
+	memset(h_clnt_clr_name, APL_NULL_CHAR, CNAME_LEN_A);
+
+	EXEC SQL SELECT CLN_NAME
+				INTO :h_clnt_clr_name INDICATOR :i_clnt_clr_name
+				FROM MT_CLIENT
+				WHERE CLN_CODE = :chr_p_client;
+
+	if ( sqlca.sqlcode < 0 )
+	{
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+	}
+
+	IS_ANY_ORA_ERROR
+
+	if ( APL_ZERO_RESULT_SET )
+	{
+		*int_p_retstat = IV_NO_DATA_FOUND_ERR;		
+		APL_GOBACK_FAIL
+	}
+
+	strcpy(chr_p_cname, h_clnt_clr_name);
+	*int_p_retstat = IV_SUCCESS;
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+
+		return APL_SUCCESS;
+
+	RETURN_FAILURE:
+
+		return APL_FAILURE;
+}

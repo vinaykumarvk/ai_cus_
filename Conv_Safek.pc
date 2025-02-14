@@ -1,0 +1,677 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#include "CO_HostStructdef.h"
+#include "CA_InterFace.h"
+
+EXEC SQL INCLUDE SQLCA.H;
+
+#define  RTV_SYSTEM_DATA
+
+/* Added by kotubabu for Linux Migration -Start*/
+#ifdef OS_LINUX
+FILE*                g_inifile;
+FILE*                g_logfile;
+FILE*                l_pr_filept;
+FILE*                l_po_filept;
+#else
+FILE *g_inifile = APL_OUT_FILE;
+FILE *g_logfile = APL_OUT_FILE;
+FILE *l_pr_filept = APL_OUT_FILE;
+FILE *l_po_filept = APL_OUT_FILE;
+#endif
+/* Added by kotubabu  for Linux Migration -END*/
+char                 chr_g_progname        [APL_BATCH_PROGNAME_LEN]= APL_NULL_STRING;
+char                 chr_g_key             [APL_BATCH_KEY_LEN]= APL_NULL_STRING;
+char                 chr_g_STARTDATE      [APL_DATE_LEN]= APL_NULL_STRING;
+char                 chr_g_funccode        [CA_FUNC_CD_LEN]= APL_NULL_STRING;
+char                 chr_g_sys_date        [APL_DATE_LEN]= APL_NULL_STRING;
+char                 chr_g_sys_date_time   [APL_DATE_LEN]= APL_NULL_STRING;
+char                 chr_g_client         [APL_CLIENT_LENGTH]= APL_NULL_STRING;
+char                 chr_g_log_buff[MSG_LENGTH]= APL_NULL_STRING;
+
+
+int Conv_Safek( INTL_ENV_DATA_STRUCT_H *p_intlenv_data_struct_h,
+								DEBUG_INFO_STRUCT_H      **l_debug_info_ptr);
+
+int rep_func_safek(char *p_pre_post,
+									INTL_ENV_DATA_STRUCT_H *p_intlenv_data_struct_h,
+									DEBUG_INFO_STRUCT_H      **l_debug_info_ptr);
+
+char get_filename(char *p_pre_post, char *p_tablename, char *p_fileheader,FILE *p_filefp,
+							INTL_ENV_DATA_STRUCT_H *p_intlenv_data_struct_h, DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+char                 chr_g_old_ccy      [4]         = APL_NULL_STRING;
+char                 chr_g_new_ccy      [4]         = APL_NULL_STRING;
+
+ 
+
+
+//main(int argc, char **argv)
+int main(int argc,char **argv)//Changes done for AIX Migration
+{
+	/* Added by kotubabu for Linux Migration -Start*/
+   #ifdef OS_LINUX
+    g_inifile = APL_OUT_FILE;
+    g_logfile = APL_OUT_FILE;
+    l_pr_filept = APL_OUT_FILE;
+    l_po_filept = APL_OUT_FILE;
+   #endif
+   /* Added by kotubabu for Linux Migration -END*/
+	struct sqlca sqlca;
+
+	
+   
+	DEBUG_INFO_STRUCT_H         **l_debug_info_ptr=NULL,
+								*l_debug_info_struct=NULL;
+	INTL_ENV_DATA_STRUCT_H   p_intlenv_data_struct_h;
+	char                 chr_inifile[PATH_LENGTH]= APL_NULL_STRING;
+	char                 chr_logfile[PATH_LENGTH]= APL_NULL_STRING;
+	char                 chr_custody_id_b[APL_USERID_LEN];
+ 
+     
+	EXEC SQL BEGIN DECLARE SECTION;
+	char chr_uname[APL_USERID_LEN];
+	char chr_passwd[APL_PASSWD_LEN];
+	EXEC SQL END DECLARE SECTION;
+
+	EXEC SQL VAR chr_uname IS STRING;
+	EXEC SQL VAR chr_passwd IS STRING;
+
+   EXEC SQL VAR chr_g_old_ccy IS STRING;
+   EXEC SQL VAR chr_g_new_ccy IS STRING;
+
+	l_debug_info_ptr = &l_debug_info_struct;
+
+   strcpy(chr_g_old_ccy, CONV_FROM_TRL);
+   strcpy(chr_g_new_ccy, CONV_TO_TRY);
+	
+	
+	strcpy(chr_inifile,getenv("INTL_ROOT_PATH"));
+	strcat(chr_inifile,"/intl_sun.cfg");
+
+	if ( ( g_inifile=fopen(chr_inifile,"r") ) == NULL)
+	exit(-1);
+
+	APL_FETCH_DB_LOGIN_DETAILS(g_inifile,chr_custody_id_b,chr_uname,chr_passwd,APL_OUT_FILE,l_debug_info_ptr)
+	EXEC SQL CONNECT :chr_uname IDENTIFIED BY :chr_passwd;
+	IS_ANY_ORA_ERROR
+
+	
+	if ( CO_Rtv_RptFileName("Safek",
+								APL_LOGFILE_DESC,
+								100,
+								argv[5],
+								argv,
+								&g_logfile,
+								l_debug_info_ptr) ==APL_FAILURE)
+	{
+		APL_GOBACK_FAIL	
+	}
+
+   if ( CO_Rtv_RptFileName("PrSAFEK",
+                        "Pre-Conv Safek Data",
+                        100,
+                        argv[5],
+                        argv,
+                        &l_pr_filept,
+                        l_debug_info_ptr) ==APL_FAILURE)
+   {
+      exit(-1);
+   }
+
+   if ( CO_Rtv_RptFileName("PoSAFEK",
+                        "Post-Conv Safek Data",
+                        100,
+                        argv[5],
+                        argv,
+                        &l_po_filept,
+                        l_debug_info_ptr) ==APL_FAILURE)
+   {
+      exit(-1);
+   }
+
+
+	EXEC SQL COMMIT;
+	IS_ANY_ORA_ERROR
+
+	
+	if ( argc < 4 )
+	{
+	CO_ProcMonitor(g_logfile,"All Arguments expected by  program not passed \n",NULL
+				,NULL);
+	APL_GOBACK_FAIL
+	}
+	
+	strcpy(chr_g_progname,   argv[0]);
+	strcpy(chr_g_key,        argv[1]);
+	strcpy(chr_g_STARTDATE, argv[2]);
+	strcpy(chr_g_funccode,argv[5]);
+	
+	
+	if ( CO_RtvSysParams(l_debug_info_ptr) == APL_FAILURE)
+	APL_GOBACK_FAIL
+	if(CO_RtvSysDt(chr_g_sys_date,l_debug_info_ptr)==APL_FAILURE)
+	APL_GOBACK_FAIL
+
+	
+   
+	if ( Conv_Safek(&p_intlenv_data_struct_h,
+						 l_debug_info_ptr) == APL_FAILURE)
+      
+	APL_GOBACK_FAIL
+
+	
+	APL_GOBACK_SUCCESS
+	RETURN_SUCCESS:
+	{
+	EXEC SQL UPDATE SYS_BATCHPROC
+			SET status        = 'completed'
+			WHERE process_name    =  RTRIM(:argv[0])
+			AND   proc_init         =  RTRIM(:argv[1])
+			AND   STARTDATE   =  :argv[2]
+			AND   status      =  'started';
+	
+	IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"BATCH_IN_PROC",chr_g_progname,chr_g_key)
+
+	EXEC SQL COMMIT;
+	IS_ANY_ORA_ERROR
+
+	CO_ProcMonitor(g_logfile,"COMMIT COMPLETED_IND \n",NULL,NULL);
+
+	sprintf(chr_g_log_buff,"T:TRL-TRY conversion for Safek exiting successfully\n");
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+	CO_ProcMonitor(APL_OUT_FILE,
+				"Currency Conversion for Safek exiting successfully",
+				NULL,
+				NULL);
+
+	fclose(g_logfile);
+   fclose(l_pr_filept);
+   fclose(l_po_filept);
+	exit(0);
+	}
+	
+	RETURN_FAILURE:
+	{
+	EXEC SQL ROLLBACK;
+	IS_ANY_ORA_ERROR
+	CO_ProcMonitor(g_logfile,"ROLLING BACK \n",NULL,NULL);
+
+	sprintf(chr_g_log_buff,"T:TRL-TRY conversion for Safek exiting with failure\n");
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+	
+	CO_ProcMonitor(APL_OUT_FILE,
+				"Currency Conversion for Safek exiting with errors",
+				NULL,
+				NULL);
+
+	fclose(g_logfile);
+      fclose(l_pr_filept);
+      fclose(l_po_filept);
+	exit(-1);
+	}
+} 
+
+
+
+int Conv_Safek(INTL_ENV_DATA_STRUCT_H *p_intlenv_data_struct_h,
+					DEBUG_INFO_STRUCT_H      **l_debug_info_ptr)
+
+{
+	
+   int int_l_amt_dec_len = 0;
+   int int_l_fmt_dec_len = 0;
+   int int_l_eqt_dec_len = 0;
+   int int_l_max_dec_len = 0;
+
+   short i_amt_dec_len = 0;
+   short i_fmt_dec_len = 0;
+   short i_eqt_dec_len = 0;
+
+
+	int int_l_conv_amt = CONV_AMT;
+	int int_l_conv_qty = CONV_QTY;
+
+	struct sqlca sqlca;
+
+	#ifdef APL_THREADS
+	APL_SET_CONTEXT
+	EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	sqlca.sqlcode = 0;
+   
+	
+	APL_IF_DEBUG
+	{
+	CO_ProcMonitor(APL_OUT_FILE,
+				"\nEntered Function Conv_Safek\n",
+				NULL,
+				NULL);
+	}
+
+
+   EXEC SQL SELECT AMOUNT_DECIMAL_LEN
+            INTO :int_l_amt_dec_len:i_amt_dec_len
+            FROM MT_CORE_SYS_PARAMS;
+
+   IS_ANY_ORA_ERROR;
+
+
+   EXEC SQL SELECT FIELD_VAL
+            INTO :int_l_fmt_dec_len:i_fmt_dec_len
+            FROM PRO_GSSPLVAL
+            WHERE MAIN_FUN = 'QUANTITY_DEC_LEN'
+            AND SUB_PROCESS = 'DEC_FOR_BONDS'
+            AND NATION = 'TR';
+
+   IS_ANY_ORA_ERROR;
+
+
+   EXEC SQL SELECT FIELD_VAL
+            INTO :int_l_eqt_dec_len:i_eqt_dec_len
+            FROM PRO_GSSPLVAL
+            WHERE MAIN_FUN = 'QUANTITY_DEC_LEN'
+            AND SUB_PROCESS = 'DEC_FOR_EQUITIES'
+            AND NATION = 'TR';
+
+   IS_ANY_ORA_ERROR;
+
+
+   if (int_l_eqt_dec_len > int_l_fmt_dec_len)
+      int_l_max_dec_len = int_l_eqt_dec_len;
+   else
+      int_l_max_dec_len = int_l_fmt_dec_len;
+
+
+	if (rep_func_safek("Pr",p_intlenv_data_struct_h,l_debug_info_ptr) ==APL_FAILURE)
+	{
+		APL_GOBACK_FAIL
+	}
+
+
+
+	
+	
+
+	EXEC SQL UPDATE DL_SAFEK
+			SET	START_SAFEK	= ROUND((START_SAFEK/:int_l_conv_amt), :int_l_max_dec_len),
+					SAFEKEEP_POS    = ROUND((SAFEKEEP_POS/:int_l_conv_amt), :int_l_max_dec_len),
+					NVALRECEIVE = ROUND((NVALRECEIVE/:int_l_conv_amt), :int_l_max_dec_len),
+					NVALDELIVER = ROUND((NVALDELIVER/:int_l_conv_amt), :int_l_max_dec_len),
+					VAL_REC  = ROUND((VAL_REC/:int_l_conv_amt), :int_l_max_dec_len),
+					VAL_DEL  = ROUND((VAL_DEL/:int_l_conv_amt), :int_l_max_dec_len)
+			WHERE INSTR_CODE IN ( SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTR_TYPE IN ('FMT','BON') AND CURRENCY_CD = :chr_g_new_ccy);
+   
+	IS_ANY_ORA_ERROR; 
+
+	sprintf(chr_g_log_buff,"Updated |%d| row(s) in DL_SAFEK table for FMT instrument\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+	printf("\n %s \n",chr_g_log_buff);
+	
+	EXEC SQL UPDATE DL_SAFEK
+			SET	START_SAFEK	= ROUND((START_SAFEK/:int_l_conv_qty), :int_l_max_dec_len),
+					SAFEKEEP_POS    = ROUND((SAFEKEEP_POS/:int_l_conv_qty), :int_l_max_dec_len),
+					NVALRECEIVE = ROUND((NVALRECEIVE/:int_l_conv_qty), :int_l_max_dec_len),
+					NVALDELIVER = ROUND((NVALDELIVER/:int_l_conv_qty), :int_l_max_dec_len),
+					VAL_REC  = ROUND((VAL_REC/:int_l_conv_qty), :int_l_max_dec_len),
+					VAL_DEL  = ROUND((VAL_DEL/:int_l_conv_qty), :int_l_max_dec_len)
+			WHERE INSTR_CODE IN (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTR_TYPE NOT IN ('FMT','BON') AND CURRENCY_CD = :chr_g_new_ccy);
+
+	IS_ANY_ORA_ERROR;
+
+	sprintf(chr_g_log_buff,"Updated |%d| row(s) in DL_SAFEK table for NON-FMT instrument\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+	printf("\n %s \n",chr_g_log_buff);
+
+
+	
+	
+
+	EXEC SQL UPDATE DL_LOCNCHG
+			SET QTY = ROUND((QTY/:int_l_conv_amt), :int_l_max_dec_len)
+			WHERE INSTR_CODE IN ( SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTR_TYPE IN ('FMT','BON') AND CURRENCY_CD = :chr_g_new_ccy)
+			AND DEALSTAT NOT IN ('CS');
+	
+	IS_ANY_ORA_ERROR;
+
+	sprintf(chr_g_log_buff,"Updated |%d| row(s) in CLOCNCHG table for FMT instrument\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+	printf("\n %s \n",chr_g_log_buff);
+
+	EXEC SQL UPDATE DL_LOCNCHG
+			SET QTY = ROUND((QTY/:int_l_conv_qty), :int_l_max_dec_len)
+			WHERE INSTR_CODE IN ( SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTR_TYPE NOT IN ('FMT','BON') AND CURRENCY_CD = :chr_g_new_ccy)
+					AND DEALSTAT NOT IN ('CS');
+ 
+	IS_ANY_ORA_ERROR;
+
+	sprintf(chr_g_log_buff,"Updated |%d| row(s) in CLOCNCHG table for NON-FMT instrument\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+	printf("\n %s \n",chr_g_log_buff);
+
+
+
+	
+	
+
+	EXEC SQL UPDATE DL_EOMSAFEK
+			SET	START_SAFEK	= ROUND((START_SAFEK/:int_l_conv_amt), :int_l_max_dec_len),
+					SAFEKEEP_POS    = ROUND((SAFEKEEP_POS/:int_l_conv_amt), :int_l_max_dec_len),
+					NVALRECEIVE = ROUND((NVALRECEIVE/:int_l_conv_amt), :int_l_max_dec_len),
+					NVALDELIVER = ROUND((NVALDELIVER/:int_l_conv_amt), :int_l_max_dec_len),
+					VAL_REC  = ROUND((VAL_REC/:int_l_conv_amt), :int_l_max_dec_len),
+					VAL_DEL  = ROUND((VAL_DEL/:int_l_conv_amt), :int_l_max_dec_len)
+			WHERE INSTR_CODE IN (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTR_TYPE IN ('FMT','BON')  AND CURRENCY_CD = :chr_g_new_ccy);
+   
+	IS_ANY_ORA_ERROR; 
+
+	sprintf(chr_g_log_buff,"Updated |%d| row(s) in CEOMSAFEK table for FMT instrument\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+	printf("\n %s \n",chr_g_log_buff);
+
+	EXEC SQL UPDATE DL_EOMSAFEK
+			SET	START_SAFEK	= ROUND((START_SAFEK/:int_l_conv_qty), :int_l_max_dec_len),
+					SAFEKEEP_POS    = ROUND((SAFEKEEP_POS/:int_l_conv_qty), :int_l_max_dec_len),
+					NVALRECEIVE = ROUND((NVALRECEIVE/:int_l_conv_qty), :int_l_max_dec_len),
+					NVALDELIVER = ROUND((NVALDELIVER/:int_l_conv_qty), :int_l_max_dec_len),
+					VAL_REC  = ROUND((VAL_REC/:int_l_conv_qty), :int_l_max_dec_len),
+					VAL_DEL  = ROUND((VAL_DEL/:int_l_conv_qty), :int_l_max_dec_len)
+			WHERE INSTR_CODE IN (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTR_TYPE NOT IN ('FMT','BON') AND CURRENCY_CD = :chr_g_new_ccy);
+
+	IS_ANY_ORA_ERROR;
+
+	sprintf(chr_g_log_buff,"Updated |%d| row(s) in CEOMSAFEK table for NON-FMT instrument\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+	printf("\n %s \n",chr_g_log_buff);
+
+
+
+	
+	
+
+	EXEC SQL UPDATE DL_WEEKTXNBAL
+			SET	CLOSING_BAL	=	ROUND((CLOSING_BAL/:int_l_conv_amt), :int_l_max_dec_len)
+			WHERE INSTR_CODE IN ( SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTR_TYPE IN ('FMT','BON') AND CURRENCY_CD = :chr_g_new_ccy);
+
+	IS_ANY_ORA_ERROR;
+
+	sprintf(chr_g_log_buff,"Updated |%d| row(s) in WEEKTXNBAL table for FMT instrument\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+	printf("\n %s \n",chr_g_log_buff);
+
+	EXEC SQL UPDATE DL_WEEKTXNBAL
+			SET	CLOSING_BAL	=	ROUND((CLOSING_BAL/:int_l_conv_qty), :int_l_max_dec_len)
+			WHERE INSTR_CODE IN (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTR_TYPE NOT IN ('FMT','BON') AND CURRENCY_CD = :chr_g_new_ccy);
+
+	IS_ANY_ORA_ERROR;
+
+	sprintf(chr_g_log_buff,"Updated |%d| row(s) in WEEKTXNBAL table for NON-FMT instrument\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+	printf("\n %s \n",chr_g_log_buff);
+
+
+
+
+	if (rep_func_safek("Po",p_intlenv_data_struct_h,l_debug_info_ptr) ==APL_FAILURE)
+	{
+		APL_GOBACK_FAIL
+	}
+
+	APL_GOBACK_SUCCESS
+	RETURN_SUCCESS:
+	{
+	APL_IF_DEBUG
+	CO_ProcMonitor(APL_OUT_FILE,
+				"Leaving processtion Conv_Safek successfully",
+				NULL,
+				NULL);
+	return (APL_SUCCESS);
+	}
+	RETURN_FAILURE:
+	{
+	APL_IF_DEBUG
+	CO_ProcMonitor(APL_OUT_FILE,
+				"Leaving processtion Conv_Safek with errors",
+				NULL,
+				NULL);
+	return(APL_FAILURE);
+	}
+}
+
+
+
+int rep_func_safek(char *p_pre_post,INTL_ENV_DATA_STRUCT_H *p_intlenv_data_struct_h,DEBUG_INFO_STRUCT_H **l_debug_info_ptr) 
+{
+	struct sqlca sqlca;
+
+	FILE   *l_filefp  = NULL;
+	char chr_l_filename_c[31];
+
+	char chr_l_client_a[APL_CLIENT_LENGTH]	 = APL_NULL_STRING;
+	char chr_l_refno_a[APL_TXNREFNO_LEN]	 = APL_NULL_STRING;
+	
+	double l_stsafekeep_pos			=0.0;
+	double l_safekeep_pos				=0.0;
+	double l_nval_rec			=0.0;
+	double l_nval_del			=0.0;
+	double l_val_rec			=0.0;
+	double l_val_del			=0.0;
+	double l_quantity            =0.0;
+	double l_closing_bal		   =0.0;
+
+	short i_dl_client			= 0;
+	short i_indentity_no  			= 0;
+	short i_stsafekeep_pos			= 0;
+	short i_safekeep_pos				= 0;
+	short i_nval_rec			= 0;
+	short i_nval_del        = 0;
+	short i_val_rec			= 0;
+	short i_val_del			= 0;	
+	short i_qty            	= 0;
+	short i_closing_bal		  	= 0;
+
+	
+	EXEC SQL VAR chr_l_client_a           IS STRING;
+	EXEC SQL VAR chr_l_refno_a             IS STRING;
+	EXEC SQL VAR chr_l_filename_c          IS STRING;
+
+
+	
+	APL_IF_DEBUG
+	{
+	CO_ProcMonitor( APL_OUT_FILE,
+				"Entered Function rep_func_safek\n",
+				NULL,
+				NULL);
+	}
+	
+   if (strcmp(p_pre_post,"Pr")==0)
+      l_filefp = l_pr_filept;
+   else
+      l_filefp = l_po_filept;	
+	
+	
+	
+	
+	
+
+		sqlca.sqlcode = 0;	
+		EXEC SQL DECLARE safek_qty CURSOR FOR 
+				SELECT CLIENT, nvl(START_SAFEK,0), nvl(SAFEKEEP_POS,0), nvl(NVALRECEIVE,0), nvl(NVALDELIVER,0), nvl(VAL_REC,0), nvl(VAL_DEL,0)
+				FROM DL_SAFEK
+				WHERE INSTR_CODE IN ( SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE CURRENCY_CD = :chr_g_new_ccy);
+
+		IS_ANY_ORA_ERROR 
+
+		EXEC SQL OPEN safek_qty;
+
+		IS_ANY_ORA_ERROR 
+
+		fprintf(l_filefp,"Safekeeping Positions Details-------------------------------------------------------------------------------------------------\n");
+
+		fprintf(l_filefp,"%-11s\t%-25s\t%-25s\t%-25s\t%-25s\t%-25s\t%-25s\n\n","CLIENT","START_SAFEK","SAFEKEEP_POS","NVALRECEIVE","NVALDELIVER","VAL_REC","VAL_DEL");
+		fprintf(l_filefp,"------------------------------------------------------------------------------------------------------------------------------\n");
+		
+		for(;;)
+		{
+			EXEC SQL FETCH safek_qty
+					INTO :chr_l_client_a:i_dl_client, :l_stsafekeep_pos:i_stsafekeep_pos, :l_safekeep_pos:i_safekeep_pos, :l_nval_rec:i_nval_rec,l_nval_del:i_nval_del, :l_val_rec:i_val_rec, :l_val_del:i_val_del;
+
+			IS_ANY_ORA_ERROR  
+
+			if (APL_ZERO_RESULT_SET)
+			break;
+
+			fprintf(l_filefp,"%-11s\t%-25f\t%-25f\t%-25f\t%-25f\t%-25f\t%-25f\n",chr_l_client_a,l_stsafekeep_pos,l_safekeep_pos,l_nval_rec,l_nval_del,l_val_rec,l_val_del);
+		}
+		fprintf(l_filefp,"==============================================================================================================================\n\n");
+		EXEC SQL CLOSE safek_qty;
+	
+	
+	
+	
+	
+	
+	
+
+	sqlca.sqlcode = 0;
+	EXEC SQL DECLARE locnchg_qty CURSOR FOR
+			SELECT CLIENT, nvl(QTY,0)
+			FROM DL_LOCNCHG
+			WHERE INSTR_CODE IN ( SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE CURRENCY_CD = :chr_g_new_ccy)
+			AND DEALSTAT NOT IN ('CS');
+
+	IS_ANY_ORA_ERROR
+
+	EXEC SQL OPEN locnchg_qty;
+
+	IS_ANY_ORA_ERROR
+
+		fprintf(l_filefp,"Location Change Details-------------------------------------------------------------------------------------------------------\n");
+	fprintf(l_filefp,"%-11s\t%-25s\n\n","CLIENT","QTY");
+		fprintf(l_filefp,"------------------------------------------------------------------------------------------------------------------------------\n");
+	
+	for(;;)
+	{
+		EXEC SQL FETCH locnchg_qty 
+				INTO :chr_l_client_a:i_dl_client, :l_quantity:i_qty;
+
+		IS_ANY_ORA_ERROR
+
+		if (APL_ZERO_RESULT_SET)
+		break;
+
+		fprintf(l_filefp,"%-11s\t%-25f\n",chr_l_client_a,l_quantity);
+	}
+		fprintf(l_filefp,"==============================================================================================================================\n\n");
+	EXEC SQL CLOSE locnchg_qty;
+	
+	
+	
+	
+	
+	
+
+		sqlca.sqlcode = 0;	
+		EXEC SQL DECLARE eomsafek_qty CURSOR FOR 
+				SELECT CLIENT, nvl(START_SAFEK,0), nvl(SAFEKEEP_POS,0), nvl(NVALRECEIVE,0), nvl(NVALDELIVER,0), nvl(VAL_REC,0), nvl(VAL_DEL,0)
+				FROM DL_EOMSAFEK
+				WHERE INSTR_CODE IN ( SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE CURRENCY_CD = :chr_g_new_ccy);
+
+		IS_ANY_ORA_ERROR 
+
+		EXEC SQL OPEN eomsafek_qty;
+
+		IS_ANY_ORA_ERROR 
+
+		fprintf(l_filefp,"EOM Safekeeping Positions Details---------------------------------------------------------------------------------------------\n");
+		fprintf(l_filefp,"%-11s\t%-25s\t%-25s\t%-25s\t%-25s\t%-25s\t%-25s\n\n","CLIENT","START_SAFEK","SAFEKEEP_POS","NVALRECEIVE","NVALDELIVER","VAL_REC","VAL_DEL");
+		fprintf(l_filefp,"------------------------------------------------------------------------------------------------------------------------------\n");
+		
+		for(;;)
+		{
+			EXEC SQL FETCH eomsafek_qty
+					INTO :chr_l_client_a:i_dl_client, :l_stsafekeep_pos:i_stsafekeep_pos, :l_safekeep_pos:i_safekeep_pos, :l_nval_rec:i_nval_rec,l_nval_del:i_nval_del, :l_val_rec:i_val_rec, :l_val_del:i_val_del;
+
+			IS_ANY_ORA_ERROR  
+
+			if (APL_ZERO_RESULT_SET)
+			break;
+
+			fprintf(l_filefp,"%-11s\t%-25f\t%-25f\t%-25f\t%-25f\t%-25f\t%-25f\n",chr_l_client_a,l_stsafekeep_pos,l_safekeep_pos,l_nval_rec,l_nval_del,l_val_rec,l_val_del);
+		}
+		fprintf(l_filefp,"==============================================================================================================================\n\n");
+		EXEC SQL CLOSE eomsafek_qty;
+
+	
+
+	sqlca.sqlcode = 0;
+	EXEC SQL DECLARE weektxnbal_qty CURSOR FOR
+			SELECT CLIENT, nvl(CLOSING_BAL,0)
+			FROM DL_WEEKTXNBAL
+			WHERE INSTR_CODE IN ( SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE CURRENCY_CD = :chr_g_new_ccy);
+
+	IS_ANY_ORA_ERROR
+
+	EXEC SQL OPEN weektxnbal_qty;
+	
+	IS_ANY_ORA_ERROR
+
+		fprintf(l_filefp,"Weekly Transaction Balance Details--------------------------------------------------------------------------------------------\n");
+	fprintf(l_filefp,"%-11s\t%-25s\n\n","CLIENT","CLOSING_BAL");
+		fprintf(l_filefp,"------------------------------------------------------------------------------------------------------------------------------\n");
+
+	for(;;)
+	{
+		EXEC SQL FETCH weektxnbal_qty
+				INTO :chr_l_client_a:i_dl_client, :l_closing_bal:i_closing_bal;
+
+		IS_ANY_ORA_ERROR
+
+		if (APL_ZERO_RESULT_SET)
+		break;
+
+		fprintf(l_filefp,"%-11s\t%-25f\n",chr_l_client_a,l_closing_bal);
+	}
+		fprintf(l_filefp,"==============================================================================================================================\n\n");
+	EXEC SQL CLOSE weektxnbal_qty;
+
+	RETURN_SUCCESS:
+	{
+	APL_IF_DEBUG
+	CO_ProcMonitor(APL_OUT_FILE,
+				"Leaving processtion rep_func_safek successfully",
+				NULL,
+				NULL);
+	fflush(l_filefp);
+	return (APL_SUCCESS);
+	}
+	
+	RETURN_FAILURE:
+	{
+	APL_IF_DEBUG
+	CO_ProcMonitor(APL_OUT_FILE,
+				"Leaving processtion rep_func_safek with errors",
+				NULL,
+				NULL);
+	fflush(l_filefp);
+	return(APL_FAILURE);
+	}
+}
+

@@ -1,0 +1,1792 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ 
+
+#include "stdio_64.h"
+#include <string.h> 
+#include <stdlib.h> 
+#include "IV_Control_A.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+
+
+int IV_Mod_IVCUSTSETUPMkrChkr(const char *p_client, const char *p_access_stamp, 
+			     INTL_ENV_DATA_STRUCT_H *p_intl_envdatastruct_h, int *int_p_retstat, 
+			     DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	extern int CO_RtvSysDtTime(char *chr_h_sys_date_time, 
+				        DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+	
+
+	char chr_l_usermode, chr_l_buffer[KEY_LENGTH];
+
+    /*Added by usman for CSGL API call - start*/
+    int l_retval = 0;
+    char keyvalue[50]=APL_NULL_STRING;
+    char l_buf[1000] = APL_NULL_STRING;
+	short    int_cond_exists     = 0;
+	char chr_l_param;
+     int l_exstind = 0;
+    /*Added by usman for CSGL API call - end*/
+	EXEC SQL BEGIN DECLARE SECTION;
+
+		char h_sys_dt[APL_DATE_LEN], chr_h_sys_date_time[APL_DATE_LEN];
+		EXEC SQL VAR h_sys_dt IS STRING;
+		EXEC SQL VAR chr_h_sys_date_time IS STRING;
+		char *chr_last = NULL;
+		struct mkrchkr_struct {
+					char stat_ind;
+					char maker[APL_USERID_LEN];
+					char maker_dt[APL_DATE_LEN];
+					char checker[APL_USERID_LEN];
+					char checker_dt[APL_DATE_LEN];
+					char access_stamp[APL_DATE_LEN];
+				      } h_mkrchkr;
+		EXEC SQL VAR h_mkrchkr.maker IS STRING;
+		EXEC SQL VAR h_mkrchkr.maker_dt IS STRING;
+		EXEC SQL VAR h_mkrchkr.checker IS STRING;
+		EXEC SQL VAR h_mkrchkr.checker_dt IS STRING;
+		EXEC SQL VAR h_mkrchkr.access_stamp IS STRING;
+		struct i_mkrchkr_struct {
+					  short int i_stat_ind;
+					  short int i_maker;
+					  short int i_maker_dt;
+					  short int i_checker;
+					  short int i_checker_dt;
+					  short int i_access_stamp;
+					} i_mkrchkr = {0, 0, 0, 0, 0, 0};
+		struct sqlca sqlca;
+
+	EXEC SQL END DECLARE SECTION;	
+
+	#ifdef APL_THREADS
+		APL_SET_CONTEXT
+		EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	memset(h_sys_dt, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(chr_h_sys_date_time, APL_NULL_CHAR, APL_DATE_LEN);
+
+	memset(h_mkrchkr.maker, APL_NULL_CHAR, APL_USERID_LEN);
+	memset(h_mkrchkr.maker_dt, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(h_mkrchkr.checker, APL_NULL_CHAR, APL_USERID_LEN);
+	memset(h_mkrchkr.checker_dt, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(h_mkrchkr.access_stamp, APL_NULL_CHAR, APL_DATE_LEN);
+
+	if ( !strcmp(p_intl_envdatastruct_h->h_mode, APL_FUNC_INPUT) )
+	{
+		chr_l_usermode = 'I'; 
+	}
+	else if ( !strcmp(p_intl_envdatastruct_h->h_mode, APL_FUNC_MODIFY) )
+	{
+		chr_l_usermode = 'M';
+	}
+	else if ( !strcmp(p_intl_envdatastruct_h->h_mode, APL_FUNC_DELETE) )
+	{
+		chr_l_usermode = 'D';
+	}
+	else if ( !strcmp(p_intl_envdatastruct_h->h_mode, APL_FUNC_AUTHORISE) )
+	{
+		chr_l_usermode = 'A';
+	}
+	else if ( !strcmp(p_intl_envdatastruct_h->h_mode, APL_FUNC_RESET) )	/* Bageshri HB_IV_001 : To provide reset functionality */
+	{
+		chr_l_usermode = 'A';
+	}
+
+	EXEC SQL SELECT STAT_IND, MAKER, MAKER_DT, 
+			CHECKER, CHECKER_DT, ACCESS_STAMP
+		 INTO :h_mkrchkr INDICATOR :i_mkrchkr
+		 FROM IV_CLIENTSETUP
+		 WHERE ((CLIENT = :p_client) AND
+			(ACCESS_STAMP = :p_access_stamp));              
+
+	if ( sqlca.sqlcode )
+	{
+		memset(chr_l_buffer, APL_NULL_CHAR, KEY_LENGTH);
+
+		ltoa_r(sqlca.sqlcode, chr_l_buffer, KEY_LENGTH - 1);
+	}
+
+	if ( sqlca.sqlcode < 0 )
+	{
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+		CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, chr_l_buffer, 
+			       APL_NULL_STRING, APL_NULL_STRING, 
+			       __LINE__, __FILE__);
+
+		APL_GOBACK_FAIL
+	}
+
+	if ( sqlca.sqlcode == 1403 )
+	{
+		*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+
+		CO_InsertErr(l_debug_info_ptr, ERR_ACCESSSTAMP_CHGD, chr_l_buffer, 
+			       APL_NULL_STRING, APL_NULL_STRING, 
+			       __LINE__, __FILE__);
+
+		APL_GOBACK_FAIL
+	}
+
+	if (APL_FAILURE == CO_RtvSysDtTime(chr_h_sys_date_time, l_debug_info_ptr))
+	{
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+		APL_GOBACK_FAIL
+	}
+
+	/* Added for Billing Client Upload - Starts */
+	if (strcmp(p_intl_envdatastruct_h->h_process,"U") == 0)
+	{
+		h_mkrchkr.stat_ind = 'A';
+		strcpy(h_mkrchkr.access_stamp, p_access_stamp);
+	}
+	else
+	{
+	strcpy(h_mkrchkr.access_stamp, chr_h_sys_date_time);
+	}
+	/* Added for Billing Client Upload - Ends */
+
+	strcpy(h_sys_dt, chr_h_sys_date_time);
+	strcpy(h_sys_dt, strtok_r(h_sys_dt, " ", &chr_last));
+	strcat(h_sys_dt, APL_NULL_TIME);
+
+	if ( chr_l_usermode == 'A' )
+	{
+		if ( h_mkrchkr.stat_ind == 'A' )
+		{
+			*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+			CO_InsertErr(l_debug_info_ptr, ERR_MSG_ACCOUNT_AUTH, 
+				       APL_NULL_STRING, APL_NULL_STRING, 
+				       APL_NULL_STRING, __LINE__, __FILE__);
+
+			APL_GOBACK_FAIL
+		}
+
+		h_mkrchkr.stat_ind = 'A';
+		strcpy(h_mkrchkr.checker,p_intl_envdatastruct_h->usr);
+		strcpy(h_mkrchkr.checker_dt, h_sys_dt);
+		i_mkrchkr.i_checker = 0;
+		i_mkrchkr.i_checker_dt = 0;
+	}
+	else
+	{
+		strcpy(h_mkrchkr.maker, p_intl_envdatastruct_h->usr);
+		strcpy(h_mkrchkr.maker_dt, h_sys_dt);
+		strcpy(h_mkrchkr.checker, APL_NULL_STRING);
+		strcpy(h_mkrchkr.checker_dt, APL_NULL_STRING);
+		i_mkrchkr.i_checker = -1;
+		i_mkrchkr.i_checker_dt = -1;
+
+		if ( (chr_l_usermode == 'I') || (chr_l_usermode == 'M') )
+		{
+			h_mkrchkr.stat_ind = 'U';
+		}
+		else if ( chr_l_usermode == 'D' )
+		{
+			h_mkrchkr.stat_ind = 'D';
+		}
+		/* Added for Billing Client Upload - Starts  */
+		if ( (strcmp(p_intl_envdatastruct_h->h_process,"U") == 0)  )
+		{
+			if  ( chr_l_usermode=='M') 
+			{
+				h_mkrchkr.stat_ind = 'A';
+				strcpy(h_mkrchkr.maker_dt, h_sys_dt);
+				strcpy(h_mkrchkr.checker_dt, h_sys_dt);
+				i_mkrchkr.i_checker = 0;
+				i_mkrchkr.i_checker_dt = 0;
+			}
+		}
+		else
+		{
+			strcpy(h_mkrchkr.maker, p_intl_envdatastruct_h->usr);
+			strcpy(h_mkrchkr.checker, APL_NULL_STRING);
+			strcpy(h_mkrchkr.checker_dt, APL_NULL_STRING);
+			i_mkrchkr.i_checker = -1;
+			i_mkrchkr.i_checker_dt = -1;
+		}
+		/* Added for Billing Client Upload - Ends */
+	}
+
+	i_mkrchkr.i_maker = 0;
+	i_mkrchkr.i_maker_dt = 0;
+	i_mkrchkr.i_access_stamp = 0;
+	i_mkrchkr.i_stat_ind = 0;
+
+	EXEC SQL UPDATE IV_CLIENTSETUP
+		 SET MAKER =      :h_mkrchkr.maker
+				   INDICATOR :i_mkrchkr.i_maker, 
+		    MAKER_DT =     :h_mkrchkr.maker_dt
+				   INDICATOR :i_mkrchkr.i_maker_dt, 
+		    CHECKER =     :h_mkrchkr.checker
+				   INDICATOR :i_mkrchkr.i_checker, 
+		    CHECKER_DT =   :h_mkrchkr.checker_dt
+				   INDICATOR :i_mkrchkr.i_checker_dt, 
+		    STAT_IND =  :h_mkrchkr.stat_ind
+				   INDICATOR :i_mkrchkr.i_stat_ind,
+		    ACCESS_STAMP= :h_mkrchkr.access_stamp
+				   INDICATOR :i_mkrchkr.i_access_stamp
+		 WHERE ((CLIENT = :p_client) AND
+			(ACCESS_STAMP = :p_access_stamp));
+
+	if ( sqlca.sqlcode )
+	{
+		memset(chr_l_buffer, APL_NULL_CHAR, KEY_LENGTH);
+
+		ltoa_r(sqlca.sqlcode, chr_l_buffer, KEY_LENGTH - 1);
+	}
+
+	if ( sqlca.sqlcode < 0 )
+	{
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+		CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, chr_l_buffer, 
+			       APL_NULL_STRING, APL_NULL_STRING, 
+			       __LINE__, __FILE__);
+
+		APL_GOBACK_FAIL
+	}
+	else if ( sqlca.sqlcode == 1403 )
+	{
+		*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+
+		CO_InsertErr(l_debug_info_ptr, ERR_ACCESSSTAMP_CHGD, APL_NULL_STRING,
+			       APL_NULL_STRING, APL_NULL_STRING, 
+			       __LINE__, __FILE__);
+
+		APL_GOBACK_FAIL
+	}
+
+	*int_p_retstat = IV_SUCCESS;
+
+	/*Added by usman for CSGL API call - START*/
+    if ( chr_l_usermode == 'A' )
+	{
+		CO_Chk_CntryEnabled("API_CONSUMER","IV_CLIENTSETUP",&int_cond_exists,l_debug_info_ptr);
+                                
+        APL_IF_DEBUG
+        {
+            printf("API cntry condition = |%d|\n",int_cond_exists);
+        }
+                
+        if(int_cond_exists>0)
+		{
+			EXEC SQL SELECT GETCLIENTPARAMBYID('CSGL_CLIENT',:p_client) INTO :chr_l_param FROM DUAL;
+			IS_ANY_ORA_ERROR
+			if(chr_l_param == 'Y')
+			{	
+				EXEC SQL SELECT COUNT(1) INTO :l_exstind FROM MT_CLIENT_CSGL WHERE CUST_CODE = :p_client;
+				IS_ANY_ORA_ERROR
+		        if(l_exstind == 1)
+				{
+				    strcpy(keyvalue,"M.CLN_CODE=");
+		            strcat(keyvalue,p_client);
+				
+		            l_retval=callCSGLAPI(p_intl_envdatastruct_h->usr, "MT_CLIENTM", keyvalue);
+		            APL_IF_DEBUG
+		            {
+			            if(l_retval == 0)
+			            {
+				            CO_ProcMonitor(APL_OUT_FILE, "CSGL_API_call.ksh Executed Successfully\n",NULL,p_intl_envdatastruct_h);
+			            }
+			            else
+			            {
+				            CO_ProcMonitor(APL_OUT_FILE, "CSGL_API_call.ksh Executed UnSuccessfully\n",NULL,p_intl_envdatastruct_h);
+			            }  
+		            }
+				}
+		    }
+		}			
+	}
+	/*Added by usman for CSGL API call - END*/
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of IV_Mod_IVCUSTSETUPMkrChkr().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_SUCCESS;
+
+	RETURN_FAILURE:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of IV_Mod_IVCUSTSETUPMkrChkr().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_FAILURE;
+}
+
+
+
+int IV_Mod_IVBCUSTSETPAccDel(const char *p_client, const char *p_access_stamp, 
+			     const char p_markorpurge, int *int_p_retstat, 
+			     DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	
+
+	char chr_l_buffer[KEY_LENGTH];
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+		struct sqlca sqlca;
+
+	EXEC SQL END DECLARE SECTION;
+
+	#ifdef APL_THREADS
+		APL_SET_CONTEXT
+		EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	if ( p_markorpurge == 'M' )
+	{
+		EXEC SQL UPDATE IV_CLIENTSETUP
+			 SET STAT_IND = 'D'
+			 WHERE ((CLIENT = :p_client) AND
+				(ACCESS_STAMP = :p_access_stamp));
+	}
+	else if ( p_markorpurge == 'P' )
+	{
+		EXEC SQL DELETE FROM IV_CLIENTSETUP
+			 WHERE ((CLIENT = :p_client) AND
+				(STAT_IND = 'D') AND
+				(ACCESS_STAMP = :p_access_stamp));
+	}
+			
+	if ( sqlca.sqlcode )
+	{
+		memset(chr_l_buffer, APL_NULL_CHAR, KEY_LENGTH);
+
+		ltoa_r(sqlca.sqlcode, chr_l_buffer, KEY_LENGTH - 1);
+	}
+
+	if ( sqlca.sqlcode < 0 )
+	{
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+		CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, chr_l_buffer, 
+			       APL_NULL_STRING, APL_NULL_STRING, 
+			       __LINE__, __FILE__);
+
+		APL_GOBACK_FAIL
+	}
+	else if ( sqlca.sqlcode == 1403 )
+	{
+		*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+
+		CO_InsertErr(l_debug_info_ptr, ERR_ACCESSSTAMP_CHGD, APL_NULL_STRING,
+			       APL_NULL_STRING, APL_NULL_STRING, 
+			       __LINE__, __FILE__);
+
+		APL_GOBACK_FAIL
+	}
+
+	*int_p_retstat = IV_SUCCESS;
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of IV_Mod_IVBCUSTSETPAccDel().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_SUCCESS;
+
+	RETURN_FAILURE:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of IV_Mod_IVBCUSTSETPAccDel().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_FAILURE;
+}
+
+
+
+int IV_Mod_IVBCUSTSETUPNew(IV_CLIENTSETUP_STRUCT *p_iv_clientsetup_struct_a, int *int_p_retstat, 
+		      DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	
+
+	extern int CO_RtvSysDtTime(char *chr_l_sys_date_time, 
+					DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+	
+
+	char *chr_l_last = (char *)NULL;
+	char chr_l_buffer[BUFFER_LEN], chr_l_sys_date_time[APL_DATE_LEN];
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+		IV_CLIENTSETUP_STRUCT l_ivclientsetup_struct;
+		EXEC SQL VAR l_ivclientsetup_struct.client IS STRING;
+		EXEC SQL VAR l_ivclientsetup_struct.b_ccycd IS STRING;
+		EXEC SQL VAR l_ivclientsetup_struct.date_of_input IS STRING;
+		EXEC SQL VAR l_ivclientsetup_struct.maker IS STRING;
+		EXEC SQL VAR l_ivclientsetup_struct.maker_dt IS STRING;
+		EXEC SQL VAR l_ivclientsetup_struct.access_stamp IS STRING;
+		EXEC SQL VAR l_ivclientsetup_struct.spl_clt_cd IS STRING;
+		EXEC SQL VAR l_ivclientsetup_struct.comm_clt IS STRING;
+		EXEC SQL VAR l_ivclientsetup_struct.rec_clt IS STRING;
+		EXEC SQL VAR l_ivclientsetup_struct.information IS STRING;
+		EXEC SQL VAR l_ivclientsetup_struct.default_feeclt IS STRING;
+		EXEC SQL VAR l_ivclientsetup_struct.last_pymt_date IS STRING;
+		EXEC SQL VAR l_ivclientsetup_struct.last_pymt_ccy IS STRING;
+		EXEC SQL VAR l_ivclientsetup_struct.checker IS STRING;
+		EXEC SQL VAR l_ivclientsetup_struct.checker_dt IS STRING;
+		EXEC SQL VAR l_ivclientsetup_struct.vat_cd IS STRING; 
+		EXEC SQL VAR l_ivclientsetup_struct.vat_note IS STRING; 
+		EXEC SQL VAR l_ivclientsetup_struct.fees_ccy IS STRING; 
+
+		/******************  Bageshri HDFCIV_001 **********************/
+		EXEC SQL VAR l_ivclientsetup_struct.oblg_lvl IS STRING;	
+		EXEC SQL VAR l_ivclientsetup_struct.oblg_typ IS STRING;	
+		EXEC SQL VAR l_ivclientsetup_struct.pay_in_acc IS STRING;	
+		EXEC SQL VAR l_ivclientsetup_struct.pay_out_acc IS STRING;	
+		EXEC SQL VAR l_ivclientsetup_struct.acc_code1 IS STRING;	
+		EXEC SQL VAR l_ivclientsetup_struct.acc_code2 IS STRING;	
+		EXEC SQL VAR l_ivclientsetup_struct.acc_code2desc IS STRING;
+		EXEC SQL VAR l_ivclientsetup_struct.oblig_rep_flg IS STRING;	
+		EXEC SQL VAR l_ivclientsetup_struct.ann_fee_month IS STRING;	
+		EXEC SQL VAR l_ivclientsetup_struct.cln_supermst IS STRING;	
+      EXEC SQL VAR l_ivclientsetup_struct.bnk_acc IS STRING;
+	  EXEC SQL VAR l_ivclientsetup_struct.bnk_fcy_acc IS STRING; /* YOG - 211206*/
+		EXEC SQL VAR l_ivclientsetup_struct.lst_bill_dt IS STRING;/* vinay */
+		EXEC SQL VAR l_ivclientsetup_struct.pymt_acc IS STRING;
+		/******************  Bageshri HDFCIV_001 END **********************/
+		/******************  Bageshri HB_IV_001 START **********************/
+		EXEC SQL VAR l_ivclientsetup_struct.dir_db_date IS STRING;
+		EXEC SQL VAR l_ivclientsetup_struct.b_basis IS STRING;
+		EXEC SQL VAR l_ivclientsetup_struct.b_dlv_date IS STRING;
+		EXEC SQL VAR l_ivclientsetup_struct.b_basis_cust IS STRING;
+		/******************  Bageshri HB_IV_001 END **********************/
+
+		I_IV_CLIENTSETUP_STRUCT l_i_iv_clientsetup_struct = {0, 0, 0, 0, 0, 0, 0, 0, 0,
+			0, 0, 0, 0, 0, 0, 0, 0, 0, 
+			0, 0, 0, 0, 0, 0, 0, 0, 0,
+			0, 0, 0, 0, 0, 0, 0, 0, 0,
+			0, 0, 0, 0, 0, 0, 0, 0, 0,
+			0, 0, 0, 0, 0, 0, 0, 0, 0,
+			0, 0, 0, 0, 0, 0, 0, 0, 0}; /* Bageshri HDFCIV_001*//* vinay *//* Bageshri HB_IV_001*/
+		struct sqlca sqlca;
+
+	EXEC SQL END DECLARE SECTION;
+
+	#ifdef APL_THREADS
+		APL_SET_CONTEXT
+		EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	memset(chr_l_sys_date_time, APL_NULL_CHAR, APL_DATE_LEN);
+
+	memset(l_ivclientsetup_struct.client, APL_NULL_CHAR, APL_CLIENT_LENGTH); 
+	memset(l_ivclientsetup_struct.b_ccycd, APL_NULL_CHAR, APL_CCYCODE_LEN); 
+	memset(l_ivclientsetup_struct.fees_ccy, APL_NULL_CHAR, APL_CCYCODE_LEN); 
+	memset(l_ivclientsetup_struct.date_of_input, APL_NULL_CHAR, APL_DATE_LEN); 
+	memset(l_ivclientsetup_struct.maker, APL_NULL_CHAR, APL_USERID_LEN); 
+	memset(l_ivclientsetup_struct.maker_dt, APL_NULL_CHAR, APL_DATE_LEN); 
+	memset(l_ivclientsetup_struct.access_stamp, APL_NULL_CHAR, APL_DATE_LEN); 
+	memset(l_ivclientsetup_struct.spl_clt_cd, APL_NULL_CHAR, 7); 
+	memset(l_ivclientsetup_struct.comm_clt, APL_NULL_CHAR, APL_CLIENT_LENGTH); 
+	memset(l_ivclientsetup_struct.rec_clt, APL_NULL_CHAR, APL_CLIENT_LENGTH_GL); /* Bageshri HDFCIV_001*/
+	memset(l_ivclientsetup_struct.information, APL_NULL_CHAR, 241); 
+	memset(l_ivclientsetup_struct.default_feeclt, APL_NULL_CHAR, APL_CLIENT_LENGTH); 
+	memset(l_ivclientsetup_struct.last_pymt_date, APL_NULL_CHAR, APL_DATE_LEN); 
+	memset(l_ivclientsetup_struct.last_pymt_ccy, APL_NULL_CHAR, APL_CCYCODE_LEN); 
+	memset(l_ivclientsetup_struct.checker, APL_NULL_CHAR, APL_CLIENT_LENGTH); 
+	memset(l_ivclientsetup_struct.checker_dt, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(l_ivclientsetup_struct.vat_cd, APL_NULL_CHAR, 51); 
+	memset(l_ivclientsetup_struct.vat_note, APL_NULL_CHAR, 121); 
+
+	/***************** Bageshri HDFCIV_001 ********************************/
+	memset(l_ivclientsetup_struct.oblg_lvl, APL_NULL_CHAR, 21); 
+	memset(l_ivclientsetup_struct.oblg_typ, APL_NULL_CHAR, 21); 
+	memset(l_ivclientsetup_struct.pay_in_acc, APL_NULL_CHAR, APL_CLIENT_LENGTH_GL); 
+	memset(l_ivclientsetup_struct.pay_out_acc, APL_NULL_CHAR, APL_CLIENT_LENGTH_GL); 
+	memset(l_ivclientsetup_struct.acc_code1, APL_NULL_CHAR, APL_CLIENT_LENGTH_GL); 
+	memset(l_ivclientsetup_struct.acc_code2, APL_NULL_CHAR, APL_CLIENT_LENGTH_GL); 
+	memset(l_ivclientsetup_struct.acc_code2desc, APL_NULL_CHAR, 66);
+	memset(l_ivclientsetup_struct.oblig_rep_flg, APL_NULL_CHAR, 3);
+	memset(l_ivclientsetup_struct.ann_fee_month, APL_NULL_CHAR, 16);
+	memset(l_ivclientsetup_struct.cln_supermst, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+	memset(l_ivclientsetup_struct.bnk_acc, APL_NULL_CHAR, APL_CLIENT_LENGTH_GL);
+	memset(l_ivclientsetup_struct.bnk_fcy_acc, APL_NULL_CHAR, APL_CLIENT_LENGTH_GL); /* YOG 211206 */
+	memset(l_ivclientsetup_struct.lst_bill_dt, APL_NULL_CHAR, APL_DATE_LEN);/* vinay */
+	memset(l_ivclientsetup_struct.pymt_acc, APL_NULL_CHAR, APL_CLIENT_LENGTH_GL);
+	/******************  Bageshri HDFCIV_001 END **********************/
+	/******************  Bageshri HB_IV_001 START **********************/
+	memset(l_ivclientsetup_struct.dir_db_date, APL_NULL_CHAR, 3);
+	memset(l_ivclientsetup_struct.b_basis, APL_NULL_CHAR, 4);
+	memset(l_ivclientsetup_struct.b_dlv_date, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(l_ivclientsetup_struct.b_basis_cust, APL_NULL_CHAR, 4);
+	/******************  Bageshri HB_IV_001 END **********************/
+
+	l_ivclientsetup_struct = *p_iv_clientsetup_struct_a;
+
+	
+
+	if ( !strlen(l_ivclientsetup_struct.client) )
+	{
+		APL_DATA_MISSING("Account", APL_NULL_STRING, APL_NULL_STRING)
+	}
+
+	if ( !strlen(l_ivclientsetup_struct.b_ccycd) )
+	{
+		APL_DATA_MISSING("Billing Currency Code", APL_NULL_STRING, 
+				  APL_NULL_STRING)
+	}
+
+	if ( !strlen(l_ivclientsetup_struct.fees_ccy) ) 
+	{
+		APL_DATA_MISSING("Fee Currency Code", APL_NULL_STRING, 
+				  APL_NULL_STRING)
+	}
+
+	if ( l_ivclientsetup_struct.send_to_master_ind == NULL )
+	{
+		APL_DATA_MISSING("Send To Master/ Self", APL_NULL_STRING, 
+				  APL_NULL_STRING)
+	}
+
+	if ( l_ivclientsetup_struct.b_gen_ind == NULL )
+	{
+		APL_DATA_MISSING("Bill To Master/ Self", APL_NULL_STRING, 
+				  APL_NULL_STRING)
+	}
+
+	memset(chr_l_buffer, APL_NULL_CHAR, BUFFER_LEN);
+
+	sprintf(chr_l_buffer, "%lf", l_ivclientsetup_struct.minimumfee);
+
+	if ( !strlen(chr_l_buffer) )
+	{
+		APL_DATA_MISSING("Minimum Fee", APL_NULL_STRING, 
+				  APL_NULL_STRING)
+	}
+	memset(chr_l_buffer, APL_NULL_CHAR, BUFFER_LEN);
+
+	sprintf(chr_l_buffer, "%lf", l_ivclientsetup_struct.maximumfee);  /* Bageshri */
+
+	if ( !strlen(chr_l_buffer) )
+	{
+		APL_DATA_MISSING("Maximum Fee", APL_NULL_STRING,
+				APL_NULL_STRING)
+	}
+
+	memset(chr_l_buffer, APL_NULL_CHAR, BUFFER_LEN);
+
+	sprintf(chr_l_buffer, "%lf", l_ivclientsetup_struct.txnminfee);  /* Bageshri */
+
+	if ( !strlen(chr_l_buffer) )
+	{
+		APL_DATA_MISSING("Txn Minimum Fee", APL_NULL_STRING,
+				APL_NULL_STRING)
+	}
+	
+	memset(chr_l_buffer, APL_NULL_CHAR, BUFFER_LEN);
+
+	sprintf(chr_l_buffer, "%lf", l_ivclientsetup_struct.txnmaxfee);  /* Bageshri */
+
+	if ( !strlen(chr_l_buffer) )
+	{
+		APL_DATA_MISSING("Txn Maximum Fee", APL_NULL_STRING,
+				APL_NULL_STRING)
+	}
+	/*added by shruthi kumbla for ISKB_1737  start*/
+	memset(chr_l_buffer, APL_NULL_CHAR, BUFFER_LEN);
+	
+	sprintf(chr_l_buffer, "%lf", l_ivclientsetup_struct.ann_min_chrg);  
+	Alert("Annual Minimum Charge |%lf|",l_ivclientsetup_struct.ann_min_chrg);
+	if ( !strlen(chr_l_buffer) )
+	{
+		APL_DATA_MISSING("Annual Minimum Charge", APL_NULL_STRING,
+				APL_NULL_STRING)
+	}
+	/*added by shruthi kumbla for ISKB_1737  end*/
+	if ( l_ivclientsetup_struct.minimumfee_to == NULL )
+	{
+		APL_DATA_MISSING("Minimum Fee Adjustment In Consolidated Bill", 
+				  APL_NULL_STRING, APL_NULL_STRING)
+	}
+
+	if ( l_ivclientsetup_struct.min_hld_adj == NULL )
+	{
+		APL_DATA_MISSING("Minimum Fee Adjusted Only If Holdings Exist", 
+				  APL_NULL_STRING, APL_NULL_STRING)
+	}
+	if ( l_ivclientsetup_struct.maximumfee_to == NULL )  /* Bageshri */
+	{
+		APL_DATA_MISSING("Maximum Fee Adjustment In Consolidated Bill",
+				APL_NULL_STRING, APL_NULL_STRING)
+	}
+
+	if ( l_ivclientsetup_struct.max_hld_adj == NULL )  /* Bageshri */
+	{
+		APL_DATA_MISSING("Maximum Fee Adjusted Only If Holdings Exist",
+				APL_NULL_STRING, APL_NULL_STRING)
+	}
+
+	if ( !strlen(l_ivclientsetup_struct.maker) )
+	{
+		APL_DATA_MISSING("Maker", APL_NULL_STRING, APL_NULL_STRING)
+	}
+
+	if (APL_FAILURE == CO_RtvSysDtTime(chr_l_sys_date_time, l_debug_info_ptr))
+	{
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+		APL_GOBACK_FAIL
+	}
+
+	strcpy(l_ivclientsetup_struct.access_stamp, chr_l_sys_date_time);
+
+	strcpy(l_ivclientsetup_struct.maker_dt, strtok_r(chr_l_sys_date_time, " ", &chr_l_last));
+	strcat(l_ivclientsetup_struct.maker_dt, APL_NULL_TIME);
+	strcpy(l_ivclientsetup_struct.date_of_input, l_ivclientsetup_struct.maker_dt);
+	strcpy(l_ivclientsetup_struct.lst_bill_dt, l_ivclientsetup_struct.maker_dt);
+
+	if ( l_ivclientsetup_struct.dir_db_ind == NULL )
+	{
+		APL_DATA_MISSING("Direct Debit Flag", APL_NULL_STRING, 
+				  APL_NULL_STRING)
+	}
+
+	/************* Bageshri HDFCIV_001 *****************/
+	if ( l_ivclientsetup_struct.nav_ind == NULL )
+	{
+		APL_DATA_MISSING("NAV Flag", APL_NULL_STRING, 
+				  APL_NULL_STRING)
+	}
+	if(!strcmp(g_mt_commonsys_params_struct_h.nation_code,"IN"))	
+	{
+	if ( ( l_ivclientsetup_struct.b_freq == NULL )||( l_ivclientsetup_struct.b_freq == ' ') )
+		{
+			APL_DATA_MISSING("Billing Frequency", APL_NULL_STRING, 
+					  APL_NULL_STRING)
+		}
+		if ( ( l_ivclientsetup_struct.dvp_ind == NULL )||( l_ivclientsetup_struct.dvp_ind == ' ') )
+		{
+			APL_DATA_MISSING("DVP Flag", APL_NULL_STRING, 
+					  APL_NULL_STRING)
+		}
+
+		/*if (( l_ivclientsetup_struct.acc_typ == NULL )||( l_ivclientsetup_struct.acc_typ == ' ') )
+		{
+			APL_DATA_MISSING("Account Type", APL_NULL_STRING, 
+					  APL_NULL_STRING)
+		}*/
+	}
+	else
+	{
+	if ( ( l_ivclientsetup_struct.b_freq == NULL )||( l_ivclientsetup_struct.b_freq == ' ') )
+		{
+			l_i_iv_clientsetup_struct.i_b_freq = -1;
+		}
+		if ( ( l_ivclientsetup_struct.dvp_ind == NULL )||( l_ivclientsetup_struct.dvp_ind == ' ') )
+		{
+			l_i_iv_clientsetup_struct.i_dvp_ind = -1;
+		}
+	}
+		if (( l_ivclientsetup_struct.acc_typ == NULL )||( l_ivclientsetup_struct.acc_typ == ' ') )
+		{
+			l_i_iv_clientsetup_struct.i_acc_typ = -1;
+		}
+
+	
+
+	/*********************************************/
+
+	if ( APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr) )
+	{
+		*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+
+		APL_GOBACK_FAIL
+	}
+
+	l_ivclientsetup_struct.stat_ind = 'U';
+	strcpy(l_ivclientsetup_struct.checker, APL_NULL_STRING);
+	strcpy(l_ivclientsetup_struct.checker_dt, APL_NULL_STRING);
+	
+	l_i_iv_clientsetup_struct.i_checker = -1;
+	l_i_iv_clientsetup_struct.i_checker_dt = -1;
+
+	if ( !strlen(p_iv_clientsetup_struct_a->spl_clt_cd) )
+	{
+		l_i_iv_clientsetup_struct.i_spl_clt_cd = -1;
+	}
+	
+	if ( !strlen(p_iv_clientsetup_struct_a->comm_clt) )
+	{
+		l_i_iv_clientsetup_struct.i_comm_clt = -1;
+	}
+
+	if ( !strlen(p_iv_clientsetup_struct_a->rec_clt) )
+	{
+		l_i_iv_clientsetup_struct.i_rec_clt = -1;
+	}
+
+	if ( !strlen(p_iv_clientsetup_struct_a->information) )
+	{
+		l_i_iv_clientsetup_struct.i_footinfo = -1;
+	}
+
+	if ( !strlen(p_iv_clientsetup_struct_a->default_feeclt) )
+	{
+		l_i_iv_clientsetup_struct.i_def_fee_clt = -1;
+	}
+
+	if ( !strlen(p_iv_clientsetup_struct_a->vat_cd) )
+	{
+		l_i_iv_clientsetup_struct.i_vat_cd = -1;
+	}
+
+	if ( !strlen(p_iv_clientsetup_struct_a->vat_note) )
+	{
+		l_i_iv_clientsetup_struct.i_vatfootinfo = -1;
+	}
+	memset(chr_l_buffer, APL_NULL_CHAR, BUFFER_LEN);
+
+	sprintf(chr_l_buffer, "%lf", p_iv_clientsetup_struct_a->total_osamount);
+
+	if ( !strlen(chr_l_buffer) )
+	{
+		l_i_iv_clientsetup_struct.i_tot_os_amount = -1;
+	}
+
+	if ( !strlen(p_iv_clientsetup_struct_a->last_pymt_date) )
+	{
+		l_i_iv_clientsetup_struct.i_lst_pymt_dt = -1;
+	}
+
+	if ( !strlen(p_iv_clientsetup_struct_a->last_pymt_ccy) )
+	{
+		l_i_iv_clientsetup_struct.i_lst_pm_currencycode = -1;
+	}
+
+	memset(chr_l_buffer, APL_NULL_CHAR, BUFFER_LEN);
+
+	sprintf(chr_l_buffer, "%lf", p_iv_clientsetup_struct_a->last_pymt_amt);
+
+	if ( !strlen(chr_l_buffer) )
+	{
+		l_i_iv_clientsetup_struct.i_lst_pm_amount = -1;
+	}
+
+	memset(chr_l_buffer, APL_NULL_CHAR, BUFFER_LEN);
+
+	sprintf(chr_l_buffer, "%lf", p_iv_clientsetup_struct_a->last_lost_amt);
+
+	if ( !strlen(chr_l_buffer) )
+	{
+		l_i_iv_clientsetup_struct.i_lstdlosamount = -1;
+	}
+
+	memset(chr_l_buffer, APL_NULL_CHAR, BUFFER_LEN);
+
+	sprintf(chr_l_buffer, "%lf", p_iv_clientsetup_struct_a->comm_tax_amt);
+
+	if ( !strlen(chr_l_buffer) )
+	{
+		l_i_iv_clientsetup_struct.i_comm_tax_amount = -1;
+	}
+
+	/************* Bageshri HDFCIV_001 *****************/
+
+	if ( !strlen(l_ivclientsetup_struct.oblg_lvl) )
+	{
+		l_i_iv_clientsetup_struct.i_oblg_lvl = -1;
+
+	}
+	if ( !strlen(l_ivclientsetup_struct.oblg_typ) )
+	{
+		l_i_iv_clientsetup_struct.i_oblg_typ = -1;
+
+	}
+
+	memset(chr_l_buffer, APL_NULL_CHAR, BUFFER_LEN);
+
+	sprintf(chr_l_buffer, "%d", p_iv_clientsetup_struct_a->pay_in_day);
+
+	if ( !strlen(chr_l_buffer) )
+	{
+		l_i_iv_clientsetup_struct.i_pay_in_day = -1;
+	}
+
+	memset(chr_l_buffer, APL_NULL_CHAR, BUFFER_LEN);
+
+	sprintf(chr_l_buffer, "%d", p_iv_clientsetup_struct_a->pay_out_day);
+
+	if ( !strlen(chr_l_buffer) )
+	{
+		l_i_iv_clientsetup_struct.i_pay_out_day = -1;
+	}
+
+	memset(chr_l_buffer, APL_NULL_CHAR, BUFFER_LEN);
+
+	sprintf(chr_l_buffer, "%lf", p_iv_clientsetup_struct_a->pay_out_lmt);
+
+	if ( !strlen(chr_l_buffer) )
+	{
+		l_i_iv_clientsetup_struct.i_pay_out_lmt = -1;
+	}
+
+	if ( !strlen(p_iv_clientsetup_struct_a->pay_in_acc) )
+	{
+		l_i_iv_clientsetup_struct.i_pay_in_acc = -1;
+	}
+
+	if ( !strlen(p_iv_clientsetup_struct_a->pay_out_acc) )
+	{
+		l_i_iv_clientsetup_struct.i_pay_out_acc = -1;
+	}
+
+	if ( !strlen(p_iv_clientsetup_struct_a->acc_code1) )
+	{
+		l_i_iv_clientsetup_struct.i_acc_code1 = -1;
+	}
+
+	if ( !strlen(p_iv_clientsetup_struct_a->acc_code2) )
+	{
+		l_i_iv_clientsetup_struct.i_acc_code2 = -1;
+	}
+
+	if ( !strlen(p_iv_clientsetup_struct_a->acc_code2desc) )
+	{
+		l_i_iv_clientsetup_struct.i_acc_code2desc = -1;
+	}
+
+	if ( !strlen(p_iv_clientsetup_struct_a->oblig_rep_flg) )
+	{
+		l_i_iv_clientsetup_struct.i_oblig_rep_flg = -1;
+	}
+
+	if (  l_ivclientsetup_struct.calc_basis == ' ' )
+	{
+		l_i_iv_clientsetup_struct.i_calc_basis = -1;
+	}
+
+	if ( !strlen(p_iv_clientsetup_struct_a->ann_fee_month) )
+	{
+		l_i_iv_clientsetup_struct.i_ann_fee_month = -1;
+	}
+
+	if ( !strlen(p_iv_clientsetup_struct_a->cln_supermst) )
+	{
+		l_i_iv_clientsetup_struct.i_cln_supermst = -1;
+	}
+
+	if ( !strlen(p_iv_clientsetup_struct_a->bnk_acc) )
+	{
+		l_i_iv_clientsetup_struct.i_bnk_acc = -1;
+	}
+	/* Yog For bnk_fcy_acc added on 211206 */
+	if ( !strlen(p_iv_clientsetup_struct_a->bnk_fcy_acc) )
+	{
+		l_i_iv_clientsetup_struct.i_bnk_fcy_acc = -1;
+	}
+	 printf("\n *** YOG *** BNK_FCY_ACC = |%s|\n", p_iv_clientsetup_struct_a->bnk_fcy_acc);
+
+	 if ( !strlen(p_iv_clientsetup_struct_a->pymt_acc) )
+	 {
+		 l_i_iv_clientsetup_struct.i_pymt_acc = -1;
+	 }
+	 /******************  Bageshri HDFCIV_001 END **********************/
+	 /******************  Bageshri HB_IV_001 START **********************/
+	 if ( !strlen(p_iv_clientsetup_struct_a->dir_db_date) )
+	 {
+		 l_i_iv_clientsetup_struct.i_dir_db_date= -1;
+	 }
+	 if ( !strlen(p_iv_clientsetup_struct_a->b_basis) )
+	 {
+		 l_i_iv_clientsetup_struct.i_b_basis= -1;
+	 }
+	 if ( !strlen(p_iv_clientsetup_struct_a->b_dlv_date) )
+	 {
+		 l_i_iv_clientsetup_struct.i_b_dlv_date= -1;
+	 }
+	memset(chr_l_buffer, APL_NULL_CHAR, BUFFER_LEN);
+
+	sprintf(chr_l_buffer, "%d", p_iv_clientsetup_struct_a->rep_pay_in_day);
+
+	if ( !strlen(chr_l_buffer) )
+	{
+		l_i_iv_clientsetup_struct.i_rep_pay_in_day = -1;
+	}
+
+	memset(chr_l_buffer, APL_NULL_CHAR, BUFFER_LEN);
+
+	sprintf(chr_l_buffer, "%d", p_iv_clientsetup_struct_a->rep_pay_out_day);
+
+	if ( !strlen(chr_l_buffer) )
+	{
+		l_i_iv_clientsetup_struct.i_rep_pay_out_day = -1;
+	}
+	 if ( !strlen(p_iv_clientsetup_struct_a->b_basis_cust) )
+	 {
+		 l_i_iv_clientsetup_struct.i_b_basis_cust= -1;
+	 }
+	Alert("Annual Minimum Charge |%lf|",l_ivclientsetup_struct.ann_min_chrg);
+	 Alert("\n *** YOG *** BNK_FCY_ACC = |%s|\n", p_iv_clientsetup_struct_a->bnk_fcy_acc);
+	 /******************  Bageshri HB_IV_001 START **********************/
+
+	EXEC SQL INSERT INTO IV_CLIENTSETUP
+		 VALUES (:l_ivclientsetup_struct INDICATOR :l_i_iv_clientsetup_struct);
+
+	*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+	IS_ANY_ORA_ERROR_AND_DUPLICATE(ERR_BILLPARAM_EXISTS, l_ivclientsetup_struct.client,
+					  APL_NULL_STRING, APL_NULL_STRING)
+
+	*int_p_retstat = IV_SUCCESS;
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of IV_Mod_IVBCUSTSETUPNew().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_SUCCESS;
+
+	RETURN_FAILURE:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of IV_Mod_IVBCUSTSETUPNew().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_FAILURE;
+}
+
+
+
+int IV_Mod_IVBCUSTSETUPLockRow(const char *p_client, const char *p_access_stamp, 
+			  int *int_p_retstat, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	
+
+	char chr_l_buffer[KEY_LENGTH];
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+		char chr_h_access_stamp[APL_DATE_LEN];
+		EXEC SQL VAR chr_h_access_stamp IS STRING;
+		short int int_i_access_stamp = 0;
+		struct sqlca sqlca;
+
+	EXEC SQL END DECLARE SECTION;
+
+	#ifdef APL_THREADS
+		APL_SET_CONTEXT
+		EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	memset(chr_l_buffer, APL_NULL_CHAR, KEY_LENGTH);
+	memset(chr_h_access_stamp, APL_NULL_CHAR, APL_DATE_LEN);
+	Alert("p_access_stamp is |%s|",p_access_stamp);
+
+	EXEC SQL SELECT ACCESS_STAMP
+		 INTO :chr_h_access_stamp INDICATOR :int_i_access_stamp
+		 FROM IV_CLIENTSETUP
+		 WHERE ((CLIENT = :p_client) AND
+			(ACCESS_STAMP = :p_access_stamp))
+		 FOR UPDATE OF ACCESS_STAMP;
+	Alert("SQL Error is |%d|",sqlca.sqlcode);
+
+	memset(chr_l_buffer, APL_NULL_CHAR, KEY_LENGTH);
+	ltoa_r(sqlca.sqlcode, chr_l_buffer, KEY_LENGTH - 1);
+
+	if ( sqlca.sqlcode < 0 )
+	{
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+		CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, chr_l_buffer, 
+			       APL_NULL_STRING, APL_NULL_STRING, 
+			       __LINE__, __FILE__);
+
+		APL_GOBACK_FAIL
+	}
+	else if ( sqlca.sqlcode == 1403 )
+	{
+		*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+
+		CO_InsertErr(l_debug_info_ptr, ERR_ACCESSSTAMP_CHGD, 
+			       APL_NULL_STRING, APL_NULL_STRING, 
+			       APL_NULL_STRING, __LINE__, __FILE__);
+
+		APL_GOBACK_FAIL
+	}
+
+	*int_p_retstat = IV_SUCCESS;
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of IV_Mod_IVBCUSTSETUPLockRow().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_SUCCESS;
+
+	RETURN_FAILURE:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of IV_Mod_IVBCUSTSETUPLockRow().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_FAILURE;
+}
+
+
+
+int IV_Mod_IVBCUSTSETUPChg(const IV_CLIENTSETUP_STRUCT *p_iv_clientsetup_struct_a, 
+		      int *int_p_retstat, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	
+
+	char chr_l_buffer1[KEY_LENGTH], chr_l_buffer2[BUFFER_LEN];
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+		IV_CLIENTSETUP_STRUCT l_ivclientsetup_struct;
+		EXEC SQL VAR l_ivclientsetup_struct.client IS STRING;
+		EXEC SQL VAR l_ivclientsetup_struct.b_ccycd IS STRING;
+		EXEC SQL VAR l_ivclientsetup_struct.date_of_input IS STRING;
+		EXEC SQL VAR l_ivclientsetup_struct.maker IS STRING;
+		EXEC SQL VAR l_ivclientsetup_struct.maker_dt IS STRING;
+		EXEC SQL VAR l_ivclientsetup_struct.access_stamp IS STRING;
+		EXEC SQL VAR l_ivclientsetup_struct.spl_clt_cd IS STRING;
+		EXEC SQL VAR l_ivclientsetup_struct.comm_clt IS STRING;
+		EXEC SQL VAR l_ivclientsetup_struct.rec_clt IS STRING;
+		EXEC SQL VAR l_ivclientsetup_struct.information IS STRING;
+		EXEC SQL VAR l_ivclientsetup_struct.default_feeclt IS STRING;
+		EXEC SQL VAR l_ivclientsetup_struct.last_pymt_date IS STRING;
+		EXEC SQL VAR l_ivclientsetup_struct.last_pymt_ccy IS STRING;
+		EXEC SQL VAR l_ivclientsetup_struct.checker IS STRING;
+		EXEC SQL VAR l_ivclientsetup_struct.checker_dt IS STRING;
+		EXEC SQL VAR l_ivclientsetup_struct.fees_ccy IS STRING; 
+		EXEC SQL VAR l_ivclientsetup_struct.vat_cd IS STRING; 
+		EXEC SQL VAR l_ivclientsetup_struct.vat_note IS STRING; 
+
+		/****************** Bageshri HDFCIV_001 **********************/
+		EXEC SQL VAR l_ivclientsetup_struct.oblg_lvl IS STRING;	
+		EXEC SQL VAR l_ivclientsetup_struct.oblg_typ IS STRING;	
+		EXEC SQL VAR l_ivclientsetup_struct.pay_in_acc IS STRING;	
+		EXEC SQL VAR l_ivclientsetup_struct.pay_out_acc IS STRING;	
+		EXEC SQL VAR l_ivclientsetup_struct.acc_code1 IS STRING;	
+		EXEC SQL VAR l_ivclientsetup_struct.acc_code2 IS STRING;	
+		EXEC SQL VAR l_ivclientsetup_struct.acc_code2desc IS STRING;
+		EXEC SQL VAR l_ivclientsetup_struct.oblig_rep_flg IS STRING;	
+		EXEC SQL VAR l_ivclientsetup_struct.ann_fee_month IS STRING;	
+		EXEC SQL VAR l_ivclientsetup_struct.cln_supermst IS STRING;	
+		EXEC SQL VAR l_ivclientsetup_struct.bnk_acc IS STRING;
+		EXEC SQL VAR l_ivclientsetup_struct.bnk_fcy_acc IS STRING; /* YOG on 211206 */
+		EXEC SQL VAR l_ivclientsetup_struct.pymt_acc IS STRING;
+		/******************  Bageshri HDFCIV_001 END **********************/
+		/******************  Bageshri HB_IV_001 START **********************/
+		EXEC SQL VAR l_ivclientsetup_struct.dir_db_date IS STRING;
+		EXEC SQL VAR l_ivclientsetup_struct.b_basis IS STRING;
+		EXEC SQL VAR l_ivclientsetup_struct.b_dlv_date IS STRING;
+		EXEC SQL VAR l_ivclientsetup_struct.b_basis_cust IS STRING;
+		/******************  Bageshri HB_IV_001 END **********************/
+
+		I_IV_CLIENTSETUP_STRUCT l_i_iv_clientsetup_struct = {0, 0, 0, 0, 0, 0, 0, 0, 0,
+						    0, 0, 0, 0, 0, 0, 0, 0, 0, 
+						    0, 0, 0, 0, 0, 0, 0, 0, 0,
+						    0, 0, 0, 0, 0, 0, 0, 0, 0,
+							 0, 0, 0, 0, 0, 0, 0, 0, 0,
+							 0, 0, 0, 0, 0, 0, 0, 0, 0,
+							 0, 0, 0, 0, 0, 0, 0, 0, 0};	/* Bageshri HDFCIV_001*//* Bageshri HB_IV_001*/
+		struct sqlca sqlca;
+
+	EXEC SQL END DECLARE SECTION;
+
+	#ifdef APL_THREADS
+		APL_SET_CONTEXT
+		EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	memset(l_ivclientsetup_struct.client, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+	memset(l_ivclientsetup_struct.b_ccycd, APL_NULL_CHAR, APL_CCYCODE_LEN);
+	memset(l_ivclientsetup_struct.fees_ccy, APL_NULL_CHAR, APL_CCYCODE_LEN);
+	memset(l_ivclientsetup_struct.date_of_input, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(l_ivclientsetup_struct.maker, APL_NULL_CHAR, APL_USERID_LEN);
+	memset(l_ivclientsetup_struct.maker_dt, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(l_ivclientsetup_struct.access_stamp, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(l_ivclientsetup_struct.spl_clt_cd, APL_NULL_CHAR, 7);
+	memset(l_ivclientsetup_struct.comm_clt, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+	memset(l_ivclientsetup_struct.rec_clt, APL_NULL_CHAR, APL_CLIENT_LENGTH_GL); /* Bageshri HDFCIV_001*/
+	memset(l_ivclientsetup_struct.information, APL_NULL_CHAR, 241);
+	memset(l_ivclientsetup_struct.default_feeclt, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+	memset(l_ivclientsetup_struct.last_pymt_date, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(l_ivclientsetup_struct.last_pymt_ccy, APL_NULL_CHAR, APL_CCYCODE_LEN);
+	memset(l_ivclientsetup_struct.checker, APL_NULL_CHAR, APL_USERID_LEN);
+	memset(l_ivclientsetup_struct.checker_dt, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(l_ivclientsetup_struct.vat_cd, APL_NULL_CHAR, 51); 			
+	memset(l_ivclientsetup_struct.vat_note, APL_NULL_CHAR, 121);		
+
+	/***************** Bageshri HDFCIV_001 ********************************/
+	memset(l_ivclientsetup_struct.oblg_lvl, APL_NULL_CHAR, 21); 
+	memset(l_ivclientsetup_struct.oblg_typ, APL_NULL_CHAR, 21); 
+	memset(l_ivclientsetup_struct.pay_in_acc, APL_NULL_CHAR, APL_CLIENT_LENGTH_GL); 
+	memset(l_ivclientsetup_struct.pay_out_acc, APL_NULL_CHAR, APL_CLIENT_LENGTH_GL); 
+	memset(l_ivclientsetup_struct.acc_code1, APL_NULL_CHAR, APL_CLIENT_LENGTH_GL); 
+	memset(l_ivclientsetup_struct.acc_code2, APL_NULL_CHAR, APL_CLIENT_LENGTH_GL); 
+	memset(l_ivclientsetup_struct.acc_code2desc, APL_NULL_CHAR, 66);
+	memset(l_ivclientsetup_struct.oblig_rep_flg, APL_NULL_CHAR, 3);
+	memset(l_ivclientsetup_struct.ann_fee_month, APL_NULL_CHAR, 16);
+	memset(l_ivclientsetup_struct.cln_supermst, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+	memset(l_ivclientsetup_struct.bnk_acc, APL_NULL_CHAR, APL_CLIENT_LENGTH_GL);
+	memset(l_ivclientsetup_struct.bnk_fcy_acc, APL_NULL_CHAR, APL_CLIENT_LENGTH_GL); /* YOG 211206 */
+	memset(l_ivclientsetup_struct.pymt_acc, APL_NULL_CHAR, APL_CLIENT_LENGTH_GL);
+	/******************  Bageshri HDFCIV_001 END **********************/
+	/******************  Bageshri HB_IV_001 START **********************/
+	memset(l_ivclientsetup_struct.dir_db_date, APL_NULL_CHAR, 3);
+	memset(l_ivclientsetup_struct.b_basis, APL_NULL_CHAR, 4);
+	memset(l_ivclientsetup_struct.b_dlv_date, APL_NULL_CHAR, APL_DATE_LEN);
+	memset(l_ivclientsetup_struct.b_basis_cust, APL_NULL_CHAR, 4);
+	/******************  Bageshri HB_IV_001 END **********************/
+	l_ivclientsetup_struct = *p_iv_clientsetup_struct_a;
+
+	if ( !strlen(l_ivclientsetup_struct.client) )
+	{
+		APL_DATA_MISSING("Account", APL_NULL_STRING, APL_NULL_STRING)
+	}
+
+	if ( !strlen(l_ivclientsetup_struct.b_ccycd) )
+	{
+		APL_DATA_MISSING("Billing Currency Code", APL_NULL_STRING, 
+				  APL_NULL_STRING)
+	}
+
+	if ( !strlen(l_ivclientsetup_struct.fees_ccy) ) 
+	{
+		APL_DATA_MISSING("Fee Currency Code", APL_NULL_STRING, 
+				  APL_NULL_STRING)
+	}
+
+	if ( (l_ivclientsetup_struct.send_to_master_ind != 'M') && 
+	     (l_ivclientsetup_struct.send_to_master_ind != 'S')&& 
+	     (l_ivclientsetup_struct.send_to_master_ind != 'G') )
+	{
+		CO_InsertErr(l_debug_info_ptr, ERR_SNDVAL_S_M, APL_NULL_STRING,  
+			       APL_NULL_STRING, APL_NULL_STRING, 
+			       __LINE__, __FILE__);
+	}
+
+	if ( (l_ivclientsetup_struct.b_gen_ind != 'M') && (l_ivclientsetup_struct.b_gen_ind != 'S') )
+	{
+		CO_InsertErr(l_debug_info_ptr, ERR_BILLTO_SORM, APL_NULL_STRING,  
+			       APL_NULL_STRING, APL_NULL_STRING, 
+			       __LINE__, __FILE__);
+	}
+
+	memset(chr_l_buffer2, APL_NULL_CHAR, BUFFER_LEN);
+
+	sprintf(chr_l_buffer2, "%lf", l_ivclientsetup_struct.minimumfee);
+
+	if ( !strlen(chr_l_buffer2) )
+	{
+		APL_DATA_MISSING("Minimum Fee", APL_NULL_STRING, 
+				  APL_NULL_STRING)
+	}
+	memset(chr_l_buffer2, APL_NULL_CHAR, BUFFER_LEN);
+
+	sprintf(chr_l_buffer2, "%lf", l_ivclientsetup_struct.maximumfee);  /* Bageshri */
+
+	if ( !strlen(chr_l_buffer2) )
+	{
+		APL_DATA_MISSING("Maximum Fee", APL_NULL_STRING,
+				APL_NULL_STRING)
+	}
+	memset(chr_l_buffer2, APL_NULL_CHAR, BUFFER_LEN);
+
+	sprintf(chr_l_buffer2, "%lf", l_ivclientsetup_struct.txnminfee);  /* Bageshri */
+
+	if ( !strlen(chr_l_buffer2) )
+	{
+		APL_DATA_MISSING("Txn Minimum Fee", APL_NULL_STRING,
+				APL_NULL_STRING)
+	}
+
+	memset(chr_l_buffer2, APL_NULL_CHAR, BUFFER_LEN);
+
+	sprintf(chr_l_buffer2, "%lf", l_ivclientsetup_struct.txnmaxfee);  /* Bageshri */
+
+	if ( !strlen(chr_l_buffer2) )
+	{
+		APL_DATA_MISSING("Txn Maximum Fee", APL_NULL_STRING,
+				APL_NULL_STRING)
+	}
+	/*added by shruthi kumbla for ISKB_1737  start*/
+	memset(chr_l_buffer2, APL_NULL_CHAR, BUFFER_LEN);
+
+	sprintf(chr_l_buffer2, "%lf", l_ivclientsetup_struct.ann_min_chrg);  
+	Alert("Annual Minimum Charge |%lf|",l_ivclientsetup_struct.ann_min_chrg);
+	if ( !strlen(chr_l_buffer2) )
+	{
+		APL_DATA_MISSING("Annual Minimum Charge", APL_NULL_STRING,
+				APL_NULL_STRING)
+	}
+	/*added by shruthi kumbla for kotak ISKB_1737  end*/
+
+	if ( (l_ivclientsetup_struct.minimumfee_to != 'Y') && 
+	     (l_ivclientsetup_struct.minimumfee_to != 'N') )
+	{
+		CO_InsertErr(l_debug_info_ptr, ERR_MINFEE_CONSO_VALID, 
+			       APL_NULL_STRING, APL_NULL_STRING, 
+			       APL_NULL_STRING, __LINE__, __FILE__);
+
+		
+	}
+
+	if ( (l_ivclientsetup_struct.min_hld_adj != 'Y') && 
+	     (l_ivclientsetup_struct.min_hld_adj != 'N') )
+	{
+		CO_InsertErr(l_debug_info_ptr, ERR_MINFEE_HLD_VALID, 
+			       APL_NULL_STRING, APL_NULL_STRING, 
+			       APL_NULL_STRING, __LINE__, __FILE__);
+
+		
+	}
+	if ( (l_ivclientsetup_struct.maximumfee_to != 'Y') &&
+			(l_ivclientsetup_struct.maximumfee_to != 'N') )  /* Bageshri */
+	{
+		CO_InsertErr(l_debug_info_ptr, ERR_MAXFEE_CONSO_VALID,
+				APL_NULL_STRING, APL_NULL_STRING,
+				APL_NULL_STRING, __LINE__, __FILE__);
+
+
+	}
+
+	if ( (l_ivclientsetup_struct.max_hld_adj != 'Y') &&
+			(l_ivclientsetup_struct.max_hld_adj != 'N') )  /* Bageshri */
+	{
+		CO_InsertErr(l_debug_info_ptr, ERR_MAXFEE_HLD_VALID,
+				APL_NULL_STRING, APL_NULL_STRING,
+				APL_NULL_STRING, __LINE__, __FILE__);
+
+
+	}
+
+	if ( (l_ivclientsetup_struct.dir_db_ind != 'Y') && 
+	     (l_ivclientsetup_struct.dir_db_ind != 'N') )
+	{
+		APL_DATA_MISSING("Direct Debit Flag", APL_NULL_STRING, 
+				  APL_NULL_STRING)
+	}
+
+	/************* Bageshri HDFCIV_001 *****************/
+
+	if ( (l_ivclientsetup_struct.nav_ind != 'Y') && 
+	     (l_ivclientsetup_struct.nav_ind != 'N') )
+	{
+		APL_DATA_MISSING("NAV Flag", APL_NULL_STRING, 
+				  APL_NULL_STRING)
+	}
+
+	if(!strcmp(g_mt_commonsys_params_struct_h.nation_code,"IN"))	
+	{
+		if ( (l_ivclientsetup_struct.b_freq != 'A')&&(l_ivclientsetup_struct.b_freq != 'M')&&(l_ivclientsetup_struct.b_freq != 'Q')&&(l_ivclientsetup_struct.b_freq != 'S'))
+		{
+			APL_DATA_MISSING("Billing Frequency", APL_NULL_STRING, 
+					  APL_NULL_STRING)
+		}
+
+		if ( (l_ivclientsetup_struct.dvp_ind != 'Y') && 
+		     (l_ivclientsetup_struct.dvp_ind != 'N') )
+		{
+			APL_DATA_MISSING("DVP Flag", APL_NULL_STRING, 
+					  APL_NULL_STRING)
+		}
+
+		/*if ( (l_ivclientsetup_struct.acc_typ == 'C')&&(l_ivclientsetup_struct.acc_typ == 'E')&&(l_ivclientsetup_struct.acc_typ == 'F')&&(l_ivclientsetup_struct.acc_typ == 'N')&&(l_ivclientsetup_struct.acc_typ == 'R') )
+		{
+			APL_DATA_MISSING("Account Type", APL_NULL_STRING, 
+					  APL_NULL_STRING)
+		}*/
+	}
+
+	/*********************************************/
+		
+
+	if ( !strlen(l_ivclientsetup_struct.maker) )
+	{
+		APL_DATA_MISSING("Maker", APL_NULL_STRING, APL_NULL_STRING)
+	}
+
+	if ( !strlen(l_ivclientsetup_struct.access_stamp) )
+	{
+		APL_DATA_MISSING("Access Stamp", APL_NULL_STRING, 
+				  APL_NULL_STRING)
+	}
+	
+	if ( APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr) )
+	{
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+		APL_GOBACK_FAIL
+	}
+
+	if ( !strlen(l_ivclientsetup_struct.spl_clt_cd) )
+	{
+		l_i_iv_clientsetup_struct.i_spl_clt_cd = -1;
+	}
+
+	if ( !strlen(l_ivclientsetup_struct.comm_clt) )
+	{
+		l_i_iv_clientsetup_struct.i_comm_clt = -1;
+	}
+
+	if ( !strlen(l_ivclientsetup_struct.rec_clt) )
+	{
+		l_i_iv_clientsetup_struct.i_rec_clt = -1;
+	}
+
+	if ( !strlen(l_ivclientsetup_struct.information) )
+	{
+		l_i_iv_clientsetup_struct.i_footinfo = -1;
+	}
+
+	if ( !strlen(l_ivclientsetup_struct.default_feeclt) )
+	{
+		l_i_iv_clientsetup_struct.i_def_fee_clt = -1;
+	}
+
+	if ( !strlen(l_ivclientsetup_struct.vat_cd) ) 
+	{
+		l_i_iv_clientsetup_struct.i_vat_cd = -1;
+	}
+
+	if ( !strlen(l_ivclientsetup_struct.vat_note) ) 
+	{
+		l_i_iv_clientsetup_struct.i_vatfootinfo = -1;
+	}
+
+	memset(chr_l_buffer2, APL_NULL_CHAR, BUFFER_LEN);
+
+	sprintf(chr_l_buffer2, "%lf", l_ivclientsetup_struct.total_osamount);
+
+	if ( !strlen(chr_l_buffer2) )
+	{
+		l_i_iv_clientsetup_struct.i_tot_os_amount = -1;
+	}
+
+	if ( !strlen(l_ivclientsetup_struct.last_pymt_date) )
+	{
+		l_i_iv_clientsetup_struct.i_lst_pymt_dt = -1;
+	}
+
+	if ( !strlen(l_ivclientsetup_struct.last_pymt_ccy) )
+	{
+		l_i_iv_clientsetup_struct.i_lst_pm_currencycode = -1;
+	}
+
+	memset(chr_l_buffer2, APL_NULL_CHAR, BUFFER_LEN);
+
+	sprintf(chr_l_buffer2, "%lf", l_ivclientsetup_struct.last_pymt_amt);
+
+	if ( !strlen(chr_l_buffer2) )
+	{
+		l_i_iv_clientsetup_struct.i_lst_pm_amount = -1;
+	}
+
+	memset(chr_l_buffer2, APL_NULL_CHAR, BUFFER_LEN);
+
+	sprintf(chr_l_buffer2, "%lf", l_ivclientsetup_struct.last_lost_amt);
+
+	if ( !strlen(chr_l_buffer2) )
+	{
+		l_i_iv_clientsetup_struct.i_lstdlosamount = -1;
+	}
+
+	memset(chr_l_buffer2, APL_NULL_CHAR, BUFFER_LEN);
+
+	sprintf(chr_l_buffer2, "%lf", l_ivclientsetup_struct.comm_tax_amt);
+
+	if ( !strlen(chr_l_buffer2) )
+	{
+		l_i_iv_clientsetup_struct.i_comm_tax_amount = -1;
+	}
+
+	/*************  Bageshri HDFCIV_001 *****************/
+	if ( !strlen(l_ivclientsetup_struct.oblg_lvl) )
+	{
+		l_i_iv_clientsetup_struct.i_oblg_lvl = -1;
+
+	}
+	if ( !strlen(l_ivclientsetup_struct.oblg_typ) )
+	{
+		l_i_iv_clientsetup_struct.i_oblg_typ = -1;
+
+	}
+
+	memset(chr_l_buffer2, APL_NULL_CHAR, BUFFER_LEN);
+
+	sprintf(chr_l_buffer2, "%d", p_iv_clientsetup_struct_a->pay_in_day);
+
+	if ( !strlen(chr_l_buffer2) )
+	{
+		l_i_iv_clientsetup_struct.i_pay_in_day = -1;
+	}
+
+	memset(chr_l_buffer2, APL_NULL_CHAR, BUFFER_LEN);
+
+	sprintf(chr_l_buffer2, "%d", p_iv_clientsetup_struct_a->pay_out_day);
+
+	if ( !strlen(chr_l_buffer2) )
+	{
+		l_i_iv_clientsetup_struct.i_pay_out_day = -1;
+	}
+
+	memset(chr_l_buffer2, APL_NULL_CHAR, BUFFER_LEN);
+
+	sprintf(chr_l_buffer2, "%lf", p_iv_clientsetup_struct_a->pay_out_lmt);
+
+	if ( !strlen(chr_l_buffer2) )
+	{
+		l_i_iv_clientsetup_struct.i_pay_out_lmt = -1;
+	}
+
+	if ( !strlen(p_iv_clientsetup_struct_a->pay_in_acc) )
+	{
+		l_i_iv_clientsetup_struct.i_pay_in_acc = -1;
+	}
+
+	if ( !strlen(p_iv_clientsetup_struct_a->pay_out_acc) )
+	{
+		l_i_iv_clientsetup_struct.i_pay_out_acc = -1;
+	}
+
+	if ( !strlen(p_iv_clientsetup_struct_a->acc_code1) )
+	{
+		l_i_iv_clientsetup_struct.i_acc_code1 = -1;
+	}
+
+	if ( !strlen(p_iv_clientsetup_struct_a->acc_code2) )
+	{
+		l_i_iv_clientsetup_struct.i_acc_code2 = -1;
+	}
+
+	if ( !strlen(p_iv_clientsetup_struct_a->acc_code2desc) )
+	{
+		l_i_iv_clientsetup_struct.i_acc_code2desc = -1;
+	}
+
+	if ( !strlen(p_iv_clientsetup_struct_a->oblig_rep_flg) )
+	{
+		l_i_iv_clientsetup_struct.i_oblig_rep_flg = -1;
+	}
+
+	if (  l_ivclientsetup_struct.calc_basis == ' ' )
+	{
+		l_i_iv_clientsetup_struct.i_calc_basis = -1;
+	}
+
+	if ( !strlen(p_iv_clientsetup_struct_a->ann_fee_month) )
+	{
+		l_i_iv_clientsetup_struct.i_ann_fee_month = -1;
+	}
+
+	if ( !strlen(p_iv_clientsetup_struct_a->cln_supermst) )
+	{
+		l_i_iv_clientsetup_struct.i_cln_supermst = -1;
+	}
+
+	if ( !strlen(p_iv_clientsetup_struct_a->bnk_acc) )
+	{
+		l_i_iv_clientsetup_struct.i_bnk_acc = -1;
+	}
+	/* Added for bnk_fcy_acc by YOG on 211206 */
+	if ( !strlen(p_iv_clientsetup_struct_a->bnk_fcy_acc) )
+	{
+		l_i_iv_clientsetup_struct.i_bnk_fcy_acc = -1;
+	}
+
+	if ( !strlen(p_iv_clientsetup_struct_a->pymt_acc) )
+	{
+		l_i_iv_clientsetup_struct.i_pymt_acc = -1;
+	}
+
+	/******************  Bageshri HDFCIV_001 END **********************/
+	/******************  Bageshri HB_IV_001 START **********************/
+	if ( !strlen(p_iv_clientsetup_struct_a->dir_db_date) )
+	{
+		l_i_iv_clientsetup_struct.i_dir_db_date= -1;
+	}
+
+	if ( !strlen(p_iv_clientsetup_struct_a->b_basis) )
+	{
+		l_i_iv_clientsetup_struct.i_b_basis= -1;
+	}
+
+	if ( !strlen(p_iv_clientsetup_struct_a->b_dlv_date) )
+	{
+		l_i_iv_clientsetup_struct.i_b_dlv_date= -1;
+	}
+
+	memset(chr_l_buffer2, APL_NULL_CHAR, BUFFER_LEN);
+
+	sprintf(chr_l_buffer2, "%d", p_iv_clientsetup_struct_a->rep_pay_in_day);
+
+	if ( !strlen(chr_l_buffer2) )
+	{
+		l_i_iv_clientsetup_struct.i_rep_pay_in_day = -1;
+	}
+
+	memset(chr_l_buffer2, APL_NULL_CHAR, BUFFER_LEN);
+
+	sprintf(chr_l_buffer2, "%d", p_iv_clientsetup_struct_a->rep_pay_out_day);
+
+	if ( !strlen(chr_l_buffer2) )
+	{
+		l_i_iv_clientsetup_struct.i_rep_pay_out_day = -1;
+	}
+
+	if (  (l_ivclientsetup_struct.acc_typ == ' ' ) || (l_ivclientsetup_struct.acc_typ == NULL ))
+	{
+		l_i_iv_clientsetup_struct.i_acc_typ = -1;
+	}
+
+	if ( !strlen(p_iv_clientsetup_struct_a->b_basis_cust) )
+	{
+		l_i_iv_clientsetup_struct.i_b_basis_cust= -1;
+	}
+	/******************  Bageshri HB_IV_001 END **********************/
+	Alert("Annual Minimum Charge |%lf|",l_ivclientsetup_struct.ann_min_chrg);
+	EXEC SQL UPDATE IV_CLIENTSETUP
+		SET B_CCYCD = :l_ivclientsetup_struct.b_ccycd 
+		INDICATOR :l_i_iv_clientsetup_struct.i_bl_currencycode,
+					 SEND_TO_MASTER_IND = :l_ivclientsetup_struct.send_to_master_ind 
+						 INDICATOR :l_i_iv_clientsetup_struct.i_send_to_master_ind, 
+					 B_GEN_IND = :l_ivclientsetup_struct.b_gen_ind
+						 INDICATOR :l_i_iv_clientsetup_struct.i_b_gen_flag, 
+					 MINIMUMFEE = :l_ivclientsetup_struct.minimumfee 
+						 INDICATOR :l_i_iv_clientsetup_struct.i_minimumfee, 
+					 MAXIMUMFEE = :l_ivclientsetup_struct.maximumfee
+						 INDICATOR :l_i_iv_clientsetup_struct.i_maximumfee,
+					 MINIMUMFEE_TO = :l_ivclientsetup_struct.minimumfee_to 
+						 INDICATOR :l_i_iv_clientsetup_struct.i_minimumfee_to, 
+					 MIN_HLD_ADJ = :l_ivclientsetup_struct.min_hld_adj 
+						 INDICATOR :l_i_iv_clientsetup_struct.i_min_hld_adj, 
+					 MAXIMUMFEE_TO = :l_ivclientsetup_struct.maximumfee_to
+						 INDICATOR :l_i_iv_clientsetup_struct.i_maximumfee_to,
+					 MAX_HLD_ADJ = :l_ivclientsetup_struct.max_hld_adj
+						 INDICATOR :l_i_iv_clientsetup_struct.i_max_hld_adj,
+					 DIR_DB_IND = :l_ivclientsetup_struct.dir_db_ind 
+						 INDICATOR :l_i_iv_clientsetup_struct.i_dir_db_flag, 
+					 SPL_CLT_CD = :l_ivclientsetup_struct.spl_clt_cd
+						 INDICATOR :l_i_iv_clientsetup_struct.i_spl_clt_cd, 
+					 COMM_CLT = :l_ivclientsetup_struct.comm_clt
+						 INDICATOR :l_i_iv_clientsetup_struct.i_comm_clt, 
+					 REC_CLT = :l_ivclientsetup_struct.rec_clt
+						 INDICATOR :l_i_iv_clientsetup_struct.i_rec_clt, 
+					 INFORMATION = :l_ivclientsetup_struct.information
+						 INDICATOR :l_i_iv_clientsetup_struct.i_footinfo, 
+					 DEFAULT_FEECLT = :l_ivclientsetup_struct.default_feeclt
+						 INDICATOR :l_i_iv_clientsetup_struct.i_def_fee_clt, 
+					 TOTAL_OSAMOUNT = :l_ivclientsetup_struct.total_osamount
+						 INDICATOR :l_i_iv_clientsetup_struct.i_tot_os_amount, 
+					 LAST_PYMT_DATE = :l_ivclientsetup_struct.last_pymt_date
+						 INDICATOR :l_i_iv_clientsetup_struct.i_lst_pymt_dt, 
+					 LAST_PYMT_CCY = :l_ivclientsetup_struct.last_pymt_ccy
+						 INDICATOR :l_i_iv_clientsetup_struct.i_lst_pm_currencycode,
+					 LAST_PYMT_AMT = :l_ivclientsetup_struct.last_pymt_amt
+						 INDICATOR :l_i_iv_clientsetup_struct.i_lst_pm_amount, 
+					 LAST_LOST_AMT = :l_ivclientsetup_struct.last_lost_amt
+						 INDICATOR :l_i_iv_clientsetup_struct.i_lstdlosamount, 
+					 COMM_TAX_AMT = :l_ivclientsetup_struct.comm_tax_amt
+						 INDICATOR :l_i_iv_clientsetup_struct.i_comm_tax_amount,
+					 FEES_CCY = :l_ivclientsetup_struct.fees_ccy 
+						 INDICATOR :l_i_iv_clientsetup_struct.i_fee_currencycode,
+					 VAT_CD	= :l_ivclientsetup_struct.vat_cd
+						 INDICATOR :l_i_iv_clientsetup_struct.i_vat_cd,
+					 VAT_NOTE = :l_ivclientsetup_struct.vat_note
+						 INDICATOR :l_i_iv_clientsetup_struct.i_vatfootinfo,
+					 OBLG_LVL = :l_ivclientsetup_struct.oblg_lvl					/* Bageshri HDFCIV_001*/
+						 INDICATOR :l_i_iv_clientsetup_struct.i_oblg_lvl,
+					 OBLG_TYP = :l_ivclientsetup_struct.oblg_typ
+						 INDICATOR :l_i_iv_clientsetup_struct.i_oblg_typ,
+					 PAY_IN_DAY = :l_ivclientsetup_struct.pay_in_day
+						 INDICATOR :l_i_iv_clientsetup_struct.i_pay_in_day,
+					 PAY_OUT_DAY = :l_ivclientsetup_struct.pay_out_day
+						 INDICATOR :l_i_iv_clientsetup_struct.i_pay_out_day,
+					 B_FREQ = :l_ivclientsetup_struct.b_freq
+						 INDICATOR :l_i_iv_clientsetup_struct.i_b_freq, 
+					 PAY_OUT_LMT = :l_ivclientsetup_struct.pay_out_lmt
+						 INDICATOR :l_i_iv_clientsetup_struct.i_pay_out_lmt,
+					 DVP_IND = :l_ivclientsetup_struct.dvp_ind
+						 INDICATOR :l_i_iv_clientsetup_struct.i_dvp_ind,
+					 ACC_TYP = :l_ivclientsetup_struct.acc_typ
+						 INDICATOR :l_i_iv_clientsetup_struct.i_acc_typ,
+					 PAY_IN_ACC = :l_ivclientsetup_struct.pay_in_acc
+						 INDICATOR :l_i_iv_clientsetup_struct.i_pay_in_acc,
+					 PAY_OUT_ACC = :l_ivclientsetup_struct.pay_out_acc
+						 INDICATOR :l_i_iv_clientsetup_struct.i_pay_out_acc,
+					 ACC_CODE1 = :l_ivclientsetup_struct.acc_code1
+						 INDICATOR :l_i_iv_clientsetup_struct.i_acc_code1,
+					 ACC_CODE2 = :l_ivclientsetup_struct.acc_code2
+						 INDICATOR :l_i_iv_clientsetup_struct.i_acc_code2,
+					 ACC_CODE2DESC = :l_ivclientsetup_struct.acc_code2desc
+						 INDICATOR :l_i_iv_clientsetup_struct.i_acc_code2desc,
+					 PORTFOLIO_EVAL = :l_ivclientsetup_struct.portfolio_eval
+						 INDICATOR :l_i_iv_clientsetup_struct.i_portfolio_eval,
+					 NAV_IND = :l_ivclientsetup_struct.nav_ind 
+						 INDICATOR :l_i_iv_clientsetup_struct.i_nav_ind,
+					 ANN_FEE_MONTH = :l_ivclientsetup_struct.ann_fee_month 
+						 INDICATOR :l_i_iv_clientsetup_struct.i_ann_fee_month,
+					 CLN_SUPERMST = :l_ivclientsetup_struct.cln_supermst 
+						 INDICATOR :l_i_iv_clientsetup_struct.i_cln_supermst,
+					 OBLIG_REP_FLG = :l_ivclientsetup_struct.oblig_rep_flg 
+						 INDICATOR :l_i_iv_clientsetup_struct.i_oblig_rep_flg,
+					 CALC_BASIS = :l_ivclientsetup_struct.calc_basis 
+						 INDICATOR :l_i_iv_clientsetup_struct.i_calc_basis,
+					 BNK_ACC = :l_ivclientsetup_struct.bnk_acc
+						 INDICATOR :l_i_iv_clientsetup_struct.i_bnk_acc,
+					 BNK_FCY_ACC = :l_ivclientsetup_struct.bnk_fcy_acc         /* YOG on 211206 */
+						 INDICATOR :l_i_iv_clientsetup_struct.i_bnk_fcy_acc, /* YOG on 211206 */
+					 TXNMINFEE = :l_ivclientsetup_struct.txnminfee
+						 INDICATOR :l_i_iv_clientsetup_struct.i_txnminfee,
+					 TXNMAXFEE = :l_ivclientsetup_struct.txnmaxfee
+						 INDICATOR :l_i_iv_clientsetup_struct.i_txnmaxfee,
+					 PYMT_ACC = :l_ivclientsetup_struct.pymt_acc
+						 INDICATOR :l_i_iv_clientsetup_struct.i_pymt_acc,
+					 DIR_DB_DATE = :l_ivclientsetup_struct.dir_db_date
+						 INDICATOR :l_i_iv_clientsetup_struct.i_dir_db_date,
+					 B_BASIS = :l_ivclientsetup_struct.b_basis
+						 INDICATOR :l_i_iv_clientsetup_struct.i_b_basis,
+					 B_DLV_DATE = :l_ivclientsetup_struct.b_dlv_date
+						 INDICATOR :l_i_iv_clientsetup_struct.i_b_dlv_date,
+					 REP_PAY_IN_DAY = :l_ivclientsetup_struct.rep_pay_in_day
+						 INDICATOR :l_i_iv_clientsetup_struct.i_rep_pay_in_day,
+					 REP_PAY_OUT_DAY = :l_ivclientsetup_struct.rep_pay_out_day
+						 INDICATOR :l_i_iv_clientsetup_struct.i_rep_pay_out_day,
+					 B_BASIS_CUST = :l_ivclientsetup_struct.b_basis_cust
+						 INDICATOR :l_i_iv_clientsetup_struct.i_b_basis_cust,
+						/*added by shruthi kumbla for ISKB_1737 */ 
+					 ANN_MIN_CHRG =:l_ivclientsetup_struct.ann_min_chrg
+						 INDICATOR :l_i_iv_clientsetup_struct.i_ann_min_chrg
+						 /********/
+						 WHERE (CLIENT = :l_ivclientsetup_struct.client);
+
+	if ( sqlca.sqlcode )
+	{
+		memset(chr_l_buffer1, APL_NULL_CHAR, KEY_LENGTH);
+
+		ltoa_r(sqlca.sqlcode, chr_l_buffer1, KEY_LENGTH - 1);
+	}
+
+	if ( sqlca.sqlcode < 0 )
+	{
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+		CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, chr_l_buffer1, 
+			       APL_NULL_STRING, APL_NULL_STRING, 
+			       __LINE__, __FILE__);
+
+		APL_GOBACK_FAIL
+	}
+	else if ( sqlca.sqlcode == 1403 )
+	{
+		*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+
+		APL_GOBACK_FAIL
+	}
+
+        APL_GOBACK_SUCCESS//AIX Warning Removal 
+
+	RETURN_SUCCESS:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of IV_Mod_IVBCUSTSETUPChg().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_SUCCESS;
+
+	RETURN_FAILURE:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of IV_Mod_IVBCUSTSETUPChg().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_FAILURE;
+}
+
+/* Bageshri HB_IV_001 : To Check whether Obligation Details are defined  or not, for master or group */
+int IV_Chk_OblgDet(const char *p_client, 
+		const char *p_mast_grp_acc, 
+		DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	char l_acc_typ = NULL;
+
+	int int_l_retstat = 0;
+
+	short i_acc_typ = 0;
+
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE, "Entered processtion IV_Chk_OblgDet", NULL, NULL);
+	}
+
+					EXEC SQL SELECT ACC_TYP
+						INTO :l_acc_typ INDICATOR :i_acc_typ
+						FROM IV_CLIENTSETUP
+						WHERE CLIENT = :p_mast_grp_acc;
+
+					IS_ANY_ORA_ERROR
+
+							if((i_acc_typ == -1)||(l_acc_typ == NULL)||(l_acc_typ == ' '))
+							{
+								APL_GOBACK_FAIL
+							}
+APL_GOBACK_SUCCESS//AIX Warning Removal 
+RETURN_SUCCESS:
+
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of IV_Chk_OblgDet().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+	}
+
+	return APL_SUCCESS;
+
+RETURN_FAILURE:
+
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of IV_Chk_OblgDet().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+	}
+
+	return APL_FAILURE;
+}

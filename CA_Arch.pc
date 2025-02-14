@@ -1,0 +1,1392 @@
+/*
+ *    COPYRIGHT NOTICE
+ *
+ *   Copyright 2016 Intellect Design Arena Limited. All rights reserved.
+ *
+ *    These materials are confidential and proprietary to 
+ *    Intellect Design Arena Limited and no part of these materials should
+ *    be reproduced, published, transmitted or distributed in any form or
+ *    by any means, electronic, mechanical, photocopying, recording or 
+ *    otherwise, or stored in any information storage or retrieval system
+ *    of any nature nor should the materials be disclosed to third parties
+ *    or used in any other manner for which this is not authorized, without
+ *    the prior express written authorization of Intellect Design Arena Limited.
+ *
+ *******************************************************************************
+ *
+ * Module Name         :         Archival Processing
+ *
+ * File Name           :         CA_Arch.pc
+ *
+ * Description         :        
+ *
+ *                         Version Control Block
+ *
+ * Date        Version		 Author         Description		    RFS No.
+ * ---------   --------	 ---------------  -----------------   --------------
+ * 14/04/2014  1.1       Prateek Singh    Changes done for ISKB_2469
+ * 19/12/2016  1.2       Prateek Singh    Re-Initiation of Archival Enhancement     ISKB_2071 (Old IsolveIds 2244 and 2469)
+ * **************************************************************************************************************************/
+
+
+#include "CR_Common.h"
+#include "CA_Common.h"
+EXEC SQL INCLUDE SQLCA.H;
+
+#define  RTV_SYSTEM_DATA
+
+
+#define	APL_BATCHSTATUS_LEN	16
+#define	APL_STATUS_BATCH_COMPLETED "completed"
+#define	APL_STATUS_BATCH_STARTED "started"
+#define  CLS_LOG_ARRAY  memset(chr_log_buff,NULL,sizeof(chr_log_buff));
+#define  APL_STATINFO_LEN  71
+#define 	APL_COMMIT_FREQENCY   50 
+#define  PRELIM_ARCH_IND 2
+#define  PYMT_SEQ_NAME "PAYMENT_SRL_NBR"
+#define  FORMATED_DATERR_LEN 12
+#define  PAGE_WIDTH 100
+#define  PAGE_INFO_LEN 10
+#define  MAX_LINES_PAGE 24
+
+
+int  CA_Archive  ( 	FILE  *p_flogfile,
+							char  **argv,
+                     char  *pro_sys_date,
+                     char  *chr_sys_date_time,
+							INTL_ENV_DATA_STRUCT_H *p_intlenv_data_struct_h,
+							DEBUG_INFO_STRUCT_H		 **l_debug_info_ptr
+                 		 ) 
+{
+	struct sqlca sqlca;
+	char chr_batch_in_proc_rowid[APL_ROWID_LEN] = APL_NULL_STRING;
+	char stat_det[APL_STATINFO_LEN] = APL_NULL_STRING;
+	char chr_status_started [APL_BATCHSTATUS_LEN] = {APL_STATUS_BATCH_STARTED};
+	char chr_status_completed [APL_BATCHSTATUS_LEN] = {APL_STATUS_BATCH_COMPLETED};
+	unsigned int  int_no_events_archived = 0; 
+	unsigned int  int_no_ents_archived = 0; 
+	unsigned int  int_no_pymts_archived = 0; 
+	unsigned int  int_no_rts_archived = 0; 
+	unsigned int  count = 0; 
+	char chr_sys_sts_unauth[APL_STATUS_LEN]= {APL_STATUS_UNAUTH};
+	char chr_sys_sts_auth[APL_STATUS_LEN]= {APL_STS_AUTH};
+	char chr_event_sts_rev[APL_STATUS_LEN] = {STATUS_REVERSED};
+	char chr_event_sts_wth[APL_STATUS_LEN] = {STATUS_WITHDRAWN};	
+	char chr_event_sts_paid_closed[APL_STATUS_LEN] = {STATUS_MSG_PAID_CLSD};
+	char chr_ca_sts_del[APL_STATUS_LEN] = {STATUS_DELETED_A};
+	char chr_ca_sts_rts_del[APL_STATUS_LEN] = {STATUS_DELETED};
+	unsigned int int_sys_commit_freq = APL_COMMIT_FREQENCY;
+	char chr_log_buff[100] = APL_NULL_STRING;
+   unsigned int int_a_prelim_arch_factor = PRELIM_ARCH_IND;
+	char	chr_pymt_seq_name[SEQ_NAME_LEN] = {PYMT_SEQ_NAME};
+  	char  chr_event_type_cash_div[EVT_CLASS_] = {EVT_CASH_DIV};
+	char	chr_event_type_bond_int[EVT_CLASS_] = {EVT_BOND};
+	char	chr_event_type_meeting[EVT_CLASS_] = {EVT_MEETING};
+	char  chr_event_type_others[EVT_CLASS_] = {EVT_OTH};
+	int   int_total_arch_array[4] ={0,0,0,0};
+	int	int_auto_event_wait_period = AUTO_EVT_WAIT_PERIOD;
+
+	
+	EXEC SQL SELECT ROWID
+	INTO :chr_batch_in_proc_rowid
+	FROM SYS_BATCHPROC
+	WHERE
+			    PROCESS_NAME =:argv[0] 
+			and PROC_INIT = :argv[1]
+			and STARTDATE =:argv[2]
+			and STATUS =:chr_status_started
+	FOR UPDATE;
+
+	IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"BATCH_IN_PROC",argv[0],argv[1])
+
+	
+	
+	
+	
+	
+	
+
+
+		EXEC SQL DELETE CA_EVENTMESGSEND
+		where corp_id in 
+		(
+		select corp_id 
+		FROM CAEVENT
+      where
+      (
+        status in (:chr_event_sts_rev,:chr_ca_sts_del,:chr_event_sts_wth)  /*Smita - HDFCCA_BaseVer - Chg Col Name*/
+       OR
+       (
+         status =:chr_event_sts_paid_closed  
+         AND
+         (
+           ( CA_EVENT not in (:chr_event_type_cash_div,:chr_event_type_bond_int) )
+                  OR
+            ( CA_EVENT in (:chr_event_type_cash_div,:chr_event_type_bond_int) AND
+            0 = (select NVL(count(*),0)
+                 from CACHEQUE,MT_CLIENT
+                 where CACHEQUE.corp_id = CAEVENT.corp_id
+                 and CACHEQUE.client = MT_CLIENT.cln_code
+                 and rownum < DECODE(:g_mt_commonsys_params_struct_h.bill_module_ind,'N',1,DECODE(MT_CLIENT.CLN_BILLABLEIND,'N',1,DECODE(DATEOFBILLING,NULL,2,1) ) )
+                        )
+                  )
+               )
+             )
+            OR
+    ( PRELIMINARY_FLAG ='N' and CA_EVENT=:chr_event_type_meeting and MEETING_DATE <= :pro_sys_date )
+	OR
+	 ( PRELIMINARY_FLAG ='N' and CA_EVENT=:chr_event_type_others and EFFECTIVE_DATE <= :pro_sys_date )
+   OR
+   ( PRELIMINARY_FLAG = 'Y' and months_between(:pro_sys_date,PROCESSED_DATE ) >=:int_a_prelim_arch_factor * :g_mt_commonsys_params_struct_h.monthsfor_arch
+      and decode(CA_EVENT,:chr_event_type_meeting,MEETING_DATE,:chr_event_type_others,EFFECTIVE_DATE, REC_DATE) is not null
+      and decode(CA_EVENT,:chr_event_type_meeting,MEETING_DATE,:chr_event_type_others,EFFECTIVE_DATE, REC_DATE) < :pro_sys_date
+   )
+		 )
+         AND
+		( status <> :chr_ca_sts_del and  months_between(:pro_sys_date,PROCESSED_DATE) >= :g_mt_commonsys_params_struct_h.monthsfor_arch OR
+			status = :chr_ca_sts_del /*Smita - Changed Col Name - HDFCCA_BaseVer*/
+		)
+			and CORP_ID NOT IN ( select corp_id from CAARCHEVENT
+	                       where ARCHIVAL_DATE = :pro_sys_date
+   		                  )
+		);
+	IS_ANY_ORA_ERROR
+
+	CO_ProcMonitor(p_flogfile,"Starting to Shift Event Records To Archival table",NULL,NULL);
+
+	EXEC SQL INSERT INTO CAARCHEVENT
+	( SELECT CORP_ID, INSTR_CODE, CA_EVENT, DECLARE_DT, EVNT_INDNT, PRIORITY, PRELIMINARY_FLAG, CA_CURRENCY, EX_DATE, REC_DATE, DATEOF_PAYMENT, RESPONSE_DATE, EXPIRY_DATE, PART_PYMT_DT, PROXY_DATE, MEETING_DATE, START_DATE, EFFECTIVE_DATE, PROC_OTH, OP_EVT_CLASS, RESP_DT_OPND, EXP_DT_OPEN_IND, EVT_SEND_MSG_IND, ENTL_SEND_MSG_IND, PYMT_SEND_MSG_IND, EARNINGS, EARNINGS_RATE, RES_INSTR_CODE, NEW_SAFEK_QTY, OLD_STK_QTY, DISP_OF_FRACT, FRACT_PR, SUB_BASE_QUANTITY, SUB_NEW_QUANTITY, SUB_PR, RHTS_CLASS, NEW_SAFEK_RT, CONTACT_DETAILS, AMOUNT_BAL, RECEIVED_AMT, QUANTITY_BAL, QUANTITY_RECEIVED, EVT_MSG_COUNT, EVT_CLT_CNT, ENTL_MSG_CNT, ENTL_CLT_CNT, COUNT_ACS_PEND, NREP_DATE_A, MSG_FOLLOWDAYS1, MSG_FOLLOWDAYS2, INFO_SEQ, ENTITL_INFONO, STATUS, PROCESSED_DATE, MAKER, MAKER_DT, CHECKER, CHECKER_DT, ACCESS_STAMP, DEAL_FRM_DATE, DEAL_TO_DATE, SUBSCR_DATE, POST_DATE, OVER_SUBSCRP, DIVIDEND_TYPE, REDEM_RT, NSER_E_INFO, NSER_B_INFO, COMP_INFO_A, INCO_INFO_A, RESPONSEDT_BUY, SELL_RESP_DATE, WWWADDR, TXNR_INFO_A, REQD_CERTIFY, EX_DT_BSE, BC_FROM_DATE, BC_TO_DATE, RES_INSTR_CODE_2, TRANS_DT, CLN_CODE, PREV_INST_DATE, NEXT_INST_DATE, INST_START_PERIOD, INST_END_PERIOD, LAST_PTC_DATE, ALLOTMENT_LETTER, REDEM_OPTION, INST_AMOUNT, SEND_SPLIT, CMP_CODE, RES_CMP_CODE, EXCH_CODE, PREMIUM, FACE_VALUE, INTEREST_TYPE, RATIO_RCV2, RATIO_HLD2, DEPO_PART_CODE, DEPO_CODE, BK_BUILD_IND, ATTACH_CORP_ID, SOURCE, NEW_SAFEK_RT2, TICK_SIZE, ISSUE_SIZE, QIB_MARGIN, MARKET_LOT, MAX_RTL_QTY, MIN_QTY, LEAD_MGR, SYND_MEMBR, CO_MGR, LWR_LIMIT, UPR_LIMIT, FRACT_QTY_BAL, FRACT_QTY_RECD,
+				:pro_sys_date,BILAV_ID
+
+		FROM CAEVENT
+      where
+      (
+        status in (:chr_event_sts_rev,:chr_ca_sts_del,:chr_event_sts_wth)  
+       OR
+       (
+         status =:chr_event_sts_paid_closed  /*Smita - Changed Col Name - HDFCCA_BaseVer*/
+         AND
+         (
+           ( CA_EVENT not in (:chr_event_type_cash_div,:chr_event_type_bond_int) )
+                  OR
+            ( CA_EVENT in (:chr_event_type_cash_div,:chr_event_type_bond_int) AND
+            0 = (select NVL(count(*),0)
+                 from CACHEQUE,MT_CLIENT
+                 where CACHEQUE.corp_id = CAEVENT.corp_id
+                 and CACHEQUE.client = MT_CLIENT.cln_code
+                 and rownum < DECODE(:g_mt_commonsys_params_struct_h.bill_module_ind,'N',1,DECODE(MT_CLIENT.CLN_BILLABLEIND,'N',1,DECODE(DATEOFBILLING,NULL,2,1) ) )
+                        )
+                  )
+               )
+             )
+            OR
+    ( PRELIMINARY_FLAG ='N' and CA_EVENT=:chr_event_type_meeting and MEETING_DATE <= :pro_sys_date )
+	OR
+	 ( PRELIMINARY_FLAG ='N' and CA_EVENT=:chr_event_type_others and EFFECTIVE_DATE <=:pro_sys_date )
+   OR
+   ( PRELIMINARY_FLAG = 'Y' and months_between(:pro_sys_date,PROCESSED_DATE ) >=:int_a_prelim_arch_factor * :g_mt_commonsys_params_struct_h.monthsfor_arch
+      and decode(CA_EVENT,:chr_event_type_meeting,MEETING_DATE,:chr_event_type_others, EFFECTIVE_DATE, REC_DATE) is not null
+      and decode(CA_EVENT,:chr_event_type_meeting,MEETING_DATE,:chr_event_type_others, EFFECTIVE_DATE, REC_DATE) < :pro_sys_date
+   )
+		 )
+         AND
+		( status <> :chr_ca_sts_del and  months_between(:pro_sys_date,PROCESSED_DATE) >= :g_mt_commonsys_params_struct_h.monthsfor_arch OR
+			status = :chr_ca_sts_del
+		)
+ 
+			and CORP_ID NOT IN ( select corp_id from CAARCHEVENT
+	                       where ARCHIVAL_DATE = :pro_sys_date
+   		                  )
+	);        
+
+	IS_ANY_ORA_ERROR
+
+	sprintf(chr_log_buff,"Shifted %d Event Records to Archival Table",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(p_flogfile,chr_log_buff,NULL,NULL);
+
+	EXEC SQL COMMIT;
+	IS_ANY_ORA_ERROR
+	
+	CO_ProcMonitor(p_flogfile,"COMMITED",NULL,NULL);
+
+		
+		EXEC SQL SELECT ROWID
+		INTO :chr_batch_in_proc_rowid
+		FROM SYS_BATCHPROC
+		WHERE
+				    PROCESS_NAME =:argv[0] 
+				and PROC_INIT = :argv[1]
+				and STARTDATE =:argv[2]
+				and STATUS =:chr_status_started
+		FOR UPDATE;
+
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"BATCH_IN_PROC",argv[0],argv[1])
+
+	
+
+	CO_ProcMonitor(p_flogfile,"\nStarting to Shift Footnote Records To Archival table",NULL,NULL);
+
+	EXEC SQL INSERT INTO CAARCHNOTE
+	( SELECT CANOTE.*,:pro_sys_date from CANOTE
+	  where INFO_SEQ in ( select INFO_SEQ from CAARCHEVENT
+								 where ARCHIVAL_DATE = :pro_sys_date
+							  )
+	  and INFO_SEQ not in ( select INFO_SEQ from CAARCHNOTE
+									where ARCHIVAL_DATE = :pro_sys_date
+							    )
+	);
+	IS_ANY_ORA_ERROR
+
+	sprintf(chr_log_buff,"Shifted %d Footnote Records to Archival Table",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(p_flogfile,chr_log_buff,NULL,NULL);
+
+	EXEC SQL COMMIT;
+	IS_ANY_ORA_ERROR
+	
+	CO_ProcMonitor(p_flogfile,"COMMITED",NULL,NULL);
+
+		
+		EXEC SQL SELECT ROWID
+		INTO :chr_batch_in_proc_rowid
+		FROM SYS_BATCHPROC
+		WHERE
+				    PROCESS_NAME =:argv[0] 
+				and PROC_INIT = :argv[1]
+				and STARTDATE =:argv[2]
+				and STATUS =:chr_status_started
+		FOR UPDATE;
+
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"BATCH_IN_PROC",argv[0],argv[1])
+
+
+	
+	
+	
+
+	CO_ProcMonitor(p_flogfile,"\nStarting to Shift Entitlement Records To Archival table",NULL,NULL);
+
+	EXEC SQL INSERT INTO CAARCHCLAIM
+	(
+		SELECT CAENTITLEMENT.*,
+				:pro_sys_date
+		FROM
+				CAENTITLEMENT
+		WHERE 
+				(CORP_ID in ( select corp_id from CAARCHEVENT
+							  where ARCHIVAL_DATE = :pro_sys_date
+							)
+				or status = :chr_ca_sts_del )
+			and CORP_ID NOT IN ( select corp_id from CAARCHCLAIM
+	                       where ARCHIVAL_DATE = :pro_sys_date
+									and client = CAENTITLEMENT.client
+   		                  )
+
+	);
+
+	IS_ANY_ORA_ERROR
+
+	sprintf(chr_log_buff,"Shifted %d Entitlement Records to Archival Table",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(p_flogfile,chr_log_buff,NULL,NULL);
+
+	EXEC SQL COMMIT;
+	IS_ANY_ORA_ERROR
+
+	CO_ProcMonitor(p_flogfile,"COMMITED",NULL,NULL);
+	
+		
+		EXEC SQL SELECT ROWID
+		INTO :chr_batch_in_proc_rowid
+		FROM SYS_BATCHPROC
+		WHERE
+				    PROCESS_NAME =:argv[0] 
+				and PROC_INIT = :argv[1]
+				and STARTDATE =:argv[2]
+				and STATUS =:chr_status_started
+		FOR UPDATE;
+
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"BATCH_IN_PROC",argv[0],argv[1])
+
+	
+	CO_ProcMonitor(p_flogfile,"\nStarting to Shift Payment Records To Archival table",NULL,NULL);
+
+	EXEC SQL INSERT INTO CAARCHCHEQUE
+	(
+		SELECT  CACHEQUE.*,
+				:pro_sys_date 
+		FROM
+				CACHEQUE
+		WHERE
+				( CORP_ID in ( select corp_id from CAARCHEVENT
+							  where ARCHIVAL_DATE = :pro_sys_date
+							)
+				or  stat_pymt = :chr_ca_sts_del )
+			and CORP_ID NOT IN ( select corp_id from CAARCHCHEQUE
+	                       where
+										 client = CACHEQUE.client and
+										 seqnum_pay = CACHEQUE.SEQNUM_PAY
+											and
+										 ARCHIVAL_DATE = :pro_sys_date
+								   
+   		                  )
+	);
+
+			
+		IS_ANY_ORA_ERROR
+
+		sprintf(chr_log_buff,"Shifted %d Payment Records to Archival Table",sqlca.sqlerrd[2]);
+		CO_ProcMonitor(p_flogfile,chr_log_buff,NULL,NULL);
+	
+		EXEC SQL COMMIT;
+		IS_ANY_ORA_ERROR
+	
+		CO_ProcMonitor(p_flogfile,"COMMITED",NULL,NULL);
+	
+		
+		EXEC SQL SELECT ROWID
+		INTO :chr_batch_in_proc_rowid
+		FROM SYS_BATCHPROC
+		WHERE
+				    PROCESS_NAME =:argv[0] 
+				and PROC_INIT = :argv[1]
+				and STARTDATE =:argv[2]
+				and STATUS =:chr_status_started
+		FOR UPDATE;
+
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"BATCH_IN_PROC",argv[0],argv[1])
+
+	
+
+	
+
+	CO_ProcMonitor(p_flogfile,"\nStarting to Shift CA Linkage Records To Archival table", NULL, NULL);
+
+	EXEC SQL INSERT INTO CAARCHMESGLNK
+   (
+      SELECT :pro_sys_date, CAMESGLINK.*
+      FROM
+            CAMESGLINK
+      WHERE
+            ( CORP_ID in ( select corp_id from CAARCHEVENT
+                       where ARCHIVAL_DATE = :pro_sys_date
+                     )
+            )
+   );
+
+	 IS_ANY_ORA_ERROR
+
+    sprintf(chr_log_buff,"Shifted %d CA Linkage Records to Archival Table",sqlca.sqlerrd[2]);
+    CO_ProcMonitor(p_flogfile,chr_log_buff,NULL,NULL);
+
+    EXEC SQL COMMIT;
+    IS_ANY_ORA_ERROR
+
+    CO_ProcMonitor(p_flogfile,"COMMITED",NULL,NULL);
+
+    
+    EXEC SQL SELECT ROWID
+    INTO :chr_batch_in_proc_rowid
+    FROM SYS_BATCHPROC
+    WHERE
+          PROCESS_NAME =:argv[0]
+          and PROC_INIT = :argv[1]
+          and STARTDATE =:argv[2]
+          and STATUS =:chr_status_started
+	 FOR UPDATE;
+
+    IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"BATCH_IN_PROC",argv[0],argv[1])
+
+	
+	
+	CO_ProcMonitor(p_flogfile,"\nStarting to Shift Rights Records To Archival table",NULL,NULL);
+
+	EXEC SQL INSERT INTO CAARCHRTSPROC
+	( SELECT CARTSPROC.*,
+			:pro_sys_date
+	FROM CARTSPROC
+	where ( (	(status = :chr_sys_sts_auth AND months_between(:pro_sys_date,CHECKER_DT) >= :g_mt_commonsys_params_struct_h.monthsfor_arch)  OR (status = :chr_ca_sts_rts_del ) )
+			AND instr_code||client||CA_EVENT||declare_dt||evnt_indnt
+				 NOT IN ( select instr_code||client||CA_EVENT||declare_dt||evnt_indnt
+							 from CAARCHRTSPROC where ARCHIVAL_DATE = :pro_sys_date
+							)	
+
+
+			)
+			)	;			
+
+		IS_ANY_ORA_ERROR
+
+		sprintf(chr_log_buff,"Shifted %d Rights Records to Archival Table",sqlca.sqlerrd[2]);
+		CO_ProcMonitor(p_flogfile,chr_log_buff,NULL,NULL);
+	
+		EXEC SQL COMMIT;
+		IS_ANY_ORA_ERROR
+	
+		CO_ProcMonitor(p_flogfile,"COMMITED",NULL,NULL);
+	
+		
+		EXEC SQL SELECT ROWID
+		INTO :chr_batch_in_proc_rowid
+		FROM SYS_BATCHPROC
+		WHERE
+				    PROCESS_NAME =:argv[0] 
+				and PROC_INIT = :argv[1]
+				and STARTDATE =:argv[2]
+				and STATUS =:chr_status_started
+		FOR UPDATE;
+
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"BATCH_IN_PROC",argv[0],argv[1])
+
+	
+
+	
+	CO_ProcMonitor(p_flogfile,"\nStarting Deletion of  Payment Records",NULL,NULL);
+	for ( ;; )
+	{
+		EXEC SQL DELETE CACHEQUE
+   	WHERE
+      	  CORP_ID in ( select corp_id from CAARCHEVENT
+         	          where ARCHIVAL_DATE = :pro_sys_date
+            	      )
+				 or
+				stat_pymt = :chr_ca_sts_del
+		and rownum < :int_sys_commit_freq;
+
+		IS_ANY_ORA_ERROR
+
+		if ( sqlca.sqlerrd[2] == 0)
+		{
+			break;
+		}
+		EXEC SQL COMMIT;
+		IS_ANY_ORA_ERROR
+
+		
+		EXEC SQL SELECT ROWID
+		INTO :chr_batch_in_proc_rowid
+		FROM SYS_BATCHPROC
+		WHERE
+				    PROCESS_NAME =:argv[0] 
+				and PROC_INIT = :argv[1]
+				and STARTDATE =:argv[2]
+				and STATUS =:chr_status_started
+		FOR UPDATE;
+
+	IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"BATCH_IN_PROC",argv[0],argv[1])
+	}
+	CO_ProcMonitor(p_flogfile,"Finished Deleting Payment Records",NULL,NULL);
+
+	
+	CO_ProcMonitor(p_flogfile,"\nStarting Deletion of Global Payment Records",NULL,NULL);
+	for ( ;; )
+	{
+		EXEC SQL DELETE CAGLPYMT
+   	WHERE
+      	  CORP_ID in ( select corp_id from CAARCHEVENT
+         	          where ARCHIVAL_DATE = :pro_sys_date
+            	      )
+		and rownum < :int_sys_commit_freq;
+
+		IS_ANY_ORA_ERROR
+
+		if ( sqlca.sqlerrd[2] == 0)
+		{
+			break;
+		}
+		EXEC SQL COMMIT;
+		IS_ANY_ORA_ERROR
+
+		
+		EXEC SQL SELECT ROWID
+		INTO :chr_batch_in_proc_rowid
+		FROM SYS_BATCHPROC
+		WHERE
+				    PROCESS_NAME =:argv[0] 
+				and PROC_INIT = :argv[1]
+				and STARTDATE =:argv[2]
+				and STATUS =:chr_status_started
+		FOR UPDATE;
+
+	IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"BATCH_IN_PROC",argv[0],argv[1])
+	}
+	CO_ProcMonitor(p_flogfile,"Finished Deleting Global Payment Records",NULL,NULL);
+
+	
+
+	
+	CO_ProcMonitor(p_flogfile,"\nStarting Deletion of CA Linkages Records",NULL,NULL);
+	for ( ;; )
+	{
+		EXEC SQL DELETE CAMESGLINK
+   	WHERE
+      	  CORP_ID in ( select corp_id from CAARCHEVENT
+         	          where ARCHIVAL_DATE = :pro_sys_date
+            	      )
+		and rownum < :int_sys_commit_freq;
+
+		IS_ANY_ORA_ERROR
+
+		if ( sqlca.sqlerrd[2] == 0)
+		{
+			break;
+		}
+		EXEC SQL COMMIT;
+		IS_ANY_ORA_ERROR
+
+		
+		EXEC SQL SELECT ROWID
+		INTO :chr_batch_in_proc_rowid
+		FROM SYS_BATCHPROC
+		WHERE
+				    PROCESS_NAME =:argv[0] 
+				and PROC_INIT = :argv[1]
+				and STARTDATE =:argv[2]
+				and STATUS =:chr_status_started
+		FOR UPDATE;
+
+	IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"BATCH_IN_PROC",argv[0],argv[1])
+	}
+	CO_ProcMonitor(p_flogfile,"Finished Deleting CA Linkages Records",NULL,NULL);
+
+
+	
+	CO_ProcMonitor(p_flogfile,"\nStarting Deletion of  CAREPLY Records",NULL,NULL);
+
+	for (;;)
+	{	
+		EXEC SQL DELETE CAREPLY
+   	WHERE
+        CORP_ID in ( select corp_id from CAARCHEVENT
+                   where ARCHIVAL_DATE = :pro_sys_date
+                  )
+		and rownum < :int_sys_commit_freq;
+
+		IS_ANY_ORA_ERROR
+
+		if ( sqlca.sqlerrd[2] == 0)
+		{
+			break;
+		}
+		EXEC SQL COMMIT;
+		IS_ANY_ORA_ERROR
+
+		
+		EXEC SQL SELECT ROWID
+		INTO :chr_batch_in_proc_rowid
+		FROM SYS_BATCHPROC
+		WHERE
+				    PROCESS_NAME =:argv[0] 
+				and PROC_INIT = :argv[1]
+				and STARTDATE =:argv[2]
+				and STATUS =:chr_status_started
+		FOR UPDATE;
+
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"BATCH_IN_PROC",argv[0],argv[1])
+	}
+	CO_ProcMonitor(p_flogfile,"Finished Deleting CAREPLY Records",NULL,NULL);
+
+	CO_ProcMonitor(p_flogfile,"\nStarting Deletion of  ARESPONSESPLIT Records",NULL,NULL);
+
+	for (;;)
+	{	
+		EXEC SQL DELETE CAREPLYSPLIT
+   	WHERE
+        CORP_ID in ( select corp_id from CAARCHEVENT
+                   where ARCHIVAL_DATE = :pro_sys_date
+                  )
+		and rownum < :int_sys_commit_freq;
+
+		IS_ANY_ORA_ERROR
+
+		if ( sqlca.sqlerrd[2] == 0)
+		{
+			break;
+		}
+		EXEC SQL COMMIT;
+		IS_ANY_ORA_ERROR
+
+		
+		EXEC SQL SELECT ROWID
+		INTO :chr_batch_in_proc_rowid
+		FROM SYS_BATCHPROC
+		WHERE
+				    PROCESS_NAME =:argv[0] 
+				and PROC_INIT = :argv[1]
+				and STARTDATE =:argv[2]
+				and STATUS =:chr_status_started
+		FOR UPDATE;
+
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"BATCH_IN_PROC",argv[0],argv[1])
+	}
+	CO_ProcMonitor(p_flogfile,"Finished Deleting ARESPONSESPLIT Records",NULL,NULL);
+	
+
+   CO_ProcMonitor(p_flogfile,"\nStarting Deletion of  ACASTATUS Records",NULL,NULL);
+
+   for (;;)
+   {
+      EXEC SQL DELETE CASTATUS
+      WHERE
+        CORP_ID in ( select corp_id from CAARCHEVENT
+                   where ARCHIVAL_DATE = :pro_sys_date
+                  )
+      and rownum < :int_sys_commit_freq;
+
+      IS_ANY_ORA_ERROR
+
+      if ( sqlca.sqlerrd[2] == 0)
+      {
+         break;
+      }
+      EXEC SQL COMMIT;
+      IS_ANY_ORA_ERROR
+
+      
+      EXEC SQL SELECT ROWID
+      INTO :chr_batch_in_proc_rowid
+      FROM SYS_BATCHPROC
+      WHERE
+                PROCESS_NAME =:argv[0]
+            and PROC_INIT = :argv[1]
+            and STARTDATE =:argv[2]
+            and STATUS =:chr_status_started
+      FOR UPDATE;
+
+      IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"BATCH_IN_PROC",argv[0],argv[1])
+   }
+   CO_ProcMonitor(p_flogfile,"Finished Deleting ACASTATUS Records",NULL,NULL);
+
+
+	
+	CO_ProcMonitor(p_flogfile,"\nStarting Deletion of  Entitlement Records",NULL,NULL);
+
+	for (;;)
+	{	
+		EXEC SQL DELETE CAENTITLEMENT
+   	WHERE
+        CORP_ID in ( select corp_id from CAARCHEVENT
+                   where ARCHIVAL_DATE = :pro_sys_date
+                  )
+				 or
+				status = :chr_ca_sts_del
+		and rownum < :int_sys_commit_freq;
+
+		IS_ANY_ORA_ERROR
+
+		if ( sqlca.sqlerrd[2] == 0)
+		{
+			break;
+		}
+		EXEC SQL COMMIT;
+		IS_ANY_ORA_ERROR
+
+		
+		EXEC SQL SELECT ROWID
+		INTO :chr_batch_in_proc_rowid
+		FROM SYS_BATCHPROC
+		WHERE
+				    PROCESS_NAME =:argv[0] 
+				and PROC_INIT = :argv[1]
+				and STARTDATE =:argv[2]
+				and STATUS =:chr_status_started
+		FOR UPDATE;
+
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"BATCH_IN_PROC",argv[0],argv[1])
+	}
+	CO_ProcMonitor(p_flogfile,"Finished Deleting Entitlement Records",NULL,NULL);
+
+
+	
+	CO_ProcMonitor(p_flogfile,"\nStarting Deletion of Alert  Records",NULL,NULL);
+
+	for (;;)
+	{
+		EXEC SQL DELETE CANOTIFY
+   	WHERE
+        CORP_ID in ( select corp_id from CAARCHEVENT
+                   where ARCHIVAL_DATE = :pro_sys_date
+                  )
+		and rownum < :int_sys_commit_freq;
+
+		IS_ANY_ORA_ERROR
+
+		if ( sqlca.sqlerrd[2] == 0)
+		{
+			break;
+		}
+		EXEC SQL COMMIT;
+		IS_ANY_ORA_ERROR
+
+		
+		EXEC SQL SELECT ROWID
+		INTO :chr_batch_in_proc_rowid
+		FROM SYS_BATCHPROC
+		WHERE
+				    PROCESS_NAME =:argv[0] 
+				and PROC_INIT = :argv[1]
+				and STARTDATE =:argv[2]
+				and STATUS =:chr_status_started
+		FOR UPDATE;
+
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"BATCH_IN_PROC",argv[0],argv[1])
+	}
+	CO_ProcMonitor(p_flogfile,"Finished Deleting Alert Records",NULL,NULL);
+
+	
+	CO_ProcMonitor(p_flogfile,"\nStarting Deletion of Alogautoevnt Records",NULL,NULL);
+
+	for (;;)
+	{
+		EXEC SQL DELETE CALOGAUTOEVENT
+   	WHERE
+				TO_DATE(:pro_sys_date) - dateof_payment > :int_auto_event_wait_period
+		and rownum < :int_sys_commit_freq;
+
+		IS_ANY_ORA_ERROR
+
+		if ( sqlca.sqlerrd[2] == 0)
+		{
+			break;
+		}
+		EXEC SQL COMMIT;
+		IS_ANY_ORA_ERROR
+
+		
+		EXEC SQL SELECT ROWID
+		INTO :chr_batch_in_proc_rowid
+		FROM SYS_BATCHPROC
+		WHERE
+				    PROCESS_NAME =:argv[0] 
+				and PROC_INIT = :argv[1]
+				and STARTDATE =:argv[2]
+				and STATUS =:chr_status_started
+		FOR UPDATE;
+
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"BATCH_IN_PROC",argv[0],argv[1])
+	}
+	CO_ProcMonitor(p_flogfile,"Finished Deleting ALOGAUTOEVNT Records",NULL,NULL);
+
+	
+	CO_ProcMonitor(p_flogfile,"\nStarting Deletion of GSeqNum Records",NULL,NULL);
+	for (;;)
+	{
+		EXEC SQL DELETE PRO_GSEQNUM
+		WHERE sequence_name = :chr_pymt_seq_name	
+   	AND 
+        seq_attrb_a  in ( select corp_id from CAARCHEVENT
+                        where ARCHIVAL_DATE = :pro_sys_date
+                      )
+		and rownum < :int_sys_commit_freq;
+
+		IS_ANY_ORA_ERROR
+
+		if ( sqlca.sqlerrd[2] == 0)
+		{
+			break;
+		}
+
+		EXEC SQL COMMIT;
+		IS_ANY_ORA_ERROR
+
+		
+		EXEC SQL SELECT ROWID
+		INTO :chr_batch_in_proc_rowid
+		FROM SYS_BATCHPROC
+		WHERE
+				    PROCESS_NAME =:argv[0] 
+				and PROC_INIT = :argv[1]
+				and STARTDATE =:argv[2]
+				and STATUS =:chr_status_started
+		FOR UPDATE;
+
+	IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"BATCH_IN_PROC",argv[0],argv[1])
+	}
+
+	CO_ProcMonitor(p_flogfile,"Finished Deleting GSeqNum Records",NULL,NULL);
+
+
+	
+	CO_ProcMonitor(p_flogfile,"\nStarting Deletion of Rights Records",NULL,NULL);
+	for (;;)
+	{
+		EXEC SQL DELETE CARTSPROC
+		where	instr_code
+				  IN ( select instr_code
+							 from CAARCHRTSPROC where ARCHIVAL_DATE = :pro_sys_date
+													and client = CARTSPROC.client
+													and CA_EVENT = CARTSPROC.CA_EVENT
+												   and declare_dt = CARTSPROC.DECLARE_DT
+													and evnt_indnt = CARTSPROC.EVNT_INDNT
+		
+							)	
+		and rownum < :int_sys_commit_freq ;
+		
+		IS_ANY_ORA_ERROR
+
+		if ( sqlca.sqlerrd[2] == 0)
+		{
+			break;
+		}
+
+		EXEC SQL COMMIT;
+		IS_ANY_ORA_ERROR
+
+		
+		EXEC SQL SELECT ROWID
+		INTO :chr_batch_in_proc_rowid
+		FROM SYS_BATCHPROC
+		WHERE
+				    PROCESS_NAME =:argv[0] 
+				and PROC_INIT = :argv[1]
+				and STARTDATE =:argv[2]
+				and STATUS =:chr_status_started
+		FOR UPDATE;
+
+	IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"BATCH_IN_PROC",argv[0],argv[1])
+	}
+	CO_ProcMonitor(p_flogfile,"Finished Deleting Rights Records",NULL,NULL);
+
+
+	
+	CO_ProcMonitor(p_flogfile,"\nStarting Deletion of  Event Records",NULL,NULL);
+	for (;;)
+	{
+		EXEC SQL DELETE CAEVENT
+   	WHERE
+      	  CORP_ID in ( select corp_id from CAARCHEVENT
+         	          where ARCHIVAL_DATE = :pro_sys_date
+            	      )
+		and rownum < :int_sys_commit_freq;
+
+		IS_ANY_ORA_ERROR
+
+		if ( sqlca.sqlerrd[2] == 0)
+		{
+			break;
+		}
+
+		EXEC SQL COMMIT;
+		IS_ANY_ORA_ERROR
+
+		
+		EXEC SQL SELECT ROWID
+		INTO :chr_batch_in_proc_rowid
+		FROM SYS_BATCHPROC
+		WHERE
+				    PROCESS_NAME =:argv[0] 
+				and PROC_INIT = :argv[1]
+				and STARTDATE =:argv[2]
+				and STATUS =:chr_status_started
+		FOR UPDATE;
+
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"BATCH_IN_PROC",argv[0],argv[1])
+	}
+
+	CO_ProcMonitor(p_flogfile,"Finished Deleting Event Records",NULL,NULL);
+
+//Added by Prateek on 14042014 for ISKB_2469(Deleteing Footnote records from CANOTE Table after Archival)-- START
+
+CO_ProcMonitor(p_flogfile,"\nStarting Deletion of CA Footnote Records",NULL,NULL);
+	for ( ;; )
+	{
+		EXEC SQL DELETE CANOTE
+   		WHERE
+		INFO_SEQ in ( select INFO_SEQ from CAARCHEVENT
+                              where ARCHIVAL_DATE = :pro_sys_date
+                             )
+		and rownum < :int_sys_commit_freq;
+
+		IS_ANY_ORA_ERROR
+
+		if ( sqlca.sqlerrd[2] == 0)
+		{
+			break;
+		}
+		EXEC SQL COMMIT;
+		IS_ANY_ORA_ERROR
+
+		
+		EXEC SQL SELECT ROWID
+		INTO :chr_batch_in_proc_rowid
+		FROM SYS_BATCHPROC
+		WHERE
+				    PROCESS_NAME =:argv[0] 
+				and PROC_INIT = :argv[1]
+				and STARTDATE =:argv[2]
+				and STATUS =:chr_status_started
+		FOR UPDATE;
+
+	IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"BATCH_IN_PROC",argv[0],argv[1])
+	}
+	CO_ProcMonitor(p_flogfile,"Finished Deleting CA Footnote Records",NULL,NULL);
+
+//Added by Prateek on 14042014 for ISKB_2469(Deleteing Footnote records from CANOTE Table after Archival)-- END
+
+
+
+	
+	EXEC SQL SELECT NVL( COUNT(*), 0 )
+	INTO :int_no_events_archived	
+	FROM CAARCHEVENT
+	WHERE ARCHIVAL_DATE=:pro_sys_date;
+
+	IS_ANY_ORA_ERROR
+
+	sprintf(chr_log_buff,"\nNo Of Events Archived : %d ",int_no_events_archived);
+	CO_ProcMonitor(p_flogfile,chr_log_buff,NULL,NULL);
+	int_total_arch_array[0] =int_no_events_archived;
+
+	EXEC SQL SELECT NVL( COUNT(*),0 )
+	INTO :int_no_ents_archived	
+	FROM CAARCHCLAIM
+	WHERE ARCHIVAL_DATE=:pro_sys_date;
+
+	IS_ANY_ORA_ERROR
+
+	sprintf(chr_log_buff,"\nNo Of Entitlements Archived : %d ",int_no_ents_archived);
+	CO_ProcMonitor(p_flogfile,chr_log_buff,NULL,NULL);
+	int_total_arch_array[1] =int_no_ents_archived;
+
+
+	EXEC SQL SELECT NVL( COUNT(*),0 )
+	INTO :int_no_pymts_archived	
+	FROM CAARCHCHEQUE
+	WHERE ARCHIVAL_DATE=:pro_sys_date;
+	
+	IS_ANY_ORA_ERROR
+
+	sprintf(chr_log_buff,"\nNo Of Payments Archived : %d ",int_no_pymts_archived);
+	CO_ProcMonitor(p_flogfile,chr_log_buff,NULL,NULL);
+	int_total_arch_array[2] =int_no_pymts_archived;
+
+	EXEC SQL SELECT NVL( COUNT(*),0 )
+	INTO :int_no_rts_archived	
+	FROM CAARCHRTSPROC
+	WHERE ARCHIVAL_DATE=:pro_sys_date;
+	
+	IS_ANY_ORA_ERROR
+
+	sprintf(chr_log_buff,"\nNo Of Rights Records Archived : %d ",int_no_rts_archived);
+	CO_ProcMonitor(p_flogfile,chr_log_buff,NULL,NULL);
+	int_total_arch_array[3] =int_no_rts_archived;
+
+	
+	CO_ProcMonitor(p_flogfile,"\nStarting to Write Archival Report",NULL,NULL);
+
+ 	if ( CA_Arch_Report( pro_sys_date,
+								 argv,
+								 int_total_arch_array,
+								 p_flogfile,	
+								 p_intlenv_data_struct_h,
+								 l_debug_info_ptr
+							 ) == APL_FAILURE
+		)
+	{
+		CO_ProcMonitor(p_flogfile,"Error Occured While Writing Archival Report.Terminating Program.",NULL,NULL);
+		APL_GOBACK_FAIL
+	}
+	else
+	{
+		CO_ProcMonitor(p_flogfile,"Finished Writing Archival Report",NULL,NULL);
+
+	}
+	
+	
+	CO_ProcMonitor(p_flogfile,"About to archive messages",NULL,NULL);
+	if (  CA_ArchMsgs(	p_flogfile,
+							argv,
+                     pro_sys_date,
+                     chr_sys_date_time,
+					   	p_intlenv_data_struct_h,
+                     l_debug_info_ptr) == APL_FAILURE
+		)
+	{
+	CO_ProcMonitor(p_flogfile,"Exiting Message Archival Fn with failure",NULL,NULL);
+		APL_GOBACK_FAIL
+	}
+
+	CO_ProcMonitor(p_flogfile,"Exiting Message Archival Fn with success",NULL,NULL);
+
+	
+	EXEC SQL UPDATE SYS_BATCHPROC
+	SET STATUS =:chr_status_completed,
+		 STAT_DET =:stat_det
+	WHERE ROWID=:chr_batch_in_proc_rowid;
+
+	IS_ANY_ORA_ERROR
+
+	
+   APL_GOBACK_SUCCESS
+ 
+   RETURN_SUCCESS:
+	{
+   	return(APL_SUCCESS);
+	}
+   RETURN_FAILURE:
+   {
+		CO_ProcMonitor(p_flogfile,NULL,l_debug_info_ptr,NULL);
+		CO_FreeErrLst(l_debug_info_ptr);
+   	return(APL_FAILURE);
+	}
+
+} 
+
+
+int	CA_Arch_Footer(int * total_arch_arr,
+							FILE *arc_rept_file,
+							FILE *p_flog_file
+							)
+{
+	unsigned int i=0;
+	char chr_title[PAGE_WIDTH] = APL_NULL_STRING;
+	
+	
+	for ( i=0; i< PAGE_WIDTH ; i++ ) fprintf(arc_rept_file,"-");
+	fprintf(arc_rept_file,"\n");
+
+	sprintf(chr_title,"Total # of dropped Events %d,  Entitlements %d,  Payments %d,  Rights %d\n",total_arch_arr[0],total_arch_arr[1],total_arch_arr[2],total_arch_arr[3]);	
+
+	fprintf(arc_rept_file,chr_title);
+
+	fprintf(arc_rept_file,"\n");
+
+	
+	for ( i=0; i< 43 ; i++ ) fprintf(arc_rept_file,"-");
+
+	fprintf(arc_rept_file,"END OF REPORT");
+
+	for ( i=0; i< 44 ; i++ ) fprintf(arc_rept_file,"-");
+
+
+  return(APL_SUCCESS); // AIX -Warnings Removal
+}
+
+ 
+int CA_Arch_Header(FILE * arc_rept_file,
+						 FILE * p_flogfile,
+						 char * chr_format_sys_date,
+						 char * chr_format_arch_date) 
+{
+
+	static int int_page_no=1;
+	static int int_no_spaces_one=0;
+	static int int_no_spaces_two=0;
+	unsigned int i =0;
+	char chr_first_line[PAGE_WIDTH] = APL_NULL_STRING;
+	char chr_fmt [PAGE_WIDTH] = APL_NULL_STRING;
+	char chr_page_info[PAGE_INFO_LEN] = APL_NULL_STRING; 
+	char chr_title[PAGE_WIDTH] = APL_NULL_STRING;
+	char chr_field_format[PAGE_WIDTH] = APL_NULL_STRING;
+
+
+	fprintf(arc_rept_file,"\n");
+	fprintf(arc_rept_file,"\n");
+
+	
+	for ( i=0; i< PAGE_WIDTH ; i++ ) fprintf(arc_rept_file,"-");
+	fprintf(arc_rept_file,"\n");
+
+	
+	if ( !strlen(chr_fmt) )
+	{
+		int_no_spaces_one = ceil( (PAGE_WIDTH - strlen(g_mt_commonsys_params_struct_h.ca_identname))
+							 / 2 ) - FORMATED_DATERR_LEN;
+		int_no_spaces_two = PAGE_WIDTH - FORMATED_DATERR_LEN - int_no_spaces_one - strlen(g_mt_commonsys_params_struct_h.ca_identname) - PAGE_INFO_LEN  ;
+
+		sprintf(chr_fmt,"%%s%%%ds%%s%%%ds%%s\n",int_no_spaces_one,int_no_spaces_two);
+
+		sprintf(chr_title,"Corporate Events Closed On Or Before : %s\n",chr_format_arch_date);
+		sprintf(chr_field_format,"%s%5s%s%5s%s%4s%s%5s%s%6s%s%5s%s\n","Instrurity"," ","Decln. Date"," ","Type"," ","Srl#"," ","Status"," ","Entitlement Recs"," ","Payment Recs");
+
+	}
+
+	sprintf(chr_page_info,"Page : %3d",int_page_no);
+
+	fprintf(arc_rept_file,chr_fmt,chr_format_sys_date," ",g_mt_commonsys_params_struct_h.ca_identname," ",chr_page_info);
+
+	fprintf(arc_rept_file,"%32s%s%32s\n\n"," ","HISTORY DATABASE DROPPING REPORT"," ");
+
+	fprintf(arc_rept_file,"%25s%s%24s\n\n"," ",chr_title," ");
+	
+	for ( i=0; i< PAGE_WIDTH ; i++ ) fprintf(arc_rept_file,"-");
+	fprintf(arc_rept_file,"\n");
+
+	fprintf(arc_rept_file,chr_field_format);
+
+	for ( i=0; i< PAGE_WIDTH ; i++ ) fprintf(arc_rept_file,"-");
+	fprintf(arc_rept_file,"\n");
+
+	int_page_no = int_page_no + 1;
+
+	return APL_SUCCESS;	
+}
+
+int CA_Arch_Report( char * pro_sys_date,
+							char ** argv,
+							int  *total_arch_arr,
+							FILE * p_flogfile,
+							INTL_ENV_DATA_STRUCT_H *p_intlenv_data_struct_h,
+							DEBUG_INFO_STRUCT_H		 **l_debug_info_ptr
+						 )
+{
+	struct sqlca sqlca;
+	ARCH_RPT_STRUCT_H l_arch_rpt_struct_h;
+	ARCH_RPT_STRUCT_I l_arch_rpt_struct_i;
+	FILE	*arc_rept_file=NULL;
+	int int_no_ents_archived = 0;
+	int int_no_pymts_archived = 0;
+	int int_no_rts_archived = 0;
+	int int_cur_line_nbr=0;
+	int i=0;
+	char chr_format_sys_date[FORMATED_DATERR_LEN+1] = APL_NULL_STRING;
+	char chr_format_arch_date[FORMATED_DATERR_LEN+1] = APL_NULL_STRING;
+	char chr_format_decl_date[FORMATED_DATERR_LEN+1] = APL_NULL_STRING;
+	char	chr_data_format[PAGE_WIDTH] = APL_NULL_STRING;
+
+	EXEC SQL VAR l_arch_rpt_struct_h.h_corp_id is STRING;
+	EXEC SQL VAR l_arch_rpt_struct_h.h_instr_code is STRING;
+
+	EXEC SQL DECLARE Arch_Rept_Cur CURSOR FOR
+	SELECT corp_id,
+			 instr_code,
+			 CA_EVENT,	
+			declare_dt,
+			 evnt_indnt,
+			 status	/*Smita - Changed Col Name - HDFCCA Base Ver*/
+	FROM CAARCHEVENT
+	WHERE ARCHIVAL_DATE=:pro_sys_date;
+
+	
+
+   if ( CO_Rtv_RptFileName("AR",
+								"CA Archival Report",
+								100,
+								argv[5],
+								argv,
+								&arc_rept_file,
+								l_debug_info_ptr) == APL_FAILURE ) 
+	{
+		APL_GOBACK_FAIL	
+	}
+
+	EXEC SQL SELECT TO_CHAR(TO_DATE(:pro_sys_date),'MON DD, YYYY'),TO_CHAR(ADD_MONTHS(:pro_sys_date,-:g_mt_commonsys_params_struct_h.monthsfor_arch),'MON DD, YYYY')
+	INTO	:chr_format_sys_date,:chr_format_arch_date
+	FROM DUAL;
+
+	IS_ANY_ORA_ERROR
+
+	CA_Arch_Header(arc_rept_file,p_flogfile,chr_format_sys_date,chr_format_arch_date); 
+
+	int_cur_line_nbr = 13;
+
+	
+		EXEC SQL OPEN Arch_Rept_Cur;
+
+	
+	for (;;)
+	{
+		memset(&l_arch_rpt_struct_h,NULL,sizeof(ARCH_RPT_STRUCT_H) );
+		memset(&l_arch_rpt_struct_i,NULL,sizeof(ARCH_RPT_STRUCT_I) );
+		strcpy(chr_data_format,APL_NULL_STRING);
+	
+		EXEC SQL FETCH Arch_Rept_Cur
+		INTO  :l_arch_rpt_struct_h:l_arch_rpt_struct_i;
+
+		IS_ANY_ORA_ERROR_CURSOR
+
+		EXEC SQL SELECT TO_CHAR(TO_DATE(:l_arch_rpt_struct_h.h_decl_date),'MON DD, YYYY')
+		INTO :chr_format_decl_date
+		FROM DUAL;
+
+		IS_ANY_ORA_ERROR
+
+		
+		EXEC SQL SELECT NVL(count(*),0)
+		INTO :int_no_ents_archived
+		FROM CAARCHCLAIM
+		WHERE
+					corp_id =:l_arch_rpt_struct_h.h_corp_id
+			AND   ARCHIVAL_DATE = :pro_sys_date;
+
+		IS_ANY_ORA_ERROR 
+
+				
+		EXEC SQL SELECT NVL(count(*),0)
+		INTO :int_no_pymts_archived
+		FROM CAARCHCHEQUE
+		WHERE
+					corp_id =:l_arch_rpt_struct_h.h_corp_id
+			AND   ARCHIVAL_DATE = :pro_sys_date;
+
+		IS_ANY_ORA_ERROR 
+
+		sprintf(chr_data_format, "%-8s%5s%-12s%4s%-2s%6s%4d%5s%-2s%10s%16d%5s%12d\n",l_arch_rpt_struct_h.h_instr_code," ",chr_format_decl_date," ",l_arch_rpt_struct_h.h_evt_class," ",l_arch_rpt_struct_h.h_evt_nbr," ",l_arch_rpt_struct_h.h_evt_stat," ",int_no_ents_archived," ",int_no_pymts_archived);			
+
+		fprintf(arc_rept_file,chr_data_format);
+
+		int_cur_line_nbr = int_cur_line_nbr + 1;
+
+		if ( int_cur_line_nbr >= MAX_LINES_PAGE -3 )
+		{
+			fprintf(arc_rept_file,"\n");
+			for ( i=0; i< PAGE_WIDTH ; i++ ) fprintf(arc_rept_file,"-");
+			fprintf(arc_rept_file,"\f");
+			CA_Arch_Header(arc_rept_file,p_flogfile,chr_format_sys_date,chr_format_arch_date); 
+			int_cur_line_nbr =11;
+		}
+	}
+
+	CA_Arch_Footer(total_arch_arr,arc_rept_file,p_flogfile); 
+	
+	
+   APL_GOBACK_SUCCESS
+ 
+   RETURN_SUCCESS:
+	{
+   	fflush(arc_rept_file);
+		fclose(arc_rept_file);
+		return(APL_SUCCESS);
+	}
+   RETURN_FAILURE:
+   {
+		CO_ProcMonitor(p_flogfile,NULL,l_debug_info_ptr,NULL);
+		CO_FreeErrLst(l_debug_info_ptr);
+		fclose(arc_rept_file);
+   	return(APL_FAILURE);
+	}
+
+}
+
+int main(int argc , char ** argv) // AIX -Warnings Removal
+{
+	DEBUG_INFO_STRUCT_H	**l_debug_info_ptr=NULL,
+						*l_debug_info_struct = NULL;
+	FILE				*chr_finifile=NULL;
+	FILE				*flogfile=NULL;
+	char				chr_inifile[PATH_LENGTH]	=	APL_NULL_STRING;
+	char				chr_logfile[PATH_LENGTH]	=	APL_NULL_STRING;
+   char 				chr_uname[APL_USERID_LEN] = APL_NULL_STRING;
+   char 				chr_passwd[APL_PASSWD_LEN]= APL_NULL_STRING;
+	char				chr_log_buff[MSG_LENGTH]	=	APL_NULL_STRING;
+	struct			sqlca sqlca;	
+	INTL_ENV_DATA_STRUCT_H   *l_intlenv_datastruct_h =  NULL;
+   char                 chr_custody_id_b[APL_USERID_LEN];
+	char				*int_pos;
+	char	pro_sys_date[APL_DATE_LEN] = APL_NULL_STRING;
+	char	chr_sys_date_time[APL_DATE_LEN] = APL_NULL_STRING;
+
+	
+ 	EXEC SQL VAR chr_uname IS STRING;
+   EXEC SQL VAR chr_passwd IS STRING;  
+
+	l_debug_info_ptr = &l_debug_info_struct;
+	
+	
+	strcpy(chr_inifile,getenv("INTL_ROOT_PATH"));
+   strcat(chr_inifile,"/intl_sun.cfg");
+
+	if ( ( chr_finifile=fopen(chr_inifile,"r") ) == NULL)
+  	{
+     exit(-1);	
+  	}
+
+   APL_FETCH_DB_LOGIN_DETAILS(chr_finifile,chr_custody_id_b,chr_uname,chr_passwd,APL_OUT_FILE,l_debug_info_ptr)
+   EXEC SQL CONNECT :chr_uname IDENTIFIED BY :chr_passwd;
+   IS_ANY_ORA_ERROR
+
+   if ( CO_Rtv_RptFileName("2K",
+								APL_LOGFILE_DESC,
+								100,
+								argv[5],
+								argv,
+								&flogfile,
+								l_debug_info_ptr) == APL_FAILURE ) 
+	{
+		exit(-1);
+	}
+	EXEC SQL COMMIT;
+	IS_ANY_ORA_ERROR
+
+	
+   if ( CO_RtvSysDtTime(chr_sys_date_time,l_debug_info_ptr) == APL_FAILURE )
+         APL_GOBACK_FAIL
+   CLS_LOG_ARRAY
+   sprintf(chr_log_buff,"\nCorporate Actions Archival  started on :[%s]\n",chr_sys_date_time);
+   CO_ProcMonitor(flogfile,chr_log_buff,NULL,NULL);
+
+	strcpy(pro_sys_date,chr_sys_date_time);
+   strcpy(pro_sys_date,strtok_r(pro_sys_date," ",&int_pos));
+   strcat(pro_sys_date,APL_NULL_TIME);
+
+	if ( CO_RtvSysParams(l_debug_info_ptr) == APL_FAILURE)
+      APL_GOBACK_FAIL
+
+	
+	l_intlenv_datastruct_h   =  (INTL_ENV_DATA_STRUCT_H*)calloc(1,sizeof(INTL_ENV_DATA_STRUCT_H));
+	APL_MALLOC_FAIL(l_intlenv_datastruct_h);
+
+	
+   if ( argc < 6 )
+   {
+      CO_ProcMonitor(flogfile,"All Arguments expected by  program not passed \n",NULL
+,NULL);
+      APL_GOBACK_FAIL
+   }
+
+   strcpy(l_intlenv_datastruct_h->usr, argv[3]);
+
+	
+	if ( CA_Archive ( 	flogfile,
+							argv,
+							pro_sys_date,						
+							chr_sys_date_time,						
+							l_intlenv_datastruct_h,
+							l_debug_info_ptr
+                 		 )  == APL_FAILURE
+      )
+  	 	{	
+     		EXEC SQL ROLLBACK;
+			IS_ANY_ORA_ERROR	
+      	CO_ProcMonitor(flogfile,"ROLLING BACK \n",NULL,NULL);
+			APL_GOBACK_FAIL
+   	}
+   	else
+   	{
+			EXEC SQL COMMIT;
+   		CO_ProcMonitor(flogfile,"RECORD COMMITTED \n",NULL,NULL);
+			IS_ANY_ORA_ERROR	
+			APL_GOBACK_SUCCESS
+		}
+   
+	
+   APL_GOBACK_SUCCESS
+ 
+   RETURN_SUCCESS:
+	{
+   	CLS_LOG_ARRAY
+	   sprintf(chr_log_buff,"T:Archival exiting successfully\n");
+      CO_ProcMonitor(flogfile,chr_log_buff,l_debug_info_ptr,NULL);
+		CO_FreeErrLst(l_debug_info_ptr);
+      
+		APL_FREE(l_intlenv_datastruct_h);
+	
+		fclose(chr_finifile);
+		fclose(flogfile);
+		
+		
+		exit(0);
+   }
+   RETURN_FAILURE:
+   {
+   	CLS_LOG_ARRAY
+      sprintf(chr_log_buff,"T:Archival exiting unsuccessfully\n");
+      CO_ProcMonitor(flogfile,chr_log_buff,l_debug_info_ptr,NULL);
+		CO_FreeErrLst(l_debug_info_ptr);
+      
+		APL_FREE(l_intlenv_datastruct_h);
+	
+		fclose(chr_finifile);
+		fclose(flogfile);
+      
+		exit(-1);
+   }
+}

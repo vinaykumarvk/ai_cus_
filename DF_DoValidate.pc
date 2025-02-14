@@ -1,0 +1,361 @@
+/************************************************************************************************************
+ * 				COPYRIGHT NOTICE 
+ *		 
+ *		  
+ *		   		Copyright @  2005 by Polaris Software Lab Ltd.
+ *		   
+ *		    		All rights reserved. 	
+ *		      	No part of this document may be reproduced, stored in a retrieval system, 
+ *		       	translated, transcribed, or transmitted in any form or by any means, 
+ *		        	without the prior written permission of Polaris Software Lab Limited ('Polaris').
+ *		         
+***********************************************************************************************************/
+
+/**********************************************************************
+*                                                                    *
+
+* Project Name        : INTELLECT CUSTODY                            *
+* Module Name         : DEAL  PROCESSING                          	*
+* File Name           : DF_DoValidate.pc                     *
+*                                                                    *
+* Description         : This source file contains the function which *
+                        is used to Validate the incoming message 54x/515  *
+*                                                                    *
+* Screens Used        : None
+        *
+* Reports Used        : None                                         *
+*                                                                    *
+*                                                                    *
+* Notes               :                                              *
+*                                                                    *
+*            Version Control Block                                   *
+*                                                                    *
+* Date       Version     	Author               Description          *
+* ---------  --------  ---------------  ---------------------------- *
+*                                                                    *
+* 			     1.0       Rakesh Singh    		New File                *
+*                                                                    *
+* List of functions   :                                              *
+*                                                                    *
+* Function Name          Description                                 *
+* ----------------  --------------------------------------------------------------------- *
+* DoValidateFn  	      The function accepts the Message struct,Message                                                                       file name,log file name and the Error Structure
+								From the calling function .
+								It validates only incoming messages depending upon the values in dfValidatemap Table 
+								
+ * *******************************************************************************************/
+ 
+ #include <stdio.h>
+ #include <string.h>
+ #include <math.h>
+ #include <dirent.h>
+ #include <unistd.h>
+ 
+ 
+ #include "CR_Common.h"
+ #include "Intellect_Interface.h"
+ #include "Intellect_Common.h"
+ #include "Df_Fe.h"
+ 
+ EXEC SQL INCLUDE SQLCA;
+ #define APL_IF_DEBUG if ( 1 )
+ extern char g_addr_frm[];
+ extern char g_addr_to[];
+
+ 
+ 
+ int DoValidateFn(char *p_str_msg_name, MESSAGE_STRUCT **p_msg_list,FILE *fl_log,char *p_str_msg_filename,char *p_str_status,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+ {
+ 
+ 
+ 	int				l_int_rejcntr					=	0;
+ 	int				l_int_repcntr					=	0;
+ 	int				l_int_rejflg					=	0;
+ 	int				l_int_repflg					=	0;
+ 	int				l_int_cnt						=	0;
+ 	int				l_int_var						=	0;
+ 	FILE				*fl								= 	(FILE *)NULL;
+ 	char				l_str_msg_no[4]				=	APL_NULL_STRING;
+ 	char				l_str_msg_name[7]				=	APL_NULL_STRING;
+ 	char				l_str_isin[13]					=	APL_NULL_STRING;
+ 	char				l_str_country_code[3]		=	APL_NULL_STRING;
+ 	char				*l_str_paramstring;
+ 	char				*l_str_seme;
+ 	char				*l_str_part1;
+ 	char 				*l_str_msgval;
+ 
+ 	MESSAGE_STRUCT **l_msg_list;
+ 	DEBUG_INFO_STRUCT_H **l_debuginfo;
+ 	H_DSPARAMMAP_STRUCT			*dsparammap_struct		=	NULL;
+ 	DFVALIDATEMAP_STRUCT_H		*h_dfvalidatemap_struct	=	NULL;
+ 	DFVALIDATEMAP_STRUCT_I		*i_dfvalidatemap_struct	=	NULL;
+ 	DF_COMMON_MSGRPT_STRUCT_H	*h_commmsgrept_struct	=	NULL;
+ 	DF_COMMON_MSGRPT_STRUCT_I	*i_commmsgrept_struct	=	NULL;
+ 	PRO_GSEQNUM_STRUCT_H			*l_progseqnum_struct_h				=	NULL;
+ 	struct sqlca sqlca;
+ 
+ 	APL_IF_DEBUG
+ 	{
+ 		CO_ProcMonitor(APL_OUT_FILE, "\n Entered processtion DoValidatFn \n",NULL, NULL);
+ 	}
+ 
+ 	l_str_paramstring = (char*)calloc(1,(sizeof(char *)));
+ 	l_str_part1= (char*)calloc(1,(sizeof(char *)));
+ 	l_str_msgval = (char *)calloc(1,(sizeof(char *)));
+ 	l_str_seme= (char *)calloc(1,(sizeof(char *)));
+ 
+ 	l_msg_list = p_msg_list;
+ 	l_debuginfo = l_debug_info_ptr;
+ 	strcpy(l_str_msg_name,p_str_msg_name);
+ 
+ 
+ 
+ 	dsparammap_struct = (H_DSPARAMMAP_STRUCT *)calloc(200,sizeof(H_DSPARAMMAP_STRUCT));
+ 	APL_MALLOC_FAIL(dsparammap_struct);
+ 	h_dfvalidatemap_struct = (DFVALIDATEMAP_STRUCT_H *)calloc(200,sizeof(DFVALIDATEMAP_STRUCT_H));
+ 	APL_MALLOC_FAIL(h_dfvalidatemap_struct);
+ 	i_dfvalidatemap_struct = (DFVALIDATEMAP_STRUCT_I *)calloc(200,sizeof(DFVALIDATEMAP_STRUCT_I));
+ 	APL_MALLOC_FAIL(i_dfvalidatemap_struct);
+ 	h_commmsgrept_struct = (DF_COMMON_MSGRPT_STRUCT_H *)calloc(200,sizeof(DF_COMMON_MSGRPT_STRUCT_H));
+ 	APL_MALLOC_FAIL(h_commmsgrept_struct);
+ 	i_commmsgrept_struct = (DF_COMMON_MSGRPT_STRUCT_I *)calloc(200,sizeof(DF_COMMON_MSGRPT_STRUCT_I));
+ 	APL_MALLOC_FAIL(i_commmsgrept_struct);
+ 
+ 	EXEC SQL BEGIN DECLARE SECTION;
+ 
+ 	EXEC SQL VAR h_dfvalidatemap_struct->h_msg_name is STRING;
+ 	EXEC SQL VAR h_dfvalidatemap_struct->h_field_name is STRING;
+ 	EXEC SQL VAR h_dfvalidatemap_struct->h_typeofvldt is STRING;
+ 	EXEC SQL VAR h_dfvalidatemap_struct->h_reqd is STRING;
+ 	EXEC SQL VAR h_dfvalidatemap_struct->h_field_type is STRING;
+ 	EXEC SQL VAR h_dfvalidatemap_struct->h_msg_tag is STRING;
+ 	EXEC SQL VAR h_dfvalidatemap_struct->chr_h_qualifier is STRING;
+ 	EXEC SQL VAR h_dfvalidatemap_struct->h_sequence is STRING;
+ 	EXEC SQL VAR h_dfvalidatemap_struct->h_val_type is STRING;
+ 	EXEC SQL VAR h_dfvalidatemap_struct->h_static_val is STRING;
+ 	EXEC SQL VAR h_dfvalidatemap_struct->h_block_no is STRING;
+ 	EXEC SQL VAR h_dfvalidatemap_struct->h_repeat is STRING;
+ 	EXEC SQL VAR h_dfvalidatemap_struct->h_failreas is STRING;
+ 	EXEC SQL VAR h_dfvalidatemap_struct->h_query is STRING;
+ 	EXEC SQL VAR h_dfvalidatemap_struct->h_nation_code is STRING;
+ 	EXEC SQL VAR l_str_country_code is STRING;
+ 
+ 
+ 
+ 
+ 	EXEC SQL VAR l_str_msg_name is STRING;
+ 
+ 	EXEC SQL END DECLARE SECTION;
+ 
+ 
+ 
+ 
+ 	strncpy(l_str_msg_no,l_str_msg_name,3);
+ 	l_str_msg_no[3]='\0';
+ 
+ 
+ 
+ 
+ 	if(I_GetVal(p_msg_list,":35B:","SEC_ISIN",l_str_isin,"B","1") == APL_FAILURE)
+ 		APL_GOBACK_FAIL
+ 
+ 
+ 	EXEC SQL SELECT CNTRYCODE INTO :l_str_country_code FROM MT_INSTRUMENT WHERE ISIN = :l_str_isin;
+ 
+ 	IS_ANY_ORA_ERROR
+ 	if(sqlca.sqlcode != 0)
+ 	{
+ 		strcpy(p_str_status,"RJT");
+ 	
+ 		if(InsComm_MsgRptFn(l_msg_list,l_str_msg_name,"INVALID ISIN",p_str_status,p_str_msg_filename,l_debug_info_ptr) == APL_FAILURE)
+ 		{
+ 			CO_ProcMonitor(fl_log,"ERROR INSERTING IN DF_COMMON_MSGRPT \n",l_debug_info_ptr,NULL);
+ 						APL_GOBACK_FAIL
+ 		}
+ 		APL_GOBACK_SUCCESS
+ 	}
+ 
+ 
+ 
+ 	EXEC SQL DECLARE VALIDATEMAP_CUR CURSOR FOR
+ 	SELECT *
+ 	FROM DFVALIDATEMAP
+ 	WHERE MSG_NAME= :l_str_msg_name AND REQD='Y' AND (COUNTRY_CODE= :l_str_country_code OR COUNTRY_CODE= 'XX') ORDER BY TYPEOFVLDT;
+ 	IS_ANY_ORA_ERROR
+ 
+ 
+ 
+ 	EXEC SQL OPEN VALIDATEMAP_CUR;
+ 	l_int_var=0;
+ 	for(;;)
+ 	{
+ 
+ 		EXEC SQL FETCH VALIDATEMAP_CUR 
+ 		INTO :h_dfvalidatemap_struct:i_dfvalidatemap_struct;
+ 	
+ 
+ 		if((sqlca.sqlcode == 1403) && (l_int_var == 0))
+ 			SYS_RETURN_NO_DATA_FOUND
+ 
+ 		APL_IF_DEBUG
+ 		{
+ 			printf("\n Entered cursor FOR LOOP\n");
+ 			printf("\n The chr_value of l_int_rejflg is %d and l_int_rejcntr is %d \n",l_int_rejflg,l_int_rejcntr);
+ 		}
+ 
+ 		if(sqlca.sqlcode ==1403)
+ 			break;
+ 
+ 
+ 
+ 		if(l_int_rejcntr != 0)
+ 		{
+ 			if(strcmp(h_dfvalidatemap_struct->h_typeofvldt,"RPR")==0)
+ 			{
+ 				strcpy(p_str_status,"RJT");
+ 					break;
+ 			}
+ 		}
+ 
+ 
+ 
+ 
+ 
+ 		strcpy(dsparammap_struct->h_msg_name,h_dfvalidatemap_struct->h_msg_name);
+ 		strcpy(dsparammap_struct->chr_h_val,"Y");
+ 		strcpy(dsparammap_struct->h_field_type,h_dfvalidatemap_struct->h_field_type);
+ 		strcpy(dsparammap_struct->h_label,h_dfvalidatemap_struct->h_field_name);
+ 		strcpy(dsparammap_struct->h_msg_tag,h_dfvalidatemap_struct->h_msg_tag);
+ 		strcpy(dsparammap_struct->chr_h_qualifier,h_dfvalidatemap_struct->chr_h_qualifier);
+ 		strcpy(dsparammap_struct->h_sequence,h_dfvalidatemap_struct->h_sequence);
+ 		strcpy(dsparammap_struct->h_static_val,h_dfvalidatemap_struct->h_static_val);
+ 		strcpy(dsparammap_struct->h_val_type,h_dfvalidatemap_struct->h_val_type);
+ 		strcpy(dsparammap_struct->h_block_no, h_dfvalidatemap_struct->h_block_no);
+ 		dsparammap_struct->h_srl_num = 0;
+ 		strcpy(dsparammap_struct->h_query, h_dfvalidatemap_struct->h_query);
+ 
+ 
+ 
+ 
+ 
+ 
+ 		APL_IF_DEBUG
+ 		{
+ 			printf("\n CALLING FORMPARAMSTRING FUNCTION \n");
+ 		}
+ 
+ 		if(FormParamString(l_msg_list,l_str_paramstring,l_str_msg_name,dsparammap_struct,l_debug_info_ptr) == APL_FAILURE)
+ 			APL_GOBACK_FAIL
+ 		
+ 		APL_IF_DEBUG
+ 		{
+ 			printf("\n RETURNED FROM FORMPARAMSTRING FUNCTION AND THE VALUE IS %s \n",l_str_paramstring);
+ 		}
+ 
+ 
+ 
+ 
+ 
+ 
+ 		strcpy(l_str_part1, l_str_paramstring + strlen(dsparammap_struct->h_label) + 2);
+ 		strncpy(l_str_msgval,l_str_part1,strlen(l_str_part1));
+ 		l_str_msgval[strlen(l_str_part1)]='\0';
+ 		APL_IF_DEBUG
+ 		{
+ 			printf("\n The resultant data1 ************** %s \n",l_str_msgval);
+ 		}
+ 
+ 
+ 
+ 		strcpy(l_str_paramstring,APL_NULL_STRING);
+ 
+ 		if(!strcmp(l_str_msgval,"Y")==0)
+ 		{
+ 		
+ 			if(strcmp(h_dfvalidatemap_struct->h_typeofvldt,"RPR")==0)
+ 			{
+ 				l_int_repcntr=l_int_repcntr+1;
+ 				l_int_repflg=1;
+ 				strcpy(p_str_status,"RPR");
+ 
+ 				APL_IF_DEBUG
+ 				{
+ 					printf("\n GONE FOR REPAIR \n");
+ 				}
+ 			}
+ 
+ 			else
+ 			{
+ 				l_int_rejcntr=l_int_rejcntr+1;
+ 				l_int_rejflg=1;
+ 				strcpy(p_str_status,"RJT");
+ 
+ 				APL_IF_DEBUG
+ 				{
+ 					printf("\n GONE FOR REJECT \n");
+ 				}
+ 			}
+ 
+ 			if(InsComm_MsgRptFn(l_msg_list,h_dfvalidatemap_struct->h_msg_name,h_dfvalidatemap_struct->h_failreas,p_str_status,p_str_msg_filename,l_debug_info_ptr) == APL_FAILURE)
+ 			{
+ 				CO_ProcMonitor(fl_log,"ERROR INSERTING IN DF_COMMON_MSGRPT \n",l_debug_info_ptr,NULL);
+ 					APL_GOBACK_FAIL
+ 			}
+ 		}
+ 
+ 		l_int_var = l_int_var + 1;
+ 	}
+ 
+ 	EXEC SQL CLOSE VALIDATEMAP_CUR;
+ 
+ 	if(( l_int_rejflg == 0) && (l_int_repflg == 0 ))
+ 	{
+ 		strcpy(p_str_status,"STP");
+ 	}	
+ 
+ 	APL_GOBACK_SUCCESS
+ 
+ 	LBL_EXIT_NO_DATA:
+ 	EXEC SQL CLOSE VALIDATEMAP_CUR;
+ 	return SYS_NO_DATA;
+ 
+ 	RETURN_SUCCESS:
+ 	{
+ 		free(dsparammap_struct);
+ 		free(h_dfvalidatemap_struct);
+ 		free(h_commmsgrept_struct);
+ 		free(i_commmsgrept_struct);
+		free(i_dfvalidatemap_struct);
+		free(l_str_paramstring);
+		free(l_str_part1);
+		free(l_str_msgval);
+		free(l_str_seme);
+ 		APL_IF_DEBUG
+ 		{
+ 			printf("Leaving Function dovalidate with success and the STATUS is %s\n",p_str_status);
+ 		}
+ 		return(APL_SUCCESS);
+ 
+ 	}
+ 
+ 
+ 	RETURN_FAILURE:
+ 	{
+ 		free(dsparammap_struct);
+ 		free(h_dfvalidatemap_struct);
+ 		free(h_commmsgrept_struct);
+ 		free(i_commmsgrept_struct);
+		free(i_dfvalidatemap_struct);
+		free(l_str_paramstring);
+		free(l_str_part1);
+		free(l_str_msgval);
+		free(l_str_seme);
+ 		APL_IF_DEBUG
+ 		{
+ 			printf("Leaving Function dovalidate with failure");
+ 		}
+ 		return(APL_FAILURE);
+ 	}
+ }
+ 
+

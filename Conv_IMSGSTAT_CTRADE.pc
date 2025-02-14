@@ -1,0 +1,306 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ 
+#include "CR_Common.h"
+EXEC SQL INCLUDE SQLCA;
+#define APL_NULL '\0'
+#define APL_SUCCESS 1
+#define APL_FAILURE 0
+#define  APL_NULL_STRING      ""
+
+int ConvFormIMSGSTATToCTRADE(FILE *p_logfile)
+{
+
+	
+
+	struct sqlca sqlca;	
+	char 		chr_l_buf[100] 				= APL_NULL_STRING;
+	char     chr_l_refno_a[17]       = APL_NULL_STRING;
+	char     chr_l_client_a[11]       = APL_NULL_STRING;
+	char     chr_l_msg_status[51]       = APL_NULL_STRING;
+	char     chr_l_msg_no[7]       = APL_NULL_STRING;
+	short 	i_dl_client=0;
+	short 	i_indentity_no=0;
+	short 	i_msg_stat=0;
+	short 	i_swift_msg_no=0;
+   int int_l_reccount=0;
+	
+	
+
+   EXEC SQL VAR chr_l_refno_a IS STRING;
+   EXEC SQL VAR chr_l_client_a IS STRING;
+   EXEC SQL VAR chr_l_msg_status IS STRING;
+   EXEC SQL VAR chr_l_msg_no IS STRING;
+
+	#ifdef APL_THREADS
+		APL_SET_CONTEXT
+		EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	sqlca.sqlcode = 0;
+
+		fprintf(	p_logfile, 
+						"Entered Function ConvFormIMSGSTATToCTRADE\n");
+
+	
+	
+
+
+	EXEC SQL DECLARE msg_53x_572_539_cursor CURSOR FOR
+	select distinct client,proc_init,swift_msg_rep from MS_MSGSTAT where swift_msg_rep in ('53x','539','572') order by swift_msg_rep;
+
+
+	EXEC SQL OPEN msg_53x_572_539_cursor ;
+	if (sqlca.sqlcode < 0 )
+		{	
+			printf("\n int_l_reccount is %d sqlca.sqlcode is %d \n",int_l_reccount,sqlca.sqlcode);
+			goto RETURN_FAILURE;
+		}
+
+	for (int_l_reccount=1; ;int_l_reccount++)
+	{
+
+		memset(chr_l_refno_a,NULL, 17 * sizeof(char));
+		memset(chr_l_client_a,NULL, 11 * sizeof(char));
+		memset(chr_l_msg_status,NULL, 51 * sizeof(char));
+		memset(chr_l_msg_no,NULL, 7 * sizeof(char));
+		i_dl_client=0;
+		i_indentity_no=0;
+		i_swift_msg_no=0;
+		EXEC SQL FETCH msg_53x_572_539_cursor INTO :chr_l_client_a:i_dl_client,
+							 :chr_l_refno_a:i_indentity_no,
+							 :chr_l_msg_no:i_swift_msg_no;
+		
+
+		if (sqlca.sqlcode < 0 ) 
+		{	
+			printf("\n int_l_reccount is %d sqlca.sqlcode is %d \n",int_l_reccount,sqlca.sqlcode);
+			goto RETURN_FAILURE;
+		}
+		if(sqlca.sqlcode==1403) 
+		{
+			printf("\n int_l_reccount is %d sqlca.sqlcode is %d \n",int_l_reccount,sqlca.sqlcode);
+			break;
+		}
+		
+		
+		
+		memset(chr_l_buf, NULL, 100);
+		
+		sprintf(chr_l_buf,"%5d: client :%s: refno :%s: swift_msg_no :%s:",int_l_reccount,chr_l_client_a,chr_l_refno_a,chr_l_msg_no);
+		printf("%5d:Picked up from imsgstat client :%s: and refno :%s: swift_msg_no :%s:\n",int_l_reccount,chr_l_client_a,chr_l_refno_a,chr_l_msg_no);
+		fprintf(p_logfile, chr_l_buf);
+
+		EXEC SQL SELECT MSG_STAT into :chr_l_msg_status:i_msg_stat
+			FROM DL_DEAL WHERE CLIENT=RTRIM(:chr_l_client_a)
+	 		AND	  IDENTIY_NO=RTRIM(:chr_l_refno_a);
+	
+		if(sqlca.sqlcode==1403) 
+		{
+				memset(chr_l_buf, NULL, 100);
+				
+				sprintf(chr_l_buf,":Trade does not exists \n");
+				printf("Trade does not exists for client :%s: and refno :%s:\n",chr_l_client_a,chr_l_refno_a);
+				fprintf(p_logfile, chr_l_buf);
+				continue;
+		}
+		else if(strcmp(chr_l_msg_no,"572")==0)
+		{
+		 		if(strchr(chr_l_msg_status,'B')!= NULL)
+				{
+					memset(chr_l_buf, NULL, 100);
+					
+					sprintf(chr_l_buf,":already marked for 572\n");
+					printf("msg_status chr_flag already marked for client :%s: and refno :%s:\n for 572",chr_l_client_a,chr_l_refno_a);
+					fprintf(p_logfile, chr_l_buf);
+					continue;
+				}
+				else 
+				{
+					EXEC SQL UPDATE DL_DEAL 
+					SET MSG_STAT=MSG_STAT||'B'
+					WHERE CLIENT=RTRIM(:chr_l_client_a)
+					AND   IDENTIY_NO=RTRIM(:chr_l_refno_a);
+
+					if (sqlca.sqlcode < 0 ) goto RETURN_FAILURE;
+
+					memset(chr_l_buf, NULL, 100);
+					
+					sprintf(chr_l_buf,":Updated DL_DEAL  for 572\n");
+					printf("Updated DL_DEAL for client :%s: and refno :%s: for 572\n",chr_l_client_a,chr_l_refno_a);
+					fprintf(p_logfile, chr_l_buf);
+				}
+		}
+		else if(strcmp(chr_l_msg_no,"53x")==0)
+	   {		
+				if(strchr(chr_l_msg_status,'A')!= NULL)
+				{
+					memset(chr_l_buf, NULL, 100);
+					
+					sprintf(chr_l_buf,":already marked for 53x\n");
+					printf("msg_status chr_flag already marked for client :%s: and refno :%s: for 53x \n",chr_l_client_a,chr_l_refno_a);
+					fprintf(p_logfile, chr_l_buf);
+					continue;
+				}
+				else
+				{
+					EXEC SQL UPDATE DL_DEAL 
+					SET MSG_STAT=MSG_STAT||'A'
+					WHERE CLIENT=RTRIM(:chr_l_client_a)
+					AND   IDENTIY_NO=RTRIM(:chr_l_refno_a);
+
+					if (sqlca.sqlcode < 0 ) goto RETURN_FAILURE;
+
+					memset(chr_l_buf, NULL, 100);
+					
+					sprintf(chr_l_buf,":Updated DL_DEAL  for 53x\n");
+					printf("Updated DL_DEAL for client :%s: and refno :%s:for 53x \n",chr_l_client_a,chr_l_refno_a);
+					fprintf(p_logfile, chr_l_buf);
+				}
+		}
+		else if(strcmp(chr_l_msg_no,"539")==0)
+	   {		
+				if(strchr(chr_l_msg_status,'C')!= NULL)
+				{
+					memset(chr_l_buf, NULL, 100);
+					
+					sprintf(chr_l_buf,":already marked for 539\n");
+					printf("msg_status chr_flag already marked for client :%s: and refno :%s: for 539 \n",chr_l_client_a,chr_l_refno_a);
+					fprintf(p_logfile, chr_l_buf);
+					continue;
+				}
+				else
+				{
+					EXEC SQL UPDATE DL_DEAL 
+					SET MSG_STAT=MSG_STAT||'C'
+					WHERE CLIENT=RTRIM(:chr_l_client_a)
+					AND   IDENTIY_NO=RTRIM(:chr_l_refno_a);
+
+					if (sqlca.sqlcode < 0 ) goto RETURN_FAILURE;
+
+					memset(chr_l_buf, NULL, 100);
+					
+					sprintf(chr_l_buf,":Updated DL_DEAL  for 539\n");
+					printf("Updated DL_DEAL for client :%s: and refno :%s:for 539 \n",chr_l_client_a,chr_l_refno_a);
+					fprintf(p_logfile, chr_l_buf);
+				}
+		}
+	}
+
+	EXEC SQL CLOSE msg_53x_572_539_cursor ;
+	if (sqlca.sqlcode < 0 ) goto RETURN_FAILURE;
+
+
+	goto RETURN_SUCCESS;
+
+   RETURN_SUCCESS :
+		  EXEC SQL COMMIT WORK;
+		  if (sqlca.sqlcode < 0 ) goto RETURN_FAILURE;
+		  fprintf(p_logfile, "final commit1");
+			fprintf(	p_logfile, 
+							"Leaving Function ConvFormIMSGSTATToCTRADE with success\n");
+      return(APL_SUCCESS);
+
+   RETURN_FAILURE :
+			fprintf(	p_logfile, 
+							"Leaving Function ConvFormIMSGSTATToCTRADE with errors\n");
+
+		fprintf(p_logfile, APL_NULL_STRING);
+      return(APL_FAILURE);
+
+}
+
+
+
+main(int argc,char **argv)
+{
+   DEBUG_INFO_STRUCT_H *l_debug_info_ptr=NULL ;
+	FILE *l_finifile;
+
+   int int_l_retval=0;
+	int int_num = 0;
+
+   char chr_uname[APL_USERID_LEN] 	= APL_NULL_STRING;
+   char chr_passwd[APL_PASSWD_LEN] 	= APL_NULL_STRING;
+   char chr_custody_id_b[APL_USERID_LEN] 	= APL_NULL_STRING;
+	char chr_l_logdir[PATH_LENGTH] 	= APL_NULL_STRING;
+	char chr_l_logname[PATH_LENGTH] 	= APL_NULL_STRING;
+	char chr_l_inifile[PATH_LENGTH] 	= APL_NULL_STRING;
+
+	FILE *l_flogfile = NULL;
+
+   EXEC SQL VAR chr_uname IS STRING;
+   EXEC SQL VAR chr_passwd IS STRING;
+
+	strcpy(chr_l_inifile,getenv("INTL_ROOT_PATH"));
+	strcat(chr_l_inifile,"intl_sun.cfg");
+
+	if ( ( l_finifile=fopen(chr_l_inifile,"r") ) == NULL)
+	{
+		exit(-1);
+	}
+
+
+  APL_FETCH_DB_LOGIN_DETAILS(l_finifile, chr_custody_id_b, chr_uname, chr_passwd ,APL_OUT_FILE,l_debug_info_ptr)
+   EXEC SQL CONNECT :chr_uname IDENTIFIED BY :chr_passwd;
+   IS_ANY_ORA_ERROR
+
+        if (APL_FAILURE == CO_Rtv_RptFileName("9A",
+     					APL_LOGFILE_DESC,
+     					100,
+     					argv[5],
+     					argv,
+     					&l_flogfile,
+     					&l_debug_info_ptr) )
+        {
+                exit(-1);
+        }
+	EXEC SQL COMMIT;
+	IS_ANY_ORA_ERROR
+		
+
+	
+
+	if (fclose(l_finifile)) 
+	{
+		exit(-1);
+	}
+
+
+   int_l_retval = ConvFormIMSGSTATToCTRADE(l_flogfile);
+  
+	if ( int_l_retval == APL_FAILURE )
+	  {
+		  fprintf(l_flogfile, "ConvFormIMSGSTATToCTRADE returned failure");
+		  goto RETURN_FAILURE;
+	  }
+   else
+	  {
+		  EXEC SQL COMMIT WORK;
+		  if (sqlca.sqlcode < 0 ) goto RETURN_FAILURE;
+		  fprintf(l_flogfile, "final commit2");
+		  goto RETURN_SUCCESS;
+	  }
+
+
+
+	RETURN_SUCCESS :
+		fclose(l_flogfile);
+		exit(0);
+
+	RETURN_FAILURE :
+		fclose(l_flogfile);
+		exit(1);
+}

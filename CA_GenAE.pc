@@ -1,0 +1,2797 @@
+/*
+ *    COPYRIGHT NOTICE
+ *
+ *   Copyright 2005 Polaris Software Lab Limited. All rights reserved.
+ *
+ *   These materials are confidential and proprietary to
+ *    Polaris Software Lab Limited and no part of these materials should
+ *    be reproduced, published, transmitted or distributed in any form or
+ *    by any means, electronic, mechanical, photocopying, recording or
+ *    otherwise, or stored in any information storage or retrieval system
+ *    of any nature nor should the materials be disclosed to third parties
+ *    or used in any other manner for which this is not authorized, without
+ *    the prior express written authorization of Polaris Software Lab Limited.
+ */
+/*********************************************************************
+ *
+ * Module Name         :      Corporate Actions
+ *
+ * File Name           :      CA_GenAE.pc
+ *
+ * Description         :      Contains Functions Related to CA Accounting Entries
+ *
+ *
+ *
+ *            Version Control Block
+ *
+ * Date        Version     Author           Description        RFS No.
+ * ---------   --------  ---------------  ------------------   ---------
+ * 18/01/2006   1.2        Smita Bhat        New File          Base Version
+ * 08/02/2006	 1.3			Smita Bhat			Chgs related to 	Base Verdion HDFCCA
+ * 														Col Names
+ * 18/03/2006	 1.4			Amit Bhosale 		Change for
+ * 														Accounting Entries													
+ *
+ * 18/10/2011	           Sana Bhatkar New Core Banking    Retro done for AIX mig for ISKB_4802
+ *					Account No Size 
+ *					Change
+ *************************************************************************/
+
+
+#include "CR_Common.h"
+#include "CA_Common.h"
+#include "BT_Common.h"
+EXEC SQL INCLUDE SQLCA.H;
+
+#define  RTV_SYSTEM_DATA
+
+
+#define	APL_BATCHSTATUS_LEN	16
+#define	APL_STATUS_BATCH_COMPLETED "completed"
+#define	APL_STATUS_BATCH_STARTED "started"
+#define	S_RESTART_SEP_TOKEN	"|"
+#define	APL_LOWEST_CHAR	" "
+#define  CLS_LOG_ARRAY  memset(chr_g_log_buff,NULL,sizeof(chr_g_log_buff));
+#define	COMMIT_COUNT_AE	2	
+
+#define  APL_VALUE_DATE_LEN 9
+#define	CREDIT_IND_A '1'
+#define	DR_CR_IND  '0'
+#define  AE_NEW_IND 1
+#define  AE_REV_IND 2
+#define	APL_GL_LOCAL_CCY "INR"
+#define	MODULE_IND_CA	'A'
+#define	APL_ACCTENT_GEN_IND  'G'
+#define  APL_ACCTENT_CURRCODE_LEN 4
+#define	APL_ACCTENT_PASS_IND 'P'
+#define  APL_ACCTENT_AMOUNT_LEN 31
+#define  APL_ACCTENT_NARR_LEN      102 
+#define  APL_ACCTENT_DEALCODE_LEN   4 
+#define  AE_DLCD "930"
+#define  AE_DLCD_PO "952"
+#define  AE_DLCD_HU "933" 
+#define  AE_CLASS_LEN 8
+#define	APL_ACCTENT_NORMENT '2'
+#define	APL_ACCTENT_DEAL_REF_LEN 51
+#define	TXN_REF_DELIMITER "|"
+#define	APL_ACCTENT_BATCHNO_LEN 10
+#define	APL_ACCTENT_SEQNUM_LEN  11
+#define  MSG_LEN 110
+#define	AE_PASS_IND_STR   "P"
+#define	AE_GEN_IND_STR    'G'
+#define	AE_REVREJ_IND  "V"
+#define  APL_INSTRUDESC_LEN 131
+#define  AE_INSTRNARR_LEN 15
+#define  APL_STAT_ALLCNTRY "XX"
+#define	APL_STATCODEDESC_LEN	41
+#define  APL_STATINFO_LEN  71
+#define	MS_INDENT_LEN 17			
+#define COMMIT_FREQ_ACCTENT 20 /*Smita - Changes for HDFC Base Version */
+
+char  chr_g_progname        [APL_BATCH_PROGNAME_LEN] = APL_NULL_STRING;
+char  chr_g_key             [APL_BATCH_KEY_LEN] = APL_NULL_STRING;
+char  chr_g_start_date      [APL_DATE_LEN] = APL_NULL_STRING;
+char	chr_g_status_started [APL_BATCHSTATUS_LEN] = APL_NULL_STRING;
+char	chr_g_status_completed [APL_BATCHSTATUS_LEN] = APL_NULL_STRING;
+
+
+FILE	*g_flogfile=NULL;
+char	chr_g_sys_date[APL_DATE_LEN] = APL_NULL_STRING;
+char	chr_g_sys_date_time[APL_DATE_LEN] = APL_NULL_STRING;
+char 	chr_g_h_debit_account[APL_CLIENT_LENGTH_GL] = APL_NULL_STRING;
+char 	chr_g_h_sundry_account[APL_CLIENT_LENGTH_GL] = APL_NULL_STRING;	
+short g_mccy_cacc_exists = 0;		
+short g_i_debit_account = 0;
+char	chr_g_batch_no[APL_ACCTENT_BATCHNO_LEN] = APL_NULL_STRING;
+char	int_g_seq_num[APL_ACCTENT_SEQNUM_LEN] = APL_NULL_STRING;
+int	int_g_run_seq_num = 1;
+char	chr_g_log_buff[MSG_LEN] = APL_NULL_STRING;
+short	g_get_batch_no_flg = APL_FAILURE;
+char	chr_g_acctent_pass_ind[APL_FLAG_LENGTH]  = APL_NULL_STRING;
+//char	chr_g_acctent_gen_ind[APL_FLAG_LENGTH]  = APL_NULL_STRING;
+char	chr_g_acctent_gen_ind;
+char	chr_g_acctent_rvrej_ind[APL_FLAG_LENGTH]  = APL_NULL_STRING;
+char	chr_g_stat_allcntry[APL_CTRY_CODE_LEN]	= APL_NULL_STRING;
+//double g_debit_ind_total = 0.0;
+//double dbl_g_cr_total = 0.0;
+DL_CURRENCY_STRUCT_H   l_dl_currency_struct_h;
+
+
+
+int	CA_Pro_FillActEntStruct( PRO_ACCTENT_STRUCT_H		*p_iacctent_struct_h,
+									PRO_ACCTENT_STRUCT_I		*p_iacctent_struct_i,
+ 									CA_CACHEQUE_STRUCT_H  *p_ca_cacheque_struct_h,
+									char						p_db_cr_ind,
+									short						new_rev_ind,
+									char						chr_l_acc_typ_ind,
+									char						*chr_p_evnt_ind,
+									char						*chr_p_ind,
+									char						*p_rowid,
+									double *p_debit_ind_total,
+									double *p_dbl_g_cr_total,
+									DEBUG_INFO_STRUCT_H			**l_debug_info_ptr
+								 );
+
+int	CA_Pro_GenActEnt	(	INTL_ENV_DATA_STRUCT_H*p_intlenv_data_struct_h,
+									char *p_process_name,
+							         char *p_process_key,
+							         char *p_start_date,
+									 double *p_debit_ind_total,
+									 double *p_dbl_g_cr_total,
+									DEBUG_INFO_STRUCT_H      **l_debug_info_ptr
+									);
+
+
+int	CA_Pro_GenEnt( char *chr_p_ind,CA_CACHEQUE_STRUCT_H 	* p_ca_cacheque_struct_h,
+							char							*chr_p_evnt_ind,
+							char							*p_rowid,
+									 double *p_debit_ind_total,
+									 double *p_dbl_g_cr_total,
+						   DEBUG_INFO_STRUCT_H 	  		**l_debug_info_ptr
+						 );
+
+
+
+
+
+int	CA_Pro_GenActEnt	(	INTL_ENV_DATA_STRUCT_H*p_intlenv_data_struct_h,
+									char *p_process_name,
+							        char *p_process_key,
+								    char *p_start_date,
+									 double *p_debit_ind_total,
+									 double *p_dbl_g_cr_total,
+									DEBUG_INFO_STRUCT_H      **l_debug_info_ptr
+									)
+{
+	
+	CA_CACHEQUE_STRUCT_H		*l_ca_chq_struct_h	=	NULL;
+	CA_CACHEQUE_STRUCT_I		*l_ca_cacheque_struct_i	=	NULL;
+	int	int_commit_count_a	=	0;
+	int	int_result	      =	0;	
+	int counter=0;
+	int int_l_datediff=0;
+
+	struct sqlca sqlca;
+
+	char  chr_h_batch_in_proc_rowid[APL_ROWID_LEN] = APL_NULL_STRING;
+	char  chr_h_batch_in_proc_status[APL_BATCHSTATUS_LEN] = APL_NULL_STRING;
+	char	rowid[APL_ROWID_LEN]	=	APL_NULL_STRING;
+	char	chr_acctent_type[AE_CLASS_LEN] = APL_NULL_STRING;
+	char    chr_l_main_funcarea[APL_MAINFUNCAREA_LEN]=APL_NULL_STRING;
+    char    chr_l_subfunc[APL_MAINFUNCAREA_LEN]=APL_NULL_STRING;
+	char  chr_h_stat_info[APL_STATINFO_LEN] = APL_NULL_STRING; 	
+/*	******************** NEW VARIBLE BY AMIT BHOSALE ********************************** */
+	char chr_l_event_class[EVT_CLASS_]=APL_NULL_STRING;
+	char chr_l_ind[2]=APL_NULL_STRING;
+	char chr_l_evnt_ind[4]=APL_NULL_STRING;
+	short i_evnt_ind=0;
+	char    chr_l_cashacc_glacc[24]=APL_NULL_STRING;
+	short   i_cashacc_ibbsacc =  0;
+	/** For Rights Allotment Entries:160607 **/
+	double l_int_qty_paid_allot =0.0;
+	double l_int_qty_paid_appl =0.0;
+	short i_qty_paid_allot=0;
+	short i_qty_paid_appl=0;
+/*	******************** NEW VARIBLE BY AMIT BHOSALE ********************************** */
+	EXEC SQL VAR chr_h_batch_in_proc_rowid IS STRING;
+	EXEC SQL VAR chr_h_batch_in_proc_status IS STRING;
+	EXEC SQL VAR rowid IS STRING;
+	EXEC SQL VAR l_ca_chq_struct_h->h_corp_id IS STRING;
+	EXEC SQL VAR l_ca_chq_struct_h->h_dl_client IS STRING;
+	EXEC SQL VAR chr_l_ind IS STRING;
+/*	******************** NEW VARIBLE BY AMIT BHOSALE ********************************** */
+	EXEC SQL VAR chr_l_event_class IS STRING;
+/*	EXEC SQL VAR l_ca_chq_struct_h->h_evnt_ind  IS STRING;*/
+   EXEC SQL VAR chr_l_cashacc_glacc IS STRING;
+	
+  //Added by Azhar for NRI Accounting Entries - START
+   char chr_l_cln_type[2]=APL_NULL_STRING;
+   char chr_l_cln_param_id[2]=APL_NULL_STRING;
+   char chr_l_cln_status[3]=APL_NULL_STRING;
+   EXEC SQL VAR chr_l_cln_type IS STRING;
+   EXEC SQL VAR chr_l_cln_param_id IS STRING;
+   EXEC SQL VAR chr_l_cln_status IS STRING;
+ //Added by Azhar for NRI Accounting Entries - END
+	
+	l_ca_chq_struct_h	=	(CA_CACHEQUE_STRUCT_H *) calloc ( 1, sizeof(CA_CACHEQUE_STRUCT_H)	);
+	APL_MALLOC_FAIL(l_ca_chq_struct_h);
+	
+	l_ca_cacheque_struct_i	=	(CA_CACHEQUE_STRUCT_I *) calloc ( 1, sizeof(CA_CACHEQUE_STRUCT_I)	);
+	APL_MALLOC_FAIL(l_ca_cacheque_struct_i);
+
+printf("\n before CO_Rtv_NxtBatchSeq \n");
+
+	if		( CO_Rtv_NxtBatchSeq(MODULE_IND_CA,
+									chr_g_batch_no,
+									int_g_seq_num,
+									l_debug_info_ptr
+									)	==	APL_FAILURE
+			)
+	{
+		CO_ProcMonitor(g_flogfile,"Could not obtain Batch Number",NULL,NULL);
+		APL_GOBACK_FAIL
+	}
+	else   
+	{
+		if	( !strcmp(chr_g_batch_no,APL_NULL_STRING) )
+		{
+			g_get_batch_no_flg = APL_SUCCESS;
+		}
+		else	
+		{
+			int_g_run_seq_num = atoi(int_g_seq_num);
+			int_g_run_seq_num = int_g_run_seq_num + 1;
+			sprintf(int_g_seq_num,"%d",int_g_run_seq_num);				
+			sprintf(chr_g_log_buff,"SHYAM::Got Batch Number :[%s] Sequence Number :[%s]",chr_g_batch_no,int_g_seq_num);
+			CO_ProcMonitor(g_flogfile,chr_g_log_buff,NULL,NULL);
+		}
+
+	}
+
+
+/*	***************  NEW CURSOR DECLARATION BY AMIT BHOSALE  **************** */
+	
+/*	EXEC SQL DECLARE	A_AccEnt_Cur	CURSOR
+	FOR
+		SELECT CACHEQUE.*,NULL,
+				rowid
+		FROM CACHEQUE 
+		WHERE
+				STAT_PYMT IN ('CP','RV') 
+				AND HF_DATE IS NULL 
+				AND   CORP_ID  = (SELECT CORP_ID FROM CAEVENT 
+	 								WHERE CAEVENT.CORP_ID = CACHEQUE.CORP_ID 
+									AND	CA_EVENT IN ('BI','CD','DV')			
+							 		)
+  		 union
+	     SELECT b.corp_id,b.cln_code,0,b.candate,x.CA_CURRENCY,b.money_payable,
+           0,0,NULL,b.hf_date,NULL,NULL,NULL,0,0,NULL,NULL,
+           NULL,b.maker,b.maker_dt,b.checker,b.checker_dt,b.access_stamp,
+           b.ae_passind,b.clt_seqnum,b.qtyshallot,0,0,0,'NSA',
+           b.rowid
+		 FROM ca_nis_allotment b,caevent x
+			 WHERE b.corp_id=x.corp_id
+			 AND HF_DATE IS NULL 
+			 AND AE_PASSIND!='G'
+			 AND   b.CORP_ID  = (SELECT CORP_ID FROM CAEVENT 
+	 								WHERE CORP_ID = B.CORP_ID 
+									AND	CA_EVENT IN ('NS')			
+							 		)
+		 union
+		 SELECT c.corp_id,c.cln_code,0,c.adate,x.CA_CURRENCY,c.mmpaid,
+			   0,0,NULL,c.hf_date,NULL,NULL,NULL,0,0,NULL,NULL,
+			   NULL,c.maker,c.maker_dt,c.checker,c.checker_dt,c.access_stamp,
+			   c.ae_passind,c.clt_seqnum,c.aqty,0,'NSP',
+			   c.rowid
+		 FROM ca_nis_application c,caevent x
+			WHERE c.corp_id=x.corp_id 
+			AND HF_DATE IS NULL 
+			AND ae_passind IS NULL
+			AND   c.CORP_ID  = (SELECT CORP_ID FROM CAEVENT 
+										WHERE CORP_ID = c.CORP_ID 
+										AND	CA_EVENT IN ('NS')			
+										)
+		 union
+		 SELECT d.corp_id, d.cln_code,0,d.application_date,x.CA_CURRENCY,d.amt_payable,
+				0,0,NULL,d.hf_date,NULL,NULL,NULL,0,0,NULL,NULL,
+				d.application_date,d.maker,d.maker_dt,d.checker,d.checker_dt,d.access_stamp,
+				d.ae_passind,d.clt_seqnum,d.applied_qty,0,NULL,
+			   d.rowid
+		 FROM ca_application d,caevent x
+     		WHERE d.corp_id=x.corp_id
+			 AND HF_DATE IS NULL
+			 AND ae_passind IS NULL
+			 AND AMT_PAYABLE >0
+			 AND   d.CORP_ID  = (SELECT CORP_ID FROM CAEVENT 
+										WHERE CORP_ID = d.CORP_ID 
+										AND	CA_EVENT IN ('BB','RT')			
+										)
+		ORDER BY 1,2,3;
+*/
+
+	printf("\n Amit:Before Opening Cursor \n");
+
+	IF_COND_EXISTS("CA_ACCENT","CACHEQUE_COL")
+	{
+		printf("\n Entered IF part of COND_EXIST \n");
+
+		EXEC SQL DECLARE A_AccEnt_Cur CURSOR FOR
+		SELECT 'A',CACHEQUE.*,NULL,
+				rowid
+		FROM CACHEQUE 
+		WHERE
+				STAT_PYMT IN ('CP','RV') 
+				AND HF_DATE IS NULL
+				AND AE_PASSIND IS NULL	
+				AND   CORP_ID  = (SELECT CORP_ID FROM CAEVENT 
+	 								WHERE CAEVENT.CORP_ID = CACHEQUE.CORP_ID 
+									AND	CA_EVENT IN ('BI','CD','DV')			
+							 		)
+		union
+				SELECT 'B',CACHEQUE.*,NULL,
+				rowid
+			FROM CACHEQUE
+			WHERE
+			STAT_PYMT IN ('CP','RV')
+			AND curr_pymt > 0
+			AND HF_DATE IS NULL
+			AND AE_PASSIND IS NULL
+			AND   CORP_ID  = (SELECT CORP_ID FROM CAEVENT
+									WHERE CAEVENT.CORP_ID = CACHEQUE.CORP_ID
+									AND   CA_EVENT IN ('BO','SD')
+									)		
+			union
+			SELECT 'C',CACHEQUE.*,NULL,
+			rowid
+				FROM CACHEQUE
+				WHERE
+				STAT_PYMT IN ('CP','RV')
+				AND HF_DATE IS NULL
+				AND AE_PASSIND IS NULL
+/*				AND DEAL_IDENTITY_NO IS NULL	*/
+				AND   CORP_ID  = (SELECT CORP_ID FROM CAEVENT
+						WHERE CAEVENT.CORP_ID = CACHEQUE.CORP_ID
+						AND   CA_EVENT = 'RD'
+						)
+			
+  		 union
+/** No Accounting Entries for IPO Allotment	23/01/07 **/
+/*	     SELECT 'D',b.corp_id,b.cln_code,0,b.candate,m.currency_cd,b.AMOUNTPAY,
+           0,0,NULL,b.hf_date,NULL,NULL,NULL,0,0,NULL,NULL,
+           NULL,b.maker,b.maker_dt,b.checker,b.checker_dt,b.access_stamp,
+           b.ae_passind,b.clt_seqnum,b.qtyshallot,0,0,0,'NSA',
+           b.rowid
+		 FROM ca_nis_allotment b,caevent x,mt_instrument m
+			 WHERE b.corp_id=x.corp_id
+			 AND m.instr_code=x.instr_code
+			 AND HF_DATE IS NULL 
+			 AND AE_PASSIND IS NULL
+			 AND b.STATUS = 'AA'
+			 AND b.AMOUNTPAY != 0
+			 AND   b.CORP_ID  = (SELECT CORP_ID FROM CAEVENT 
+	 								WHERE CORP_ID = B.CORP_ID 
+									AND	CA_EVENT ='NS'			
+							 		)
+		 union
+*/ 	 SELECT 'E',c.corp_id,c.cln_code,0,c.adate,m.currency_cd,c.mmpaid,
+			   0,0,NULL,c.hf_date,NULL,NULL,NULL,0,0,NULL,NULL,
+			   NULL,c.maker,c.maker_dt,c.checker,c.checker_dt,c.access_stamp,
+			   c.ae_passind,c.clt_seqnum,c.aqty,0,0,0,NULL,0,0,'NSP',
+			   c.rowid
+		 FROM ca_nis_application c,caevent x,mt_instrument m
+			WHERE c.corp_id=x.corp_id
+		  	AND m.instr_code=x.instr_code	
+			AND HF_DATE IS NULL 
+			AND ae_passind IS NULL
+			AND c.bk_build_ind='N'
+			AND c.STATUS = 'AA'
+			AND c.mmpaid != 0
+			AND   c.CORP_ID  = (SELECT CORP_ID FROM CAEVENT 
+										WHERE CORP_ID = c.CORP_ID 
+										AND	CA_EVENT = 'NS'			
+										)
+		 union
+		 SELECT 'F',f.corp_id,f.cln_code,f.brevno,f.bdate,m.currency_cd,f.mmpaynw,
+		 0,0,NULL,f.hf_date,NULL,NULL,NULL,0,0,NULL,NULL,
+		 NULL,f.maker,f.maker_dt,f.checker,f.checker_dt,f.access_stamp,
+		 f.ae_passind,f.clt_seqnum,GREATEST(f.bqty1,f.bqty2,f.bqty3),0,0,0,NULL,0,0,'NS',
+		 f.rowid
+			 FROM ca_nis_bid f,caevent x,mt_instrument m
+			 WHERE f.corp_id=x.corp_id
+			 AND m.instr_code=x.instr_code
+			 AND HF_DATE IS NULL
+			 AND ae_passind IS NULL
+			 AND f.STATUS = 'AA'
+			 AND f.mmpaynw != 0
+			 AND   f.CORP_ID  = (SELECT CORP_ID FROM CAEVENT
+					 WHERE CORP_ID = f.CORP_ID
+					 AND   CA_EVENT = 'NS'
+					 )					  
+		 union
+			 SELECT 'G',d.corp_id, d.cln_code,cln_srno,d.application_date,m.currency_cd,d.amt_payable,
+			 0,0,NULL,d.hf_date,NULL,NULL,NULL,0,0,NULL,NULL,
+			 d.application_date,d.maker,d.maker_dt,d.checker,d.checker_dt,d.access_stamp,
+		 	 d.ae_passind,d.clt_seqnum,d.applied_qty,0,0,0,NULL,0,0,NULL,
+		 	 d.rowid
+			 FROM ca_application d,caevent x,mt_instrument m
+			 WHERE d.corp_id=x.corp_id
+			 AND m.instr_code=x.instr_code
+			 AND HF_DATE IS NULL
+			 AND ae_passind IS NULL
+			 AND AMT_PAYABLE >0
+			 AND d.STATUS= 'AA'
+			 AND   d.CORP_ID  = (SELECT CORP_ID FROM CAEVENT
+					 WHERE CORP_ID = d.CORP_ID
+					 AND   CA_EVENT  = 'RT'
+					 )
+			 union
+			 SELECT 'H',e.corp_id,e.cln_code,0,e.allot_dt,m.currency_cd,e.AMT_REC,
+			 0,0,NULL,e.hf_date,NULL,NULL,NULL,0,0,NULL,NULL,
+			 e.allot_dt,e.maker,e.maker_dt,e.checker,e.checker_dt,e.access_stamp,
+			 e.ae_passind,e.clt_seqnum,e.alloted_qty,0,0,0,NULL,0,0,NULL,
+			 e.rowid
+			 FROM ca_rtbb_allotment e,caevent x,mt_instrument m
+			 WHERE e.corp_id=x.corp_id
+			 AND m.instr_code=x.instr_code
+			 AND HF_DATE IS NULL
+			 AND ae_passind IS NULL
+			 AND e.status='AA'
+			 AND e.AMT_REC > 0
+			 AND   e.CORP_ID  = (SELECT CORP_ID FROM CAEVENT
+					 WHERE CORP_ID = e.CORP_ID
+					 AND   CA_EVENT IN ('BB','RT') 
+					 )
+			 union
+			 SELECT 'I',i.corp_id, i.CLIENT,i.SEQNUM_PAY,i.DATEOF_PAYMENT,i.PAYMENT_CCY,i.QUANTITY_RECEIVED*x.sub_pr,
+				i.QUANTITY_RECEIVED,i.TAX_RATE,PAYMENT_INFO,i.hf_date,i.DEAL_IDENTITY_NO,i.DATEOFBILLING,i.LOCATION_CD,
+			  	i.TAX_AMOUNT,i.OTHER_CHRGS,i.STAT_PYMT,i.PROCESSED_DATE,i.DATE_OF_INPUT,i.maker,i.maker_dt,
+				i.checker,i.checker_dt,i.access_stamp,i.ae_passind,i.clt_seqnum,i.QUANTITY_PAID,i.TAXABLE_DIVIDEND,
+				i.FRACT_QTY_BAL,i.FRACT_QTY_RECD,NULL,0,0,NULL,i.rowid
+				FROM cacheque i,caevent x
+				WHERE i.corp_id=x.corp_id
+				AND HF_DATE IS NULL
+				AND ae_passind IS NULL
+				AND x.sub_pr >0
+				AND   i.CORP_ID  = (SELECT CORP_ID FROM CAEVENT
+					WHERE CORP_ID = i.CORP_ID
+					AND   CA_EVENT  = 'CV'
+				)
+				union
+			SELECT 'J',b.r_corp_id,b.cln_code,0,b.notice_date,m.currency_cd,b.put_call_value,
+			   AVL_QTY,NULL,NULL,b.hf_date,NULL,value_date,NULL,0,0,NULL,NULL,
+			   NULL,b.maker,b.maker_dt,b.checker,b.checker_dt,b.access_stamp,
+			   b.ae_passind,b.clt_seqnum,b.put_call_qty,0,0,0,NULL,0,0,x.OP_EVT_CLASS,
+			   b.rowid
+			FROM ca_putcall_app b,caevent x,mt_instrument m
+			 WHERE b.r_corp_id=x.corp_id
+			 AND m.instr_code=x.instr_code
+			 AND HF_DATE IS NULL 
+			 AND AE_PASSIND IS NULL
+			 AND b.STATUS = 'AA'
+			 AND b.put_call_value != 0
+			 AND   b.R_CORP_ID  = (SELECT CORP_ID FROM CAEVENT 
+	 								WHERE CORP_ID = B.R_CORP_ID 
+									AND	CA_EVENT ='RD' AND OP_EVT_CLASS='PO'
+							 		)
+			union
+			SELECT 'K',CACHEQUE.*,NULL,
+				rowid
+			FROM CACHEQUE 
+			WHERE
+				STAT_PYMT IN ('CP','RV') 
+				AND HF_DATE IS NULL
+				AND AE_PASSIND IS NULL
+				AND CURR_PYMT > 0
+				AND   CORP_ID  = (SELECT CORP_ID FROM CAEVENT 
+	 								WHERE CAEVENT.CORP_ID = CACHEQUE.CORP_ID 
+									AND	CA_EVENT  ='SP' AND OP_EVT_CLASS='AM'
+							 		)
+		ORDER BY 1,2,3;
+
+	}
+	else
+	{
+		printf("\n Entered ELSE part of COND_EXIST \n");
+/*Added by Swapnil for Allowing ca for freezed account.isolve no ISKB_2188:          start*/
+		EXEC SQL DECLARE A_AccEnt_Cur1 CURSOR FOR
+		SELECT 'A',A.corp_id,A.client,A.seqnum_pay,A.dateof_payment,A.payment_ccy,A.curr_pymt,A.quantity_received,A.tax_rate,A.payment_info,A.hf_date,A.deal_identity_no,A.dateofbilling,A.location_cd,A.tax_amount,A.other_chrgs,A.stat_pymt,A.processed_date,A.date_of_input,A.maker,A.maker_dt,A.checker,A.checker_dt,A.access_stamp,A.ae_passind,A.clt_seqnum,A.quantity_paid,A.taxable_dividend,A.fract_qty_bal,A.fract_qty_recd,NULL,
+		NULL,
+		A.net_amount,
+		NULL,
+				rowid
+		FROM CACHEQUE A
+		WHERE
+				STAT_PYMT IN ('CP','RV') 
+				AND HF_DATE IS NULL
+				AND AE_PASSIND IS NULL	
+				AND   CORP_ID  = (SELECT CORP_ID FROM CAEVENT 
+	 								WHERE CAEVENT.CORP_ID = A.CORP_ID 
+									AND	CA_EVENT IN ('BI','CD','DV')			
+							 		)
+		union
+				SELECT 'B',A.corp_id,A.client,A.seqnum_pay,A.dateof_payment,A.payment_ccy,A.curr_pymt,A.quantity_received,A.tax_rate,A.payment_info,A.hf_date,A.deal_identity_no,A.dateofbilling,A.location_cd,A.tax_amount,A.other_chrgs,A.stat_pymt,A.processed_date,A.date_of_input,A.maker,A.maker_dt,A.checker,A.checker_dt,A.access_stamp,A.ae_passind,A.clt_seqnum,A.quantity_paid,A.taxable_dividend,A.fract_qty_bal,A.fract_qty_recd,NULL,
+				NULL,
+				A.net_amount,
+		                NULL,
+				rowid
+			FROM CACHEQUE A
+			WHERE
+			STAT_PYMT IN ('CP','RV')
+			AND curr_pymt > 0
+			AND HF_DATE IS NULL
+			AND AE_PASSIND IS NULL
+			AND   CORP_ID  = (SELECT CORP_ID FROM CAEVENT
+									WHERE CAEVENT.CORP_ID = A.CORP_ID
+									AND   CA_EVENT IN ('BO','SD')
+									)		
+			union
+			SELECT 'C',A.corp_id,A.client,A.seqnum_pay,A.dateof_payment,A.payment_ccy,A.curr_pymt,A.quantity_received,A.tax_rate,A.payment_info,A.hf_date,A.deal_identity_no,A.dateofbilling,A.location_cd,A.tax_amount,A.other_chrgs,A.stat_pymt,A.processed_date,A.date_of_input,A.maker,A.maker_dt,A.checker,A.checker_dt,A.access_stamp,A.ae_passind,A.clt_seqnum,A.quantity_paid,A.taxable_dividend,A.fract_qty_bal,A.fract_qty_recd,NULL,
+			NULL,
+			A.net_amount,
+		        NULL,
+			rowid
+				FROM CACHEQUE A
+				WHERE
+				STAT_PYMT IN ('CP','RV')
+				AND HF_DATE IS NULL
+				AND AE_PASSIND IS NULL
+/*				AND DEAL_IDENTITY_NO IS NULL	*/
+				AND   CORP_ID  = (SELECT CORP_ID FROM CAEVENT
+						WHERE CAEVENT.CORP_ID = A.CORP_ID
+						AND   CA_EVENT = 'RD'
+						)
+			
+  		 union
+/** No Accounting Entries for IPO Allotment	23/01/07 **/
+/*	     SELECT 'D',b.corp_id,b.cln_code,0,b.candate,m.currency_cd,b.AMOUNTPAY,
+           0,0,NULL,b.hf_date,NULL,NULL,NULL,0,0,NULL,NULL,
+           NULL,b.maker,b.maker_dt,b.checker,b.checker_dt,b.access_stamp,
+           b.ae_passind,b.clt_seqnum,b.qtyshallot,0,0,0,'NSA',
+           b.rowid
+		 FROM ca_nis_allotment b,caevent x,mt_instrument m
+			 WHERE b.corp_id=x.corp_id
+			 AND m.instr_code=x.instr_code
+			 AND HF_DATE IS NULL 
+		 AND AE_PASSIND IS NULL
+			 AND b.STATUS = 'AA'
+			 AND b.AMOUNTPAY != 0
+			 AND   b.CORP_ID  = (SELECT CORP_ID FROM CAEVENT 
+	 								WHERE CORP_ID = B.CORP_ID 
+									AND	CA_EVENT ='NS'			
+							 		)
+		 union
+*/		 SELECT 'E',c.corp_id,c.cln_code,0,c.adate,m.currency_cd,c.mmpaid,
+			   0,0,NULL,c.hf_date,NULL,NULL,NULL,0,0,NULL,NULL,
+			   NULL,c.maker,c.maker_dt,c.checker,c.checker_dt,c.access_stamp,
+			   c.ae_passind,c.clt_seqnum,c.aqty,0,0,0,'NSP',
+			   			NULL,0,
+						NULL,
+			   c.rowid
+		 FROM ca_nis_application c,caevent x,mt_instrument m
+			WHERE c.corp_id=x.corp_id
+		  	AND m.instr_code=x.instr_code	
+			AND HF_DATE IS NULL 
+			AND ae_passind IS NULL
+			AND c.bk_build_ind='N'
+			AND c.STATUS = 'AA'
+			AND c.mmpaid != 0
+			AND   c.CORP_ID  = (SELECT CORP_ID FROM CAEVENT 
+										WHERE CORP_ID = c.CORP_ID 
+										AND	CA_EVENT = 'NS'			
+										)
+		 union
+		 SELECT 'F',f.corp_id,f.cln_code,f.brevno,f.bdate,m.currency_cd,f.mmpaynw,
+		 0,0,NULL,f.hf_date,NULL,NULL,NULL,0,0,NULL,NULL,
+		 NULL,f.maker,f.maker_dt,f.checker,f.checker_dt,f.access_stamp,
+		 f.ae_passind,f.clt_seqnum,GREATEST(f.bqty1,f.bqty2,f.bqty3),0,0,0,'NS',
+		 NULL,0,
+		 NULL,
+		 f.rowid
+			 FROM ca_nis_bid f,caevent x,mt_instrument m
+			 WHERE f.corp_id=x.corp_id
+			 AND m.instr_code=x.instr_code
+			 AND HF_DATE IS NULL
+			 AND ae_passind IS NULL
+			 AND f.STATUS = 'AA'
+			 AND f.mmpaynw != 0
+			 AND   f.CORP_ID  = (SELECT CORP_ID FROM CAEVENT
+					 WHERE CORP_ID = f.CORP_ID
+					 AND   CA_EVENT = 'NS'
+					 )					  
+		 union
+			 SELECT 'G',d.corp_id, d.cln_code,cln_srno,d.application_date,m.currency_cd,d.amt_payable,
+			 0,0,NULL,d.hf_date,NULL,NULL,NULL,0,0,NULL,NULL,
+			 d.application_date,d.maker,d.maker_dt,d.checker,d.checker_dt,d.access_stamp,
+		 	 d.ae_passind,d.clt_seqnum,d.applied_qty,0,0,0,NULL,
+			 NULL,0,
+			 NULL,
+		 	 d.rowid
+			 FROM ca_application d,caevent x,mt_instrument m
+			 WHERE d.corp_id=x.corp_id
+			 AND m.instr_code=x.instr_code
+			 AND HF_DATE IS NULL
+			 AND ae_passind IS NULL
+			 AND AMT_PAYABLE >0
+			 AND d.STATUS= 'AA'
+			 AND   d.CORP_ID  = (SELECT CORP_ID FROM CAEVENT
+					 WHERE CORP_ID = d.CORP_ID
+					 AND   CA_EVENT  = 'RT'
+					 )
+			 union
+			 SELECT 'H',e.corp_id,e.cln_code,0,e.allot_dt,m.currency_cd,e.AMT_REC,
+			 0,0,NULL,e.hf_date,NULL,NULL,NULL,0,0,NULL,NULL,
+			 e.allot_dt,e.maker,e.maker_dt,e.checker,e.checker_dt,e.access_stamp,
+			 e.ae_passind,e.clt_seqnum,e.alloted_qty,0,0,0,NULL,
+			 NULL,0,
+			 NULL,
+			 e.rowid
+			 FROM ca_rtbb_allotment e,caevent x,mt_instrument m
+			 WHERE e.corp_id=x.corp_id
+			 AND m.instr_code=x.instr_code
+			 AND HF_DATE IS NULL
+			 AND ae_passind IS NULL
+			 AND e.status='AA'
+			 AND e.AMT_REC > 0
+			 AND   e.CORP_ID  = (SELECT CORP_ID FROM CAEVENT
+					 WHERE CORP_ID = e.CORP_ID
+					 AND   CA_EVENT IN ('BB','RT') 
+					 )
+			 union
+			 SELECT 'I',i.corp_id, i.CLIENT,i.SEQNUM_PAY,i.DATEOF_PAYMENT,i.PAYMENT_CCY,i.QUANTITY_RECEIVED*x.sub_pr,
+				i.QUANTITY_RECEIVED,i.TAX_RATE,PAYMENT_INFO,i.hf_date,i.DEAL_IDENTITY_NO,i.DATEOFBILLING,i.LOCATION_CD,
+			  	i.TAX_AMOUNT,i.OTHER_CHRGS,i.STAT_PYMT,i.PROCESSED_DATE,i.DATE_OF_INPUT,i.maker,i.maker_dt,
+				i.checker,i.checker_dt,i.access_stamp,i.ae_passind,i.clt_seqnum,i.QUANTITY_PAID,i.TAXABLE_DIVIDEND,
+				i.FRACT_QTY_BAL,i.FRACT_QTY_RECD,NULL,
+				NULL,
+				i.net_amount,
+				NULL,
+				i.rowid
+				FROM cacheque i,caevent x
+				WHERE i.corp_id=x.corp_id
+				AND HF_DATE IS NULL
+				AND ae_passind IS NULL
+				AND x.sub_pr >0
+				AND   i.CORP_ID  = (SELECT CORP_ID FROM CAEVENT
+					WHERE CORP_ID = i.CORP_ID
+					AND   CA_EVENT  = 'CV'
+				)
+				union
+			SELECT 'J',b.r_corp_id,b.cln_code,0,b.notice_date,m.currency_cd,b.put_call_value,
+			   AVL_QTY,NULL,NULL,b.hf_date,NULL,value_date,NULL,0,0,NULL,NULL,
+			   NULL,b.maker,b.maker_dt,b.checker,b.checker_dt,b.access_stamp,
+			   b.ae_passind,b.clt_seqnum,b.put_call_qty,0,0,0,x.OP_EVT_CLASS,
+			   NULL,0,
+			   NULL,
+			   b.rowid
+			FROM ca_putcall_app b,caevent x,mt_instrument m
+			 WHERE b.r_corp_id=x.corp_id
+			 AND m.instr_code=x.instr_code
+			 AND HF_DATE IS NULL 
+			 AND AE_PASSIND IS NULL
+			 AND b.STATUS = 'AA'
+			 AND b.put_call_value != 0
+			 AND   b.R_CORP_ID  = (SELECT CORP_ID FROM CAEVENT 
+	 								WHERE CORP_ID = B.R_CORP_ID 
+									AND	CA_EVENT ='RD' AND OP_EVT_CLASS='PO'
+							 		)
+			union
+			SELECT 'K',A.corp_id,A.client,A.seqnum_pay,A.dateof_payment,A.payment_ccy,A.curr_pymt,A.quantity_received,A.tax_rate,A.payment_info,A.hf_date,A.deal_identity_no,A.dateofbilling,A.location_cd,A.tax_amount,A.other_chrgs,A.stat_pymt,A.processed_date,A.date_of_input,A.maker,A.maker_dt,A.checker,A.checker_dt,A.access_stamp,A.ae_passind,A.clt_seqnum,A.quantity_paid,A.taxable_dividend,A.fract_qty_bal,A.fract_qty_recd,NULL,
+			NULL,
+			A.net_amount,
+			NULL,
+				rowid
+			FROM CACHEQUE A
+			WHERE
+				STAT_PYMT IN ('CP','RV') 
+				AND HF_DATE IS NULL
+				AND AE_PASSIND IS NULL
+				AND CURR_PYMT > 0
+				AND   CORP_ID  = (SELECT CORP_ID FROM CAEVENT 
+	 								WHERE CAEVENT.CORP_ID = A.CORP_ID 
+									AND	CA_EVENT  ='SP' AND OP_EVT_CLASS='AM'
+							 		)
+		ORDER BY 1,2,3;
+
+
+	}
+
+ /*Added by Swapnil for Allowing ca for freezed account.isolve no ISKB_2188    end*/
+
+/*		Change By AmitB 25/05/06  ******** */
+/* 				
+ 		EXEC SQL SELECT CUSTSUS
+			INTO :chr_g_h_debit_account:g_i_debit_account
+			FROM IV_CLIENTGL;
+		
+		IS_ANY_ORA_ERROR
+*/			
+ /* Retro done for AIX mig -- ISKB4802 */
+	/*	EXEC SQL SELECT SUBSTR(CASUS,-9,9)
+				INTO :chr_g_h_debit_account:g_i_debit_account
+				FROM IV_CLIENTGL;
+
+		IS_ANY_ORA_ERROR  */
+
+	
+	/* Changed for Account No Change Ench --KOTAK --ISKB_4802 -- 13072011 -- Shweta*/	
+		EXEC SQL SELECT SUBSTR(CASUS,9)
+				INTO :chr_g_h_debit_account:g_i_debit_account
+				FROM IV_CLIENTGL;
+
+		IS_ANY_ORA_ERROR
+	
+		printf("\n After GL Account \n");
+			
+		
+   	if ( CO_Chk_CntryEnabled( "MULTI_CCY",
+     		                     "GL_CLT",
+                           	&g_mccy_cacc_exists,
+                           	l_debug_info_ptr
+                         	) == APL_FAILURE
+			)
+   	{
+     	 	APL_GOBACK_FAIL
+   	}
+
+		if (g_mccy_cacc_exists)
+		{
+   		memset(chr_l_main_funcarea,APL_NULL_CHAR,APL_MAINFUNCAREA_LEN);
+   		memset(chr_l_subfunc,APL_NULL_CHAR,APL_MAINFUNCAREA_LEN);
+			memset(chr_g_h_sundry_account,APL_NULL_CHAR,APL_CLIENT_LENGTH_GL);
+
+   		strcpy(chr_l_main_funcarea,"CASH_ACC_MAINT");
+   		strcpy(chr_l_subfunc,"SUNDRY_ACCOUNT");
+
+
+		if(APL_FAILURE == CO_Rtv_FldVal(chr_l_main_funcarea,chr_l_subfunc,chr_g_h_sundry_account,l_debug_info_ptr))
+   		{
+      		APL_GOBACK_FAIL
+			}
+		}
+
+		printf("\n Here 2 \n");	
+	IF_COND_EXISTS("CA_ACCENT","CACHEQUE_COL")
+	EXEC SQL OPEN	A_AccEnt_Cur;
+	else
+	EXEC SQL OPEN   A_AccEnt_Cur1;
+	printf("\n Error opening Cursor=|%d| \n",sqlca.sqlcode);
+	IS_ANY_ORA_ERROR
+
+	CO_ProcMonitor(g_flogfile,"Opened cursor on CACHEQUE table",NULL,NULL);
+	for(;;)
+	{
+
+   	memset(chr_l_cashacc_glacc,APL_NULL_CHAR,24);
+		memset(l_ca_chq_struct_h,NULL,sizeof(CA_CACHEQUE_STRUCT_H));
+		memset(l_ca_cacheque_struct_i,0,sizeof(CA_CACHEQUE_STRUCT_I));
+		i_cashacc_ibbsacc = 0;
+
+	IF_COND_EXISTS("CA_ACCENT","CACHEQUE_COL")
+		EXEC SQL FETCH	A_AccEnt_Cur
+		INTO
+			:chr_l_ind,:l_ca_chq_struct_h:l_ca_cacheque_struct_i,:chr_l_evnt_ind:i_evnt_ind,
+			:rowid;
+	else
+		EXEC SQL FETCH  A_AccEnt_Cur1
+		INTO
+			:chr_l_ind,:l_ca_chq_struct_h:l_ca_cacheque_struct_i,:chr_l_evnt_ind:i_evnt_ind,
+			:rowid;
+		printf("\n Error Fetching Cursor=|%d| \n",sqlca.sqlcode);
+		counter++;
+/*		*************** START CHANGES BY AMIT BHOSALE	**************	*/
+		if(APL_ZERO_RESULT_SET)
+			break;
+		IS_ANY_ORA_ERROR
+/*		*************** START CHANGES BY AMIT BHOSLAE  **************	*/
+		printf("Indicator : |%s|\nAccount :(%s)\nPayment Srl. Nbr :(%d)\n",chr_l_ind,l_ca_chq_struct_h->h_dl_client,l_ca_chq_struct_h->h_pymt_srl_nbr);
+
+	    CLS_LOG_ARRAY
+		sprintf(chr_g_log_buff,"Fetching Record from CACHEQUE table\nCA_Id :(%s) ",l_ca_chq_struct_h->h_corp_id);
+		CO_ProcMonitor(g_flogfile,chr_g_log_buff,NULL,NULL);
+	   
+		CLS_LOG_ARRAY
+		sprintf(chr_g_log_buff,"Account :(%s)\nPayment Srl. Nbr :(%d)\nNet Amount : (%lf)\n",l_ca_chq_struct_h->h_dl_client,l_ca_chq_struct_h->h_pymt_srl_nbr,l_ca_chq_struct_h->h_net_amount);
+		CO_ProcMonitor(g_flogfile,chr_g_log_buff,NULL,NULL);
+
+                if(l_ca_cacheque_struct_i->i_other_chrgs == -1)
+		{
+			l_ca_chq_struct_h->h_other_chrgs = 0;
+		}
+	
+		if(l_ca_cacheque_struct_i->i_tax_rate == -1)
+		{
+			l_ca_chq_struct_h->h_tax_rate = 0;
+		}
+/** Start:160607: Rights Full Allotment Entries shouldn't generate **/
+		EXEC SQL SELECT ca_event INTO :chr_l_event_class FROM CAEVENT
+				WHERE corp_id=:l_ca_chq_struct_h->h_corp_id;
+		IS_ANY_ORA_ERROR
+		
+	  //Added by Azhar K. for NRI Accounting Entries  - START
+		EXEC SQL SELECT cln_type,GETCLIENTPARAMBYID('IGNORE_AE',:l_ca_chq_struct_h->h_dl_client),status INTO :chr_l_cln_type,:chr_l_cln_param_id,:chr_l_cln_status FROM MT_CLIENT  WHERE  cln_code = :l_ca_chq_struct_h->h_dl_client and status in('AA','FA');
+		IS_ANY_ORA_ERROR
+		
+		if((strcmp(chr_l_cln_type,"N") == 0) || (strcmp(chr_l_cln_param_id,"Y") == 0) || (strcmp(chr_l_cln_status,"FA") == 0))
+		{
+			printf("\n Client Type is NRI OR IGNORE_AE param is Y for Clients other than NRI OR Client is Frozen so skipping Accounting Entries for client :(%s)",l_ca_chq_struct_h->h_dl_client);
+			fprintf(g_flogfile,"\n Client Type is NRI OR IGNORE_AE param is Y for Clients other than NRI OR Client is Frozen so skipping Accounting Entries for client :(%s)",l_ca_chq_struct_h->h_dl_client);
+			
+			if(APL_FAILURE == CA_Proc_NRIAccEntries(rowid,chr_l_event_class,chr_l_ind,l_debug_info_ptr))
+			{
+				fprintf(g_flogfile,"\n ***** CA NRI Accounting Entries Failed for Client=|%s| Corp ID=|%s| ***** \n",l_ca_chq_struct_h->h_dl_client,l_ca_chq_struct_h->h_corp_id);
+				CO_ProcMonitor(g_flogfile,"Returned from CA_Proc_NRIAccEntries() with Failure\n",l_debug_info_ptr,NULL);
+				APL_GOBACK_FAIL
+			}
+			continue;
+		}
+	 //Added by Azhar K. for NRI Accounting Entries  - END
+		
+		if(!strcmp(chr_l_event_class,"RT") && !strcmp(chr_l_ind,"H"))
+		{
+			EXEC SQL SELECT NVL(SUM(APPLIED_QTY + ADDQTY_APP),0) INTO :l_int_qty_paid_appl:i_qty_paid_appl FROM ca_application
+			WHERE CORP_ID=:l_ca_chq_struct_h->h_corp_id AND CLN_CODE=:l_ca_chq_struct_h->h_dl_client;
+
+			IS_ANY_ORA_ERROR
+
+			EXEC SQL SELECT NVL((ALLOTED_QTY + ADD_ALLOT_QTY),0) INTO :l_int_qty_paid_allot:i_qty_paid_allot FROM ca_rtbb_allotment
+			WHERE CORP_ID=:l_ca_chq_struct_h->h_corp_id AND CLN_CODE=:l_ca_chq_struct_h->h_dl_client;
+
+			IS_ANY_ORA_ERROR
+
+			printf("\n chr_p_evt_class=|%s| l_int_qty_paid_appl=|%lf| l_int_qty_paid_allot=|%lf| \n",chr_l_event_class,l_int_qty_paid_appl,l_int_qty_paid_allot);
+
+			if(l_int_qty_paid_appl <= l_int_qty_paid_allot)
+			{
+				fprintf(g_flogfile,"\n No Accounting Entries for Full Rights Allotment.\n Eventid:%s \n Account:%s\n",l_ca_chq_struct_h->h_corp_id,l_ca_chq_struct_h->h_dl_client);
+				continue;
+			}
+		}
+/** End:160607: Rights Full Allotment Entries shouldn't generate **/
+
+		printf("\n chr_l_ind=|%s| For Corp_id=|%s| Value_Date=|%s|\n",chr_l_ind,l_ca_chq_struct_h->h_corp_id,l_ca_chq_struct_h->h_billdate);
+
+		if(strcmp(chr_l_ind,"J")==0 && strcmp(l_ca_chq_struct_h->h_billdate,APL_NULL_STRING)!=0)
+		{
+			fprintf(g_flogfile,"\n chr_l_ind=|%s| Sysdate=|%s| PutCall Value Date=|%s| \n",chr_l_ind,chr_g_sys_date,l_ca_chq_struct_h->h_billdate);
+			EXEC SQL SELECT (TO_DATE(:chr_g_sys_date) - TO_DATE(:l_ca_chq_struct_h->h_billdate)) INTO :int_l_datediff FROM DUAL;
+
+			IS_ANY_ORA_ERROR
+			
+			fprintf(g_flogfile,"\n Diff Between Dates=|%d| \n",int_l_datediff);
+
+			if( int_l_datediff < 0)
+			{
+				fprintf(g_flogfile,"\n Can not generate Accounting Entry Today as Value Date=|%s| is in Future for Corp_id=|%s| \n",l_ca_chq_struct_h->h_billdate,l_ca_chq_struct_h->h_corp_id);
+				continue;
+			}
+	
+		}
+
+		if	( !strcmp(l_ca_chq_struct_h->h_pymt_stat,STATUS_REVERSED) &&
+			  strcmp(l_ca_chq_struct_h->h_clt_pass_flg,AE_PASS_IND_STR) &&
+			  strcmp(l_ca_chq_struct_h->h_clt_pass_flg,AE_REVREJ_IND) 
+			)
+		{
+			CO_ProcMonitor(g_flogfile,"Cannot pass Reverse Entries as Original Entries have not been passed\n",NULL,NULL);
+			continue;
+		}
+		   
+/* Retro done for AIX mig -- ISKB4802*/
+		/*EXEC SQL SELECT SUBSTR(BNK_ACC,-14,14)
+			INTO :chr_l_cashacc_glacc:i_cashacc_ibbsacc
+			FROM IV_CLIENTSETUP
+			WHERE CLIENT=:l_ca_chq_struct_h->h_dl_client;
+
+		IS_ANY_ORA_ERROR  */
+
+		 /*Changes done for Kotak Ench -- Account No size Change--ISKB_4802--13072011 --Shweta*/
+		EXEC SQL SELECT SUBSTR(BNK_ACC,9)
+			INTO :chr_l_cashacc_glacc:i_cashacc_ibbsacc
+			FROM IV_CLIENTSETUP
+			WHERE CLIENT=:l_ca_chq_struct_h->h_dl_client;
+
+		IS_ANY_ORA_ERROR
+
+		if (sqlca.sqlcode == 1403)
+
+		printf("****** Sqlcode : |%d|, i_cashacc_ibbsacc:|%d|\n",sqlca.sqlcode,i_cashacc_ibbsacc);
+		
+		if ((sqlca.sqlcode == 1403)||((sqlca.sqlcode == 0)&&(i_cashacc_ibbsacc== -1)))
+		{
+			fprintf(g_flogfile,"Client Bank Account is not defined, Accounting Entries can not be generate for client |%s|\n",l_ca_chq_struct_h->h_dl_client);
+			continue;
+		}
+
+		printf("Cash Account:|%s|\n",chr_l_cashacc_glacc);
+			
+		if	(	g_get_batch_no_flg == APL_SUCCESS)
+		{
+
+			if	(	IV_Proc_GenBatchNoFn(	chr_g_batch_no,
+										l_debug_info_ptr
+										)	==	APL_FAILURE
+				)
+			{
+				CO_ProcMonitor(g_flogfile,"Could not obtain Batch Number",NULL,NULL);
+				APL_GOBACK_FAIL
+			}
+			else 
+			{
+				int_g_run_seq_num = 1; 
+				strcpy(int_g_seq_num,"1");
+				g_get_batch_no_flg = APL_FAILURE;
+				sprintf(chr_g_log_buff,"Got Batch Number :[%s] Sequence Number :[%s]",chr_g_batch_no,int_g_seq_num);
+				CO_ProcMonitor(g_flogfile,chr_g_log_buff,NULL,NULL);
+			}
+		}
+
+			printf("\n Before CA_Pro_GenEnt \n");
+			printf("Currency :|%s|\n",l_ca_chq_struct_h->h_pymt_currency);	
+			printf("\n Before Calling CA_Pro_GenEnt ROWID=|%s|\n",rowid);
+
+		if	(	CA_Pro_GenEnt(chr_l_ind,l_ca_chq_struct_h,
+								chr_l_evnt_ind,
+								rowid,
+								p_debit_ind_total,
+								p_dbl_g_cr_total,
+							 	 l_debug_info_ptr
+								 )	==	APL_FAILURE
+			)
+		{
+			APL_GOBACK_FAIL
+		}	
+		else
+		{
+	
+
+/***		EXEC SQL COMMIT WORK;		****/
+
+		if((!strcmp(chr_l_event_class,"BI") || !strcmp(chr_l_event_class,"CD") || !strcmp(chr_l_event_class,"DV")) && !strcmp(chr_l_ind,"A"))
+	  	 {
+			printf("\n Update1 \n");
+			EXEC SQL UPDATE CACHEQUE
+			SET
+				HF_DATE=:chr_g_sys_date,
+				AE_PASSIND=:chr_g_acctent_gen_ind,
+				CLT_SEQNUM=:chr_g_batch_no,
+				PROCESSED_DATE=:chr_g_sys_date,
+				ACCESS_STAMP=:chr_g_sys_date_time
+			WHERE
+				ROWID=:rowid;
+				
+			IS_ANY_ORA_ERROR
+		 }
+		else if((!strcmp(chr_l_event_class,"BO") || !strcmp(chr_l_event_class,"SD")) && !strcmp(chr_l_ind,"B") )
+		{
+			printf("\n Update2 \n");
+			EXEC SQL UPDATE CACHEQUE
+				SET
+					HF_DATE=:chr_g_sys_date,
+					AE_PASSIND=:chr_g_acctent_gen_ind,
+					CLT_SEQNUM=:chr_g_batch_no,
+					PROCESSED_DATE=:chr_g_sys_date,
+					ACCESS_STAMP=:chr_g_sys_date_time
+				WHERE
+					ROWID=:rowid;
+
+			IS_ANY_ORA_ERROR		
+		
+		}
+		else if(!strcmp(chr_l_event_class,"RD") && !strcmp(chr_l_ind,"C"))
+		{
+
+			printf("\n Update3 \n");
+			
+			EXEC SQL UPDATE CACHEQUE
+				SET
+					HF_DATE=:chr_g_sys_date,
+					AE_PASSIND=:chr_g_acctent_gen_ind,
+					CLT_SEQNUM=:chr_g_batch_no,
+					PROCESSED_DATE=:chr_g_sys_date,
+					ACCESS_STAMP=:chr_g_sys_date_time
+				WHERE
+				ROWID=:rowid;
+
+			IS_ANY_ORA_ERROR
+			
+		}
+			
+/*		else if(!strcmp(chr_l_evnt_ind,"NSA") && !strcmp(chr_l_ind,"D"))
+		 {	
+			printf("\n Update4 \n");
+			
+			EXEC SQL UPDATE CA_NIS_ALLOTMENT
+			SET
+				HF_DATE=:chr_g_sys_date,
+				AE_PASSIND=:chr_g_acctent_gen_ind,
+				CLT_SEQNUM=:chr_g_batch_no,
+				PROCESSED_DATE=:chr_g_sys_date,
+				ACCESS_STAMP=:chr_g_sys_date_time
+			WHERE
+				ROWID=:rowid;
+
+			IS_ANY_ORA_ERROR
+		 }
+*/		else if(!strcmp(chr_l_event_class,"NSP") && !strcmp(chr_l_ind,"E"))// added by akshay for ISKB_12054
+		 {	
+			printf("\n Update5 \n");
+			
+			EXEC SQL UPDATE CA_NIS_APPLICATION
+			SET
+				HF_DATE=:chr_g_sys_date,
+				AE_PASSIND=:chr_g_acctent_gen_ind,
+				CLT_SEQNUM=:chr_g_batch_no,
+				PROCESSED_DATE=:chr_g_sys_date,
+				ACCESS_STAMP=:chr_g_sys_date_time
+			WHERE
+				ROWID=:rowid;
+				
+			IS_ANY_ORA_ERROR
+		 }
+		 else if(!strcmp(chr_l_event_class,"NS") && !strcmp(chr_l_ind,"F")) // added by akshay for ISKB_12054
+		 {
+			 printf("\n Update6 \n");
+
+			 EXEC SQL UPDATE CA_NIS_BID
+				 SET
+				 	HF_DATE=:chr_g_sys_date,
+				 	AE_PASSIND=:chr_g_acctent_gen_ind,
+				 	CLT_SEQNUM=:chr_g_batch_no,
+				 	PROCESSED_DATE=:chr_g_sys_date,
+				 ACCESS_STAMP=:chr_g_sys_date_time
+				 WHERE
+					 ROWID=:rowid;
+
+			 IS_ANY_ORA_ERROR		
+
+		 }
+		else if(!strcmp(chr_l_event_class,"RT")  && !strcmp(chr_l_ind,"G"))
+		 {	
+			printf("\n Update7 \n");
+			EXEC SQL UPDATE CA_APPLICATION
+			SET
+				HF_DATE=:chr_g_sys_date,
+				AE_PASSIND=:chr_g_acctent_gen_ind,
+				CLT_SEQNUM=:chr_g_batch_no,
+				PROCESSED_DATE=:chr_g_sys_date,
+				ACCESS_STAMP=:chr_g_sys_date_time
+			WHERE
+				ROWID=:rowid;
+				
+			IS_ANY_ORA_ERROR
+		 }
+		else if((!strcmp(chr_l_event_class,"BB") || !strcmp(chr_l_event_class,"RT") ) && !strcmp(chr_l_ind,"H"))
+
+		{
+			printf("\n Update8 \n");
+			
+			EXEC SQL UPDATE CA_RTBB_ALLOTMENT
+				SET
+					HF_DATE=:chr_g_sys_date,
+					AE_PASSIND=:chr_g_acctent_gen_ind,
+					CLT_SEQNUM=:chr_g_batch_no,
+					PROCESSED_DATE=:chr_g_sys_date,
+				ACCESS_STAMP=:chr_g_sys_date_time
+				WHERE
+					ROWID=:rowid;
+
+			IS_ANY_ORA_ERROR
+
+		}
+		else if(!strcmp(chr_l_event_class,"CV") && !strcmp(chr_l_ind,"I"))
+		{
+
+			printf("\n Update9 \n");
+			
+			EXEC SQL UPDATE CACHEQUE
+				SET
+					HF_DATE=:chr_g_sys_date,
+					AE_PASSIND=:chr_g_acctent_gen_ind,
+					CLT_SEQNUM=:chr_g_batch_no,
+					PROCESSED_DATE=:chr_g_sys_date,
+					ACCESS_STAMP=:chr_g_sys_date_time
+				WHERE
+				ROWID=:rowid;
+
+			IS_ANY_ORA_ERROR
+			
+		}
+		else if(!strcmp(chr_l_event_class,"RD") && !strcmp(chr_l_ind,"J"))
+		{
+
+			printf("\n Update 10 \n");
+			
+			EXEC SQL UPDATE CA_PUTCALL_APP
+				SET
+					HF_DATE=:chr_g_sys_date,
+					AE_PASSIND=:chr_g_acctent_gen_ind,
+					CLT_SEQNUM=:chr_g_batch_no,
+					PROCESSED_DATE=:chr_g_sys_date,
+					ACCESS_STAMP=:chr_g_sys_date_time
+				WHERE
+				ROWID=:rowid;
+
+			IS_ANY_ORA_ERROR
+			
+		}
+		else if(!strcmp(chr_l_event_class,"SP") && !strcmp(chr_l_ind,"K"))
+		{
+
+			printf("\n Update 11 \n");
+			
+			EXEC SQL UPDATE CACHEQUE
+				SET
+					HF_DATE=:chr_g_sys_date,
+					AE_PASSIND=:chr_g_acctent_gen_ind,
+					CLT_SEQNUM=:chr_g_batch_no,
+					PROCESSED_DATE=:chr_g_sys_date,
+					ACCESS_STAMP=:chr_g_sys_date_time
+				WHERE
+				ROWID=:rowid;
+
+			IS_ANY_ORA_ERROR
+			
+		}	
+
+
+		   CLS_LOG_ARRAY
+			if	(	!strcmp(l_ca_chq_struct_h->h_pymt_stat,STATUS_MSG_PAID_CLSD) )
+			{
+				strcpy(chr_acctent_type,"Fresh");
+			}
+			else if	(	!strcmp(l_ca_chq_struct_h->h_pymt_stat,STATUS_REVERSED) )
+			{
+				strcpy(chr_acctent_type,"Reverse");
+			}
+        	CLS_LOG_ARRAY
+			 sprintf(chr_g_log_buff,"%s Accounting Entries Generated for Payment Record with \nCA_Id:(%s) ",chr_acctent_type,l_ca_chq_struct_h->h_corp_id);
+	         CO_ProcMonitor(g_flogfile,chr_g_log_buff,NULL,NULL);
+
+        	CLS_LOG_ARRAY
+			 sprintf(chr_g_log_buff,"Account:(%s)\nPayment Srl. Nbr:(%d)\n",l_ca_chq_struct_h->h_dl_client,l_ca_chq_struct_h->h_pymt_srl_nbr);
+         CO_ProcMonitor(g_flogfile,chr_g_log_buff,NULL,NULL);
+			
+			int_commit_count_a++;
+		}		
+
+		if	(	(int_commit_count_a%COMMIT_FREQ_ACCTENT) == 0	)	
+		{
+			sprintf(chr_g_log_buff,"Total Credit Amount : |%lf| Total Debit Amount : |%lf|\n",*p_dbl_g_cr_total,*p_debit_ind_total);
+            CO_ProcMonitor(g_flogfile,chr_g_log_buff,NULL,NULL);
+		 
+			if (!APL_DOUBLE_EQUAL(*p_dbl_g_cr_total,*p_debit_ind_total))
+			{
+            CO_InsertErr(   l_debug_info_ptr,
+                              ERR_DATA_INTEGRITY,
+                              "Dr/Cr.Total Mismatch",
+                              APL_NULL_STRING,
+                              APL_NULL_STRING,
+                              __LINE__,
+                              __FILE__ );
+	
+				APL_GOBACK_FAIL
+			}
+			else
+			{
+				sprintf(chr_h_stat_info,"Processed %d Records",int_commit_count_a);
+				
+/*				if(APL_FAILURE == BT_Status_Update( p_process_name,
+                                 p_process_key,
+                                 p_start_date,
+                                 chr_h_stat_info,
+                                 l_debug_info_ptr))
+				{
+					APL_GOBACK_FAIL
+				}
+**/
+				EXEC SQL COMMIT WORK;
+				IS_ANY_ORA_ERROR	
+
+   			CO_ProcMonitor(g_flogfile,"RECORD COMMITTED \n",NULL,NULL);
+		IF_COND_EXISTS("CA_ACCENT","CACHEQUE_COL")			
+         	EXEC SQL OPEN A_AccEnt_Cur;
+		else
+         	EXEC SQL OPEN A_AccEnt_Cur1;
+		
+         	IS_ANY_ORA_ERROR;
+			}
+		}
+	
+		
+	}	
+
+IF_COND_EXISTS("CA_ACCENT","CACHEQUE_COL")
+	EXEC SQL CLOSE A_AccEnt_Cur;
+else
+	EXEC SQL CLOSE  A_AccEnt_Cur1;
+   APL_GOBACK_SUCCESS
+
+
+		APL_GOBACK_SUCCESS
+      RETURN_SUCCESS  :
+      {
+			APL_FREE(l_ca_chq_struct_h);
+			APL_FREE(l_ca_cacheque_struct_i);
+
+			return (APL_SUCCESS);
+      }
+      RETURN_FAILURE  :
+      {
+			CLS_LOG_ARRAY
+			CO_ProcMonitor(g_flogfile,NULL,l_debug_info_ptr,NULL);
+			CO_FreeErrLst(l_debug_info_ptr);
+			
+			APL_FREE(l_ca_chq_struct_h);
+			APL_FREE(l_ca_cacheque_struct_i);
+
+	      return (APL_FAILURE);
+		}
+}
+
+// Added by Azhar K. for API NRI Acounting Entries - START
+int CA_Proc_NRIAccEntries(char *p_rowid,char *chr_p_evnt_class,char *chr_p_ind,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	printf("\n Entered into CA_Proc_NRIAccEntries function...");
+	
+	if((!strcmp(chr_p_evnt_class,"BI") || !strcmp(chr_p_evnt_class,"CD") || !strcmp(chr_p_evnt_class,"DV")) && !strcmp(chr_p_ind,"A"))
+	  	 {
+			EXEC SQL UPDATE CACHEQUE
+			SET
+				HF_DATE=:chr_g_sys_date,
+				AE_PASSIND= 'P',
+				PROCESSED_DATE=:chr_g_sys_date,
+				ACCESS_STAMP=:chr_g_sys_date_time
+				WHERE
+				ROWID=:p_rowid;
+				
+			IS_ANY_ORA_ERROR
+		 }
+		else if((!strcmp(chr_p_evnt_class,"BO") || !strcmp(chr_p_evnt_class,"SD")) && !strcmp(chr_p_ind,"B") )
+		{
+			EXEC SQL UPDATE CACHEQUE
+				SET
+					HF_DATE=:chr_g_sys_date,
+					AE_PASSIND= 'P',
+					PROCESSED_DATE=:chr_g_sys_date,
+					ACCESS_STAMP=:chr_g_sys_date_time
+					WHERE
+					ROWID=:p_rowid;
+
+			IS_ANY_ORA_ERROR		
+		}
+		else if(!strcmp(chr_p_evnt_class,"RD") && !strcmp(chr_p_ind,"C"))
+		{
+			EXEC SQL UPDATE CACHEQUE
+				SET
+					HF_DATE=:chr_g_sys_date,
+					AE_PASSIND= 'P',
+					PROCESSED_DATE=:chr_g_sys_date,
+					ACCESS_STAMP=:chr_g_sys_date_time
+					WHERE
+					ROWID=:p_rowid;
+
+			IS_ANY_ORA_ERROR
+		}
+			
+         else if(!strcmp(chr_p_evnt_class,"NSP") && !strcmp(chr_p_ind,"E"))// added by akshay for ISKB_12054
+		 {	
+			EXEC SQL UPDATE CA_NIS_APPLICATION
+				SET
+					HF_DATE=:chr_g_sys_date,
+					AE_PASSIND= 'P',
+					PROCESSED_DATE=:chr_g_sys_date,
+					ACCESS_STAMP=:chr_g_sys_date_time
+					WHERE
+					ROWID=:p_rowid;
+				
+			IS_ANY_ORA_ERROR
+		 }
+		 
+		 else if(!strcmp(chr_p_evnt_class,"NS") && !strcmp(chr_p_ind,"F")) // added by akshay for ISKB_12054
+		 {
+			 EXEC SQL UPDATE CA_NIS_BID
+				 SET
+				 	HF_DATE=:chr_g_sys_date,
+					AE_PASSIND= 'P',
+					PROCESSED_DATE=:chr_g_sys_date,
+					ACCESS_STAMP=:chr_g_sys_date_time
+					WHERE
+					ROWID=:p_rowid;
+
+			 IS_ANY_ORA_ERROR		
+		 }
+		 
+		 else if(!strcmp(chr_p_evnt_class,"RT")  && !strcmp(chr_p_ind,"G"))
+		 {	
+			EXEC SQL UPDATE CA_APPLICATION
+				SET
+				    HF_DATE=:chr_g_sys_date,
+					AE_PASSIND= 'P',
+					PROCESSED_DATE=:chr_g_sys_date,
+					ACCESS_STAMP=:chr_g_sys_date_time
+					WHERE
+					ROWID=:p_rowid;
+				
+			IS_ANY_ORA_ERROR
+		 }
+		 
+		else if((!strcmp(chr_p_evnt_class,"BB") || !strcmp(chr_p_evnt_class,"RT") ) && !strcmp(chr_p_ind,"H"))
+		{
+			EXEC SQL UPDATE CA_RTBB_ALLOTMENT
+				SET
+					HF_DATE=:chr_g_sys_date,
+					AE_PASSIND= 'P',
+					PROCESSED_DATE=:chr_g_sys_date,
+					ACCESS_STAMP=:chr_g_sys_date_time
+					WHERE
+					ROWID=:p_rowid;
+
+			IS_ANY_ORA_ERROR
+		}
+		
+		else if(!strcmp(chr_p_evnt_class,"CV") && !strcmp(chr_p_ind,"I"))
+		{
+			EXEC SQL UPDATE CACHEQUE
+				SET
+					HF_DATE=:chr_g_sys_date,
+					AE_PASSIND= 'P',
+					PROCESSED_DATE=:chr_g_sys_date,
+					ACCESS_STAMP=:chr_g_sys_date_time
+					WHERE
+					ROWID=:p_rowid;
+
+			IS_ANY_ORA_ERROR
+		}
+		
+		else if(!strcmp(chr_p_evnt_class,"RD") && !strcmp(chr_p_ind,"J"))
+		{
+			EXEC SQL UPDATE CA_PUTCALL_APP
+				SET
+					HF_DATE=:chr_g_sys_date,
+					AE_PASSIND= 'P',
+					PROCESSED_DATE=:chr_g_sys_date,
+					ACCESS_STAMP=:chr_g_sys_date_time
+					WHERE
+					ROWID=:p_rowid;
+
+			IS_ANY_ORA_ERROR
+		}
+		
+		else if(!strcmp(chr_p_evnt_class,"SP") && !strcmp(chr_p_ind,"K"))
+		{
+			EXEC SQL UPDATE CACHEQUE
+				SET
+					HF_DATE=:chr_g_sys_date,
+					AE_PASSIND= 'P',
+					PROCESSED_DATE=:chr_g_sys_date,
+					ACCESS_STAMP=:chr_g_sys_date_time
+					WHERE
+					ROWID=:p_rowid;
+
+			IS_ANY_ORA_ERROR
+		}	
+	
+	  APL_GOBACK_SUCCESS
+	
+	  RETURN_SUCCESS:
+      {
+		  fprintf(g_flogfile,"\n Leaving CA_Proc_NRIAccEntries() With Success \n");
+		  return (APL_SUCCESS);
+      }
+      RETURN_FAILURE  :
+      {
+		  CO_ProcMonitor(g_flogfile,"\n Leaving CA_Proc_NRIAccEntries() With Failure \n",l_debug_info_ptr,NULL);
+	      return (APL_FAILURE);
+	  }
+}
+// Added by Azhar K. for API NRI Acounting Entries - END
+
+int	CA_Pro_GenEnt( char *chr_p_ind,CA_CACHEQUE_STRUCT_H * p_ca_cacheque_struct_h,
+							char					*chr_p_evnt_ind,
+							char					*p_rowid,
+									 double *p_debit_ind_total,
+									 double *p_dbl_g_cr_total,
+						   DEBUG_INFO_STRUCT_H 	    **l_debug_info_ptr
+						 )
+{
+	char	db_cr_ind = APL_NULL_CHAR;
+	short new_rev_ind	=	0;
+	PRO_ACCTENT_STRUCT_H 	*l_pro_cracctent_struct_h = NULL;
+	PRO_ACCTENT_STRUCT_I 	*l_pro_acctent_struct_i = NULL;
+	PRO_ACCTENT_STRUCT_H 	*l_pro_dbacctent_struct_h = NULL;
+	PRO_ACCTENT_STRUCT_I 	*l_pro_dbacctent_struct_i = NULL;
+	struct sqlca sqlca;
+/*	******************** START NEW VARIBLES BY AMIT BHOSALE ********************************** */
+	char GL_IND=APL_NULL_CHAR;
+	char CLT_IND=APL_NULL_CHAR;
+	char chr_l_evt_class[EVT_CLASS_] = APL_NULL_STRING;
+	char chr_l_acc_typ_ind=APL_NULL_CHAR;
+	char l_leg_ind_cr[6]=APL_NULL_STRING;//Changes done by Sandip for CS0016079
+	char l_leg_ind_db[6]=APL_NULL_STRING;//Changes done by Sandip for CS0016079
+
+	EXEC SQL BEGIN DECLARE SECTION;
+		EXEC SQL VAR chr_l_evt_class IS STRING;
+		EXEC SQL VAR l_leg_ind_cr IS STRING;
+		EXEC SQL VAR l_leg_ind_db IS STRING;
+	EXEC SQL END DECLARE SECTION;
+
+/*	******************** END NEW VARIBLES BY AMIT BHOSALE ********************************** */
+
+	l_pro_cracctent_struct_h = ( PRO_ACCTENT_STRUCT_H * )calloc ( 1, sizeof ( PRO_ACCTENT_STRUCT_H) );
+	APL_MALLOC_FAIL(l_pro_cracctent_struct_h);
+	
+	l_pro_acctent_struct_i = ( PRO_ACCTENT_STRUCT_I * )calloc ( 1, sizeof ( PRO_ACCTENT_STRUCT_I) );
+	APL_MALLOC_FAIL(l_pro_acctent_struct_i);
+
+	memset(l_pro_acctent_struct_i,-1,sizeof( PRO_ACCTENT_STRUCT_I) );
+	
+	l_pro_dbacctent_struct_h = ( PRO_ACCTENT_STRUCT_H * )calloc ( 1, sizeof ( PRO_ACCTENT_STRUCT_H) );
+	APL_MALLOC_FAIL(l_pro_dbacctent_struct_h);
+	
+	l_pro_dbacctent_struct_i = ( PRO_ACCTENT_STRUCT_I * )calloc ( 1, sizeof ( PRO_ACCTENT_STRUCT_I) );
+	APL_MALLOC_FAIL(l_pro_dbacctent_struct_i);
+
+	memset(l_pro_dbacctent_struct_i,-1,sizeof( PRO_ACCTENT_STRUCT_I) );
+
+	
+	if	(	!strcmp(p_ca_cacheque_struct_h->h_pymt_stat,STATUS_MSG_PAID_CLSD)	)
+	{
+			new_rev_ind = AE_NEW_IND;
+	}
+
+	else	if	(	!strcmp(p_ca_cacheque_struct_h->h_pymt_stat,STATUS_REVERSED)	)
+	{
+			new_rev_ind = AE_REV_IND;
+	}
+
+   if( CA_RtvCCY( p_ca_cacheque_struct_h->h_pymt_currency,
+                      &l_dl_currency_struct_h,
+                      l_debug_info_ptr) == APL_FAILURE)
+      APL_GOBACK_FAIL
+	
+
+/*	**************** END CHANGES BY AMIT BHOSALE	********************	*/
+
+	EXEC SQL SELECT CA_EVENT
+			INTO :chr_l_evt_class
+			FROM CAEVENT
+			WHERE CORP_ID=:p_ca_cacheque_struct_h->h_corp_id;
+
+	printf("\n Error fetchning class %d \n",sqlca.sqlcode);
+		
+	IS_ANY_ORA_ERROR
+	
+	printf("Payment: |%f|\n",p_ca_cacheque_struct_h->h_curr_pymt);  // AIX -Warnings Reaoval
+	
+	if(!strcmp(chr_l_evt_class,"NS")) 
+	{
+		if(p_ca_cacheque_struct_h->h_curr_pymt < 0)
+		{
+			GL_IND='0'; 
+			CLT_IND='1';
+		}
+		else if(p_ca_cacheque_struct_h->h_curr_pymt > 0)
+		{
+			GL_IND='1'; 
+			CLT_IND='0';
+		}
+	}
+	else if(!strcmp(chr_l_evt_class,"BI") || !strcmp(chr_l_evt_class,"CD") || !strcmp(chr_l_evt_class,"DV") || !strcmp(chr_l_evt_class,"BO") || !strcmp(chr_l_evt_class,"RD") || !strcmp(chr_l_evt_class,"SD"))
+	{
+		GL_IND='0';
+		CLT_IND='1';
+
+	}
+	else if( !strcmp(chr_l_evt_class,"TK") || !strcmp(chr_l_evt_class,"PT")  || !strcmp(chr_l_evt_class,"CA"))
+	{
+		GL_IND='1';
+		CLT_IND='0';
+	}
+	else if(!strcmp(chr_l_evt_class,"BB") || !strcmp(chr_p_ind,"H") || !strcmp(chr_l_evt_class,"PO"))
+	{
+		GL_IND='0';
+		CLT_IND='1';
+	}
+	else if(!strcmp(chr_l_evt_class,"RT") && !strcmp(chr_p_ind,"G"))
+	{
+			GL_IND='1';
+			CLT_IND='0';
+	}
+	else if(!strcmp(chr_l_evt_class,"RT") && !strcmp(chr_p_ind,"H"))
+	{
+			GL_IND='0';
+			CLT_IND='1';
+	}
+	else if(!strcmp(chr_p_ind,"F"))
+	{
+		GL_IND='1';
+		CLT_IND='0';
+	}
+	else if(!strcmp(chr_l_evt_class,"CV") && !strcmp(chr_p_ind,"I"))
+	{
+			GL_IND='1';
+			CLT_IND='0';
+	}
+	else if(!strcmp(chr_l_evt_class,"SP") && !strcmp(chr_p_ind,"K"))
+	{	
+			GL_IND='0';
+			CLT_IND='1';
+	}
+
+	printf("GL_IND: |%c|\n",GL_IND);
+	chr_l_acc_typ_ind='G';
+
+printf("\n Before Calling CA_Pro_FillActEntStruct ROWID=|%s|\n",p_rowid);
+
+if	(	CA_Pro_FillActEntStruct(	l_pro_dbacctent_struct_h,
+										l_pro_dbacctent_struct_i,
+										p_ca_cacheque_struct_h,
+										GL_IND,
+										new_rev_ind,
+										chr_l_acc_typ_ind,
+										chr_p_evnt_ind,
+										chr_p_ind,
+										p_rowid,
+										p_debit_ind_total,
+										p_dbl_g_cr_total,
+										l_debug_info_ptr
+									)	==	APL_FAILURE
+		)
+	{
+		APL_GOBACK_FAIL
+	}
+
+
+	strcpy(l_pro_dbacctent_struct_h->acc_type,"G");
+
+	printf("\n Before GL Entry: Report Amt=|%lf| LCL_Amoumt=|%lf| \n",p_ca_cacheque_struct_h->h_curr_pymt,l_pro_dbacctent_struct_h->lcl_amount);
+
+	if(l_pro_dbacctent_struct_h->report_amt < 0)
+	{
+		l_pro_dbacctent_struct_h->report_amt=abs(l_pro_dbacctent_struct_h->report_amt);
+		l_pro_cracctent_struct_h->fccy_amt=abs(l_pro_cracctent_struct_h->fccy_amt);
+	}
+	if(l_pro_dbacctent_struct_h->lcl_amount < 0)
+	{
+		l_pro_dbacctent_struct_h->lcl_amount=abs(l_pro_dbacctent_struct_h->lcl_amount);
+	}
+
+/*	**************** END CHANGES BY AMIT BHOSALE ********************	*/
+				printf("\n Entered into CA_GENAE 3B GL_ACCOUNT=|%s|\n",l_pro_dbacctent_struct_h->client);
+				printf("\n Before Passing:ACC_TYPE=|%s|\n",l_pro_dbacctent_struct_h->acc_type);
+	if(strlen(l_pro_dbacctent_struct_h->inden_num) > 5)//Changes done by Sandip for CS0016079
+	{
+				fprintf(g_flogfile,"\n\n***********************************************************************");
+				fprintf(g_flogfile,"\n Current Serial Number=|%s| exceeds Maximum available Serial Number=99999.",l_pro_dbacctent_struct_h->inden_num);
+				fprintf(g_flogfile,"\n Accounting Entries Can Not be Generated.");
+				fprintf(g_flogfile,"\n***********************************************************************\n\n");
+				APL_GOBACK_FAIL
+	}
+	if	(	IV_Mod_ActEntNew(l_pro_dbacctent_struct_h,
+								  l_debug_info_ptr
+								 )	== APL_FAILURE
+		)
+	{
+		APL_GOBACK_FAIL
+	} 
+	
+				printf("\n Entered into CA_GENAE 4\n");
+
+
+	int_g_run_seq_num = int_g_run_seq_num + 1;
+	sprintf(int_g_seq_num,"%d",int_g_run_seq_num);
+	
+/*	**************** START CHANGES BY AMIT BHOSALE********************	*/
+
+	strcpy(l_leg_ind_cr,l_pro_dbacctent_struct_h->inden_num);
+	chr_l_acc_typ_ind='C';
+
+
+if	(	CA_Pro_FillActEntStruct(	l_pro_cracctent_struct_h,
+										l_pro_acctent_struct_i,
+										p_ca_cacheque_struct_h,
+										CLT_IND,
+										new_rev_ind,
+										chr_l_acc_typ_ind,	
+										chr_p_evnt_ind,
+										chr_p_ind,
+										p_rowid,	
+										p_debit_ind_total,
+										p_dbl_g_cr_total,
+										l_debug_info_ptr
+										)	==	APL_FAILURE
+		)
+	{
+		APL_GOBACK_FAIL
+	}
+
+					printf("\n Entered into CA_GENAE 3D \n");
+	strcpy(l_pro_cracctent_struct_h->acc_type,"C");
+
+	printf("\n Before CLient Entry: Report Amt=|%lf| LCL_Amoumt %f\n",p_ca_cacheque_struct_h->h_curr_pymt,l_pro_cracctent_struct_h->lcl_amount);  // AIX -Warnings Reaoval
+	
+	if(l_pro_cracctent_struct_h->report_amt  < 0)
+	{
+		l_pro_cracctent_struct_h->report_amt=abs(l_pro_cracctent_struct_h->report_amt);
+		l_pro_cracctent_struct_h->fccy_amt=abs(l_pro_cracctent_struct_h->fccy_amt);
+	}
+	if(l_pro_cracctent_struct_h->lcl_amount  < 0)
+	{
+		l_pro_cracctent_struct_h->lcl_amount=abs(l_pro_cracctent_struct_h->lcl_amount);
+	}
+printf("\n Before Passing:ACC_TYPE=|%s|\n",l_pro_cracctent_struct_h->acc_type);
+printf("\n Entered into CA_GENAE 3B CLIENT_ACCOUNT=|%s|\n",l_pro_cracctent_struct_h->client);
+/*	**************** END CHANGES BY AMIT BHOSALE	********************	*/
+	if(strlen(l_pro_cracctent_struct_h->inden_num) > 5)//Changes done by Sandip for CS0016079
+	{
+				fprintf(g_flogfile,"\n\n***********************************************************************");
+				fprintf(g_flogfile,"\n Current Serial Number=|%s| exceeds Maximum available Serial Number=99999.",l_pro_cracctent_struct_h->inden_num);
+				fprintf(g_flogfile,"\n Accounting Entries Can Not be Generated.");
+				fprintf(g_flogfile,"\n***********************************************************************\n\n");
+				APL_GOBACK_FAIL
+	}
+	if	(	IV_Mod_ActEntNew(	l_pro_cracctent_struct_h,
+						  			l_debug_info_ptr
+								 )	== APL_FAILURE
+		)
+	{
+		APL_GOBACK_FAIL
+	} 
+	
+/*	**************** START CHANGES BY AMIT BHOSALE	********************	*/
+
+	strcpy(l_leg_ind_db,l_pro_cracctent_struct_h->inden_num);
+
+
+	EXEC SQL UPDATE pro_acctent SET leg_ind=:l_leg_ind_cr WHERE inden_num=:l_pro_cracctent_struct_h->inden_num;
+	IS_ANY_ORA_ERROR
+	EXEC SQL UPDATE pro_acctent SET leg_ind=:l_leg_ind_db WHERE inden_num=:l_pro_dbacctent_struct_h->inden_num;
+	IS_ANY_ORA_ERROR
+
+/*	**************** END CHANGES BY AMIT BHOSALE	********************	*/
+
+	int_g_run_seq_num = int_g_run_seq_num + 1;
+	sprintf(int_g_seq_num,"%d",int_g_run_seq_num);				
+	
+	printf("\n Entered into CA_GENAE UPD1\n");
+	
+		APL_GOBACK_SUCCESS
+      RETURN_SUCCESS  :
+      {
+			APL_FREE(l_pro_cracctent_struct_h);
+			APL_FREE(l_pro_acctent_struct_i);
+			APL_FREE(l_pro_dbacctent_struct_h);
+			APL_FREE(l_pro_dbacctent_struct_i);
+
+			return (APL_SUCCESS);
+      }
+      RETURN_FAILURE  :
+      {
+			APL_FREE(l_pro_cracctent_struct_h);
+			APL_FREE(l_pro_acctent_struct_i);
+			APL_FREE(l_pro_dbacctent_struct_h);
+			APL_FREE(l_pro_dbacctent_struct_i);
+
+	      return (APL_FAILURE);
+		}
+}		
+
+
+
+int	CA_Pro_FillActEntStruct( PRO_ACCTENT_STRUCT_H		*p_iacctent_struct_h,
+									PRO_ACCTENT_STRUCT_I		*p_iacctent_struct_i,
+									CA_CACHEQUE_STRUCT_H  *p_ca_cacheque_struct_h,
+									char						p_db_cr_ind,
+									short						new_rev_ind,
+									char						chr_p_acc_typ_ind,
+									char						*chr_p_evnt_ind,
+									char						*chr_p_ind,
+									char						*p_rowid,
+									double *p_debit_ind_total,
+									double *p_dbl_g_cr_total,
+									DEBUG_INFO_STRUCT_H			**l_debug_info_ptr
+								 )
+{
+	char 		chr_h_gl_account[APL_CLIENT_LENGTH_GL];
+	char		curr_cd[APL_ACCTENT_CURRCODE_LEN] = APL_NULL_STRING;
+	char		db_cr_ind = APL_NULL_CHAR;
+	char		val_date[APL_VALUE_DATE_LEN] = APL_NULL_STRING;
+	char		description[APL_ACCTENT_NARR_LEN] = APL_NULL_STRING;
+	char		deal_cd[APL_ACCTENT_DEALCODE_LEN] = APL_NULL_STRING;
+	char		deal_ident[APL_ACCTENT_DEAL_REF_LEN] = APL_NULL_STRING;
+	double	amount = 0.0;
+	double	pre_round_amount = 0.0;
+	double   tmp_trunc_tax = 0.0;
+	double   lcyamount = 0.0;
+	double   pre_round_lcyamount = 0.0;
+	short		int_l_condexists_A = 0;
+	short 	i_condexists = 0;  
+	short 	i_ibbs_account	=0;
+	char		h_instr_code[APL_INSTRUMENTCODE_LEN] = APL_NULL_STRING;
+	char		h_evt_class[4] = APL_NULL_STRING;
+	
+	short		i_evt_class=0;   
+	
+	char		chr_h_code_desc[APL_STATCODEDESC_LEN] = APL_NULL_STRING;
+	char		chr_h_fxinc_flg[APL_FLAG_LENGTH] = APL_NULL_STRING;
+	short		i_fxinc_flg =0;
+	char		chr_swift_ref_no[MS_INDENT_LEN] = APL_NULL_STRING;			
+	char		h_instr_name[19]					 = APL_NULL_STRING;   
+	char		h_instr_isin[13] 				 = APL_NULL_STRING;   
+	short		h_pay_srno						 = 0;						 
+	char		h_pymt_stat[3]					 = APL_NULL_STRING;   
+	char		h_entitl_stat[3]               = APL_NULL_STRING;   
+	double	h_ent_amount						 = 0.00;				    
+
+	struct sqlca sqlca;
+
+
+   char     h_nation_code[APL_CTRY_CODE_LEN]=APL_NULL_STRING;     
+   char     h_ccy[APL_CCYCODE_LEN]=APL_NULL_STRING;          
+   int      int_emu_period_flag=0;											  
+   int      int_period_flg = 0;                                      	
+	
+	char    chr_h_defcaflg[APL_FLAG_LENGTH]	=	APL_NULL_STRING;
+	char    chr_l_main_funcarea[APL_MAINFUNCAREA_LEN]=APL_NULL_STRING;
+   char    chr_l_subfunc[APL_MAINFUNCAREA_LEN]=APL_NULL_STRING;
+	char    chr_l_corpaction[APL_MAINFUNCAREA_LEN]=APL_NULL_STRING;
+	char    chr_l_defflg[APL_MAINFUNCAREA_LEN] =  APL_NULL_STRING;
+/*	char    chr_h_cashacc_glacc[APL_CLIENT_LENGTH_GL]=APL_NULL_STRING;	*/
+	char    chr_h_cashacc_glacc[24]=APL_NULL_STRING;
+	short   i_cashacc_ibbsacc =  0;
+ 
+
+	
+	
+   double   l_exchgrt_a= 0.0;
+   double   l_h_exchgrt= 0.0;
+   double   l_grd_amount= 0.0;
+   double   l_emu_amount = 0.0;
+   double   l_round_amount =0.0;
+   char     chr_l_h_main_func_area[APL_MAINFUNCAREA_LEN] =  APL_NULL_STRING;
+   char     chr_l_h_sub_func[APL_MAINFUNCAREA_LEN]       =  APL_NULL_STRING;
+   char     chr_l_h_ncd_curr[APL_CCYCODE_LEN]            =  APL_NULL_STRING;
+   char     chr_l_h_emu_curr[APL_CCYCODE_LEN]            =  APL_NULL_STRING;
+	short     l_mccycondexists = 0;
+   
+	
+
+	
+	
+	double 	h_earnings = 0.0;
+	short 	i_earnings = 0;
+	double 	h_earnings_rt = 0.0;
+	short 	i_earnings_rt = 0;
+	char chr_evt_class[4]=APL_NULL_STRING;
+// Swapnil for Prod issue CS0024150-	START 
+	short i_pay_srno = 0;	
+	short i_curr_cd1 = 0;	
+	short i_h_exchgrt = 0;	
+	short i_l_h_ncd_curr = 0;	
+	short i_l_h_emu_curr = 0;	
+	short i_instr_code = 0;	
+	short i_instr_name = 0;	
+	short i_instr_isin = 0;	
+	short i_entitl_stat = 0;	
+	short i_ent_amount = 0;	
+// Swapnil for Prod issue CS0024150- END 	
+
+	
+	EXEC SQL VAR h_instr_code 		IS STRING; 
+	EXEC SQL VAR h_instr_name 	IS STRING;
+	EXEC SQL VAR chr_h_code_desc 	IS STRING;
+	EXEC SQL VAR h_evt_class 	IS STRING;
+	EXEC SQL VAR chr_h_fxinc_flg 	IS STRING;
+	EXEC SQL VAR chr_h_gl_account IS STRING;
+	EXEC SQL VAR chr_swift_ref_no IS STRING;
+	EXEC SQL VAR chr_h_defcaflg        IS STRING;
+   EXEC SQL VAR chr_h_cashacc_glacc IS STRING;
+	EXEC SQL VAR h_instr_isin		IS STRING;		
+	EXEC SQL VAR h_entitl_stat		IS STRING;     
+
+	
+   EXEC SQL VAR  chr_l_h_main_func_area  IS STRING;
+   EXEC SQL VAR  chr_l_h_sub_func        IS STRING;
+   EXEC SQL VAR  chr_l_h_ncd_curr        IS STRING;
+   EXEC SQL VAR  chr_l_h_emu_curr        IS STRING;
+   
+
+   if ( CO_Chk_CntryEnabled( "MULTI_CCY",
+                           "CA_ACC_ENTRIES",
+                           &l_mccycondexists,
+                           l_debug_info_ptr
+                         ) == APL_FAILURE
+      )
+   {
+      APL_GOBACK_FAIL
+   }
+
+   if ( CO_Chk_EMU_Period(chr_g_sys_date,&int_period_flg,l_debug_info_ptr) == APL_FAILURE )
+        {
+          APL_GOBACK_FAIL
+        }
+   
+       if( (int_period_flg == 2) || (int_period_flg == 3) )
+            int_emu_period_flag=1;
+   EXEC SQL SELECT NATION_CODE 
+		INTO :h_nation_code 
+		FROM	MT_COMMON_SYS_PARAMS;
+  
+   IS_ANY_ORA_ERROR;
+
+/* ***************	VARIABLE SIZE INCREASED BY AMIT BHOSALE **************** */	
+
+/*	memset(h_evt_class,APL_NULL_CHAR,EVT_CLASS_);
+*/	memset(h_evt_class,APL_NULL_CHAR,4);
+	i_evt_class=0;
+
+
+	EXEC SQL SELECT CA_EVENT
+	INTO :h_evt_class:i_evt_class
+	FROM CAEVENT
+	WHERE CORP_ID=:p_ca_cacheque_struct_h->h_corp_id;
+
+	IS_ANY_ORA_ERROR;
+	
+	printf("\n Entered into CA_GENAE 4A\n");
+  if ( ! strcmp(h_nation_code,"GR")  && int_emu_period_flag == 1)
+	{
+	EXEC SQL SELECT CLN_CURRENCY
+		INTO :h_ccy
+		FROM MT_CLIENT
+		WHERE CLN_CODE = :p_ca_cacheque_struct_h->h_dl_client;
+	
+
+   IS_ANY_ORA_ERROR;
+
+   strcpy(curr_cd,h_ccy);
+   }
+  else
+	{
+   if (((l_mccycondexists ) || ((g_mccy_cacc_exists) && ((strcmp(h_evt_class,"BI")==0) || (strcmp(h_evt_class,"RD")==0)))) && (strcmp(p_ca_cacheque_struct_h->h_pymt_currency,g_mt_commonsys_params_struct_h.dom_ccy) !=0 ))  
+      {
+        EXEC SQL SELECT GL_CD
+                   INTO :curr_cd:i_curr_cd1
+                   FROM DL_CURRENCY
+                  WHERE CURRENCY_CD = :p_ca_cacheque_struct_h->h_pymt_currency;
+
+       IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_VAL_NF,
+                                              "Currency Not Setup",
+                                              APL_NULL_STRING,
+                                              APL_NULL_STRING);
+
+		i_h_exchgrt = 0;									  
+       EXEC SQL SELECT EXCHGRT
+                  INTO :l_h_exchgrt:i_h_exchgrt
+                  FROM MT_EXCHRATE
+                 WHERE currency_cd=:p_ca_cacheque_struct_h->h_pymt_currency
+                   AND DENOM_CCY = :g_mt_commonsys_params_struct_h.dom_ccy
+                   AND RATE_DATE = (select MAX(RATE_DATE) from MT_EXCHRATE
+                   where currency_cd =:p_ca_cacheque_struct_h->h_pymt_currency and DENOM_CCY=:g_mt_commonsys_params_struct_h.dom_ccy);
+
+
+       IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_VAL_NF,
+                                              "Exchange Rate",
+                                              APL_NULL_STRING,
+                                              APL_NULL_STRING);
+
+       if(l_mt_core_sys_params_struct_h.dir_indir_fxqt_ind[0] == 'I')
+           l_exchgrt_a = 1/l_h_exchgrt;
+       else
+           l_exchgrt_a = l_h_exchgrt;
+
+       }
+    else
+      strcpy(curr_cd,APL_GL_LOCAL_CCY);
+   }
+	
+	if ((int_period_flg == 2)  || (int_period_flg == 3))  
+	  {
+		 strcpy(chr_l_h_main_func_area,"EMUCONV");
+		 strcpy(chr_l_h_sub_func,"NCD_CCY");
+
+       EXEC SQL SELECT FIELD_VAL
+                  INTO :chr_l_h_ncd_curr:i_l_h_ncd_curr
+                  FROM PRO_GSSPLVAL
+                 WHERE MAIN_FUN=:chr_l_h_main_func_area
+                   AND   SUB_PROCESS = :chr_l_h_sub_func
+                   AND  NATION=:g_mt_commonsys_params_struct_h.nation_code;
+
+	printf("\n Entered into CA_GENAE 4B\n");
+       IS_ANY_ORA_ERROR
+
+       strcpy(chr_l_h_main_func_area,"EMUCONV");
+       strcpy(chr_l_h_sub_func,"EMU_CCY");
+  
+       EXEC SQL SELECT FIELD_VAL
+                  INTO :chr_l_h_emu_curr:i_l_h_emu_curr
+                  FROM PRO_GSSPLVAL
+                 WHERE MAIN_FUN=:chr_l_h_main_func_area
+                   AND   SUB_PROCESS = :chr_l_h_sub_func
+                   AND  NATION=:g_mt_commonsys_params_struct_h.nation_code;
+
+       IS_ANY_ORA_ERROR
+
+	   i_h_exchgrt = 0;
+       EXEC SQL SELECT EXCHGRT
+                  INTO :l_h_exchgrt:i_h_exchgrt
+                  FROM MT_EXCHRATE
+                 WHERE currency_cd=:chr_l_h_ncd_curr
+                   AND DENOM_CCY = :chr_l_h_emu_curr
+                   AND RATE_DATE = (select MAX(RATE_DATE) from MT_EXCHRATE where currency_cd =:chr_l_h_ncd_curr and DENOM_CCY=:chr_l_h_emu_curr);
+	
+
+	   IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_VAL_NF,
+                                              "Exchange Rate",
+                                              APL_NULL_STRING,
+                                              APL_NULL_STRING);
+
+       if(l_mt_core_sys_params_struct_h.dir_indir_fxqt_ind[0] == 'I')
+           l_exchgrt_a = l_h_exchgrt;
+       else
+           l_exchgrt_a = 1/l_h_exchgrt;
+
+    }
+	
+	printf("\n Entered into CA_GENAE 4C  AMIT:chr_p_acc_typ_ind=|%c|\n",chr_p_acc_typ_ind);
+   if ( (!l_mccycondexists ) )
+   {
+
+	if	(	chr_p_acc_typ_ind	==	'C')
+	{
+
+		EXEC SQL SELECT CLN_GL_ACCOUNT,CLN_FX_INC_IND
+		INTO :chr_h_gl_account:i_ibbs_account,:chr_h_fxinc_flg:i_fxinc_flg
+		FROM	MT_CLIENT
+		WHERE CLN_CODE = :p_ca_cacheque_struct_h->h_dl_client;
+		
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_ACCNOT_FND,
+														  p_ca_cacheque_struct_h->h_dl_client,
+														  APL_NULL_STRING,
+														  APL_NULL_STRING
+														 )	
+	
+	/*	Comment to avoid check of Default CashAccount flag	*/
+   /* 
+
+   strcpy(chr_l_corpaction,CORPORATE_ACT_IND);
+
+   memset(chr_l_main_funcarea,APL_NULL_CHAR,APL_MAINFUNCAREA_LEN);
+   memset(chr_l_subfunc,APL_NULL_CHAR,APL_MAINFUNCAREA_LEN);
+	memset(chr_l_defflg,APL_NULL_CHAR,APL_MAINFUNCAREA_LEN);
+
+   strcpy(chr_l_main_funcarea,"DEF_CASHACC_FLG");
+   strcpy(chr_l_subfunc,chr_l_corpaction);
+
+	printf("\n Entered into CA_GENAE 4D\n");
+	printf("\n chr_l_main_funcarea=|%s| chr_l_subfunc=|%s| chr_l_defflg=|%s|\n",chr_l_main_funcarea,chr_l_subfunc,chr_l_defflg);
+	
+	if(APL_FAILURE == CO_Rtv_FldVal(chr_l_main_funcarea,chr_l_subfunc,chr_l_defflg,l_debug_info_ptr))
+   {
+		printf("\n Error.1chr_l_defflg=|%s|\n",chr_l_defflg);
+      APL_GOBACK_FAIL
+   }
+
+	printf("\n Entered into CA_GENAE 4D-1\n");
+   strcpy(chr_h_defcaflg,chr_l_defflg);
+	*/	
+	
+/*	NEW CHNAGE:AMIT 12/05/2006		
+ 
+	EXEC SQL SELECT CUSTSUS
+   INTO :chr_h_cashacc_glacc:i_cashacc_ibbsacc
+   FROM IV_CLIENTGL;
+*/
+/* Retro done for AIX mig -- ISKB4802*/
+/*	EXEC SQL SELECT SUBSTR(BNK_ACC,-14,14)
+	INTO :chr_h_cashacc_glacc:i_cashacc_ibbsacc
+	FROM IV_CLIENTSETUP
+	WHERE CLIENT=:p_ca_cacheque_struct_h->h_dl_client;	
+	
+	
+   IS_ANY_ORA_ERROR   */
+
+	/*Changed for Kotak Ench -- Account No Size Change--ISKB_4802 --130711--Shweta*/
+	EXEC SQL SELECT SUBSTR(BNK_ACC,9)
+	INTO :chr_h_cashacc_glacc:i_cashacc_ibbsacc
+	FROM IV_CLIENTSETUP
+	WHERE CLIENT=:p_ca_cacheque_struct_h->h_dl_client;	
+	
+	
+   IS_ANY_ORA_ERROR
+		
+		if ((g_mccy_cacc_exists) && ((strcmp(p_ca_cacheque_struct_h->h_pymt_currency,"EUR")==0) || (strcmp(p_ca_cacheque_struct_h->h_pymt_currency,"USD")==0)) &&  ((strcmp(h_evt_class,"BI")==0) || (strcmp(h_evt_class,"RD")==0)))
+		{
+			if (sqlca.sqlcode == 1403)
+			{
+   			EXEC SQL SELECT GL_ACCOUNT
+   			INTO :chr_h_cashacc_glacc:i_cashacc_ibbsacc
+   			FROM DL_CASHCLT
+   			WHERE CLIENT=:chr_g_h_sundry_account
+   			AND CURRENCY_CD = :p_ca_cacheque_struct_h->h_pymt_currency
+   			AND DEFAULT_CCY IN ('A', 'X');
+
+   			IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_ACCNOT_FND,
+                                         p_ca_cacheque_struct_h->h_dl_client,
+                                         "Cash Account",
+                                         APL_NULL_STRING
+														)
+			}
+		}
+		else
+		{
+      	if(sqlca.sqlcode != 1403)
+         	strcpy(chr_h_gl_account,chr_h_cashacc_glacc);
+		}
+	 strcpy(p_iacctent_struct_h->spl_clt_cd,chr_h_fxinc_flg);	
+	 p_iacctent_struct_i->i_spl_clt_cd = 0;
+	}
+	else if	(chr_p_acc_typ_ind == 'G')
+	{
+		strcpy(chr_h_gl_account,chr_g_h_debit_account);
+	}
+  }
+   else
+   {
+   if (chr_p_acc_typ_ind == 'C'	)
+   {
+			
+		printf("\n AMIT:FOR CLIENT IF \n");		
+		
+/*      EXEC SQL SELECT CLN_GL_ACCOUNT,CLN_FX_INC_IND
+      INTO :chr_h_gl_account:i_ibbs_account,:chr_h_fxinc_flg:i_fxinc_flg
+      FROM  MT_CLIENT
+      WHERE CLN_CODE = :p_ca_cacheque_struct_h->h_dl_client;
+	printf(" Error=|%d| \n",sqlca.sqlcode);
+      IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_ACCNOT_FND,
+                                            p_ca_cacheque_struct_h->h_dl_client,
+                                            APL_NULL_STRING,
+                                            APL_NULL_STRING
+                                           )
+
+*/
+printf("\n Entered into CA_GENAE 4E CLIENT=|%s| \n",p_ca_cacheque_struct_h->h_dl_client);
+/*  Changes for Picking From IV_ClientSetup Table	*/
+/*
+	EXEC SQL SELECT GL_ACCOUNT
+   	INTO :chr_h_cashacc_glacc:i_cashacc_ibbsacc
+   	FROM DL_CASHCLT
+   	WHERE CLIENT=:p_ca_cacheque_struct_h->h_dl_client
+   	AND CURRENCY_CD = :p_ca_cacheque_struct_h->h_pymt_currency
+   	AND DEFAULT_CCY IN ('A', 'X');
+
+	EXEC SQL SELECT DECODE(:p_db_cr_ind,'0',PAY_OUT_ACC,'1',PAY_IN_ACC)
+   	INTO :chr_h_cashacc_glacc:i_cashacc_ibbsacc
+   	FROM IV_CLIENTSETUP
+   	WHERE CLIENT=:p_ca_cacheque_struct_h->h_dl_client;
+*/
+/* Retro done for AIX mig -- ISKB4802*/
+/*		EXEC SQL SELECT SUBSTR(BNK_ACC,-14,14)
+				INTO :chr_h_cashacc_glacc:i_cashacc_ibbsacc
+				FROM IV_CLIENTSETUP
+				WHERE CLIENT=:p_ca_cacheque_struct_h->h_dl_client;*/
+
+		/*Changed for Account Number size change -- Kotak Ench --ISKB_4802 --13072011 -- Shweta*/		
+	      	EXEC SQL SELECT SUBSTR(BNK_ACC,9)
+				INTO :chr_h_cashacc_glacc:i_cashacc_ibbsacc
+				FROM IV_CLIENTSETUP
+				WHERE CLIENT=:p_ca_cacheque_struct_h->h_dl_client;
+		
+		printf("\n BANK_ACC=|%s|\n",chr_h_cashacc_glacc);	
+		
+   	IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_ACCNOT_FND,
+                                        p_ca_cacheque_struct_h->h_dl_client,
+                                        "Cash Account",
+                                        APL_NULL_STRING
+                                       )
+    	strcpy(chr_h_gl_account,chr_h_cashacc_glacc);
+    	strcpy(p_iacctent_struct_h->spl_clt_cd,chr_h_fxinc_flg);
+    	p_iacctent_struct_i->i_spl_clt_cd = 0;
+   }
+   else if ( chr_p_acc_typ_ind == 'G' )
+	{
+		strcpy(chr_h_gl_account,chr_g_h_debit_account);
+
+	
+/*
+    EXEC SQL SELECT GL_ACCOUNT
+    INTO :chr_h_gl_account
+    FROM DL_CASHCLT
+    WHERE CLIENT=:l_mt_core_sys_params_struct_h.custody_clt_cd
+    AND CURRENCY_CD = :p_ca_cacheque_struct_h->h_pymt_currency
+    AND DEFAULT_CCY IN ('A', 'X');
+
+    IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_ACCNOT_FND,
+                                         l_mt_core_sys_params_struct_h.custody_clt_cd,
+                                         "Cash Account",
+                                         APL_NULL_STRING
+                                        )
+*/
+   }
+   }
+
+	EXEC SQL SELECT TO_CHAR(TO_DATE(:p_ca_cacheque_struct_h->h_pymt_dt),'yyyymmdd')
+	INTO	:val_date
+	FROM	DUAL;
+
+	IS_ANY_ORA_ERROR
+	
+	int_l_condexists_A = 0;
+	
+	if	( CO_Chk_CntryEnabled( "ACC_ENTRIES",
+									"PAY_AMT_INT_CALC",
+									&int_l_condexists_A,
+									l_debug_info_ptr
+								 )	==	APL_FAILURE
+		)
+	{
+		APL_GOBACK_FAIL
+	}
+
+	if	(int_l_condexists_A != 0) 
+	{
+		pre_round_amount = p_ca_cacheque_struct_h->h_curr_pymt - 
+					floor( floor ( p_ca_cacheque_struct_h->h_curr_pymt ) * ( p_ca_cacheque_struct_h->h_tax_rate / 100) ) 	- 
+					p_ca_cacheque_struct_h->h_other_chrgs ;
+	}
+	else 
+	{
+		
+      printf("\n Entered into CA_GENAE 4EE\n");
+      int_l_condexists_A = 0;
+
+      if (APL_FAILURE == CO_Chk_CntryEnabled("PAYMSG_TAX","TAXABLE_DIVIDEND",&int_l_condexists_A,l_debug_info_ptr))     
+         APL_GOBACK_FAIL
+
+/*		memset(h_evt_class,APL_NULL_CHAR,EVT_CLASS_);	*/
+		memset(h_evt_class,APL_NULL_CHAR,4);
+		i_evt_class=0;
+
+		EXEC SQL SELECT CA_EVENT, EARNINGS, EARNINGS_RATE
+		INTO :h_evt_class:i_evt_class,:h_earnings:i_earnings,:h_earnings_rt:i_earnings_rt
+		FROM CAEVENT
+		WHERE CORP_ID=:p_ca_cacheque_struct_h->h_corp_id;
+		IS_ANY_ORA_ERROR;
+      
+		if((int_l_condexists_A) && (strcmp(h_evt_class,EVT_CASH_DIV)==0 || strcmp(h_evt_class,EVT_DECR_VAL) ==0))
+                                                           											
+      {
+		  printf("\nshrinath1\n");
+			tmp_trunc_tax = 0;
+			if(h_earnings > 0)
+			{
+				 printf("\nshrinath2\n");
+				EXEC SQL SELECT TRUNC(:p_ca_cacheque_struct_h->h_quantity_paid * :p_ca_cacheque_struct_h->h_taxable_dividend * :p_ca_cacheque_struct_h->h_tax_rate / 100) INTO :tmp_trunc_tax FROM DUAL;
+				IS_ANY_ORA_ERROR
+				
+				pre_round_amount = p_ca_cacheque_struct_h->h_quantity_paid * h_earnings - tmp_trunc_tax;
+			}
+			else
+			{
+				 printf("\nshrinath3\n");
+				EXEC SQL SELECT TRUNC(:p_ca_cacheque_struct_h->h_curr_pymt / 100 * :p_ca_cacheque_struct_h->h_taxable_dividend * :p_ca_cacheque_struct_h->h_tax_rate / 100) INTO :tmp_trunc_tax FROM DUAL;
+
+				
+			
+				pre_round_amount = p_ca_cacheque_struct_h->h_curr_pymt / 100 * h_earnings_rt - tmp_trunc_tax;
+			}
+
+		} 
+		
+
+      else
+	  {
+		   printf("\nshrinath4\n");
+		   printf("p_ca_cacheque_struct_h->h_net_amount==>|%lf|",p_ca_cacheque_struct_h->h_net_amount);
+			/*changes done by shrinath for UAT issue CS0022140 start*/
+			if(p_ca_cacheque_struct_h->h_net_amount != 0)
+			{
+				 printf("\nshrinath5\n");
+				pre_round_amount = p_ca_cacheque_struct_h->h_net_amount - p_ca_cacheque_struct_h->h_other_chrgs ;
+			}
+			else
+			{
+				 printf("\nshrinath6\n");
+				pre_round_amount = (	p_ca_cacheque_struct_h->h_curr_pymt * ( 1 - ( p_ca_cacheque_struct_h->h_tax_rate /100 )  ) - p_ca_cacheque_struct_h->h_other_chrgs  );
+			}
+			/*changes done by shrinath for UAT issue CS0022140 ends*/
+	  }
+	}
+
+	printf("\n Payment Currrency=|%s| \n",p_ca_cacheque_struct_h->h_pymt_currency);
+ printf("\nshrinath7===>|%lf|\n",pre_round_amount);
+	if(strcmp(p_ca_cacheque_struct_h->h_pymt_currency,"INR")==0)
+	{
+		l_dl_currency_struct_h.h_dec_len=2;
+	}
+
+	CO_Round( pre_round_amount,
+				l_dl_currency_struct_h.h_dec_len,
+				&amount);						
+printf("\nshrinath8===>|%lf|\n",amount);
+	
+	if	( new_rev_ind == AE_REV_IND) 
+	{
+		amount = ( -1 * amount );
+		
+      pre_round_amount = ( -1 * pre_round_amount );	
+	}
+	
+ 	if ( (l_mccycondexists ) && (strcmp(p_ca_cacheque_struct_h->h_pymt_currency,g_mt_commonsys_params_struct_h.dom_ccy) !=0 ) )
+   {
+   pre_round_lcyamount = pre_round_amount * l_exchgrt_a;
+
+   if(strcmp(p_ca_cacheque_struct_h->h_pymt_currency,"INR")==0)
+   {
+		l_dl_currency_struct_h.h_dec_len=2;
+   }
+   CO_Round( pre_round_lcyamount,
+            l_dl_currency_struct_h.h_dec_len,
+            &lcyamount);
+   if (  p_db_cr_ind == CREDIT_IND_A )
+   {
+      *p_dbl_g_cr_total = (*p_dbl_g_cr_total) + lcyamount ;
+   }
+   else if  (  p_db_cr_ind == DR_CR_IND )
+   {
+      *p_debit_ind_total = (*p_debit_ind_total) + lcyamount;
+   }
+   }
+   else
+   {
+	if	(	p_db_cr_ind	==	CREDIT_IND_A	)
+	{
+		*p_dbl_g_cr_total = (*p_dbl_g_cr_total) + amount ;
+	}
+	else if	(	p_db_cr_ind	==	DR_CR_IND	)
+	{
+		*p_debit_ind_total = (*p_debit_ind_total) + amount;
+	}
+	
+	}
+
+	printf("\nCredit Amount ===>|%lf| Debit Amount ===>|%lf| \n",*p_dbl_g_cr_total,*p_debit_ind_total);
+	int_l_condexists_A = 0;
+	i_condexists = 0; 
+	printf("\n Entered into CA_GENAE 4G\n");
+	
+	if	( CO_Chk_CntryEnabled( "ACC_ENTRIES",
+									"TXNCODE_952",
+									&int_l_condexists_A,
+									l_debug_info_ptr
+								 )	==	APL_FAILURE
+		)
+	{
+		APL_GOBACK_FAIL
+	}
+
+	if	( CO_Chk_CntryEnabled( "ACC_ENTRIES",
+									"TXNCODE_933",
+									&i_condexists,
+									l_debug_info_ptr
+								 )	==	APL_FAILURE
+		)
+	{
+		APL_GOBACK_FAIL
+	}
+	printf("\n Entered into CA_GENAE 4M\n");
+	 
+	if	((	int_l_condexists_A == 0 ) && (i_condexists == 0))
+	{
+		
+      if ( ! strcmp(h_nation_code,"GR") )
+      {
+         if ( p_db_cr_ind == CREDIT_IND_A )
+         { 
+			 	 strcpy(deal_cd,"85");
+		   }
+         else
+         { 
+		  	  strcpy(deal_cd,"47");
+		   }
+      }
+		else if ( ! strcmp(h_nation_code,"CZ"))
+				{
+					strcpy(deal_cd,"506");  
+				}
+      else if ( ! strcmp(h_nation_code,"RO"))
+            {
+					if ( p_db_cr_ind == CREDIT_IND_A )
+                  {
+                   strcpy(deal_cd,"509");
+				      }
+               else
+						{
+                   strcpy(deal_cd,"508");
+						} 
+				}
+      else	
+			strcpy(deal_cd,AE_DLCD);
+	}
+	else if ( i_condexists > 0)
+		strcpy(deal_cd,AE_DLCD_HU);
+	else if (int_l_condexists_A > 0)
+		strcpy(deal_cd,AE_DLCD_PO);
+	
+
+	
+
+	
+	printf("\n Entered into CA_GENAE 4P\n");
+	
+
+
+
+
+	
+	EXEC SQL SELECT INSTR_CODE
+	INTO :h_instr_code:i_instr_code
+	FROM CAEVENT
+	WHERE CORP_ID=:p_ca_cacheque_struct_h->h_corp_id;
+
+	IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_REC_NOTFND,
+													  	"Event",
+														APL_NULL_STRING,
+														APL_NULL_STRING
+													 )
+
+	printf("\n Entered into AMIT1:h_instr_code=|%s|\n",h_instr_code);
+	EXEC SQL SELECT SUBSTR(INSTR_NAME,1,15),NVL(INSTR_ISIN,'ICD '||instr_code)
+	INTO	:h_instr_name:i_instr_name,:h_instr_isin:i_instr_isin
+	FROM  MT_INSTRUMENT
+	WHERE INSTR_CODE=:h_instr_code;
+	
+	printf("\n AMIT1:|%d| \n",sqlca.sqlcode);	
+	IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_REC_NOTFND,
+													  	h_instr_code,
+														APL_NULL_STRING,
+														APL_NULL_STRING
+													 )
+	printf("\n Entered into AMIT2\n");
+
+   EXEC SQL SELECT STATUS,INSTR_INC_BAL /*Smita - Changed Col Names - HDFCCA_Base Ver*/
+		  INTO :h_entitl_stat:i_entitl_stat,:h_ent_amount:i_ent_amount
+		  FROM CAENTITLEMENT
+		  WHERE CORP_ID=:p_ca_cacheque_struct_h->h_corp_id AND
+				  CLIENT=:p_ca_cacheque_struct_h->h_dl_client;
+	
+	printf("\n Entered into AMIT1|%d| \n",sqlca.sqlcode);
+
+	IS_ANY_ORA_ERROR
+
+	printf("\n Entered into CA_GENAE 4T\n");
+	if (p_ca_cacheque_struct_h->h_curr_pymt < 0)
+	{
+		
+		if (h_ent_amount==abs(p_ca_cacheque_struct_h->h_curr_pymt))
+			strcpy(h_pymt_stat,"FULL");
+		else 
+			strcpy(h_pymt_stat,"PART");
+	}
+	else if (h_ent_amount==p_ca_cacheque_struct_h->h_curr_pymt)
+		strcpy(h_pymt_stat,"FULL");
+	else if (strcmp(h_entitl_stat,"CP"))
+		strcpy(h_pymt_stat,"PART");
+	else
+	{
+
+		EXEC SQL SELECT MAX(SEQNUM_PAY)
+		INTO :h_pay_srno:i_pay_srno 
+		FROM CACHEQUE
+		WHERE CORP_ID=:p_ca_cacheque_struct_h->h_corp_id
+	  			AND	CLIENT=:p_ca_cacheque_struct_h->h_dl_client
+				AND	STAT_PYMT = 'CP'
+				AND	PROCESSED_DATE = 
+					(	SELECT MAX(PROCESSED_DATE) 
+						FROM CACHEQUE
+						WHERE CORP_ID=:p_ca_cacheque_struct_h->h_corp_id
+						  AND CLIENT=:p_ca_cacheque_struct_h->h_dl_client
+						  AND STAT_PYMT = 'CP' ) ;
+
+		IS_ANY_ORA_ERROR
+	   
+		if ( h_pay_srno == p_ca_cacheque_struct_h->h_pymt_srl_nbr)
+			strcpy(h_pymt_stat,"COMP");
+		else
+			strcpy(h_pymt_stat,"PART");
+	}
+	
+	if (strlen(h_instr_name) < 15)
+	{
+		CO_PadString(h_instr_name,'R',15," ",l_debug_info_ptr);
+	}
+
+/*	**************** START CHANGES BY AMIT BHOSALE	********************	*/
+
+	printf("\n Entered into CA_GENAE 4TT\n");
+	
+	
+	strcpy(description,APL_NULL_STRING);
+
+	if(!strcmp(chr_p_evnt_ind,"NSA") || !strcmp(chr_p_evnt_ind,"NSP"))
+	{	
+		strcpy(chr_evt_class,chr_p_evnt_ind);
+	}
+	else if (!strcmp(chr_p_evnt_ind,"PO"))
+	{	
+		strcpy(chr_evt_class,chr_p_evnt_ind);
+	}
+	else
+	{
+		strcpy(chr_evt_class,h_evt_class);
+	}	
+printf("\n Entered into CA_GENAE 4TTTr\n");
+
+	sprintf(chr_g_log_buff,"\nBefore Calling CO_Get_Narrative() \n");		
+	CO_ProcMonitor(g_flogfile,chr_g_log_buff,NULL,NULL);	
+
+	fprintf(g_flogfile,"\n chr_p_evnt_ind=|%s| chr_evt_class=|%s| \n",chr_p_evnt_ind,chr_evt_class);
+	fprintf(g_flogfile,"\n For Event=|%s| DateOfPayment=|%s| \n",chr_p_evnt_ind,p_ca_cacheque_struct_h-> h_pymt_dt);
+	printf("\n Entered Calling  CO_Get_Narrative ROWID=|%s| \n",p_rowid);
+
+
+	if ( CO_Get_Narrative(chr_p_acc_typ_ind,
+					  p_ca_cacheque_struct_h->h_dl_client,
+					  p_ca_cacheque_struct_h->h_corp_id,
+					  p_ca_cacheque_struct_h-> h_pymt_srl_nbr,
+					  chr_evt_class,
+					  h_instr_code,	   
+					  h_instr_isin,
+					  h_instr_name,
+					  p_ca_cacheque_struct_h-> h_pymt_dt,	
+					  description,
+					  chr_p_ind,
+					  p_rowid,	
+					  g_flogfile,	
+					  l_debug_info_ptr) == APL_FAILURE )
+        {
+          APL_GOBACK_FAIL
+        }
+	printf("\n Entered into CA_GENAE 4TTT\n");
+	
+	sprintf(chr_g_log_buff,"\nAfter Calling CO_Get_Narrative() \n");
+	CO_ProcMonitor(g_flogfile,chr_g_log_buff,NULL,NULL);
+/*	**************** END CHANGES BY AMIT BHOSALE	********************	*/
+	
+	strcpy(deal_ident,p_ca_cacheque_struct_h->h_corp_id);
+	strcat(deal_ident,TXN_REF_DELIMITER);
+	strcat(deal_ident,p_ca_cacheque_struct_h->h_dl_client);
+	strcat(deal_ident,TXN_REF_DELIMITER);
+	strcat(deal_ident,ltoa(p_ca_cacheque_struct_h->h_pymt_srl_nbr));
+	strcat(deal_ident,TXN_REF_DELIMITER);
+	strcat(deal_ident,p_ca_cacheque_struct_h->h_pymt_currency);    		
+	strcat(deal_ident,TXN_REF_DELIMITER);								
+
+
+
+	 p_iacctent_struct_h->module_ind = MODULE_IND_CA;
+			p_iacctent_struct_i->i_module_ind = 0;
+
+	 strcpy(p_iacctent_struct_h->brnch_cd,g_mt_commonsys_params_struct_h.brnch_cd);
+			p_iacctent_struct_i->i_brnch_cd = 0;
+	
+	 strcpy(p_iacctent_struct_h->inden_num,int_g_seq_num);
+			p_iacctent_struct_i->i_sequence_num = 0;
+	
+	 strcpy(p_iacctent_struct_h->client,chr_h_gl_account);
+			p_iacctent_struct_i->i_dl_client = 0;
+	
+	 strcpy(p_iacctent_struct_h->curr_cd,curr_cd);
+			p_iacctent_struct_i->i_curr_cd = 0;
+
+	printf("\n Entered into CA_GENAE 4TTTT\n");
+        if ( (int_period_flg == 1 ) || (strcmp(g_mt_commonsys_params_struct_h.nation_code, "GR") != 0 ))
+        {
+			 printf("\nshrinath9\n");
+            if ( (l_mccycondexists ) && (strcmp(p_ca_cacheque_struct_h->h_pymt_currency,g_mt_commonsys_params_struct_h.dom_ccy) !=0 ) )
+              {
+				   printf("\nshrinath10\n");
+               p_iacctent_struct_h->lcl_amount = lcyamount;
+               p_iacctent_struct_h->fccy_amt = amount;
+               p_iacctent_struct_h->exchg_rt = l_exchgrt_a;
+              }
+           else
+             {
+				  printf("\nshrinath11\n");
+           p_iacctent_struct_h->lcl_amount = amount;
+                p_iacctent_struct_i->i_lcy_amount = 0;
+			    }
+        }
+        else
+        {
+			 printf("\nshrinath12\n");
+           if (strcmp(p_ca_cacheque_struct_h->h_pymt_currency,chr_l_h_emu_curr)== 0 )
+           {
+			    printf("\nshrinath13\n");
+              l_grd_amount = 0.0;
+              CO_Round((pre_round_amount*l_exchgrt_a), 0, &l_grd_amount);
+              p_iacctent_struct_h->lcl_amount = l_grd_amount;
+              p_iacctent_struct_i->i_lcy_amount = 0;
+              p_iacctent_struct_h->fccy_amt = amount;
+              p_iacctent_struct_i->i_fcy_amt = 0;
+            }
+            else
+            {
+				 printf("\nshrinath14\n");
+               l_grd_amount = 0.0;
+               CO_Round(pre_round_amount, 0, &l_grd_amount);
+               p_iacctent_struct_h->lcl_amount = l_grd_amount;
+               p_iacctent_struct_i->i_lcy_amount = 0;
+               l_emu_amount =0.0;
+					if (l_exchgrt_a == 0.0)
+					{
+               CO_Round((pre_round_amount), 2, &l_emu_amount);
+					}
+					else
+					CO_Round((pre_round_amount/l_exchgrt_a), 2, &l_emu_amount);
+               p_iacctent_struct_h->fccy_amt = l_emu_amount;
+               p_iacctent_struct_i->i_fcy_amt = 0;
+             }
+         }
+	
+	printf("\n Entered into CA_GENAE 4TX\n");
+	
+	 strcpy(p_iacctent_struct_h->val_date,val_date);
+			p_iacctent_struct_i->i_value_date = 0;
+	
+		strcpy(p_iacctent_struct_h->deal_cd,deal_cd);
+			p_iacctent_struct_i->i_deal_cd = 0;
+	
+		p_iacctent_struct_h->db_cr_ind	=	p_db_cr_ind;
+			p_iacctent_struct_i->i_db_cr_flag = 0;
+	
+	strcpy(p_iacctent_struct_h->description,description);
+			p_iacctent_struct_i->i_description = 0;
+
+	p_iacctent_struct_h->status_ind	=	APL_ACCTENT_GEN_IND;
+			p_iacctent_struct_i->i_status_ind = 0;
+	printf("\nSTATUS=|%c|\n",p_iacctent_struct_h->status_ind);
+	printf("\nDbCr Ind=|%c|\n",p_iacctent_struct_h->db_cr_ind);
+	strcpy(p_iacctent_struct_h->proc_num,chr_g_batch_no);
+			p_iacctent_struct_i->i_proc_num = 0;
+	printf("\nshrinath15==>|%lf|\n",amount);
+	p_iacctent_struct_h->report_amt = amount;	
+			p_iacctent_struct_i->i_rep_amount = 0;
+
+	p_iacctent_struct_h->rec_refer	=	APL_ACCTENT_NORMENT;
+			p_iacctent_struct_i->i_rec_identify = 0;
+	
+	 strcpy(p_iacctent_struct_h->proc_dt,chr_g_sys_date);	
+			 p_iacctent_struct_i->i_batch_dt = 0;
+
+	 strcpy(p_iacctent_struct_h->deal_ident,deal_ident);	
+			 p_iacctent_struct_i->i_deal_ident = 0;
+
+	p_iacctent_struct_h->exchg_rt = 1;
+
+
+		APL_GOBACK_SUCCESS
+      RETURN_SUCCESS  :
+      {
+			return (APL_SUCCESS);
+      }
+      RETURN_FAILURE  :
+      {
+	      return (APL_FAILURE);
+		}
+}
+
+int main(int argc , char ** argv)  // AIX -Warnings Reaoval
+{
+	DEBUG_INFO_STRUCT_H	*l_debug_info_list  = NULL ,**l_debug_info_ptr=NULL; //AIX -SMAC Chnge
+	FILE				*chr_finifile=NULL;
+	char				chr_inifile[PATH_LENGTH]	=	APL_NULL_STRING;
+	char				chr_logfile[PATH_LENGTH]	=	APL_NULL_STRING;
+   char 				chr_uname[APL_USERID_LEN] = APL_NULL_STRING;
+   char 				chr_passwd[APL_PASSWD_LEN]= APL_NULL_STRING;
+	char				*int_pos;
+	struct			sqlca sqlca;	
+	INTL_ENV_DATA_STRUCT_H   *l_intlenv_datastruct_h =  NULL;
+   char                 chr_custody_id_b[APL_USERID_LEN];
+	double g_debit_ind_total = 0.0;
+	double dbl_g_cr_total = 0.0;
+
+	printf("\n the arg[0] = |%s| \n",argv[0]);
+	printf("\n the arg[1] = |%s| \n",argv[1]);
+	printf("\n the arg[2] = |%s| \n",argv[2]);
+    
+    sprintf(chr_g_log_buff,"\n SHYAM::the arg[0] = |%s| \n",argv[0]);
+    sprintf(chr_g_log_buff,"\n SHYAM::the arg[1] = |%s| \n",argv[1]);
+    sprintf(chr_g_log_buff,"\n SHYAM::the arg[2] = |%s| \n",argv[2]);
+
+	
+ 	EXEC SQL VAR chr_uname IS STRING;
+   EXEC SQL VAR chr_passwd IS STRING;  
+	l_debug_info_list = (DEBUG_INFO_STRUCT_H *)calloc(1,sizeof(DEBUG_INFO_STRUCT_H));	
+	l_debug_info_ptr = &l_debug_info_list;
+	
+	
+
+	strcpy(chr_inifile,getenv("INTL_ROOT_PATH"));
+   strcat(chr_inifile,"intl_sun.cfg");
+
+	if ( ( chr_finifile=fopen(chr_inifile,"r") ) == NULL)
+  	{
+     exit(-1);	
+  	}
+
+
+	
+	APL_FETCH_DB_LOGIN_DETAILS(chr_finifile,chr_custody_id_b,chr_uname,chr_passwd,APL_OUT_FILE,l_debug_info_ptr)
+	EXEC SQL CONNECT :chr_uname IDENTIFIED BY :chr_passwd;
+	IS_ANY_ORA_ERROR
+	
+
+	
+
+   if ( CO_Rtv_RptFileName("CA_GenAccEntries",
+								APL_LOGFILE_DESC,
+								100,
+								argv[5],
+								argv,
+								&g_flogfile,
+								l_debug_info_ptr) == APL_FAILURE ) 
+	{
+		exit(-1);	
+	}
+	EXEC SQL COMMIT;	
+	IS_ANY_ORA_ERROR
+	
+	if(BT_Status_Update(argv[0],
+					argv[1],
+					argv[2],
+					APL_STARTED_STATUS,
+					l_debug_info_ptr) ==APL_FAILURE)
+	{
+			APL_GOBACK_FAIL
+	}
+
+	
+	printf("\n Here1 \n");	
+
+   if ( CO_RtvSysDtTime(chr_g_sys_date_time,l_debug_info_ptr) == APL_FAILURE )
+         APL_GOBACK_FAIL
+   CLS_LOG_ARRAY
+   sprintf(chr_g_log_buff,"\nEOD Accounting Entries Generation started on :[%s]\n",chr_g_sys_date_time);
+   CO_ProcMonitor(g_flogfile,chr_g_log_buff,NULL,NULL);
+	strcpy(chr_g_sys_date,chr_g_sys_date_time);
+    
+    sprintf(chr_g_log_buff,"\n SHYAM::chr_g_sys_date = |%s| \n",chr_g_sys_date);
+	
+    strcpy(chr_g_sys_date,strtok_r(chr_g_sys_date," ",&int_pos));
+    
+    sprintf(chr_g_log_buff,"\n SHYAM::chr_g_sys_date = |%s| \n",chr_g_sys_date);
+    
+	strcat(chr_g_sys_date,APL_NULL_TIME);
+	
+	printf("\n Here2 \n");	
+	
+	if ( CO_RtvSysParams(l_debug_info_ptr) == APL_FAILURE)
+      APL_GOBACK_FAIL
+
+	printf("\n Here3 \n");	
+	
+	l_intlenv_datastruct_h   =  (INTL_ENV_DATA_STRUCT_H*)calloc(1,sizeof(INTL_ENV_DATA_STRUCT_H));
+	APL_MALLOC_FAIL(l_intlenv_datastruct_h);
+
+	printf("\n Here4 \n");	
+	
+   if ( argc < 10 )
+   {
+      CO_ProcMonitor(g_flogfile,"All Arguments expected by  program not passed \n",NULL,NULL);
+      APL_GOBACK_FAIL
+   }
+
+	printf("\n Here5 \n");	
+
+   strcpy(chr_g_progname,   argv[0]);
+   strcpy(chr_g_key,        argv[1]);
+   strcpy(chr_g_start_date, argv[2]);
+   strcpy(l_intlenv_datastruct_h->usr, argv[3]);
+
+	
+	strcpy(chr_g_status_started,APL_STATUS_BATCH_STARTED);
+	strcpy(chr_g_status_completed,APL_STATUS_BATCH_COMPLETED); 
+	strcpy(chr_g_acctent_pass_ind,AE_PASS_IND_STR); 
+	//strcpy(chr_g_acctent_gen_ind,AE_GEN_IND_STR); 
+	chr_g_acctent_gen_ind = AE_GEN_IND_STR; 
+	strcpy(chr_g_acctent_rvrej_ind,AE_REVREJ_IND); 
+	strcpy(chr_g_stat_allcntry,APL_STAT_ALLCNTRY);
+	
+
+	printf("\n Here6 \n");	
+	
+	if ( CA_Pro_GenActEnt( 	l_intlenv_datastruct_h,
+									chr_g_progname,
+									chr_g_key,
+									chr_g_start_date,
+									&g_debit_ind_total,
+									&dbl_g_cr_total,			
+									l_debug_info_ptr
+                 			 )  == APL_FAILURE
+      )
+  	 	{	
+			EXEC SQL ROLLBACK;
+			IS_ANY_ORA_ERROR	
+      	CO_ProcMonitor(g_flogfile,"ROLLING BACK \n",NULL,NULL);
+			APL_GOBACK_FAIL
+   	}
+   	else
+   	{
+		sprintf(chr_g_log_buff,"Total Credit Amount : |%lf| Total Debit Amount : |%lf|\n",dbl_g_cr_total,g_debit_ind_total);
+        CO_ProcMonitor(g_flogfile,chr_g_log_buff,NULL,NULL);
+		
+			if (!APL_DOUBLE_EQUAL(dbl_g_cr_total,g_debit_ind_total))
+			{
+            CO_InsertErr(   l_debug_info_ptr,
+                              ERR_DATA_INTEGRITY,
+                              "Dr/Cr.Total Mismatch",
+                              APL_NULL_STRING,
+                              APL_NULL_STRING,
+                              __LINE__,
+                              __FILE__ );
+	
+				APL_GOBACK_FAIL
+			}
+			else
+			{	
+				EXEC SQL COMMIT;
+				IS_ANY_ORA_ERROR	
+/*   			CO_ProcMonitor(g_flogfile,"RECORD COMMITTED \n",NULL,NULL);
+*/				APL_GOBACK_SUCCESS
+			}
+		}
+   
+	
+   APL_GOBACK_SUCCESS
+ 
+   RETURN_SUCCESS:
+	{
+   	CLS_LOG_ARRAY
+	   sprintf(chr_g_log_buff,"T:Corporate Actions Accounting Entries Generation exiting successfully\n");
+      CO_ProcMonitor(g_flogfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+		CO_FreeErrLst(l_debug_info_ptr);
+      
+		APL_FREE(l_intlenv_datastruct_h);
+	
+	if(BT_Status_Completed(argv[0],
+            argv[1],
+            argv[2],
+            l_debug_info_ptr)   ==  APL_FAILURE )
+    {
+       APL_GOBACK_FAIL
+    }
+		fclose(chr_finifile);
+		
+		fclose(g_flogfile);
+   EXEC SQL COMMIT WORK;
+
+   if(sqlca.sqlcode != 0)
+	  APL_GOBACK_FAIL
+      exit(0);
+		
+   }
+   RETURN_FAILURE:
+   {
+   	CLS_LOG_ARRAY
+	   sprintf(chr_g_log_buff,"T:Corporate Actions Accounting Entries Generation exiting unsuccessfully\n");
+      CO_ProcMonitor(g_flogfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+		CO_FreeErrLst(l_debug_info_ptr);
+      
+		APL_FREE(l_intlenv_datastruct_h);
+	if(BT_Status_Completed(argv[0],
+            argv[1],
+            argv[2],
+            l_debug_info_ptr)   ==  APL_FAILURE )
+    {
+       APL_GOBACK_FAIL
+    }
+EXEC SQL COMMIT WORK;
+
+		fclose(chr_finifile);
+		fclose(g_flogfile);
+      
+		exit(-1);
+   }
+}
+

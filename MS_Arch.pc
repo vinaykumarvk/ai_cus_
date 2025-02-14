@@ -1,0 +1,450 @@
+/*
+ *   COPYRIGHT NOTICE
+ *
+ *   Copyright 2016 Intellect Design Arena Limited. All rights reserved.
+ *
+ *    These materials are confidential and proprietary to 
+ *    Intellect Design Arena Limited and no part of these materials should
+ *    be reproduced, published, transmitted or distributed in any form or
+ *    by any means, electronic, mechanical, photocopying, recording or 
+ *    otherwise, or stored in any information storage or retrieval system
+ *    of any nature nor should the materials be disclosed to third parties
+ *    or used in any other manner for which this is not authorized, without
+ *    the prior express written authorization of Intellect Design Arena Limited.
+ */
+/*******************************************************************************
+ *
+ * Module Name         :         Archival Processing
+ *
+ * File Name           :         MS_Arch.pc
+ *
+ * Description         :         
+ *
+ *            Version Control Block
+ *
+ * Date        Version       Author           Description								 RFS No.
+ * ---------   --------   ---------------  -----------------						--------------
+ * 19/12/2016   1.0.0.1    Prateek Singh    Re-Initiation of Archival Enhancement	ISKB_2071 (Old IsolveIds 2244 and 2469)
+ * 25/03/2022   1.0.0.2    kotubabu         Linux Migration                         Kotak Implumention
+ * ***********************************************************************************************/
+
+
+
+
+
+
+
+#include "MS_Swift.h"
+#include "IV_Control_A.h"
+EXEC SQL INCLUDE SQLCA.H;
+
+/*Commented by kotubabu for Linux Migration
+#define OS_UNIX*/
+#define COMMIT_COUNT_MS_ARCH 5000
+
+
+
+
+int MS_Proc_MsgArch(	char **argv,
+						FILE *p_logfile,
+						char *p_msgdatadir,
+						char *p_msgoutdir,
+						char *p_msgarchdir,
+						DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	
+	struct sqlca sqlca;	
+	char	chr_l_buf[BUFFER_LEN]			= APL_NULL_STRING;
+	int	int_h_count = 0;
+	short 	i_h_count = 0;
+	int	int_h_count1 = 0;
+	int	int_h_total_count = 0;
+	int	i = 0;
+	short l_i_now = 0 ;
+ char l_temp_processing_status[51] = APL_NULL_STRING;
+
+ EXEC SQL BEGIN DECLARE SECTION;
+
+ 	char    chr_l_now[11]                                   = APL_NULL_STRING;
+
+EXEC SQL END DECLARE SECTION	;
+ 
+	
+	sqlca.sqlcode = 0;
+
+	
+
+	CO_ProcMonitor(	p_logfile, 
+					"Entered Function MS_Proc_MsgArch\n",
+					NULL,
+					NULL);
+/*added by siva.ganapathi for ISKB_2244 on 23/03/2009 -- started*/
+ printf("\n arguments argv[0] = |%s| argv[1] = |%s| argv[2] = |%s|\n",argv[0],argv[1],argv[2]);	
+EXEC SQL SELECT PROCESS_NAME into :l_temp_processing_status
+        FROM SYS_BATCHPROC
+   WHERE PROCESS_NAME=:argv[0]
+   AND   PROC_INIT=:argv[1]
+   AND   STARTDATE=:argv[2]
+   AND   STATUS='started';
+Alert("\n SQL ERROR = |%d| \n",sqlca.sqlcode);
+Alert("\n PROCESSING STATUS = |%s| \n",l_temp_processing_status);
+/*added by siva.ganapathi for ISKB_2244 on 23/03/2009 -- Ended*/	
+
+   EXEC SQL SELECT NVL(PROCESSING_STATUS,'A') into :l_temp_processing_status/*modified by siva.ganapathi for ISKB_2244 on 23/93/2009*/
+	FROM SYS_BATCHPROC
+   WHERE PROCESS_NAME=:argv[0]
+   AND   PROC_INIT=:argv[1]
+   AND   STARTDATE=:argv[2]
+   AND   STATUS='started'
+   FOR UPDATE OF PROCESSING_STATUS,STATUS;
+	printf("\n********* argv[0] = |%s| argv[1] = |%s| argv[2] = |%s|\n",argv[0],argv[1],argv[2]);
+	IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,
+					"Batch-In-Proc Rec.",
+					argv[0],
+					argv[1])/*modified by siva.ganapathi for ISKB_2244 on 23/93/2009*/
+
+	EXEC SQL SELECT TO_CHAR(SYS_DATE,'dd/mm/yyyy') INTO :chr_l_now:l_i_now FROM PRO_SYS_DATE ;/*modified by siva.ganapathi for ISKB_2244 on 23/03/2009*/
+	IS_ANY_ORA_ERROR
+
+        
+
+        EXEC SQL DELETE 
+        FROM MS_INMSGRP
+        WHERE REPORT_DT <= (SELECT (SYS_DATE-(:l_mt_message_sys_params_struct_h.allowed_retension_prd)) 
+                           FROM PRO_SYS_DATE);
+
+        IS_ANY_ORA_ERROR;
+
+		
+
+        EXEC SQL DELETE 
+        FROM DL_MSGLINK
+		  WHERE SWIFT_MSG_NO ='536'
+		  AND MSG_IN_OUT_IND='I' 
+		  AND INFORMATION IN (SELECT DISTINCT NAMEOF_FILE 
+										 FROM DL_SETLRPT 
+										 WHERE REPORT_IND='Y'
+										 AND REPORT_DT <= (SELECT (SYS_DATE-(:l_mt_message_sys_params_struct_h.allowed_retension_prd)) FROM PRO_SYS_DATE));
+			
+			IS_ANY_ORA_ERROR
+											
+
+
+
+        EXEC SQL DELETE 
+        FROM DL_SETLRPT
+        WHERE REPORT_IND='Y'
+		  AND REPORT_DT <= (SELECT (SYS_DATE-(:l_mt_message_sys_params_struct_h.allowed_retension_prd)) 
+                           FROM PRO_SYS_DATE);
+
+        IS_ANY_ORA_ERROR;
+
+	printf("\n allowed_retension_prdd = |%d| \n", l_mt_message_sys_params_struct_h.allowed_retension_prd);
+
+	CO_ProcMonitor(p_logfile, "Started archival for IMSGLOG", NULL, NULL);
+
+	EXEC SQL SELECT COUNT(*) 
+	INTO :int_h_count:i_h_count
+	FROM MS_MSGLOG b
+	WHERE
+		( to_date(:chr_l_now,'dd/mm/yyyy') - trunc(b.maker_dt) >  :l_mt_message_sys_params_struct_h.allowed_retension_prd ) and 
+		( b.status = 'A' or b.status = 'E' ) ; /*modified by siva.ganapathi for ISKB_2244 on 23/03/2009*/
+
+	IS_ANY_ORA_ERROR
+
+	printf(" sqlca.sqlcode is |%d|", sqlca.sqlcode);
+	printf("\n int_h_count is |%d| i_h_count = |%d|\n", int_h_count, i_h_count);
+
+	/* Commented by Gouse - ISKB_2469 - Same is been added in CA_MsgArch.pc
+	if (int_h_count > 0)
+	{
+
+		int_h_count1 = (int) (int_h_count/COMMIT_COUNT_MS_ARCH) + 1 ;
+
+		for (i=1; i <= int_h_count1 ; i++)
+		{
+
+			EXEC SQL INSERT INTO MS_ARCHMSGLOG
+				(SELECT * FROM MS_MSGLOG WHERE 
+		 		(  (to_date(:chr_l_now,'dd/mm/yyyy') - maker_dt > :l_mt_message_sys_params_struct_h.allowed_retension_prd) and
+				(status = 'A' or status = 'E') and
+				rownum <= 5000)); 
+
+			IS_ANY_ORA_ERROR
+
+			EXEC SQL DELETE MS_MSGLOG 
+			WHERE 
+				( (to_date(:chr_l_now,'dd/mm/yyyy') - maker_dt > :l_mt_message_sys_params_struct_h.allowed_retension_prd) and
+				(status = 'A' or status = 'E') and
+				rownum <= 5000);
+
+			IS_ANY_ORA_ERROR
+
+			int_h_total_count+=sqlca.sqlerrd[2];
+
+			memset(chr_l_buf,APL_NULL_CHAR,BUFFER_LEN);
+			strcpy(chr_l_buf,"Archived ");
+			strcat(chr_l_buf,ltoa(int_h_total_count));
+			strcat(chr_l_buf," records");
+	
+			EXEC SQL UPDATE SYS_BATCHPROC
+			SET STAT_DET = :chr_l_buf
+			WHERE PROCESS_NAME=:argv[0]
+			AND   PROC_INIT=:argv[1]
+			AND   STARTDATE=:argv[2]
+			AND   STATUS='started';
+
+			IS_ANY_ORA_ERROR
+
+			EXEC SQL COMMIT WORK;
+
+			IS_ANY_ORA_ERROR
+
+			CO_ProcMonitor(p_logfile, chr_l_buf, NULL, NULL);
+			CO_ProcMonitor(p_logfile, "COMMITTED", NULL, NULL);
+
+			
+
+   		EXEC SQL SELECT NVL(PROCESSING_STATUS,'A') into :l_temp_processing_status
+			FROM SYS_BATCHPROC
+   		WHERE PROCESS_NAME=:argv[0]
+   		AND   PROC_INIT=:argv[1]
+   		AND   STARTDATE=:argv[2]
+   		AND   STATUS='started'
+   		FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+			IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_REC_NOTFND,
+																"Batch-In-Proc Rec.",
+																APL_NULL_STRING,
+																APL_NULL_STRING )
+		}
+
+		EXEC SQL COMMIT WORK;
+			IS_ANY_ORA_ERROR
+
+		CO_ProcMonitor(p_logfile, chr_l_buf, NULL, NULL);
+		CO_ProcMonitor(p_logfile, "Finished archival for IMSGLOG\n", NULL, NULL);
+
+		
+
+  	 	EXEC SQL SELECT NVL(PROCESSING_STATUS,'A') into :l_temp_processing_status
+		FROM SYS_BATCHPROC
+   	WHERE PROCESS_NAME=:argv[0]
+   	AND   PROC_INIT=:argv[1]
+   	AND   STARTDATE=:argv[2]
+   	AND   STATUS='started'
+   	FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_REC_NOTFND,
+															"Batch-In-Proc Rec.",
+															APL_NULL_STRING,
+															APL_NULL_STRING )
+	}*/
+
+	if(int_h_count > 0)
+	{
+		memset(chr_l_buf, NULL, BUFFER_LEN);
+		sprintf(	chr_l_buf, 
+					"\nFinished Archival for all records which are more than %d days old as of chr_date : %.11s", 
+					l_mt_message_sys_params_struct_h.allowed_retension_prd, 
+					chr_l_now );
+		CO_ProcMonitor(p_logfile, chr_l_buf , NULL, NULL);
+	}
+	else
+	{
+		CO_ProcMonitor(p_logfile, "\n\nNo records int_found for archival", NULL, NULL);
+	}
+
+	APL_GOBACK_SUCCESS
+
+   RETURN_SUCCESS :
+		EXEC SQL COMMIT WORK;
+		CO_ProcMonitor(	p_logfile, 
+						"Leaving Function MS_Proc_MsgArch with success\n",
+						NULL,
+						NULL);
+      return(APL_SUCCESS);
+
+   RETURN_FAILURE :
+		EXEC SQL ROLLBACK WORK;
+		CO_ProcMonitor(	p_logfile, 
+						"Leaving Function MS_Proc_MsgArch with errors\n",
+						NULL,
+						NULL);
+		CO_ProcMonitor(p_logfile, APL_NULL_STRING, l_debug_info_ptr, NULL);
+		CO_FreeErrLst(l_debug_info_ptr);
+      return(APL_FAILURE);
+}
+
+
+
+int main(int argc,char **argv)
+{
+	struct sqlca sqlca;
+   DEBUG_INFO_STRUCT_H *l_debug_info_ptr = NULL;
+	DEBUG_INFO_STRUCT_H l_debug_info; /*ISKB_2469 Decleration missed out and resolved*/
+	FILE *l_finifile;
+
+   int int_l_retval=0;
+	int int_num = 0;
+
+   char chr_uname[APL_USERID_LEN] 	= APL_NULL_STRING;
+   char chr_custody_id_b[APL_USERID_LEN] 	= APL_NULL_STRING;
+   char chr_passwd[APL_PASSWD_LEN] 	= APL_NULL_STRING;
+	char chr_l_logdir[PATH_LENGTH] 	= APL_NULL_STRING;
+	char chr_l_logname[PATH_LENGTH] 	= APL_NULL_STRING;
+	char chr_l_inifile[PATH_LENGTH] 	= APL_NULL_STRING;
+	char chr_l_msgarchdir[PATH_LENGTH] 	= APL_NULL_STRING;
+	char chr_l_msgoutdir[PATH_LENGTH] 	= APL_NULL_STRING;
+	char chr_l_msgdatadir[PATH_LENGTH] 	= APL_NULL_STRING;
+
+	FILE *l_flogfile = NULL;
+	l_debug_info_ptr = &l_debug_info; /*ISKB_2469 Decleration missed out and resolved*/
+
+   EXEC SQL VAR chr_uname IS STRING;
+   EXEC SQL VAR chr_custody_id_b IS STRING;
+   EXEC SQL VAR chr_passwd IS STRING;
+
+	sqlca.sqlcode = 0;
+
+	strcpy(chr_l_inifile,getenv("INTL_ROOT_PATH"));
+	strcat(chr_l_inifile,"intl_sun.cfg");
+
+	if ( ( l_finifile=fopen(chr_l_inifile,"r") ) == NULL)
+	{
+		exit(-1);
+	}
+
+
+	if ( APL_FAILURE == CO_ReadToken(	l_finifile,
+													"INTL_LOG_PATH",
+													chr_l_logdir,
+													&l_debug_info_ptr ))
+	{
+		fclose(l_finifile);
+		exit(-1);
+	}
+
+	if ( APL_FAILURE == CO_ReadToken(	l_finifile,
+													"INTL_MS_SND_PATH",
+													chr_l_msgoutdir,
+													&l_debug_info_ptr ))
+	{
+		fclose(l_finifile);
+		exit(-1);
+	}
+
+	if ( APL_FAILURE == CO_ReadToken(	l_finifile,
+													"INTL_MSINC_ARC_PATH_T",
+													chr_l_msgarchdir,
+													&l_debug_info_ptr ))
+	{
+		fclose(l_finifile);
+		exit(-1);
+	}
+
+	if ( APL_FAILURE == CO_ReadToken(	l_finifile,
+													"INTL_MS_DATA_PATH",
+													chr_l_msgdatadir,
+													&l_debug_info_ptr ))
+	{
+		fclose(l_finifile);
+		exit(-1);
+	}
+	
+
+	APL_FETCH_DB_LOGIN_DETAILS(l_finifile, chr_custody_id_b, chr_uname, chr_passwd, APL_OUT_FILE, &l_debug_info_ptr)
+
+	
+
+	if (fclose(l_finifile)) 
+	{
+		exit(-1);
+	}
+
+   EXEC SQL CONNECT :chr_uname IDENTIFIED BY :chr_passwd;
+
+   if (sqlca.sqlcode)
+   {
+      APL_GOBACK_FAIL
+   }
+   else
+   {
+		
+
+		if (APL_FAILURE == CO_Rtv_RptFileName(	"4H",
+														APL_LOGFILE_DESC,
+														100,
+														argv[5],
+														argv,
+														&l_flogfile,
+														&l_debug_info_ptr ) )
+		{
+			APL_GOBACK_FAIL
+		}
+
+
+		EXEC SQL COMMIT WORK;
+
+		if (sqlca.sqlcode)
+		{
+			CO_ProcMonitor(l_flogfile, "Could not commit after opening chr_log file", NULL, NULL);
+			CO_Proc_RptClose(l_flogfile, &l_debug_info_ptr);
+			APL_GOBACK_FAIL
+		}
+
+		
+
+		if (APL_FAILURE == CO_RtvSysParams(&l_debug_info_ptr))
+		{
+			CO_ProcMonitor(l_flogfile, "Could not get system params", &l_debug_info_ptr, NULL);
+			CO_Proc_RptClose(l_flogfile, &l_debug_info_ptr);
+			APL_GOBACK_FAIL
+		}
+
+      int_l_retval = MS_Proc_MsgArch( argv, l_flogfile, chr_l_msgdatadir,chr_l_msgoutdir,chr_l_msgarchdir,&l_debug_info_ptr);
+      if ( int_l_retval == APL_FAILURE )
+      {
+			CO_ProcMonitor(l_flogfile, "MS_Arch returned failure", NULL, NULL);
+			CO_Proc_RptClose(l_flogfile, &l_debug_info_ptr);
+			EXEC SQL ROLLBACK WORK RELEASE;
+         APL_GOBACK_FAIL
+      }
+      else
+      {
+         EXEC SQL UPDATE SYS_BATCHPROC
+         SET  status = 'completed'
+         WHERE PROCESS_NAME=:argv[0]
+         AND   PROC_INIT=:argv[1]
+         AND   STARTDATE=:argv[2]
+         AND   STATUS='started';
+
+			if (sqlca.sqlcode)
+			{
+				CO_ProcMonitor(l_flogfile, "Could not update batch_in_proc", NULL, NULL);
+				CO_Proc_RptClose(l_flogfile, &l_debug_info_ptr);
+				APL_GOBACK_FAIL
+			}
+
+         EXEC SQL COMMIT WORK RELEASE;
+			if (sqlca.sqlcode)
+			{
+				CO_ProcMonitor(l_flogfile, "Could not do final commit", NULL, NULL);
+				CO_Proc_RptClose(l_flogfile, &l_debug_info_ptr);
+				APL_GOBACK_FAIL
+			}
+
+			CO_Proc_RptClose(l_flogfile, &l_debug_info_ptr);
+         APL_GOBACK_SUCCESS
+     char l_error[4001] = APL_NULL_STRING;/*added by siva.ganapathi for ISKB_2244 on 23/03/2009 -- started*/
+ CO_Rtv_ErrString(l_debug_info_ptr,l_error);
+printf(" ERROR = |%s|\n",l_error);/*added by siva.ganapathi for ISKB_2244 on 23/03/2009 -- Ended*/
+      }
+   }
+
+	RETURN_SUCCESS : printf("\n RETURN SUCCESS \n"); exit(0);/*modified by siva.ganapathi for ISKB_2244 on 23/93/2009*/
+	RETURN_FAILURE : printf("\n RETURN FAILURE \n"); exit(1); /*modified by siva.ganapathi for ISKB_2244 on 23/93/2009*/
+
+}
+

@@ -1,0 +1,425 @@
+
+
+#include <CO_HostStructdef.h>
+
+EXEC SQL INCLUDE sqlca;
+
+
+
+main(int argc,char **argv)
+{
+DEBUG_INFO_STRUCT_H *l_debug_info_ptr = (DEBUG_INFO_STRUCT_H *) NULL;
+FILE *l_finifile,*l_logfile,*l_ptr_rep_file;
+int int_num=0;
+char  chr_l_now[APL_DATE_LEN]     = APL_NULL_STRING;
+char  chr_l_date[11]     = APL_NULL_STRING;
+char chr_l_sys_date[11]=APL_NULL_STRING;
+char l_temp_processing_status[51] = APL_NULL_STRING;
+
+char h_dl_client[25] = APL_NULL_STRING;
+char h_instr_isin[13] = APL_NULL_STRING;
+char h_instr_code[9]=APL_NULL_STRING;
+char chr_h_code_desc[41]=APL_NULL_STRING;
+char h_dlt[11] = APL_NULL_STRING;
+char h_qty[10] = APL_NULL_STRING;
+char h_error_cd[3] = APL_NULL_STRING;
+char h_rec_del[2] = APL_NULL_STRING;
+
+char **temp;
+
+char chr_l_inifile[PATH_LENGTH] = APL_NULL_STRING;
+char chr_l_rep_file[PATH_LENGTH] = APL_NULL_STRING;
+char chr_uname[APL_USERID_LEN] = APL_NULL_STRING;
+char chr_custody_id_b[APL_USERID_LEN] = APL_NULL_STRING;
+char chr_passwd[APL_USERID_LEN] = APL_NULL_STRING;
+char chr_l_rep_name[15]=APL_NULL_STRING;
+char chr_l_basis[2]=APL_NULL_STRING;
+int int_retval=0;
+EXEC SQL BEGIN DECLARE SECTION;
+
+EXEC SQL VAR chr_uname IS STRING;
+EXEC SQL VAR chr_passwd IS STRING;
+EXEC SQL VAR chr_l_date IS STRING;
+EXEC SQL VAR chr_l_sys_date IS STRING;
+
+EXEC SQL VAR h_dl_client IS STRING;
+EXEC SQL VAR h_qty IS STRING;
+EXEC SQL VAR h_instr_code IS STRING;
+EXEC SQL VAR chr_h_code_desc IS STRING;
+EXEC SQL VAR h_dlt IS STRING;
+EXEC SQL VAR h_error_cd IS STRING;
+EXEC SQL VAR h_rec_del IS STRING;
+EXEC SQL VAR h_instr_isin IS STRING;
+short i_dl_client  = 0;
+short i_qty  = 0;
+short i_upld_date  = 0;
+short i_error_cd  = 0;
+short i_instr_code = 0;
+short i_code_desc = 0;
+short i_dlt = 0;
+short i_rec_del = 0;
+short i_instr_isin = 0;
+EXEC SQL END DECLARE SECTION;
+
+memset(h_dl_client,NULL,25);
+memset(h_qty,NULL,10);
+memset(h_instr_code,NULL,9);
+memset(chr_h_code_desc,NULL,41);
+memset(h_dlt,NULL,11);
+memset(h_error_cd,NULL,3);
+memset(h_rec_del,NULL,2);
+memset(h_instr_isin,NULL,13);
+
+
+strcpy(chr_l_inifile,getenv("INTL_ROOT_PATH"));
+strcat(chr_l_inifile,"intl_sun.cfg");
+if ( ( l_finifile=fopen(chr_l_inifile,"r") ) == NULL)
+   {
+   APL_GOBACK_FAIL
+   }
+sqlca.sqlcode=0;
+
+APL_FETCH_DB_LOGIN_DETAILS(l_finifile, chr_custody_id_b, chr_uname, chr_passwd, APL_OUT_FILE, &l_debug_info_ptr);
+
+EXEC SQL CONNECT :chr_uname IDENTIFIED BY :chr_passwd;
+ 
+                 
+    if (APL_FAILURE == CO_Rtv_RptFileName( "MR",
+            "REPORT_FILES",
+                 100,
+					  argv[5],
+                 argv,
+                 &l_ptr_rep_file,
+                 &l_debug_info_ptr ))
+   {
+   APL_GOBACK_FAIL;
+   }
+
+    if (APL_FAILURE == CO_Rtv_RptFileName( "ML",
+            APL_LOGFILE_DESC,
+                 100,
+					  argv[5],
+                 argv,
+                 &l_logfile,
+                 &l_debug_info_ptr ))
+   {
+   APL_GOBACK_FAIL;
+   }
+   fclose(l_finifile);
+if (APL_FAILURE == CO_SplitStr( argv[9],
+		  '|',
+		  &int_num,
+		  &temp ))
+{
+fprintf(l_logfile,"Returns unsuccessfully from CO_SplitStr\n");
+}
+
+strcpy(chr_l_date,temp[0]);
+strcpy(chr_l_basis,temp[1]);
+fprintf(l_logfile,"The chr_date is : %s:\n",chr_l_date);
+fprintf(l_logfile,"The basis is : %s\n",chr_l_basis);
+
+if  (int_num==0)
+{
+		fprintf(l_logfile,"\n Zero argments \n");
+}
+
+fprintf(l_logfile,"Program Name : %s\n",argv[0]);
+fprintf(l_logfile,"KEY          : %s\n",argv[1]);
+fprintf(l_logfile,"START DATE   : %s\n",argv[2]);
+fprintf(l_logfile,"ARGV[9]		  : %s\n",argv[9]);
+
+
+
+EXEC SQL SELECT PROCESSING_STATUS into :l_temp_processing_status
+FROM SYS_BATCHPROC
+WHERE PROCESS_NAME=:argv[0]
+AND   PROC_INIT=:argv[1]
+AND   STARTDATE=:argv[2]
+AND   STATUS='started'
+FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+if(APL_ZERO_RESULT_SET)
+{
+CO_ProcMonitor(l_logfile,"E:No entry in batch_in_proc\n",NULL,NULL);
+APL_GOBACK_FAIL
+}
+EXEC SQL SELECT to_char(SYS_DATE,'DD/MM/YYYY') into :chr_l_sys_date FROM PRO_SYS_DATE ;
+
+if (chr_l_basis[0]=='U')
+{
+		  EXEC SQL DECLARE upd_trade_cursor_upld CURSOR FOR
+			  SELECT  rpad(nvl(client,' '),24,' '),
+						 rpad(nvl(instr_isin,' '),12,' '),
+						 rpad(nvl(to_char(QTY),' '),9,' '),
+						 rpad(nvl(REC_DEL,' '),1,' '),
+						 rpad(nvl(deal_date,' '),10,' '),
+						 lpad(nvl(to_char(ERROR_CD),' '),2,'0')
+			  FROM DL_MAROCLEAR
+			  WHERE UPLOAD_DATE=:chr_l_date
+			  AND ERROR_CD in (12,15);
+}
+else 
+{
+		  EXEC SQL DECLARE upd_trade_cursor_trd CURSOR FOR
+			  SELECT  rpad(nvl(client,' '),24,' '),
+						 rpad(nvl(instr_isin,' '),12,' '),
+						 rpad(nvl(to_char(QTY),' '),9,' '),
+						 rpad(nvl(REC_DEL,' '),1,' '),
+						 rpad(nvl(deal_date,' '),10,' '),
+						 lpad(nvl(to_char(ERROR_CD),' '),2,'0')
+			  FROM DL_MAROCLEAR
+			  WHERE deal_date=:chr_l_date
+			  AND ERROR_CD in (12,15);
+}
+if (chr_l_basis[0]=='U')
+   EXEC SQL OPEN upd_trade_cursor_upld;
+else
+   EXEC SQL OPEN upd_trade_cursor_trd;
+	
+       fprintf(l_logfile,"SQLCODE : %d\n",sqlca.sqlcode);
+
+   for(;;)
+   {
+         sqlca.sqlcode=0;
+
+		if (chr_l_basis[0]=='U')
+        EXEC SQL FETCH upd_trade_cursor_upld
+        INTO    :h_dl_client:i_dl_client,
+                :h_instr_isin:i_instr_isin,
+                :h_qty:i_qty,
+                :h_rec_del:i_rec_del,
+                :h_dlt:i_dlt,
+                :h_error_cd:i_error_cd ;
+		else
+        EXEC SQL FETCH upd_trade_cursor_trd
+        INTO    :h_dl_client:i_dl_client,
+                :h_instr_isin:i_instr_isin,
+                :h_qty:i_qty,
+                :h_rec_del:i_rec_del,
+                :h_dlt:i_dlt,
+                :h_error_cd:i_error_cd ;
+
+       fprintf(l_logfile,"SQLCODE : %d\n",sqlca.sqlcode);
+       if (APL_ZERO_RESULT_SET)
+       {
+         break;
+       }
+      else
+      {
+         fprintf(l_logfile,"A/C : %s, QTY: %s, TRDT: %s, ISIN: %s\n",h_dl_client,h_qty,h_dlt,h_instr_isin);
+         int_retval=UpdtCmaroclErrCode(h_dl_client,h_qty,h_rec_del,h_dlt,h_instr_isin,h_error_cd,l_logfile,&l_debug_info_ptr);
+      }
+   }
+	if (chr_l_basis[0]=='U')
+   	EXEC SQL CLOSE upd_trade_cursor_upld;
+	else
+		EXEC SQL CLOSE upd_trade_cursor_trd;
+
+fprintf(l_ptr_rep_file,"\n\n---------------------------------------------------------------------------------------\n");
+fprintf(l_ptr_rep_file,"                              MAROCLEAR REJECT FILE REPORT\n");
+if (chr_l_basis[0]=='U')
+fprintf(l_ptr_rep_file,"                               UPLOAD DATE : %s\n",chr_l_date);
+else
+fprintf(l_ptr_rep_file,"                               TRADE DATE : %s\n",chr_l_date);
+
+fprintf(l_ptr_rep_file,"                                     CITIBANK MOROCCO\n");
+fprintf(l_ptr_rep_file,"SYSTEM DATE : %s.\n",chr_l_sys_date);
+fprintf(l_ptr_rep_file,"---------------------------------------------------------------------------------------\n\n\n");
+
+fprintf(l_ptr_rep_file,"ACCOUNT                  INSTRUMENT       QUANTITY     FAIL REASON\n");
+fprintf(l_ptr_rep_file,"---------------------------------------------------------------------------------------\n\n\n");
+
+if (chr_l_basis[0]=='U')
+{
+		  EXEC SQL DECLARE cmarocl_details_upld CURSOR FOR
+		  SELECT rpad(DL_MAROCLEAR.client,24,' '),
+								rpad(DL_MAROCLEAR.INSTR_ISIN,12,' '),
+								rpad(to_char(DL_MAROCLEAR.QTY),9,' '),
+								PRO_SGENSTAT.map_desc
+					  FROM DL_MAROCLEAR DL_MAROCLEAR,
+							 PRO_SGENSTAT PRO_SGENSTAT
+					  WHERE DL_MAROCLEAR.UPLOAD_DATE=:chr_l_date
+					  AND   PRO_SGENSTAT.map_val=DL_MAROCLEAR.ERROR_CD
+					  AND   PRO_SGENSTAT.map_type='MAROCLEAR ERROR CODE';
+}
+else
+{
+		  EXEC SQL DECLARE cmarocl_details_trd CURSOR FOR
+		  SELECT rpad(DL_MAROCLEAR.client,24,' '),
+								rpad(DL_MAROCLEAR.INSTR_ISIN,12,' '),
+								rpad(to_char(DL_MAROCLEAR.QTY),9,' '),
+								PRO_SGENSTAT.map_desc
+					  FROM DL_MAROCLEAR DL_MAROCLEAR,
+							 PRO_SGENSTAT PRO_SGENSTAT
+					  WHERE DL_MAROCLEAR.deal_date=:chr_l_date
+					  AND   PRO_SGENSTAT.map_val=DL_MAROCLEAR.ERROR_CD
+					  AND   PRO_SGENSTAT.map_type='MAROCLEAR ERROR CODE';
+}
+
+		  if (chr_l_basis[0]=='U')
+		  	EXEC SQL OPEN cmarocl_details_upld;
+		  else
+		  	EXEC SQL OPEN cmarocl_details_trd;
+
+		  for(;;)
+		  {
+		  i_dl_client=0;
+		  i_instr_isin=0;
+		  i_qty=0;
+		  i_code_desc=0;
+		  strcpy(h_dl_client,APL_NULL_STRING);
+		  strcpy(h_instr_isin,APL_NULL_STRING);
+		  strcpy(h_qty,APL_NULL_STRING);
+		  strcpy(chr_h_code_desc,APL_NULL_STRING);
+		  if (chr_l_basis[0]=='U')
+		  EXEC SQL FETCH cmarocl_details_upld
+					  INTO :h_dl_client:i_dl_client,
+							 :h_instr_isin:i_instr_isin,
+							 :h_qty:i_qty,
+							 :chr_h_code_desc:i_code_desc;
+		  else
+		  EXEC SQL FETCH cmarocl_details_trd
+					  INTO :h_dl_client:i_dl_client,
+							 :h_instr_isin:i_instr_isin,
+							 :h_qty:i_qty,
+							 :chr_h_code_desc:i_code_desc;
+
+		  if (APL_ZERO_RESULT_SET)
+			  break;
+		  fprintf(l_ptr_rep_file,"%s %s   %s    %s\n",h_dl_client,h_instr_isin,h_qty,chr_h_code_desc);
+		  fprintf(l_logfile,"%s %s   %s    %s\n",h_dl_client,h_instr_code,h_qty,chr_h_code_desc);
+		  }
+		  if (chr_l_basis[0]=='U')
+		  		EXEC SQL CLOSE cmarocl_details_upld;
+		  else
+				EXEC SQL CLOSE cmarocl_details_trd;
+fprintf(l_ptr_rep_file,"\n\n---------------------------------------------------------------------------------------\n");
+fprintf(l_ptr_rep_file,"                                  END OF REPORT \n");
+fprintf(l_ptr_rep_file,"---------------------------------------------------------------------------------------\n");
+
+RETURN_SUCCESS:
+     EXEC SQL UPDATE SYS_BATCHPROC
+     SET  status = 'completed'
+     WHERE PROCESS_NAME=:argv[0]
+     AND   PROC_INIT=:argv[1]
+     AND   STARTDATE=:argv[2]
+     AND   STATUS='started';	
+	fprintf(l_logfile,"Returning Successfully from C_GenMaroUserRep\n");
+	CO_Proc_RptClose(l_logfile, &l_debug_info_ptr);	
+	CO_Proc_RptClose(l_ptr_rep_file, &l_debug_info_ptr);	
+	EXEC SQL COMMIT RELEASE;
+	exit(APL_SUCCESS);
+
+RETURN_FAILURE:
+	fprintf(l_logfile,"Returning Unsuccessfully from C_GenMaroUserRep\n");
+	CO_Proc_RptClose(l_logfile, &l_debug_info_ptr);
+	CO_Proc_RptClose(l_ptr_rep_file, &l_debug_info_ptr);
+	EXEC SQL COMMIT RELEASE;
+	exit(APL_FAILURE);
+
+}
+
+int UpdtCmaroclErrCode(char *h_dl_client,char *h_qty,char *h_rec_del,char *h_dlt,char *h_instr_isin,char *p_err_code,FILE *p_logfile,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+char chr_l_trcode1;
+char chr_l_trcode2;
+
+char chr_l_confdt[APL_DATE_LEN] = APL_NULL_STRING;
+char chr_l_trade_status[3] =  APL_NULL_STRING;
+char temp[30]=APL_NULL_STRING;
+char chr_l_failcode_A[3] = APL_NULL_STRING;
+int int_upd_err_code=0;
+int int_int_qty=0;
+EXEC SQL BEGIN DECLARE SECTION;
+
+EXEC SQL VAR chr_l_confdt IS STRING;
+EXEC SQL VAR chr_l_trade_status IS STRING;
+EXEC SQL VAR chr_l_failcode_A IS STRING;
+short i_confdate = 0;
+short i_deal_status = 0;
+short i_failreas_cd = 0;
+EXEC SQL END DECLARE SECTION;
+fprintf(p_logfile,"Account is : %s, ISIN is : %s, Trdt is : %s, quantity is : %s.\n",h_dl_client,h_instr_isin,h_dlt,h_qty);
+
+if(APL_FAILURE == CO_Trim(h_dl_client,' ','R',temp,l_debug_info_ptr))
+{
+  CO_ProcMonitor(p_logfile,"\nError  in type",NULL,NULL);
+  APL_GOBACK_FAIL;
+}
+strcpy(h_dl_client,temp);
+if(APL_FAILURE == CO_Trim(h_qty,' ','R',temp,l_debug_info_ptr))
+{
+  CO_ProcMonitor(p_logfile,"\nError  in type",NULL,NULL);
+  APL_GOBACK_FAIL;
+}
+strcpy(h_qty,temp);
+
+fprintf(p_logfile,"Account is : %s, ISIN is : %s, Trdt is : %s, quantity is : %s.\n",h_dl_client,h_instr_isin,h_dlt,h_qty);
+fprintf(p_logfile,"INSIDE THE UpdtCmaroclErrCode TO UPDATE ERR_CODE\n");
+fprintf(p_logfile,"The l_debuglist h_code is : %s\n",p_err_code);
+
+if (!strcmp(h_rec_del,"A"))
+{
+chr_l_trcode1='2';
+chr_l_trcode2='4';
+}
+else
+{
+chr_l_trcode1='1';
+chr_l_trcode2='3';
+}
+
+fprintf(p_logfile,"Recdel : %s  , Tecode : %c %c\n",h_rec_del,chr_l_trcode1,chr_l_trcode2);
+sqlca.sqlcode=0;
+EXEC SQL SELECT VAL_FDT,DEAL_STAT,failreason_cd
+			INTO :chr_l_confdt:i_confdate,
+				  :chr_l_trade_status:i_deal_status,
+				  :chr_l_failcode_A:i_failreas_cd
+			FROM DL_DEAL
+			WHERE ltrim(rtrim(CLIENT))=:h_dl_client
+				AND to_char(QTY)=:h_qty
+				AND DEAL_CD in (:chr_l_trcode1,:chr_l_trcode2)
+				AND to_char(DEAL_DATE,'DD/MM/YYYY')=:h_dlt
+				AND INSTR_CODE in (select instr_code from MT_INSTRUMENT where ltrim(rtrim(instr_isin))=:h_instr_isin); 
+fprintf(p_logfile,"The sqlca.sqlcode is : %d\n",sqlca.sqlcode); 
+fprintf(p_logfile,"The trade_status  is : %s\n",chr_l_trade_status);
+fprintf(p_logfile,"The conf chr_date   is : %s, i_confdate is : %d\n",chr_l_confdt,i_confdate);
+fprintf(p_logfile,"The failreason_cd    is : %s\n",chr_l_failcode_A);
+
+if (i_confdate != -1)
+{
+	if (!strcmp(p_err_code,"12"))
+		int_upd_err_code=7;
+	else
+		int_upd_err_code=8;
+}
+fprintf(p_logfile,"Error h_code is : updated : %d\n",int_upd_err_code);
+fprintf(p_logfile,"SQLCA>SQLCODE 1: %d\n",sqlca.sqlcode);
+
+int_int_qty=atoi(h_qty);
+fprintf(p_logfile,"Char Qty : %s,    Interger Qty : %d\n",h_qty,int_int_qty);
+
+fprintf(p_logfile,"Account is : %s, ISIN is : %s, Trdt is : %s, quantity is : %s.\n",h_dl_client,h_instr_isin,h_dlt,h_qty);
+sqlca.sqlcode=0;
+EXEC SQL UPDATE DL_MAROCLEAR 
+			SET ERROR_CD=:int_upd_err_code
+			WHERE ltrim(rtrim(CLIENT))=:h_dl_client
+			AND QTY=:int_int_qty
+			AND DEAL_DATE=:h_dlt  
+			AND instr_isin=:h_instr_isin;
+
+fprintf(p_logfile,"SQLCA>SQLCODE  : after update : %d\n",sqlca.sqlcode);
+EXEC SQL COMMIT WORK;
+
+fprintf(p_logfile,"SQLCA>SQLCODE : %d\n",sqlca.sqlcode);
+
+IS_ANY_ORA_ERROR;
+fprintf(p_logfile,"A/C : %s, QTY: %s, TRDT: %s, ISIN: %s\n",h_dl_client,h_qty,h_dlt,h_instr_isin);
+
+
+RETURN_SUCCESS : return(APL_SUCCESS);
+RETURN_FAILURE : return(APL_FAILURE);
+
+}

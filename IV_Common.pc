@@ -1,0 +1,477 @@
+
+
+/*
+ *    COPYRIGHT NOTICE
+ *
+ *   Copyright 2005 Polaris Software Lab Limited. All rights reserved.
+ *
+ *   These materials are confidential and proprietary to
+ *    Polaris Software Lab Limited and no part of these materials should
+ *    be reproduced, published, transmitted or distributed in any form or
+ *    by any means, electronic, mechanical, photocopying, recording or
+ *    otherwise, or stored in any information storage or retrieval system
+ *    of any nature nor should the materials be disclosed to third parties
+ *    or used in any other manner for which this is not authorized, without
+ *    the prior express written authorization of Polaris Software Lab Limited.
+ */
+/*********************************************************************
+ *
+ * Module Name         :      Corporate Actions
+ *
+ * File Name           :      CA_GenAE.pc
+ *
+ * Description         :      Contains Functions Related to CA Accounting Entries
+ *
+ *
+ *
+ *            Version Control Block
+ *
+ * Date        Version     Author           Description        RFS No.
+ * ---------   --------  ---------------  ------------------   ---------
+
+ * 18/10/2011	         Sana Bhatkar     New Core Banking    Retro done for AIX mig for ISKB_4802
+ *										   Account No Size 
+ *										   Change
+ *************************************************************************/
+
+
+#include "CR_Common.h"
+#include "CO_Commdef.h"
+#include "CO_OthStructdef.h"
+
+EXEC SQL INCLUDE SQLCA.H;
+
+int IV_Rtv_Bill_FrmGendt_DlvDt(DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	
+	EXEC SQL BEGIN DECLARE SECTION;
+
+		char chr_h_gen_flg;
+		short int int_i_gen_flg = 0;
+		struct sqlca sqlca;
+
+	EXEC SQL END   DECLARE SECTION;
+
+	#ifdef APL_THREADS
+	APL_SET_CONTEXT
+	EXEC SQL CONTEXT USE	:my_ctx_local;
+	#endif
+	
+	EXEC SQL SELECT GENERATE_IND
+		 INTO :chr_h_gen_flg INDICATOR :int_i_gen_flg
+		 FROM SYS_IVCONTROLPARAM;
+
+	IS_ANY_ORA_ERROR	
+
+	if( chr_h_gen_flg == 'Y' ) 
+	{
+		APL_GOBACK_SUCCESS
+	}
+	else
+	{
+		APL_GOBACK_FAIL 
+	}
+
+	RETURN_SUCCESS:
+		return APL_SUCCESS;
+
+	RETURN_FAILURE:
+		return APL_FAILURE;
+}
+
+void writeGEFU_Header(FILE *p_ptr_handoff_file)
+{
+        fprintf(p_ptr_handoff_file,"<HTML xmlns:x=\"urn:schemas-microsoft-com:office:excel\"><HEAD><META http-equiv='Content-Type' content='text/html; charset=UTF-16'></META>");
+        fprintf(p_ptr_handoff_file,"</HEAD>");
+        fprintf(p_ptr_handoff_file,"<BODY>");
+        fprintf(p_ptr_handoff_file,"<table class='normal' cellSpacing='0' cellPadding='0' width='100%%' border='1'>");
+	fprintf(p_ptr_handoff_file,"<TR><th>Account No</th><th>Client Name</th><th>Debit(D)/Credit(C)</th><th>Amount</th><th>Narration</th><th>Branch Code</th><th>Ref No</th></TR>");
+}
+
+int writeGEFU_File(char chr_p_module_ind,
+		char chr_p_gen_pass_ind,
+                char * chr_p_batch_no,
+                char *p_process_name,
+                char *p_start_date,
+		FILE *p_flogfile,
+                INTL_ENV_DATA_STRUCT_H *p_intl_envdatastruct_h,
+                DEBUG_INFO_STRUCT_H      **l_debug_info_ptr)
+{
+        char chr_l_sysdate[9]= APL_NULL_STRING;
+        char  chr_l_inifile[PATH_LENGTH]= APL_NULL_STRING;
+        FILE  *l_ptr_ini_file = NULL;
+        FILE  *l_ptr_handoff_file = NULL;
+        char  chr_l_handoff_dir[PATH_LENGTH]= APL_NULL_STRING;
+        char  chr_l_handoff_file_name[PATH_LENGTH]= APL_NULL_STRING;
+        char chr_l_hoff_file[PATH_LENGTH]=APL_NULL_STRING;
+
+	char  chr_l_log_buffer[BUFFER_LEN] = APL_NULL_STRING;
+
+        char chr_l_trxn_type[3]=APL_NULL_STRING;
+        char chr_l_account[17]= APL_NULL_STRING;
+        char chr_l_brnch_cd[12]= APL_NULL_STRING;
+        char chr_l_trxn_cd[5]= APL_NULL_STRING;
+        char chr_l_trxn_date[9]= APL_NULL_STRING;
+        char chr_l_db_cd_ind[5]= APL_NULL_STRING;
+        char chr_l_val_date[9]= APL_NULL_STRING;
+        char chr_report_amt[19]=APL_NULL_STRING;
+        char chr_l_trxn_desc[41]= APL_NULL_STRING;
+        char chr_l_clnt[12] = APL_NULL_STRING;
+        char chr_inden_num[5] = APL_NULL_STRING;
+        char chr_status[2] = APL_NULL_STRING;
+        char chr_l_ref_no[13]= APL_NULL_STRING;
+
+        short i_trxn_type=0;
+        short i_account=0;
+        short i_brnch_cd=0;
+        short i_trxn_cd=0;
+        short i_trxn_date=0;
+        short i_db_cd_ind=0;
+        short i_val_date=0;
+        short i_report_amt = 0;
+        short i_trxn_desc=0;
+        short i_client = 0;
+        short i_inden_num = 0;
+        short i_status = 0;
+
+        int counter3=0;
+        int int_retval = 0;
+
+        EXEC SQL BEGIN DECLARE SECTION;
+
+	EXEC SQL VAR chr_l_clnt IS STRING;
+
+	EXEC SQL END DECLARE SECTION;
+
+	INTL_REPT_STRUCT_H            *l_intl_rept_struct_ha  =NULL;
+
+	l_intl_rept_struct_ha   = (INTL_REPT_STRUCT_H *)calloc(1, sizeof(INTL_REPT_STRUCT_H));
+	APL_MALLOC_FAIL(l_intl_rept_struct_ha);
+
+	FILE *l_flogfile = p_flogfile;  
+
+	strcpy(chr_l_inifile,getenv("INTL_ROOT_PATH"));
+	strcat(chr_l_inifile,"intl_sun.cfg");
+
+         if ((l_ptr_ini_file = fopen(chr_l_inifile,"r")) == NULL)
+         {
+                 CO_ProcMonitor(l_flogfile,"Failed to Open Config. File",NULL,NULL);
+                 APL_GOBACK_FAIL
+         }
+
+         if (CO_ReadToken(l_ptr_ini_file,"INTL_HF_PATH",chr_l_handoff_dir,l_debug_info_ptr) != APL_SUCCESS)
+         {
+                 return(APL_FAILURE);
+         }
+         sprintf(chr_l_log_buffer,"HandOff FilePath=|%s|",chr_l_handoff_dir);
+         CO_ProcMonitor(l_flogfile,chr_l_log_buffer,NULL,NULL);
+
+
+         EXEC SQL SELECT TO_CHAR(SYSDATE,'YYYYMMDD') INTO :chr_l_sysdate FROM dual;
+         IS_ANY_ORA_ERROR
+
+                 strcpy(chr_l_handoff_file_name,chr_l_handoff_dir);
+         strcat(chr_l_handoff_file_name,chr_p_batch_no);
+         strcat(chr_l_handoff_file_name,"GEFU");
+         strcat(chr_l_handoff_file_name,chr_l_sysdate);
+         strcat(chr_l_handoff_file_name,".xls");
+         printf("\n HandOff FileName=|%s| \n",chr_l_handoff_file_name);
+
+
+         strcat(chr_l_hoff_file,chr_p_batch_no);
+         strcat(chr_l_hoff_file,"GEFU");
+         strcat(chr_l_hoff_file,chr_l_sysdate);
+
+         strcat(chr_l_hoff_file,".xls");
+
+
+         printf("\n Report Table File Entry=|%s| \n",chr_l_hoff_file);
+
+         strcpy(l_intl_rept_struct_ha->report_name, chr_l_hoff_file);
+         strcpy(l_intl_rept_struct_ha->report_desc, APL_HOFF_FILE_DESC);
+
+         strcpy(l_intl_rept_struct_ha->report_date, p_start_date);
+         l_intl_rept_struct_ha->report_width = 100;
+         strcpy(l_intl_rept_struct_ha->task_desc, p_process_name);
+         strcpy(l_intl_rept_struct_ha->fe_be_ind, APL_BE_IND);
+
+         strcpy(l_intl_rept_struct_ha->usr, p_intl_envdatastruct_h->usr);
+
+         if (APL_FAILURE == CO_Proc_DBRptIns( l_intl_rept_struct_ha, l_debug_info_ptr))
+         {
+                 APL_GOBACK_FAIL
+         }
+         if ((l_ptr_handoff_file = fopen(chr_l_handoff_file_name,"w")) == NULL)
+         {
+                 return(APL_FAILURE);
+         }
+
+         writeGEFU_Header(l_ptr_handoff_file);
+         Alert("Header printed");
+
+/************************************************* commented as done separately for each module ind
+         fprintf(l_flogfile,"\n Before Updating  pro_acctent \n");
+
+         EXEC SQL UPDATE pro_acctent
+                 SET status='P'
+                 WHERE module_ind =:chr_p_module_ind
+                 AND proc_num=:chr_p_batch_no
+                 AND status='G';
+
+         if(sqlca.sqlcode)
+         {
+                 printf("\n Error Updating pro_accctent =|%d| \n",sqlca.sqlcode);
+                 sprintf(chr_l_log_buffer,"Error Updating pro_acctent=|%d| \n",sqlca.sqlcode);
+                 fprintf(l_flogfile,"%s",chr_l_log_buffer);
+         }
+         IS_ANY_ORA_ERROR
+
+*******************************************************************************/
+
+                 Alert("calling cursor");
+         EXEC SQL DECLARE l_cur_gefu_trxn1 CURSOR FOR
+                 SELECT DECODE(acc_type,'G','03','C','04'),
+                        SUBSTR(LPAD(TO_CHAR(client),16,' '),1,16) account,
+                        LPAD(SUBSTR(LPAD(TO_CHAR(brnch_cd),4,'0'),1,4),11,' ') brnch_cd,
+                        DECODE(acc_type,'G',DECODE(db_cr_ind,'0','1460','1','1060'),'C',DECODE(db_cr_ind,'0','1008','1','1408')),
+                        TO_CHAR(batch_date,'YYYYMMDD'),
+                        RPAD((LPAD(DECODE(db_cr_ind,'0','D','1','C'),3,' ')),4,' '),
+                        val_date,
+			SUBSTR(NVL(TO_CHAR(report_amt),'000000000000000000'),1,18),
+                        SUBSTR(NVL(LPAD(narrative,40,' '),'                                        '),1,40),
+                        DECODE(module_ind,'P',SUBSTR(narrative,14,10),'B',SUBSTR(narrative,14,10),SUBSTR(narrative,4,10)),
+                        inden_num,status
+                                FROM pro_acctent a
+                                WHERE a.proc_num=:chr_p_batch_no
+                                AND a.module_ind=:chr_p_module_ind
+                                AND a.status=:chr_p_gen_pass_ind
+                                ORDER BY TO_NUMBER(inden_num);
+
+         EXEC SQL OPEN l_cur_gefu_trxn1;
+
+         for(;;)
+         {
+
+                 EXEC SQL FETCH l_cur_gefu_trxn1 INTO        :chr_l_trxn_type:i_trxn_type,
+                      :chr_l_account:i_account,
+                      :chr_l_brnch_cd:i_brnch_cd,
+                      :chr_l_trxn_cd:i_trxn_cd,
+                      :chr_l_trxn_date:i_trxn_date,
+                      :chr_l_db_cd_ind:i_db_cd_ind,
+                      :chr_l_val_date:i_val_date,
+                      :chr_report_amt:i_report_amt,
+                      :chr_l_trxn_desc:i_trxn_desc,
+                      :chr_l_clnt:i_client,
+                      :chr_inden_num:i_inden_num,
+                      :chr_status:i_status;
+
+                 if(APL_ZERO_RESULT_SET)
+                 {
+                         if(counter3==0)
+                         {
+
+                                 CO_ProcMonitor(l_flogfile,"No Records Found in l_cur_cln_ent CURSOR!" ,NULL,NULL);
+                         }
+                         break;
+                 }
+                 IS_ANY_ORA_ERROR
+
+                         counter3++;
+                 printf("\nBagee ***************status is |%s| |%s|\n",chr_status,chr_report_amt);
+                 printf("\n Bagee ---inden num is |%s|\n",chr_inden_num);
+
+                 sprintf(chr_l_ref_no,"%s%d",chr_p_batch_no,counter3);
+
+                 printf("\n chr_l_ref_no=|%s| \n",chr_l_ref_no);
+                 sprintf(chr_l_log_buffer,"Account Type=|%s| Account No=|%s| Debit/Credit=|%s|",chr_l_trxn_type,chr_l_account,chr_l_db_cd_ind);
+                 CO_ProcMonitor(l_flogfile,chr_l_log_buffer,NULL,NULL);
+
+                 printf("\n client name is |%s|\n",chr_l_clnt);
+                 strtok(chr_l_clnt," ");
+                 printf("\n client name after strtok |%s|\n",chr_l_clnt);
+                 int_retval =   CO_PadString(chr_l_clnt,"L",10," ",l_debug_info_ptr);
+
+                 if (int_retval != APL_SUCCESS)
+                         APL_GOBACK_FAIL
+
+                                 int_retval =   CO_PadString(chr_l_clnt,"R",11," ",l_debug_info_ptr);
+
+                 if (int_retval != APL_SUCCESS)
+                         APL_GOBACK_FAIL
+
+                                 int_retval =   CO_PadString(chr_l_ref_no,"L",12," ",l_debug_info_ptr);
+
+                 if (int_retval != APL_SUCCESS)
+                         APL_GOBACK_FAIL
+
+                 fprintf(l_ptr_handoff_file,"<tr><td x:str=\"\'%s\">%s</td>",chr_l_account,chr_l_account);
+                 fprintf(l_ptr_handoff_file,"<td>%s</td>",chr_l_clnt);
+                 fprintf(l_ptr_handoff_file,"<td>%s</td>",chr_l_db_cd_ind);
+                 fprintf(l_ptr_handoff_file,"<td>%s</td>",chr_report_amt);
+                 fprintf(l_ptr_handoff_file,"<td>%s</td>",chr_l_trxn_desc);
+                 fprintf(l_ptr_handoff_file,"<td>%s</td>",chr_l_brnch_cd);
+                 fprintf(l_ptr_handoff_file,"<td>%s</td></tr>",chr_l_ref_no);
+
+         }
+
+         EXEC SQL CLOSE l_cur_gefu_trxn1;
+         fprintf(l_ptr_handoff_file,"</table></BODY></HTML>");
+
+        Alert("finished cursor");
+
+         /* start--- trailor record code commented - to be used only after confirmation from HDFC */
+
+         /*
+
+            EXEC SQL SELECT A.debit_count,A.debit_amount,B.credit_count,B.credit_amount
+            INTO
+            :chr_l_tot_no_debit:i_tot_no_debit,
+            :chr_l_tot_no_credit:i_tot_no_credit,
+            :chr_l_tot_amt_debit:i_tot_amt_debit,
+            :chr_l_tot_amt_credit:i_tot_amt_credit
+            FROM
+            (SELECT SUBSTR(LPAD(COUNT(*),9,'0'),1,9) AS debit_count,
+            SUBSTR(LPAD(SUM(report_amt),15,'0'),1,15)AS debit_amount
+            FROM pro_acctent
+            WHERE proc_num=:chr_p_batch_no
+            AND DB_CR_IND='0'
+            AND module_ind= :chr_p_module_ind) A,
+            (SELECT SUBSTR(LPAD(COUNT(*),9,'0'),1,9) AS credit_count,
+            SUBSTR(LPAD(SUM(report_amt),15,'0'),1,15)AS credit_amount
+            FROM pro_acctent
+            WHERE proc_num=:chr_p_batch_no
+            AND DB_CR_IND='1'
+            AND module_ind=:chr_p_module_ind) B;
+
+            IS_ANY_ORA_ERROR
+
+            sprintf(chr_l_log_buffer,"Total:DEBIT_RECORDS=|%s| CREDIT_RECORDS=|%s| DEBIT_AMOUNT=|%s| CREDIT_AMOUNT=|%s| ",chr_l_tot_no_debit,chr_l_tot_no_credit,chr_l_tot_amt_debit,chr_l_tot_amt_credit);
+            CO_ProcMonitor(l_flogfile,chr_l_log_buffer,NULL,NULL);
+
+            sprintf(chr_l_gefu_trailor,"3%s%s%s%s",chr_l_tot_no_debit,chr_l_tot_no_credit,chr_l_tot_amt_debit,chr_l_tot_amt_credit);
+            printf("\n Trailer Record=|%s|\n",chr_l_gefu_trailor);
+            fprintf(l_ptr_handoff_file,"%s",chr_l_gefu_trailor);
+            printf("n TRAILOR RECORD=|%s| \n",chr_l_gefu_trailor);
+          */
+         /*  trailor record code commented - to be used only after confirmation from HDFC --- end*/
+
+          fclose(l_ptr_handoff_file);
+          APL_GOBACK_SUCCESS
+
+RETURN_SUCCESS  :
+         {
+                 printf("\n Leaving writeGEFU_File() With Success \n");
+                 fprintf(l_flogfile,"\n Leaving writeGEFU_File() With Success\n");
+                 return (APL_SUCCESS);
+         }
+RETURN_FAILURE  :
+         {
+                 printf("\n Leaving writeGEFU_File() With Failure ORA=|%d|\n",sqlca.sqlcode);
+                 sprintf(chr_l_log_buffer,"\n Leaving writeGEFU_File() With Failure ORA=|%d|",sqlca.sqlcode);
+                 CO_ProcMonitor(l_flogfile,chr_l_log_buffer,l_debug_info_ptr,NULL);
+                 return (APL_FAILURE);
+         }
+}
+
+/* Bageshri HB_IV_001 : function To Get Account Code from the Account */
+
+int IV_Mod_ClientCode(char *p_cln_code,FILE *p_flogfile,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	int i=0,j=0;
+	int g_int_acc_digits = 0;
+	char l_acc_scc[3] = APL_NULL_STRING;
+/* Retro done for AIX migration */
+   /*char l_acc_ac[16] = APL_NULL_STRING;*/
+	/*Changed for --Account Code Size increase from 15 to 20 --Kotak Ench --ISKB_4802--Shweta --15072011*/
+	char l_acc_ac[21] = APL_NULL_STRING; 
+	l_acc_scc[0] = p_cln_code[2];
+	l_acc_scc[1] = p_cln_code[3];
+	l_acc_scc[2] = APL_NULL_CHAR;
+	int l_acc_len = 0;
+   int temp = 0;
+	char *p_cln_code_ac;
+
+
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Entered function IV_Mod_ClientCode() \n",
+					NULL, NULL);
+	}
+/* Retro done for AIX migration */
+  /*Added for Kotak Ench -- ISKB_4802--150711 --Shweta*/
+		for(i=APL_CLIENT_LENGTH_GL-2,j=20-1;j>=0;i--,j--)
+		       {
+					l_acc_ac[j]=p_cln_code[i];
+               }  
+
+/*Commented for Kotak Ench --ISKB_4802-- Shweta --1507*/					
+/*	if(!strcmp(l_acc_scc,"01"))
+	{
+		if(l_invoice_systemparam_struct_h.acc_digits == 0)
+		{
+			if ( CO_RtvSysParams(l_debug_info_ptr) == APL_FAILURE)
+			{
+				Alert("\nReturned unsuccessfully from CO_RtvSysParams processtion\n");
+				fprintf(p_flogfile,"\nReturned unsuccessfully from CO_RtvSysParams processtion\n");
+
+				APL_GOBACK_FAIL
+			}
+		}
+		if(l_invoice_systemparam_struct_h.acc_digits != 0)
+			g_int_acc_digits = l_invoice_systemparam_struct_h.acc_digits;
+		else
+		{
+			Alert("\nNo. of Digits for CASA Billing Account not set at Billing Set Up Parameters.");
+			fprintf(p_flogfile,"\nNo. of Digits for CASA Billing Account not set at Billing Set Up Parameters.");
+			APL_GOBACK_FAIL
+		}
+
+		l_acc_len = strlen(p_cln_code);
+		Alert("g_int_acc_digits |%d| total account length |%d|",g_int_acc_digits,l_acc_len);
+
+		for(i=l_acc_len-1,j=g_int_acc_digits-1;j>=0;i--,j--)
+			l_acc_ac[j]=p_cln_code[i];
+	}
+	else 
+	{
+		for(i=APL_CLIENT_LENGTH_GL-2,j=15-1;j>=0;i--,j--)
+			l_acc_ac[j]=p_cln_code[i];
+
+		if(!strcmp(l_acc_scc,"02"))
+		{
+			if(APL_FAILURE == CO_Trim(&l_acc_ac,'0','L',&temp,l_debug_info_ptr))
+				APL_GOBACK_FAIL
+			else
+				strcpy(l_acc_ac,temp);
+		}
+	}*/
+
+   
+
+//	Alert("423 :::l_acc_ac |%s|",l_acc_ac);
+	fprintf(p_flogfile,"\nAccount Code of |%s| is |%s|",p_cln_code,l_acc_ac);
+
+	strcpy(p_cln_code,l_acc_ac);
+
+
+	APL_GOBACK_SUCCESS;
+
+	
+
+	RETURN_SUCCESS:
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Exiting out of IV_Mod_ClientCode() successfully\n",
+					NULL, NULL);
+	}
+	return (APL_SUCCESS);
+	
+	RETURN_FAILURE:
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Exiting out of IV_Mod_ClientCode() unsuccessfully\n",
+					NULL, NULL);
+	}
+
+	return (APL_FAILURE);
+}

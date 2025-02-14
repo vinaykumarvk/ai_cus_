@@ -1,0 +1,1148 @@
+
+
+
+
+
+
+#include	<CO_HostStructdef.h>
+#include "IV_Control_A.h"
+
+#define  TEMP_BUFF_LEN           200
+#define REPORT_PAGE_LEN        80
+
+EXEC SQL INCLUDE sqlca;
+
+int main(int argc, char **argv) //AIX - Warnings Removal
+{
+	Alert("Inside Main OF DIRECT DEBIT "); //shailesh ISKB_430_02  ISKB_430_07
+	
+	INTL_ENV_DATA_STRUCT_H	l_intl_envdata_struct_h;
+	struct sqlca			sqlca;	
+	DEBUG_INFO_STRUCT_H			**l_debug_info_ptr									=	NULL;
+	DEBUG_INFO_STRUCT_H			*l_debug_info_struct								=	NULL;
+	FILE 						*l_ptr_logfile									=	NULL;
+	FILE						*l_ptr_inifile									=	NULL;
+	char						chr_l_logfile_name[PATH_LENGTH]				=	APL_NULL_STRING;	
+	char						chr_uname[APL_USERID_LEN]						=	APL_NULL_STRING;
+	char						chr_custody_id_q[APL_USERID_LEN]						=	APL_NULL_STRING;
+	char						chr_passwd[APL_PASSWD_LEN]						=	APL_NULL_STRING;
+	char						chr_l_inifile_name[PATH_LENGTH]				=	APL_NULL_STRING;	
+	char						chr_l_buf[TEMP_BUFF_LEN]								=	APL_NULL_STRING;
+	char						chr_l_batch_status[APL_BTCH_STATUS_LEN]		=	APL_NULL_STRING;
+	char						chr_l_status_started[APL_BTCH_STATUS_LEN]	=	APL_NULL_STRING;
+	char                 chr_l_progname[APL_BATCH_PROGNAME_LEN]		=	APL_NULL_STRING;
+	char                 chr_l_key[APL_BATCH_KEY_LEN]					=	APL_NULL_STRING;
+
+	int			int_retval											=	0;
+	int l_int_inden_num =0;   //shailesh ISKB_430_02  ISKB_430_07
+	double l_dbl_conf_amt =0;
+	double l_dbl_conf_amt_1 =0;
+	double l_dbl_bill_amt =0;
+
+
+	EXEC SQL VAR chr_uname	IS STRING;
+	EXEC SQL VAR chr_custody_id_q	IS STRING;
+	EXEC SQL VAR chr_passwd	IS STRING;
+
+	
+	memset(&l_intl_envdata_struct_h, NULL, sizeof(INTL_ENV_DATA_STRUCT_H));
+	strcpy(l_intl_envdata_struct_h.usr, argv[3]);
+	strcpy(l_intl_envdata_struct_h.h_mode, argv[4]);
+	strcpy(l_intl_envdata_struct_h.processtion, argv[5]);
+	strcpy(l_intl_envdata_struct_h.auth_req, argv[6]);
+	strcpy(l_intl_envdata_struct_h.subprocess, argv[7]);
+	strcpy(l_intl_envdata_struct_h.h_process, argv[8]);
+	
+	
+	sqlca.sqlcode = 0;
+	l_debug_info_ptr = &l_debug_info_struct;
+
+	EXEC SQL VAR chr_l_status_started IS STRING;
+	
+	strcpy(chr_l_status_started, APL_STARTED_STATUS);
+	strcpy(chr_l_progname, argv[0]);
+	strcpy(chr_l_key, argv[1]);
+
+	
+	strcpy(chr_l_inifile_name, getenv("INTL_ROOT_PATH"));
+	strcat(chr_l_inifile_name, "intl_sun.cfg");	
+	if( NULL == (l_ptr_inifile = fopen(chr_l_inifile_name, "r")))
+	{
+		APL_GOBACK_FAIL
+	}
+
+	
+	APL_FETCH_DB_LOGIN_DETAILS(l_ptr_inifile, chr_custody_id_q, chr_uname, chr_passwd, APL_OUT_FILE, l_debug_info_ptr);
+	
+	
+	EXEC SQL CONNECT :chr_uname IDENTIFIED BY :chr_passwd;
+	if(sqlca.sqlcode)
+	{
+		APL_GOBACK_FAIL
+	}
+
+	
+	if(APL_FAILURE == CO_Rtv_RptFileName("1r", APL_LOGFILE_DESC, 100, argv[5], argv, &l_ptr_logfile, l_debug_info_ptr))
+	{
+		EXEC SQL ROLLBACK WORK RELEASE;
+		APL_GOBACK_FAIL;
+	}
+
+	
+
+	
+	EXEC SQL COMMIT WORK;
+	if(sqlca.sqlcode)
+	{
+		CO_Proc_RptClose(l_ptr_logfile, l_debug_info_ptr);
+		EXEC SQL ROLLBACK WORK RELEASE;
+		APL_GOBACK_FAIL
+	}
+	
+	
+	memset(chr_l_buf, APL_NULL_CHAR, TEMP_BUFF_LEN);
+	sprintf(chr_l_buf, "Log h_file has been created with the prefix 1r. \n");
+	CO_ProcMonitor(l_ptr_logfile, chr_l_buf, NULL, &l_intl_envdata_struct_h);
+	CO_ProcMonitor(l_ptr_logfile, "Payment Generation for Direct Debit Customers id started successfully. \n", NULL, &l_intl_envdata_struct_h);
+
+	Alert("Entering CO_RtvSysParams");
+	if(APL_FAILURE == CO_RtvSysParams(l_debug_info_ptr))
+	{
+		CO_ProcMonitor(l_ptr_logfile, "Could Not Read System Parameters", NULL, NULL);	
+		APL_GOBACK_FAIL
+	}
+
+	Alert("Entering CO_Pro_LocRec");
+	int_retval = CO_Pro_LocRec(argv, l_ptr_logfile, l_debug_info_ptr);
+	if(APL_SUCCESS != int_retval)
+	{
+		CO_ProcMonitor(l_ptr_logfile, "Unable to lock BATCH_IN_PROC record	-	Rollback done. \n", NULL, &l_intl_envdata_struct_h);
+		CO_Proc_RptClose(l_ptr_logfile, l_debug_info_ptr);
+		EXEC SQL ROLLBACK WORK RELEASE;
+		APL_GOBACK_FAIL
+	}
+
+	Alert("Entering IV_Mod_DirDebPayGen");
+	int_retval = IV_Mod_DirDebPayGen(argv, l_ptr_logfile, &l_intl_envdata_struct_h, l_debug_info_ptr);
+	if(APL_SUCCESS == int_retval)
+	{
+		if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+		{
+			
+			CO_ProcMonitor(l_ptr_logfile, APL_NULL_STRING, l_debug_info_ptr, &l_intl_envdata_struct_h);
+			CO_FreeErrLst(l_debug_info_ptr);
+		}
+		
+		strcpy(chr_l_batch_status, APL_COMPLETED_STATUS);
+		
+		APL_GOBACK_SUCCESS
+	}
+	else
+	{
+		if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+		{
+			
+			CO_ProcMonitor(l_ptr_logfile, APL_NULL_STRING, l_debug_info_ptr, &l_intl_envdata_struct_h);
+			CO_FreeErrLst(l_debug_info_ptr);
+		}	
+
+		strcpy(chr_l_batch_status, APL_STARTED_STATUS);
+
+		APL_GOBACK_FAIL
+	}
+
+	APL_GOBACK_SUCCESS
+	
+	RETURN_SUCCESS:
+	{
+		EXEC SQL UPDATE SYS_BATCHPROC
+			SET STATUS = :chr_l_batch_status
+			WHERE PROCESS_NAME = RTRIM(:argv[0])
+				AND PROC_INIT = RTRIM(:argv[1])
+				AND STARTDATE = :argv[2]
+				AND USR = RTRIM(:argv[3])
+				AND STATUS = RTRIM(:chr_l_status_started);
+
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND, "BATCH_IN_PROC", chr_l_progname, chr_l_key);
+		
+		EXEC SQL COMMIT WORK;
+
+		IS_ANY_ORA_ERROR
+
+		CO_ProcMonitor(l_ptr_logfile, "Direct Debit Payment Generation is completed successfully \n", NULL, NULL);
+		CO_Proc_RptClose(l_ptr_logfile,l_debug_info_ptr);	
+		fclose(l_ptr_inifile);
+
+		exit(0);
+	}
+	
+	RETURN_FAILURE:
+	{
+                //ISKB_430_02_07 Chgs
+		EXEC SQL UPDATE SYS_BATCHPROC
+			SET PROCESSING_STATUS = 'failed'
+			WHERE PROCESS_NAME = RTRIM(:argv[0])
+				AND PROC_INIT = RTRIM(:argv[1])
+				AND STARTDATE = :argv[2]
+				AND USR = RTRIM(:argv[3])
+				AND STATUS = RTRIM(:chr_l_status_started);
+		EXEC SQL COMMIT WORK;
+
+		if(sqlca.sqlcode != 0)
+		{
+			memset(chr_l_buf, APL_NULL_CHAR, TEMP_BUFF_LEN);
+			sprintf(chr_l_buf, " Could not commit the record. Error Ocuured %d \n", sqlca.sqlcode);
+			CO_ProcMonitor(l_ptr_logfile, chr_l_buf, NULL, NULL);
+		}
+		CO_ProcMonitor(l_ptr_logfile, "Direct Debit Payment Generation returned  with failure \n", NULL, NULL);
+		CO_Proc_RptClose(l_ptr_logfile,l_debug_info_ptr);	
+		fclose(l_ptr_inifile);
+		exit(-1);
+	}
+
+}
+
+
+
+int IV_Mod_DirDebPayGen(char **argv, FILE *p_ptr_logfile, INTL_ENV_DATA_STRUCT_H *p_intl_env_data_struct_h_e, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	Alert("Inside IV_Mod_DirDebPayGen");
+	struct sqlca			sqlca;
+
+	FILE	*l_payment_report	=	NULL;
+	FILE	*l_error_report	=	NULL;
+	FILE	*l_ptr_inifile		=	NULL;
+
+	char	chr_l_inifile_name[PATH_LENGTH]	=	APL_NULL_STRING;
+	char	chr_l_buf[TEMP_BUFF_LEN]					=	APL_NULL_STRING;
+	char	chr_l_client_a[APL_CLIENT_LENGTH]		=	APL_NULL_STRING;
+	char	chr_l_ccycode[APL_CCYCODE_LEN]		=	APL_NULL_STRING;
+	char	int_l_status[APL_FLAG_LENGTH]			=	APL_NULL_STRING;
+	char	chr_l_acc_status[APL_STATUS_LEN]	=	APL_NULL_STRING;
+	char	chr_l_sysdate_b[APL_DATE_LEN]			=	APL_NULL_STRING;
+	char	chr_l_prevbusdate[APL_DATE_LEN]	=	APL_NULL_STRING;
+	char	chr_l_yesterday[APL_DATE_LEN]		=	APL_NULL_STRING;
+	char	chr_l_sysdatetime_A[APL_DATE_LEN]	=	APL_NULL_STRING;
+	char	chr_l_ac_pay1[APL_CLIENT_LENGTH]		=	APL_NULL_STRING;
+	char	chr_l_ac_pay2[APL_CLIENT_LENGTH]		=	APL_NULL_STRING;
+	char	chr_l_pay_ac[APL_FLAG_LENGTH]			=	APL_NULL_STRING; 
+	char	chr_l_blacc_chkr[APL_USERID_LEN]	=	APL_NULL_STRING;
+	char	chr_l_sysdate_dd[3]					=	APL_NULL_STRING;
+	char	chr_l_sysdate_mm[3]					=	APL_NULL_STRING;
+	char	chr_l_sysdate_yyyy[5]					=	APL_NULL_STRING;
+	char	*chr_l_last								=	(char *)NULL;
+	char	chr_l_rec_ac[APL_CLIENT_LENGTH_GL]		=	APL_NULL_STRING; /* Bageshri */
+        char    chr_l_pymt_acc[APL_CLIENT_LENGTH_GL]      =  APL_NULL_STRING; /* Bageshri */
+	char	chr_l_dir_db_date[3]		=	APL_NULL_STRING;
+	char	chr_l_prvbusdate_dd[3]					=	APL_NULL_STRING; /***************/
+
+	double	l_tot_os_amount	=	0.0;
+	double	l_exchgrt		=	0.0;
+	double	l_YrlyPymt		=	0.0;
+//shailesh ISKB_430_02  ISKB_430_07
+	char chr_l_bill_date[APL_DATE_LEN]	=	APL_NULL_STRING;
+	char l_chr_bill_date[APL_DATE_LEN]	=	APL_NULL_STRING;
+
+	IV_CHEQUE_STRUCT	l_iv_cheque_struct;
+	IV_CLIENTSETUP_STRUCT	l_iv_cltsetup_struct;
+	DEBUG_INFO_STRUCT_H		*l_debuginfo	=	NULL;
+
+	int	int_retval					=	0;
+	int	int_l_pay_gen_day			=	0;
+	int	int_l_page_pay				=	0;
+	int	int_l_line_pay				=	0;
+	int	int_l_page_err				=	0;
+	int	int_l_line_err				=	0;
+	int	int_l_unauth_adj_exist	=	0;
+	int	int_l_count					=	0;
+	int   int_l_dir_db_day        =  0; /* Bageshri */
+	int   int_l_pay_gen_day_prv   =  0; /* Bageshri */
+
+	short	i_dl_client		=	0;
+	short	i_currencycode		=	0;
+	short i_status_ind			=	0;
+	short	i_tot_os_amount	=	0;
+	short	i_clt_status	=	0;
+	short	i_ac_pymt1		=	0;
+	short	i_ac_pymt2		=	0;
+	short i_blacc_chkr	=	0;
+	short i_rec_clt			=	0;
+	short i_dir_db_date			=	0;
+	short i_pymt_acc			=	0;
+
+	int l_int_inden_num =0;//shailesh ISKB_430_02  ISKB_430_07
+	double l_dbl_conf_amt =0;
+	double l_dbl_conf_amt_1 =0;
+	double l_dbl_bill_amt =0;
+
+	EXEC SQL VAR l_iv_cheque_struct.client	IS STRING;
+	EXEC SQL VAR l_iv_cheque_struct.pymt_clt 	IS STRING;
+	EXEC SQL VAR chr_l_ac_pay1				IS STRING;
+	EXEC SQL VAR chr_l_ac_pay2				IS STRING;
+	EXEC SQL VAR chr_l_client_a				IS STRING;
+	EXEC SQL VAR chr_l_ccycode				IS STRING;
+	EXEC SQL VAR int_l_status				IS STRING;
+	EXEC SQL	VAR chr_l_acc_status			IS STRING;
+	EXEC SQL	VAR chr_l_ac_pay1				IS STRING;
+	EXEC SQL VAR chr_l_ac_pay2				IS STRING;
+	EXEC SQL VAR chr_l_blacc_chkr			IS STRING;
+	EXEC SQL VAR chr_l_rec_ac				IS STRING;
+        EXEC SQL VAR chr_l_pymt_acc            IS STRING;	
+	EXEC SQL VAR chr_l_dir_db_date				IS STRING;
+	
+
+	CO_ProcMonitor(p_ptr_logfile, " Entered the processtion IV_Mod_DirDebPayGen. \n", NULL, p_intl_env_data_struct_h_e);
+	
+	
+	sqlca.sqlcode = 0;
+	
+	
+	strcpy(chr_l_inifile_name, getenv("INTL_ROOT_PATH"));
+	strcat(chr_l_inifile_name, "intl_sun.cfg");	
+	if( NULL == (l_ptr_inifile = fopen(chr_l_inifile_name, "r")))
+	{
+		APL_GOBACK_FAIL
+	}
+	
+	
+	int_retval = CO_Rtv_RptFileName("PG", "Payment Generation Report", 80, p_intl_env_data_struct_h_e->processtion, argv, &l_payment_report, l_debug_info_ptr);
+
+	int_l_page_pay++;
+	int_retval = IV_WrtPymtRptHdr(l_payment_report, int_l_page_pay, p_ptr_logfile, p_intl_env_data_struct_h_e, l_debug_info_ptr);
+	if (int_retval != APL_SUCCESS)
+   	APL_GOBACK_FAIL
+
+	int_l_line_pay = 4;
+
+	
+	int_retval = CO_Rtv_RptFileName("EP", "Error Report in Payment Generation", 80, p_intl_env_data_struct_h_e->processtion, argv, &l_error_report, l_debug_info_ptr);
+
+	int_l_page_err++;
+	int_retval = IV_WrtErrRptHdr(l_error_report,int_l_page_err, p_ptr_logfile,p_intl_env_data_struct_h_e,l_debug_info_ptr);
+	if (int_retval != APL_SUCCESS)
+   	APL_GOBACK_FAIL
+
+	int_l_line_err = 4;
+
+	if(APL_SUCCESS != CO_RtvSysDtTime(chr_l_sysdatetime_A, l_debug_info_ptr))
+	{
+		CO_ProcMonitor(p_ptr_logfile, "Error in getting System Date Time", NULL, p_intl_env_data_struct_h_e);
+		APL_GOBACK_FAIL
+	}
+
+	strcpy(chr_l_sysdate_b, chr_l_sysdatetime_A);
+	strcpy(chr_l_buf, strtok(chr_l_sysdate_b, " "));
+	strcat(chr_l_sysdate_b, APL_NULL_TIME);
+	strcpy(chr_l_sysdate_dd, strtok_r(chr_l_buf, "/", &chr_l_last));
+	strcpy(chr_l_sysdate_mm, strtok_r(NULL, "/", &chr_l_last));
+	strcpy(chr_l_sysdate_yyyy, strtok_r(NULL, "/", &chr_l_last));
+	
+	int_l_pay_gen_day = atoi(chr_l_sysdate_dd);
+	
+/* commented by Bageshri ( if client level direct debit is not set then sysem level direct debit date is used )
+ * so validations are done using cursor dirdbcus */
+
+	/*if(int_l_pay_gen_day < l_invoice_systemparam_struct_h.pymt_gen_date)
+	{
+		memset(chr_l_buf, APL_NULL_CHAR, TEMP_BUFF_LEN);
+		sprintf(chr_l_buf, "Payment Generation not due today. \n Payment Generation Day is :%d: \n System Date is :%d:\n", 
+			int_l_pay_gen_day, l_invoice_systemparam_struct_h.pymt_gen_date);
+		CO_ProcMonitor(p_ptr_logfile, chr_l_buf, NULL, p_intl_env_data_struct_h_e);
+		APL_GOBACK_SUCCESS
+	}
+	else if(int_l_pay_gen_day > l_invoice_systemparam_struct_h.pymt_gen_date)
+	{*/
+		EXEC SQL SELECT SYS_DATE - 1 INTO :chr_l_yesterday FROM PRO_SYS_DATE;
+
+		IS_ANY_ORA_ERROR
+
+		strcpy(chr_l_yesterday, strtok(chr_l_yesterday, " "));
+		strcat(chr_l_yesterday, APL_NULL_TIME);
+
+		if(MS_Rtv_NxtBussDtSch(chr_l_yesterday, chr_l_prevbusdate, l_debug_info_ptr)==APL_FAILURE)
+   	{
+      	APL_GOBACK_FAIL
+   	}
+		strcpy(chr_l_buf, strtok(chr_l_prevbusdate, " "));
+		strcpy(chr_l_prvbusdate_dd, strtok_r(chr_l_buf, "/", &chr_l_last));
+
+   	int_l_pay_gen_day_prv = atoi(chr_l_prvbusdate_dd); /* Bageshri */
+
+	/*	strcpy(chr_l_sysdate_dd, strtok_r(chr_l_buf, "/", &chr_l_last));
+   	int_l_pay_gen_day = atoi(chr_l_sysdate_dd);
+		if(int_l_pay_gen_day >= l_invoice_systemparam_struct_h.pymt_gen_date)
+		{
+			memset(chr_l_buf, APL_NULL_CHAR, TEMP_BUFF_LEN);
+			sprintf(chr_l_buf, "Payment Generation not due today. \n Payment Generation Day is :%d: \n Previous Business Day is :%d:\n", 
+						l_invoice_systemparam_struct_h.pymt_gen_date, int_l_pay_gen_day);
+			CO_ProcMonitor(p_ptr_logfile, chr_l_buf, NULL, p_intl_env_data_struct_h_e);
+			APL_GOBACK_SUCCESS
+		}
+	}*/
+
+	/***** For India specific By : vinay kalaskar  **************/
+	
+	IF_COND_EXISTS("IV_ACC_CLIENT","FUND_ACC")
+	{
+		EXEC SQL SELECT PAYACC,PAY1ACC,CHECKER 
+					INTO :chr_l_ac_pay1:i_ac_pymt1, 
+						  :chr_l_ac_pay2:i_ac_pymt2, 
+						  :chr_l_blacc_chkr:i_blacc_chkr				
+					FROM IV_CLIENTGL;
+		
+		IS_ANY_ORA_ERROR
+
+	}
+	else
+	{
+		
+		EXEC SQL SELECT PAYACC_A, PAYACC_B, CHECKER
+			INTO :chr_l_ac_pay1:i_ac_pymt1, :chr_l_ac_pay2:i_ac_pymt2, :chr_l_blacc_chkr:i_blacc_chkr
+			FROM IV_CLIENT;
+
+		IS_ANY_ORA_ERROR
+	}
+	
+	if(-1 == i_blacc_chkr)
+	{
+		CO_ProcMonitor(p_ptr_logfile, "Billing Accounts are not Authorised hence Payment Generation will abort.\n", NULL, p_intl_env_data_struct_h_e);
+		APL_GOBACK_FAIL
+	}
+
+	if((-1 == i_ac_pymt1) && (-1 == i_ac_pymt2))
+	{
+		CO_ProcMonitor(p_ptr_logfile, "Both the Payment Accounts are null hence Payment Generation will abort.\n", NULL, p_intl_env_data_struct_h_e);
+		APL_GOBACK_FAIL
+	}	
+		
+	Alert("Before Cursor dirdbcus");
+	/* Cursor to fetch clients for direct debit Payment */
+	Alert("  --  sys day |%d| prev day |%d|",int_l_pay_gen_day,int_l_pay_gen_day_prv);	
+	
+
+
+	EXEC SQL DECLARE dirdbcus CURSOR FOR
+		SELECT A.CLIENT, A.B_CCYCD, A.STAT_IND, A.TOTAL_OSAMOUNT, B.STATUS, A.REC_CLT, A.DIR_DB_DATE
+		FROM IV_CLIENTSETUP A, MT_CLIENT B
+		WHERE A.CLIENT = B.CLN_CODE
+			AND DIR_DB_IND = 'Y'
+			AND B_GEN_IND = 'S'
+			AND (TOTAL_OSAMOUNT IS NOT NULL AND TOTAL_OSAMOUNT > 0)
+		ORDER BY A.CLIENT;
+
+
+	EXEC SQL OPEN dirdbcus;
+
+	IS_ANY_ORA_ERROR;
+	
+	for(;;)
+	{
+
+		memset(chr_l_client_a, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+		memset(chr_l_ccycode, APL_NULL_CHAR, APL_CCYCODE_LEN);
+		memset(int_l_status, APL_NULL_CHAR, APL_FLAG_LENGTH);
+		memset(chr_l_acc_status, APL_NULL_CHAR, APL_STATUS_LEN);
+		memset(chr_l_rec_ac, APL_NULL_CHAR, APL_CLIENT_LENGTH_GL);
+		memset(chr_l_dir_db_date, APL_NULL_CHAR, 3);
+
+		l_tot_os_amount = 0.0;
+	
+		EXEC SQL FETCH dirdbcus INTO 
+		:chr_l_client_a:i_dl_client, :chr_l_ccycode:i_currencycode, :int_l_status:i_status_ind, 
+		:l_tot_os_amount:i_tot_os_amount, :chr_l_acc_status:i_clt_status, :chr_l_rec_ac:i_rec_clt,
+		:chr_l_dir_db_date:i_dir_db_date;
+
+		//ISKB_430_02_07 Chgs
+		if(sqlca.sqlcode == 1403)
+		{
+		Alert("\n no more client for processing of direct debit");
+		break;
+		}
+
+		int_l_count++;
+
+		/* Bageshri for direct debit date at client level preferred over system level */
+
+		if(i_dir_db_date == -1)
+			int_l_dir_db_day = l_invoice_systemparam_struct_h.pymt_gen_date;
+		else
+			int_l_dir_db_day = atoi(chr_l_dir_db_date);
+
+
+		if(int_l_pay_gen_day < int_l_dir_db_day)
+		{
+			memset(chr_l_buf, APL_NULL_CHAR, TEMP_BUFF_LEN);
+			sprintf(chr_l_buf, "Payment Generation for client %s not due today. \n Payment Generation Day is :%d: \n System Date is :%d:\n", chr_l_client_a, int_l_dir_db_day, int_l_pay_gen_day );
+			CO_ProcMonitor(p_ptr_logfile, chr_l_buf, NULL, p_intl_env_data_struct_h_e);
+			continue;
+		}
+		else if(int_l_pay_gen_day > int_l_dir_db_day)
+		{
+			if(int_l_pay_gen_day_prv >= int_l_dir_db_day)
+			{
+				memset(chr_l_buf, APL_NULL_CHAR, TEMP_BUFF_LEN);
+				sprintf(chr_l_buf, "Payment Generation for client %s not due today. \n Payment Generation Day is :%d: \n Previous Business Day is :%d:\n", chr_l_client_a, int_l_dir_db_day, int_l_pay_gen_day);
+				CO_ProcMonitor(p_ptr_logfile, chr_l_buf, NULL, p_intl_env_data_struct_h_e);
+				continue;
+			}
+		}
+
+		/****************************************************/
+		EXEC SQL SELECT COUNT(*) 
+			INTO :int_l_unauth_adj_exist 
+			FROM IV_CHEQUE
+			WHERE CLIENT = :chr_l_client_a
+				AND STATUS != 'A';
+
+		IS_ANY_ORA_ERROR
+		if(int_l_unauth_adj_exist)
+		{
+			int_retval = IV_WrtErrRptDet(l_error_report, chr_l_client_a, "Unauthorised Payments Exist", p_ptr_logfile, p_intl_env_data_struct_h_e, l_debug_info_ptr);
+			if (int_retval != APL_SUCCESS)
+         	APL_GOBACK_FAIL
+
+			int_l_line_err++;
+			if(int_l_line_err == REPORT_PAGE_LEN)
+			{	
+				int_l_page_err++;
+				int_retval = IV_WrtErrRptHdr(l_error_report,int_l_page_err, p_ptr_logfile,p_intl_env_data_struct_h_e,l_debug_info_ptr);
+				if (int_retval != APL_SUCCESS)
+            	APL_GOBACK_FAIL
+
+				int_l_line_err = 4;
+			}
+			
+			continue;
+		}
+
+		if(0 != strcmp(chr_l_acc_status, "AA"))
+		{
+			memset(chr_l_buf, APL_NULL_CHAR, TEMP_BUFF_LEN);
+			sprintf(chr_l_buf, "Account Details for :%s: are not authorised. \n", chr_l_client_a);
+			CO_ProcMonitor(p_ptr_logfile, chr_l_buf, NULL, p_intl_env_data_struct_h_e);
+			int_retval = IV_WrtErrRptDet(l_error_report, chr_l_client_a, "Account Not Authorised", p_ptr_logfile, p_intl_env_data_struct_h_e, l_debug_info_ptr);
+         if (int_retval != APL_SUCCESS)
+            APL_GOBACK_FAIL
+
+         int_l_line_err++;
+			if(int_l_line_err == REPORT_PAGE_LEN)
+			{	
+				int_l_page_err++;
+				int_retval = IV_WrtErrRptHdr(l_error_report,int_l_page_err, p_ptr_logfile,p_intl_env_data_struct_h_e,l_debug_info_ptr);
+				if (int_retval != APL_SUCCESS)
+            	APL_GOBACK_FAIL
+
+				int_l_line_err = 4;
+			}
+			
+			continue;
+		}
+
+		if(int_l_status[0] != 'A')
+		{
+			memset(chr_l_buf, APL_NULL_CHAR, TEMP_BUFF_LEN);
+			sprintf(chr_l_buf, "Customer Setup Details  for :%s: are not authorised. \n", chr_l_client_a);
+			CO_ProcMonitor(p_ptr_logfile, chr_l_buf, NULL, p_intl_env_data_struct_h_e);
+			int_retval = IV_WrtErrRptDet(l_error_report, chr_l_client_a, "Customer Billing Setup Details Not Authorised", p_ptr_logfile, 
+															p_intl_env_data_struct_h_e, l_debug_info_ptr);
+         if (int_retval != APL_SUCCESS)
+            APL_GOBACK_FAIL
+
+         int_l_line_err++;
+			if(int_l_line_err == REPORT_PAGE_LEN)
+			{	
+				int_l_page_err++;
+				int_retval = IV_WrtErrRptHdr(l_error_report,int_l_page_err, p_ptr_logfile,p_intl_env_data_struct_h_e,l_debug_info_ptr);
+				if (int_retval != APL_SUCCESS)
+            	APL_GOBACK_FAIL
+
+				int_l_line_err = 4;
+			}
+			
+			continue;
+		}
+
+		int_retval = 0;
+		if ( APL_FAILURE == IV_Mod_ConvToFxFnDir(chr_l_ccycode, l_invoice_systemparam_struct_h.b_ccy, g_mt_commonsys_params_struct_h.dom_ccy, 
+                   								chr_l_sysdate_b, &l_exchgrt, &int_retval, l_debug_info_ptr) )
+   	{
+			CO_ProcMonitor(p_ptr_logfile, "Error in gettting exchange rate", NULL, p_intl_env_data_struct_h_e);
+      	APL_GOBACK_FAIL
+   	}
+		if(IV_NO_DATA_FOUND_ERR == int_retval)
+		{
+			memset(chr_l_buf, APL_NULL_CHAR, TEMP_BUFF_LEN);
+			sprintf(chr_l_buf, "Exchage Rate doesn't exist between From Currency :%s: and To Currency :%s: and \nAccount :%s:", 
+							chr_l_ccycode, l_invoice_systemparam_struct_h.b_ccy, chr_l_client_a); 
+			CO_ProcMonitor(p_ptr_logfile, chr_l_buf, NULL, p_intl_env_data_struct_h_e);
+			int_retval = IV_WrtErrRptDet(l_error_report, chr_l_client_a, "Exchage Rate Not Found", p_ptr_logfile, p_intl_env_data_struct_h_e, l_debug_info_ptr);
+         if (int_retval != APL_SUCCESS)
+            APL_GOBACK_FAIL
+
+         int_l_line_err++;
+			if(int_l_line_err == REPORT_PAGE_LEN)
+			{	
+				int_l_page_err++;
+				int_retval = IV_WrtErrRptHdr(l_error_report,int_l_page_err, p_ptr_logfile,p_intl_env_data_struct_h_e,l_debug_info_ptr);
+				if (int_retval != APL_SUCCESS)
+            	APL_GOBACK_FAIL
+
+				int_l_line_err = 4;
+			}
+			
+			continue;
+		}
+		
+		memset(&l_iv_cheque_struct, APL_NULL_CHAR, sizeof(IV_CHEQUE_STRUCT));
+
+		strcpy(l_iv_cheque_struct.client, chr_l_client_a);
+		strcpy(l_iv_cheque_struct.dateof_payment, chr_l_sysdate_b);
+		l_iv_cheque_struct.inden_num = 0;
+		strcpy(l_iv_cheque_struct.b_ccycd, chr_l_ccycode);
+		l_iv_cheque_struct.conf_amt = l_tot_os_amount;
+		l_iv_cheque_struct.pay_seq = 0;
+		strcpy(l_iv_cheque_struct.maker, "SYSTEM");
+		strcpy(l_iv_cheque_struct.maker_dt, chr_l_sysdate_b);
+                strcpy(l_iv_cheque_struct.tds_amt,APL_NULL_STRING); /* Bageshri */
+		l_iv_cheque_struct.status_pymt = l_invoice_systemparam_struct_h.status_pymt[0];
+
+		int_retval = 0;
+
+	/***** For India specific By : vinay kalaskar ******************/
+		
+	IF_COND_EXISTS("IV_ACC_CLIENT","FUND_ACC")
+	{
+                 memset(chr_l_pymt_acc, APL_NULL_CHAR, APL_CLIENT_LENGTH_GL); /* Bageshri */
+
+		 EXEC SQL SELECT PYMT_ACC 
+			 		 INTO :chr_l_pymt_acc 
+					 FROM IV_CLIENTSETUP 
+			 		 WHERE CLIENT=:chr_l_client_a;
+		 
+		 IS_ANY_ORA_ERROR
+		strcpy(l_iv_cheque_struct.pymt_clt, chr_l_pymt_acc);
+	}
+	else 
+	{
+		if(APL_FAILURE == IV_Chk_PymtAcc(1, chr_l_ccycode, &int_retval, l_debug_info_ptr) )
+		{
+			l_debug_info_ptr = &l_debuginfo;
+			l_debuginfo = (DEBUG_INFO_STRUCT_H *) NULL;
+			int_retval = 0;
+			if ( APL_FAILURE == IV_Chk_PymtAcc(2, chr_l_ccycode, &int_retval, l_debug_info_ptr) )
+			{
+				l_debug_info_ptr = &l_debuginfo;
+				l_debuginfo = (DEBUG_INFO_STRUCT_H *) NULL;
+				int_retval = IV_WrtErrRptDet(l_error_report, chr_l_client_a, "Payment Currency Doesn't Match Billing Currency", p_ptr_logfile, 
+																p_intl_env_data_struct_h_e, l_debug_info_ptr);
+         	if (int_retval != APL_SUCCESS)
+            	APL_GOBACK_FAIL
+
+         	int_l_line_err++;
+				if(int_l_line_err == REPORT_PAGE_LEN)
+				{	
+					int_l_page_err++;
+					int_retval = IV_WrtErrRptHdr(l_error_report,int_l_page_err, p_ptr_logfile,p_intl_env_data_struct_h_e,l_debug_info_ptr);
+					if (int_retval != APL_SUCCESS)
+            		APL_GOBACK_FAIL
+
+					int_l_line_err = 4;
+				}
+				continue;
+			}
+			else
+			{
+				strcpy(chr_l_pay_ac, "2");
+			}
+		}
+		else
+		{
+			strcpy(chr_l_pay_ac, "1");
+		}
+		strcpy(l_iv_cheque_struct.pymt_clt, chr_l_pay_ac);
+	}
+		strcpy(l_iv_cheque_struct.adjust_entry, "N");
+		
+		int_retval = 0;
+				
+
+		//shailesh 26-11-2007 The below code is added to  populate the IV_CHEQUE structure with 
+		//inden_num,bill_date,pymt_ind,bill_amt,conf_amt
+                //shailesh ISKB_430_02  ISKB_430_07
+
+
+		EXEC SQL SELECT   TO_CHAR(MAX(DATEOF_BILLING),'DD/MM/YYYY')  INTO :l_chr_bill_date
+				FROM IV_SERVICE_CHRG WHERE CLIENT = :chr_l_client_a 
+				AND  DATEOF_BILLING<=(SELECT SYS_DATE FROM PRO_SYS_DATE);
+
+		if(sqlca.sqlcode != 0)
+		{
+			Alert("\n Unable to fetch billing date for client [%s]",chr_l_client_a);
+			APL_GOBACK_FAIL
+		}
+		strcpy(l_iv_cheque_struct.bill_date,l_chr_bill_date);
+
+		if(APL_FAILURE == IV_GetIndenNum(chr_l_client_a,
+										 l_chr_bill_date,
+										 chr_l_sysdate_b,
+										 'T',
+										  0,
+										  &l_int_inden_num,	
+										  &int_retval, l_debug_info_ptr))
+		{
+			Alert("\n Unable to get INDEN_NUM for client [%s]",chr_l_client_a);
+			APL_GOBACK_FAIL
+		}
+		
+		l_iv_cheque_struct.inden_num = l_int_inden_num;
+		l_iv_cheque_struct.pymt_ind = 'D';
+			
+
+		if(APL_FAILURE ==  IV_Calc_BillAmt(chr_l_client_a,l_chr_bill_date,&l_dbl_conf_amt,
+							&l_dbl_conf_amt_1,&l_dbl_bill_amt,
+							&int_retval, l_debug_info_ptr))
+		{
+
+		Alert("\n unable to calculate the bill amount for client [%s]",chr_l_client_a);
+		APL_GOBACK_FAIL
+		}
+		l_iv_cheque_struct.bill_amt = l_dbl_bill_amt;
+
+		l_iv_cheque_struct.conf_amt = l_iv_cheque_struct.bill_amt;
+
+		//checking whether payment is already done
+		int l_int_t_pymt_exist = 0;
+		int l_int_s_pymt_exist = 0;
+		if (APL_FAILURE == IV_IVPymt_T_Exist(chr_l_client_a, 					   
+											l_chr_bill_date,
+											&l_int_t_pymt_exist,
+	                                        &int_retval, l_debug_info_ptr))
+		{
+		int_retval = IV_CRITCAL_ERROR_IND;
+		APL_GOBACK_FAIL
+		}
+		if(l_int_t_pymt_exist)
+			{
+
+			Alert("payment already done by [%s] for this billing date  in total mode \n",chr_l_client_a);
+			continue;
+			}
+		
+		if (APL_FAILURE == IV_IVPymt_S_Exist(chr_l_client_a, 					   
+											l_chr_bill_date,
+											&l_int_s_pymt_exist,
+	                                        &int_retval, l_debug_info_ptr))
+		{
+		int_retval = IV_CRITCAL_ERROR_IND;
+
+		APL_GOBACK_FAIL
+		}
+		
+		if(l_int_s_pymt_exist)
+			{
+			Alert("\n Payment Mode by [%s] for this billing date is service-wise",chr_l_client_a);
+			continue;
+			}
+
+		Alert("\passed the pre payment check");
+		l_iv_cheque_struct.os_amt = 0;
+		l_iv_cheque_struct.tot_os_amt = 0;
+		l_iv_cheque_struct.service_cd =0;
+		Alert("Entering IV_Proc_MakeDirectDebitPymt");
+
+		if(APL_FAILURE == IV_Proc_MakeDirectDebitPymt(&l_iv_cheque_struct, &int_retval, l_debug_info_ptr))
+		{
+			APL_GOBACK_FAIL
+		}
+		
+	
+		
+		
+		int_retval = IV_WrtPymtRptDet(l_payment_report, chr_l_client_a, chr_l_rec_ac, l_tot_os_amount, p_ptr_logfile, p_intl_env_data_struct_h_e, l_debug_info_ptr);
+		if (int_retval != APL_SUCCESS)
+      	APL_GOBACK_FAIL
+
+		int_l_line_pay++;
+		if(int_l_line_pay == REPORT_PAGE_LEN)
+		{	
+			int_l_page_pay++;
+			int_retval = IV_WrtPymtRptHdr(l_payment_report, int_l_page_pay, p_ptr_logfile, p_intl_env_data_struct_h_e, l_debug_info_ptr);
+			if (int_retval != APL_SUCCESS)
+         	APL_GOBACK_FAIL
+			int_l_line_pay = 4;
+		}
+
+			/*
+		shailesh ISKB_430_02  ISKB_430_07
+		commented since not used ,as per changes made
+		if(0 == strcmp(l_invoice_systemparam_struct_h.status_pymt, "U"))
+		{
+			continue;
+		}
+
+		int_retval=0;
+		if(APL_FAILURE == IV_Rtv_IVCUSTSETUP(chr_l_client_a, &l_iv_cltsetup_struct, &int_retval, l_debug_info_ptr))
+		{
+			if ( int_retval == IV_CRITCAL_ERROR_IND )
+      	{
+				CO_ProcMonitor(p_ptr_logfile, "Error in getting Customer Setup details. \n", NULL, p_intl_env_data_struct_h_e);
+         	APL_GOBACK_FAIL
+      	}
+		}
+		strcpy(l_iv_cltsetup_struct.last_pymt_date, chr_l_sysdate_b);
+		strcpy(l_iv_cltsetup_struct.last_pymt_ccy, chr_l_ccycode);
+		l_iv_cltsetup_struct.total_osamount -= l_tot_os_amount;
+		l_iv_cltsetup_struct.last_pymt_amt = l_tot_os_amount;
+
+		int_retval=0;
+		Alert("Entering IV_Mod_IVBCUSTSETUPAmt");
+		
+		if(APL_FAILURE == IV_Mod_IVBCUSTSETUPAmt(&l_iv_cltsetup_struct, &int_retval, l_debug_info_ptr))
+		{
+			if ( int_l_status == IV_CRITCAL_ERROR_IND )
+      	{
+				CO_ProcMonitor(p_ptr_logfile, "Error in updating Customer Setup Details. \n", NULL, p_intl_env_data_struct_h_e);
+         	APL_GOBACK_FAIL
+      	}
+      	else if ( int_l_status == IV_NO_DATA_FOUND_ERR )
+      	{
+				CO_ProcMonitor(p_ptr_logfile, "Access Stamp Change Error. \n", NULL, p_intl_env_data_struct_h_e);
+         	APL_GOBACK_FAIL
+      	}
+		}
+
+		l_YrlyPymt = l_tot_os_amount * l_exchgrt;
+
+		int_retval = 0;
+		if ( APL_FAILURE == IV_Mod_BYRACT(atoi(chr_l_sysdate_yyyy), atoi(chr_l_sysdate_mm), 'P', l_YrlyPymt, 
+                 &int_l_status, l_debug_info_ptr) )
+   	{
+			CO_ProcMonitor(p_ptr_logfile, "Error in updating table BYRACT", NULL, p_intl_env_data_struct_h_e);
+      	APL_GOBACK_FAIL
+   	}
+
+
+	}
+
+	if(0 == int_l_count)
+	{
+		CO_ProcMonitor(p_ptr_logfile, "No records found.", NULL, p_intl_env_data_struct_h_e);
+	}
+	*/
+	}
+   APL_GOBACK_SUCCESS
+
+   RETURN_SUCCESS :
+   {
+		fclose(l_ptr_inifile);
+      CO_ProcMonitor(p_ptr_logfile, "Leaving Function IV_Mod_DirDebPayGen successfully \n", NULL, p_intl_env_data_struct_h_e);
+      return(APL_SUCCESS);
+   }
+
+   RETURN_FAILURE :
+   {
+		fclose(l_ptr_inifile);
+      CO_ProcMonitor(p_ptr_logfile, "Leaving Function IV_Mod_DirDebPayGen with failure. \n", NULL, p_intl_env_data_struct_h_e);
+      return(APL_FAILURE);
+   }
+}
+
+int IV_WrtPymtRptHdr(FILE *p_payment_report, int p_page_no, FILE *p_ptr_logfile, INTL_ENV_DATA_STRUCT_H *p_intl_env_data_struct_h_e, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	char	chr_l_sys_date[11]		=	APL_NULL_STRING;
+	char	chr_l_buf[TEMP_BUFF_LEN]	=	APL_NULL_STRING;
+
+	int	i	=	0;
+
+	EXEC SQL VAR chr_l_sys_date	IS STRING;
+
+	CO_ProcMonitor(p_ptr_logfile, "Entered processtion IV_WrtPymtRptHdr. \n", NULL, p_intl_env_data_struct_h_e);
+
+	if(APL_SUCCESS != CO_RtvSysDtTime(chr_l_sys_date, l_debug_info_ptr))
+   {
+      CO_ProcMonitor(p_ptr_logfile, "Error in getting System Date Time", NULL, p_intl_env_data_struct_h_e);
+      APL_GOBACK_FAIL
+   }
+
+	fprintf(p_payment_report, "\n");
+
+	memset(chr_l_buf, '-', REPORT_PAGE_LEN);
+	fprintf(p_payment_report, "%s\n", chr_l_buf);
+
+	fprintf(p_payment_report, " %19s DIRECT DR_FLAG PAYMENT GENERATION REPORT %11sPage %d \n"," ", " ", p_page_no);
+
+	fprintf(p_payment_report, " %-11s%-18s%20s \n", "CLIENT", "RECEIVING ACCOUNT", "PAYMENT AMOUNT");
+
+	memset(chr_l_buf, '-', REPORT_PAGE_LEN);
+	fprintf(p_payment_report, "%s\n", chr_l_buf);
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+	{
+		CO_ProcMonitor(p_ptr_logfile, "Leaving Function IV_WrtPymtRptHdr successfully. \n", NULL, p_intl_env_data_struct_h_e);
+		
+		return(APL_SUCCESS);
+	}
+
+	RETURN_FAILURE:
+	{
+		CO_ProcMonitor(p_ptr_logfile, "Leaving Function IV_WrtPymtRptHdr with failure. \n", NULL, p_intl_env_data_struct_h_e);
+		
+		return(APL_FAILURE);
+	}
+}
+
+int IV_WrtErrRptHdr(FILE *p_error_report, int p_page_no, FILE *p_ptr_logfile, INTL_ENV_DATA_STRUCT_H *p_intl_env_data_struct_h_e, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	char	chr_l_sys_date[11]		=	APL_NULL_STRING;
+	char	chr_l_buf[TEMP_BUFF_LEN]	=	APL_NULL_STRING;
+
+	int	i	=	0;
+
+	EXEC SQL VAR chr_l_sys_date	IS STRING;
+
+	CO_ProcMonitor(p_ptr_logfile, "Entered processtion IV_WrtErrRptHdr. \n", NULL, p_intl_env_data_struct_h_e);
+
+	if(APL_SUCCESS != CO_RtvSysDt(chr_l_sys_date, l_debug_info_ptr))
+   {
+      CO_ProcMonitor(p_ptr_logfile, "Error in getting System Date Time", NULL, p_intl_env_data_struct_h_e);
+      APL_GOBACK_FAIL
+   }
+
+	fprintf(p_error_report, "\n");
+
+	memset(chr_l_buf, '-', REPORT_PAGE_LEN);
+	fprintf(p_error_report, "%s\n", chr_l_buf);
+
+	fprintf(p_error_report, " %16s DIRECT DR_FLAG PAYMENT GENERATION ERROR REPORT %8sPage %d \n"," ", " ", p_page_no );
+
+	fprintf(p_error_report, " %-11s%-s \n", "CLIENT", "REAS");
+
+	memset(chr_l_buf, '-', REPORT_PAGE_LEN);
+	fprintf(p_error_report, "%s\n", chr_l_buf);
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+	{
+		CO_ProcMonitor(p_ptr_logfile, "Leaving Function IV_WrtErrRptHdr successfully. \n", NULL, p_intl_env_data_struct_h_e);
+		
+		return(APL_SUCCESS);
+	}
+
+	RETURN_FAILURE:
+	{
+		CO_ProcMonitor(p_ptr_logfile, "Leaving Function IV_WrtErrRptHdr with failure. \n", NULL, p_intl_env_data_struct_h_e);
+		
+		return(APL_FAILURE);
+	}
+}
+
+int IV_WrtPymtRptDet(FILE *p_payment_report, char *chr_p_client, char *p_rec_ac, double p_tot_os_amt, FILE *p_ptr_logfile, 
+											INTL_ENV_DATA_STRUCT_H *p_intl_env_data_struct_h_e, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	struct sqlca  sqlca;
+	
+	CO_ProcMonitor(p_ptr_logfile, "Entered processtion IV_WrtPymtRptDet. \n ", NULL, p_intl_env_data_struct_h_e);
+fprintf(p_payment_report, " %-11s%-25s%.5lf \n", chr_p_client, p_rec_ac, p_tot_os_amt); /* Bageshri */
+	/*fprintf(p_payment_report, " %-11s%-18s%.2lf \n", chr_p_client, p_rec_ac, p_tot_os_amt);*/
+
+	APL_GOBACK_SUCCESS
+
+   RETURN_SUCCESS:
+   {
+      CO_ProcMonitor(p_ptr_logfile, "Leaving Function IV_WrtPymtRptDet successfully. \n", NULL, p_intl_env_data_struct_h_e);
+      
+      return(APL_SUCCESS);
+   }
+
+   RETURN_FAILURE:
+   {
+      CO_ProcMonitor(p_ptr_logfile, "Leaving Function IV_WrtPymtRptDet with failure. \n", NULL, p_intl_env_data_struct_h_e);
+      
+      return(APL_FAILURE);
+   }
+
+}
+
+int IV_WrtErrRptDet(FILE *p_payment_report, char *chr_p_client, char *p_reason, FILE *p_ptr_logfile, INTL_ENV_DATA_STRUCT_H *p_intl_env_data_struct_h_e, 
+										DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	struct sqlca  sqlca;
+	
+	CO_ProcMonitor(p_ptr_logfile, "Entered processtion IV_WrtPymtRptDet. \n ", NULL, p_intl_env_data_struct_h_e);
+
+	fprintf(p_payment_report, " %-11s%-s \n", chr_p_client, p_reason);
+
+	APL_GOBACK_SUCCESS
+
+   RETURN_SUCCESS:
+   {
+      CO_ProcMonitor(p_ptr_logfile, "Leaving Function IV_WrtErrRptDet successfully. \n", NULL, p_intl_env_data_struct_h_e);
+      
+      return(APL_SUCCESS);
+   }
+
+   RETURN_FAILURE:
+   {
+      CO_ProcMonitor(p_ptr_logfile, "Leaving Function IV_WrtErrRptDet with failure. \n", NULL, p_intl_env_data_struct_h_e);
+      
+      return(APL_FAILURE);
+   }
+
+}
+
+int IV_Mod_ConvToFxFnDir(char *p_from_ccy, char *chr_p_to_ccy, char *p_dom_ccy, char *p_dt, double *p_rate, int *int_p_retstat, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+   EXEC SQL BEGIN DECLARE SECTION;
+
+   char 	chr_h_from_ccy[APL_CCYCODE_LEN]	=	APL_NULL_STRING;
+	char	chr_h_to_ccy[APL_CCYCODE_LEN]		=	APL_NULL_STRING;
+	char	chr_h_dom_ccy[APL_CCYCODE_LEN]		=	APL_NULL_STRING;
+   char 	chr_h_fx_quote;
+   char	chr_h_date[APL_DATE_LEN]	= APL_NULL_STRING;
+   double	h_exchg_rt 	=	1.0;
+   short		i_exch_rt  	= 	0;
+	short		i_fx_quote 		= 	0;
+   double	h_exchg_rate1 	= 	0.0;
+	double	h_exchg_rate2 	= 	0.0;
+   short 	i_exch_rate1  	= 	0;
+	short		i_exch_rate2 	= 	0;
+
+   EXEC SQL VAR chr_h_from_ccy IS STRING;
+   EXEC SQL VAR chr_h_to_ccy   IS STRING;
+   EXEC SQL VAR chr_h_dom_ccy  IS STRING;
+   EXEC SQL VAR chr_h_date  IS STRING;
+
+   EXEC SQL  END  DECLARE SECTION;
+
+   int int_indirect_flg   = 0;
+
+   struct sqlca sqlca;
+
+   #ifdef APL_THREADS
+      APL_SET_CONTEXT
+      EXEC SQL CONTEXT USE :my_ctx_local;
+   #endif
+
+   sqlca.sqlcode = 0;
+   chr_h_fx_quote  = APL_NULL_CHAR;
+	memset(chr_h_from_ccy,APL_NULL_CHAR, APL_CCYCODE_LEN);
+   memset(chr_h_to_ccy,  APL_NULL_CHAR, APL_CCYCODE_LEN);
+   memset(chr_h_dom_ccy, APL_NULL_CHAR, APL_CCYCODE_LEN);
+
+   strcpy(chr_h_from_ccy,p_from_ccy);
+   strcpy(chr_h_to_ccy,chr_p_to_ccy);
+   strcpy(chr_h_dom_ccy,p_dom_ccy);
+
+   EXEC SQL SELECT DIR_INDIR_FXQT_IND
+       INTO :chr_h_fx_quote:i_fx_quote
+          FROM MT_CORE_SYS_PARAMS;
+
+   IS_ANY_ORA_ERROR
+
+   if(i_fx_quote == -1)
+      chr_h_fx_quote = 'D';
+
+   if(chr_h_fx_quote == 'I')
+   {
+      strcpy(chr_h_from_ccy,chr_p_to_ccy);
+      strcpy(chr_h_to_ccy,p_from_ccy);
+   }
+
+   if(  ( (strcmp(chr_h_from_ccy,chr_h_dom_ccy) == 0) &&
+          (strcmp(chr_h_to_ccy,chr_h_dom_ccy)   == 0) )  ||
+          (strcmp(chr_h_from_ccy,chr_h_to_ccy)  == 0)   )
+   {
+      *p_rate = 1;
+      *int_p_retstat = IV_SUCCESS;
+      APL_GOBACK_SUCCESS;
+   }
+
+   if (strcmp(p_dt,APL_NULL_STRING) == 0)
+   {
+      if (APL_FAILURE == CO_RtvSysDt(chr_h_date,l_debug_info_ptr) )
+      {
+         *int_p_retstat = IV_CRITCAL_ERROR_IND;
+         APL_GOBACK_FAIL
+      }
+   }
+   else
+   {
+      strcpy(chr_h_date,p_dt);
+   }
+
+   if( (strcmp(chr_h_from_ccy,chr_h_dom_ccy) != 0) &&
+       (strcmp(chr_h_to_ccy,chr_h_dom_ccy)   != 0) )
+   {
+      EXEC SQL SELECT a.EXCHGRT/b.EXCHGRT
+      INTO :h_exchg_rt:i_exch_rt
+      FROM MT_EXCHRATE a,MT_EXCHRATE b
+      WHERE a.currency_cd   = :chr_h_from_ccy
+      AND b.currency_cd     = :chr_h_to_ccy
+		AND a.DENOM_CCY  = :chr_h_dom_ccy
+      AND b.DENOM_CCY  = :chr_h_dom_ccy
+      AND a.RATE_DATE         = (SELECT MAX(RATE_DATE)
+                           FROM MT_EXCHRATE
+                           WHERE CURRENCY_CD = :chr_h_from_ccy
+                           AND   RATE_DATE <= :chr_h_date)
+      AND b.RATE_DATE         = (SELECT MAX(RATE_DATE)
+                           FROM MT_EXCHRATE
+                           WHERE CURRENCY_CD = :chr_h_to_ccy
+                           AND   RATE_DATE <= :chr_h_date);
+   }
+   else
+   {
+      if(strcmp(chr_h_from_ccy,chr_h_dom_ccy) == 0)
+      {
+         strcpy(chr_h_from_ccy,chr_h_to_ccy);
+         int_indirect_flg = 1;
+      }
+      EXEC SQL SELECT EXCHGRT
+      INTO :h_exchg_rt:i_exch_rt
+      FROM MT_EXCHRATE
+      WHERE CURRENCY_CD     = :chr_h_from_ccy
+      AND DENOM_CCY = :chr_h_dom_ccy
+      AND RATE_DATE     = (SELECT MAX(RATE_DATE)
+                        FROM MT_EXCHRATE
+                        WHERE CURRENCY_CD = :chr_h_from_ccy
+                        AND   RATE_DATE <= :chr_h_date);
+   }
+   if(sqlca.sqlcode < 0 || APL_ZERO_RESULT_SET)
+   {
+      *int_p_retstat = IV_CRITCAL_ERROR_IND;
+   }
+
+   IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(DB_ERR_NO,chr_h_from_ccy,chr_h_to_ccy,APL_NULL_STRING);
+
+   if(i_exch_rt == -1)
+	{
+      h_exchg_rt = 0;
+		*p_rate = h_exchg_rt;
+		*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+	}
+	else if(int_indirect_flg == 1)
+      *p_rate = 1/h_exchg_rt;
+   else
+      *p_rate = h_exchg_rt;
+
+   *int_p_retstat = IV_SUCCESS;
+
+   APL_GOBACK_SUCCESS
+
+RETURN_SUCCESS:
+   APL_IF_DEBUG
+   {
+		CO_ProcMonitor(APL_OUT_FILE, "Exiting Successfully Out Of IV_Mod_ConvToFxFnDir\n", NULL, NULL);
+   }
+   return APL_SUCCESS;
+
+RETURN_FAILURE:
+   APL_IF_DEBUG
+   {
+      CO_ProcMonitor(APL_OUT_FILE, "Exiting Unsuccessfully Out Of IV_Mod_ConvToFxFnDir\n", NULL, NULL);
+   }
+   return APL_FAILURE;
+
+}

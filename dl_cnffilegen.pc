@@ -1,0 +1,4382 @@
+/*
+ *    COPYRIGHT NOTICE
+ *
+ *   Copyright 2016 Intellect Design Arena Limited. All rights reserved.
+ *
+ *   These materials are confidential and proprietary to
+ *    Intellect Design Arena Limited and no part of these materials should
+ *    be reproduced, published, transmitted or distributed in any form or
+ *    by any means, electronic, mechanical, photocopying, recording or
+ *    otherwise, or stored in any information storage or retrieval system
+ *    of any nature nor should the materials be disclosed to third parties
+ *    or used in any other manner for which this is not authorized, without
+ *    the prior express written authorization of Intellect Design Arena Limited.
+ */
+/*********************************************************************
+ *
+ * Module Name         :      DEAL PROCESSING
+ *
+ * File Name           :      dl_cnffilegen.pc
+ *
+ * Description         :      Confirmation File Generation
+ *
+ *
+ *
+ *            Version Control Block
+ *
+ * Date        Version     Author           Description        RFS No.
+ * ---------   --------  ---------------  ------------------   ---------
+ * 02/06/2015  1.1       supriya jadhav   Lien/Margin Automation ISKB_1493 
+ *************************************************************************/
+
+
+
+#include "stdio_64.h"
+#include "Intellect_Common.h"
+#include "Intellect_Interface.h"
+#include "DL_Interface.h"
+#include "BT_Common.h"
+#include "Intellect_Error.h"
+#include "CO_IndStructdef.h"
+#include "CO_OthStructdef.h"
+#include "CO_Commdef.h"
+
+EXEC SQL INCLUDE SQLCA.H;
+char *getPath1(DEBUG_INFO_STRUCT_H **) ;
+
+void writeCnfHeader_NSE(FILE *);
+/*
+void writeCnfDetails_NSE(FILE *,DL_EXCHGORD_UPLD_STRUCT_H *);
+*/
+/* changes by amish -- 30/10/2006 */
+int writeCnfDetails_NSE(FILE *,DL_EXCHGORD_UPLD_STRUCT_H *,DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+int writeCnfDetails_MCS(FILE *,DL_EXCHGORD_UPLD_STRUCT_H *,DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+int writeCnfDetailsOTR_MCS(FILE *,DL_EXCHGORD_UPLD_STRUCT_H *,DEBUG_INFO_STRUCT_H **l_debug_info_ptr);// MCS-SX OTR file generation- Manasi
+
+int gen_cnf_NSE_SLB(char *p_file_name,int p_file_link,char **argv,FILE *l_logfile,DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+#define OBG_HDR_SIGN "NSEC"
+#define OBG_HDR_FILE_SENT "1"
+#define OBG_HDR_GEN_PLACE "1"
+#define OBG_HDR_HP_CREATE_DT "   " // KS -- 3 Spaces
+#define OBG_HDR_HP_CREATE_TM "   " // KS -- 3 Spaces
+#define OBG_HDR_OTH_CREATE_DT "   " // KS -- 3 Spaces
+#define OBG_HDR_OTH_CREATE_TM "   " // KS -- 3 Spaces
+#define OBG_HDR_EXP_CREATE_DT "   " // KS -- 3 Spaces
+#define OBG_HDR_EXP_CREATE_TM "   " // KS -- 3 Spaces
+#define OBG_HDR_CHK_SUM "####" /* CHANGES BY AMISH - 24/10/2006 */
+#define OBG_HDR_FILLER1 "            " // KS --12 Spaces
+#define OBG_HDR_VER "3.6"    		// KS -- 3 Spaces
+#define OBG_HDR_FILLER2 "                                                         " // KS -- 57 Spaces
+
+#define OBG_DET_REC_TYP "P"
+#define OBG_DET_ACT_TYP "U"
+/* Tarkeshwar added for sequnce no wise file generation issue fix 20-Feb-2013 STARTS */
+#include <sys/types.h>
+#include <dirent.h>
+int getNextSeq(char *sFileName); 
+
+/* Tarkeshwar added for sequnce no wise file generation issue fix 20-Feb-2013 ENDS */
+
+
+
+int main(int argc,char **argv)  //AIX-Warnings Removal
+{
+struct sqlca sqlca;
+	
+	/***********	Variable Declaration Section	**********/
+	DEBUG_INFO_STRUCT_H **l_debug_info_ptr = (DEBUG_INFO_STRUCT_H **) NULL;
+	l_debug_info_ptr = (DEBUG_INFO_STRUCT_H **)calloc(1,sizeof(DEBUG_INFO_STRUCT_H *)); 
+
+	char  **temp = ( char **)NULL;	
+	int l_int_num = 0;
+	FILE *l_logfile = (FILE *)NULL;
+	FILE *p_logfile = NULL;
+
+    char l_exchange_code[4] = APL_NULL_STRING;
+	char l_file_name[40] = APL_NULL_STRING;
+
+	/***********	Data Base Connention	**********/
+
+	Alert("\n Calling CO_Get_DBConnect now .. \n");
+	fflush(stdout);
+	if(CO_Get_DBConnect(l_debug_info_ptr) == APL_FAILURE)
+	{
+		APL_GOBACK_FAIL
+	}
+	
+		Alert("\n sqlca.sqlcode is |%d|",sqlca.sqlcode);
+	if(sqlca.sqlcode)
+	{
+	//	APL_GOBACK_FAIL
+	}
+
+
+	/***********	Processing INPUT PARAMETERS	START	**********/
+	Alert("\n Calling CO_Rtv_RptFileName now .. \n");
+	fflush(stdout);
+	if (APL_FAILURE == CO_Rtv_RptFileName( "7g",
+				APL_LOGFILE_DESC,
+				100,
+				argv[5],
+				argv,
+				&l_logfile,
+				l_debug_info_ptr ) ) 
+	{
+		CO_ProcMonitor(l_logfile, "Failure from CO RTY:", NULL, NULL);
+		APL_GOBACK_FAIL
+	} 
+	/*********** Passed parameters from FE are Exchange Code, Settlment Number *********/
+	Alert("\n Calling CO_SplitStr now .. \n");
+	fflush(stdout);
+	if(APL_FAILURE == CO_SplitStr(argv[9],
+			';',
+			&l_int_num,&temp))
+	{
+		CO_ProcMonitor(l_logfile, "Failure from StrSplitFn", NULL, NULL);
+		APL_GOBACK_FAIL
+
+	}
+
+   if(l_int_num != 2)
+      {
+         printf("\n total no of arguments are |%d|", l_int_num);
+         CO_ProcMonitor(l_logfile, "Improper Number of arguements", l_debug_info_ptr, NULL);
+         /*CO_Proc_RptClose(l_logfile, &l_debug_info_ptr);*/
+         APL_GOBACK_FAIL
+      }
+
+   strcpy(l_exchange_code, temp[0]);
+   strcpy(l_file_name, temp[1]);
+   printf("\n Selected Exchange Code is  |%s|",l_exchange_code);
+
+/*   if(!strcmp(l_exchange_code,"NSE"))
+	{  
+	  if (CO_RtvSysDt(chr_l_sys_date, l_debug_info_ptr) == APL_FAILURE)
+				  APL_GOBACK_FAIL
+		EXEC SQL SELECT DL_CONF_SEQ.NEXTVAL,to_char(to_date(:chr_l_sys_date,'DD/MM/YYYY HH24:MI:SS'),'YYMMDD') INTO :l_conf_seq,:chr_l_sys_date FROM DUAL;
+		IS_ANY_ORA_ERROR
+	    strcpy(l_file_name,"N");
+	    strcat(l_file_name,chr_l_sys_date);
+	    strcat(l_file_name,ltoa(l_conf_seq));
+	}
+*/
+	/*************	Processing INPUT PARAMETERS	END	***************/
+	printf("\n Calling gen_cnf_file now Exchange Code=|%s| File Name=|%s|.. \n",l_exchange_code,l_file_name);
+	if(APL_FAILURE == gen_cnf_file(l_exchange_code,l_file_name,argv,l_logfile,l_debug_info_ptr))
+	{
+		CO_ProcMonitor(l_logfile, "gen_cnf_file returned failure", NULL, NULL);
+	
+	   CO_Proc_RptClose(l_logfile, &l_debug_info_ptr);
+		
+		APL_GOBACK_FAIL
+	}
+	printf("\n Done with gen_cnf_file ..\n");
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS :
+	if(BT_Status_Completed(argv[0],
+					argv[1],
+					argv[2],
+					l_debug_info_ptr)   ==  APL_FAILURE )
+		{
+			APL_GOBACK_FAIL
+		}
+		CO_Proc_RptClose(l_logfile, l_debug_info_ptr);
+
+		EXEC SQL COMMIT WORK;
+
+		if(sqlca.sqlcode != 0)APL_GOBACK_FAIL
+			exit(0);
+
+		RETURN_FAILURE    :
+/**		strcpy(l_debug_info_ptr,"Data Not Found");
+**/
+  /*** TUX : What is This ?????should be (*l_debug_info_ptr)->msg **/
+	Alert("Inside failure");
+		CO_Proc_RptClose(l_logfile, l_debug_info_ptr);
+		exit(-1);
+		 
+}
+
+int gen_cnf_file(char *p_exchange_code,char *p_file_name,char **argv,FILE *l_logfile,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+   int   l_file_link = 0;
+	short l_i_file_link = 0;
+
+   EXEC SQL SELECT FILELINKINFO INTO l_file_link:l_i_file_link
+	      FROM DL_ORD_SUMM WHERE FILE_NAME = :p_file_name;
+	printf("#A sqlca.sqlcode is |%d|\n",sqlca.sqlcode);
+   IS_ANY_ORA_ERROR;
+
+	printf("\n Inside gen_cnf_file now Exchange Code=|%s| File Name=|%s|.. \n",p_exchange_code,p_file_name);
+
+	/***************************** Changes For OTR ****************************************/
+	if (( strstr(p_file_name,"OTR") != NULL) || ( strstr(p_file_name,"OT") != NULL))
+	{
+		printf("\n Calling gen_cnf_file_OTR now File Name=|%s|, File Link=|%d|.. \n",p_file_name,l_file_link);
+		if(strstr(p_file_name,"MCX")!=NULL)
+			gen_cnf_file_MCS_OTR(p_file_name,l_file_link,argv,l_logfile,l_debug_info_ptr);
+		else
+		gen_cnf_file_OTR(p_file_name,l_file_link,argv,l_logfile,l_debug_info_ptr);
+	}/***************************** Changes For OTR ****************************************/
+	 /* SLB CHGS Ashish 03-04-2008 Start */
+   else if (( strstr(p_file_name,"SLB") != NULL) && (strcmp(p_exchange_code,"NSE") == 0))
+   {
+		Alert("\n Calling gen_cnf_NSE_SLB now File Name=|%s|, File Link=|%d|.. \n",p_file_name,l_file_link);
+		gen_cnf_NSE_SLB(p_file_name,l_file_link,argv,l_logfile,l_debug_info_ptr);
+   } 
+   /* SLB CHGS Ashish 03-04-2008 End */
+	else
+	{
+		if (strcmp(p_exchange_code,"NSE") == 0)
+		{
+			printf("\n Calling gen_cnf_file_NSE now File Name=|%s|, File Link=|%d|.. \n",p_file_name,l_file_link);
+			gen_cnf_file_NSE(p_file_name,l_file_link,argv,l_logfile,l_debug_info_ptr);
+		}
+		else if (strcmp(p_exchange_code,"BSE") == 0)
+		{
+			printf("\n Calling gen_cnf_file_BSE now File Name=|%s|, File Link=|%d|.. \n",p_file_name,l_file_link);
+			gen_cnf_file_BSE(p_file_name,l_file_link,argv,l_logfile,l_debug_info_ptr);
+		}
+		else if (strcmp(p_exchange_code,"MCS") == 0)
+		{
+			Alert("\n Calling gen_cnf_file_MCS now File Name=|%s|, File Link=|%d|.. \n",p_file_name,l_file_link);
+			gen_cnf_file_MCS(p_file_name,l_file_link,argv,l_logfile,l_debug_info_ptr);
+		}
+	} /***************************** Changes For OTR ****************************************/
+	
+	/*	
+	if (strcmp(p_exchange_code,"NSE") == 0)
+	{
+		gen_cnf_file_NSE(p_file_name,l_file_link,argv,l_logfile,l_debug_info_ptr);
+	}
+	else if (strcmp(p_exchange_code,"BSE") == 0)
+	{
+		gen_cnf_file_BSE(p_file_name,l_file_link,argv,l_logfile,l_debug_info_ptr);
+	}
+	*/
+   APL_GOBACK_SUCCESS
+   RETURN_SUCCESS :
+   {
+     printf("Exiting gen_cnf_file successfully\n");
+     return (APL_SUCCESS);
+   }
+   RETURN_FAILURE :
+   {
+     printf("Exiting gen_cnf_file unsuccessfully\n");
+     return (APL_FAILURE);
+   }
+
+}
+/* changes by amish - 30/10/2006 */
+int gen_cnf_file_BSE(char *p_file_name,int p_file_link,char **argv,FILE *l_logfile,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	//#define DATA_VALUE_SEPRTR           '^B'
+	char 	chr_l_downloadpath[200] = APL_NULL_STRING;
+	FILE 	*l_Download_File = (FILE *)NULL;
+
+	char 	chr_l_uploadpath[200] = APL_NULL_STRING;
+	FILE 	*l_Upload_File = (FILE *)NULL;
+
+	char 	chr_l_cnffilename[200] = APL_NULL_STRING;
+	char                 l_temp[1001] = APL_NULL_STRING;
+
+	int l_counter = 0;
+	int line_number = 0;
+	int l_no_records=0; /** IsolveID-250:AmitB:for NSE Binary Header Changes:10-04-2007  **/
+
+	INTL_REPT_STRUCT_H            *l_intl_rept_struct_ha  =NULL;
+
+/**	char   l_matched_flg[2] = APL_NULL_STRING;
+**/	char   l_matched_flg = APL_NULL_CHAR;
+	char   l_is_nodelv[2] = APL_NULL_STRING;
+	char                 l_new_line[1001] = APL_NULL_STRING;
+	char                 l_line[1001] = APL_NULL_STRING;
+	FILE *fp_cfg = (FILE *)NULL;
+	char l_cfg_filename[100];
+	char l_lien_reqd[2]=APL_NULL_STRING;
+
+	/*Added By Prateek on 13092016 for Optimization of BSE Confirmation file Generation - START*/
+	char l_order_no[26]=APL_NULL_STRING;
+	char l_client[13]=APL_NULL_STRING;
+	char l_buy_sell_flg[2]=APL_NULL_STRING;
+	char l_deal_ref[17]=APL_NULL_STRING;
+	char l_LienReqd[2]= APL_NULL_STRING;
+	char l_settl_no[12]= APL_NULL_STRING;
+	char l_mkt_type[12]= APL_NULL_STRING;
+	//char l_dl_ref_rpt[4001]= APL_NULL_STRING;
+	char l_dl_ref_rpt[32001]= APL_NULL_STRING; // added by akshay
+	char l_dl_ref_substr[20]= APL_NULL_STRING;
+	char l_dl_ref[20]= APL_NULL_STRING;
+	char l_lien_status[3]= APL_NULL_STRING;
+
+	const char *p1;
+	const char *p2;
+	char *res;
+
+
+
+
+	short i_l_order_no =0;
+	short i_l_client =0;
+	short i_l_buy_sell_flg =0;
+	short i_l_deal_ref =0;
+	short i_l_settl_no=0;
+	short i_l_LienReqd=0;
+	short i_l_dl_ref_substr=0;
+	short i_l_mkt_type=0;
+	short i_l_dl_ref_rpt=0;
+	short i_l_lien_status=0;
+
+
+	EXEC SQL VAR l_order_no IS STRING;
+	EXEC SQL VAR l_client IS STRING;
+	EXEC SQL VAR l_buy_sell_flg IS STRING;
+	EXEC SQL VAR l_deal_ref IS STRING;
+	EXEC SQL VAR l_LienReqd IS STRING;
+	EXEC SQL VAR l_settl_no IS STRING;
+	EXEC SQL VAR l_mkt_type IS STRING;
+	EXEC SQL VAR l_dl_ref IS STRING;
+	EXEC SQL VAR l_dl_ref_rpt IS STRING;
+	EXEC SQL VAR l_dl_ref_substr IS STRING;
+	EXEC SQL VAR l_lien_status IS STRING;
+	/*Added By Prateek on 13092016 for Optimization of BSE Confirmation file Generation - END*/
+
+	EXEC SQL VAR l_line IS STRING;
+	EXEC SQL VAR l_new_line IS STRING;
+
+	l_intl_rept_struct_ha   = (INTL_REPT_STRUCT_H *)calloc(1, sizeof(INTL_REPT_STRUCT_H));
+	APL_MALLOC_FAIL(l_intl_rept_struct_ha);
+	
+	/*
+	strcpy(chr_l_cnffilename,"BSE_CNF_FILE.TXT");
+	*/
+	strcpy(chr_l_cnffilename,p_file_name);
+	strcat(chr_l_cnffilename,".CNF");
+
+	printf("\n Inside gen_cnf_file_BSE now Upload File Name=|%s| File Link=|%d| cnf File Name=|%s|.. \n",p_file_name,p_file_link,chr_l_cnffilename);
+	
+
+	strcpy(l_cfg_filename,getenv("INTL_ROOT_PATH"));
+   strcat(l_cfg_filename,"/intl_sun.cfg");
+   APL_FUNCTION_ENTER(l_logfile)
+   fp_cfg = fopen(l_cfg_filename,"r");
+
+	  if(fp_cfg == (FILE *)NULL)
+   {
+		BT_IF_DEBUG
+	      fprintf(l_logfile, "Config File |%s|\n",l_cfg_filename);
+	BT_IF_DEBUG
+	      CO_ProcMonitor(l_logfile,"Failed To Open Config File",NULL,NULL);
+
+      APL_GOBACK_FAIL
+  }
+
+	if ( CO_ReadToken(fp_cfg,"INTL_UPL_PATH",chr_l_uploadpath,l_debug_info_ptr) == APL_FAILURE)
+      {
+         CO_ProcMonitor(l_logfile, "Failure From Retrieve Dir Path Of Upload", NULL, NULL);
+         APL_GOBACK_FAIL
+      }
+      strcat(chr_l_uploadpath,p_file_name);
+
+   if((l_Upload_File = fopen(chr_l_uploadpath,"r")) == NULL)
+	   {
+			printf("Could not open File |%s|",chr_l_uploadpath);
+	   	APL_GOBACK_FAIL;
+	   }
+	printf("\n Inside gen_cnf_file_BSE Opened Upload File now Upload File Name=|%s| .. \n",chr_l_uploadpath);
+
+	if ( CO_ReadToken(fp_cfg,"INTL_DWNLD_PATH",chr_l_downloadpath,l_debug_info_ptr) == APL_FAILURE)
+      {
+         CO_ProcMonitor(l_logfile, "Failure From Retrieve Dir Path Of Download", NULL, NULL);
+         APL_GOBACK_FAIL
+      }
+      strcat(chr_l_downloadpath,chr_l_cnffilename);
+
+   if((l_Download_File = fopen(chr_l_downloadpath,"w")) == NULL)
+	   {
+			printf("Could not open File |%s|",chr_l_downloadpath);
+	   	APL_GOBACK_FAIL;
+	   }
+	printf("\n Inside gen_cnf_file_BSE Opened Download File now Download File Name=|%s| .. \n",chr_l_downloadpath);
+
+	strcpy(l_intl_rept_struct_ha->report_name, chr_l_cnffilename);
+	strcpy(l_intl_rept_struct_ha->report_desc, APL_HOFF_FILE_DESC);
+	strcpy(l_intl_rept_struct_ha->report_date, argv[2]);
+	l_intl_rept_struct_ha->report_width = 100;
+	strcpy(l_intl_rept_struct_ha->task_desc, argv[5]);
+	strcpy(l_intl_rept_struct_ha->fe_be_ind, APL_BE_IND);
+	strcpy(l_intl_rept_struct_ha->usr, argv[3]);
+
+	
+	if (APL_FAILURE == CO_Proc_DBRptIns( l_intl_rept_struct_ha, l_debug_info_ptr))
+
+	{
+		APL_GOBACK_FAIL
+	}
+
+	printf("\n Now entring while loop to read records form File ...\n" );
+      while(!feof(l_Upload_File))
+		{
+			printf("\n Now Inside while loop to read records form File ..." );
+			memset(l_line,APL_NULL_CHAR,1001);
+			l_counter++;
+			line_number = l_counter;
+			fscanf(l_Upload_File, "%[^\n]\n",l_line);
+			l_line[strlen(l_line)] =APL_NULL_CHAR;
+			printf("\n After l_line ...|%d|",strlen(l_line));
+
+			memset(l_order_no, APL_NULL_CHAR,26);
+			memset(l_client, APL_NULL_CHAR,13);
+			memset(l_buy_sell_flg, APL_NULL_CHAR,2);
+			memset(l_deal_ref, APL_NULL_CHAR,17);
+			memset(l_LienReqd, APL_NULL_CHAR,2);
+			memset(l_settl_no, APL_NULL_CHAR,12);
+			memset(l_mkt_type, APL_NULL_CHAR,3);
+			//memset(l_dl_ref,APL_NULL_CHAR,20);
+			memset(l_dl_ref_rpt,APL_NULL_CHAR,32001);
+			memset(l_dl_ref_substr,APL_NULL_CHAR,20);
+			memset(l_lien_status,APL_NULL_CHAR,3);
+			
+
+			if(strlen(l_line)==0)
+				continue;
+
+				EXEC SQL SELECT nvl(MATCHED,'N'),nvl(IS_NODELV,'N'),ORDER_NO,CLIENT,BUY_SELL_FLG,DEAL_REF_NO ,SETTL_NO,MKT_TYPE
+				INTO :l_matched_flg,:l_is_nodelv,:l_order_no:i_l_order_no,:l_client:i_l_client,:l_buy_sell_flg:i_l_buy_sell_flg,
+					 :l_deal_ref:i_l_deal_ref,:l_settl_no:i_l_settl_no,:l_mkt_type:i_l_mkt_type FROM DL_EXCHGORD_UPLD
+				WHERE
+				FILELINKINFO = :p_file_link AND
+				ROWSEQUENCE = :line_number  AND
+				NVL(IS_NODELV,'N') !='Y'; /* changes by amish -- 24/10/2006 - it shld not pick No delv records here !! */
+
+				Alert("\n sqlca.sqlcode |%d|",sqlca.sqlcode);
+		
+			IS_ANY_ORA_ERROR;
+			if(sqlca.sqlcode ==1403)
+				continue;
+
+			/*Added By Prateek on 13092016 for Optimization of BSE Confirmation file Generation - START*/
+
+			if(strcmp(l_buy_sell_flg,"B")==0)
+			{
+				EXEC SQL SELECT GETCLIENTPARAMBYID('LIEN_MARK_REQD',:l_client)
+				INTO :l_LienReqd:i_l_LienReqd
+				FROM DUAL;
+
+				Alert("\n sqlca.sqlcode |%d|",sqlca.sqlcode);
+				Alert("\n Value of l_LienReqd for Client |%s| is |%s|",l_client,l_LienReqd);
+				IS_ANY_ORA_ERROR;
+
+				if(strcmp(l_LienReqd,"Y")==0)
+				{
+
+					if(strlen(l_deal_ref)==0)// Deal Reference Number in Exchange order table is null,so case of Many to many Matching
+					{
+
+						Alert("Deal Reference Number in Exchange order table is null,so case of Many to many Matching");
+						Alert("Order number is |%s|",l_order_no);
+						Alert("Client Code  is |%s|",l_client);
+						Alert("Market type is |%s|",l_mkt_type);
+						Alert("Settlement number is |%s|",l_settl_no);
+						
+						EXEC SQL
+						SELECT DEAL_REF_NO into :l_dl_ref_rpt FROM DL_MATCH_RPT 
+						WHERE ORDER_NO=:l_order_no
+						AND CLIENT=(SELECT CLN_EXCH_MAP_CODE FROM MT_CLI_EXCH_MAP WHERE CLN_CODE=:l_client and CLN_EXCH_CODE='BSE' AND STATUS='AA')
+						AND MKT_TYPE=:l_mkt_type
+						AND SETTLEMENT_NO=:l_settl_no
+						AND EXCH_CODE='BSE'
+						AND STATUS='PM';
+
+						Alert("\n sqlca.sqlcode |%d|",sqlca.sqlcode);
+						Alert("\n Value of l_dl_ref_rpt is |%s|",l_dl_ref_rpt);
+						IS_ANY_ORA_ERROR;
+
+						EXEC SQL SELECT SUBSTR(:l_dl_ref_rpt,2,INSTR(:l_dl_ref_rpt,'')-2) INTO :l_dl_ref_substr:i_l_dl_ref_substr FROM DUAL;
+
+						Alert("\n sqlca.sqlcode |%d|",sqlca.sqlcode);
+						Alert("\n After -Value of l_dl_ref_substr is |%s|",l_dl_ref_substr);
+						IS_ANY_ORA_ERROR;
+
+						if(strlen(l_dl_ref_substr)!=0)
+						{
+						//Interoperability changes
+						EXEC SQL 
+						SELECT STATUS INTO :l_lien_status:i_l_lien_status
+						FROM DL_LIEN 
+						WHERE CLIENT=:l_client
+						AND REF_NO=:l_dl_ref_substr 
+						//AND EXCH_CODE ='BSE'
+						//AND SETTL_NO =:l_settl_no;
+						AND EXCH_CODE IN (SELECT EXCH_CODE 
+						FROM DL_DEAL WHERE CLIENT = :l_client AND IDENTIY_NO = :l_dl_ref_substr  AND EXCH_CODE IS NOT NULL )
+						AND SETTL_NO in (select SETTLEMENT_NO 
+						FROM DL_DEAL WHERE CLIENT = :l_client AND IDENTIY_NO = :l_dl_ref_substr  AND EXCH_CODE IS NOT NULL );
+						
+						Alert("\n sqlca.sqlcode |%d|",sqlca.sqlcode);
+						Alert("\n Value of l_lien_status is |%s|",l_lien_status);
+						Alert("\n Value of l_lien_status for Deal Reference |%s| is |%s|",l_lien_status,l_dl_ref_substr);
+						IS_ANY_ORA_ERROR;
+
+
+						if(strcmp(l_lien_status,"IN")!=0)
+							{
+								continue; // Move to the next record
+							}
+
+						}
+						else
+						{
+							printf("Deal reference number after substr is null");
+							continue; // Move to the next record because Deal reference number in both the table is null
+						}
+
+
+					}
+					else //Deal Reference Number in Exchange order table is not null,so case of one to one Matching
+					{
+						//Interoperability changes
+						EXEC SQL 
+						SELECT STATUS INTO :l_lien_status :i_l_lien_status
+						FROM DL_LIEN 
+						WHERE CLIENT=:l_client
+						AND REF_NO=:l_deal_ref
+						//AND EXCH_CODE ='BSE'
+						//AND SETTL_NO =:l_settl_no
+						AND EXCH_CODE IN (SELECT EXCH_CODE 
+						FROM DL_DEAL WHERE CLIENT = :l_client AND IDENTIY_NO = :l_deal_ref  AND EXCH_CODE IS NOT NULL )
+						AND SETTL_NO in (select SETTLEMENT_NO 
+						FROM DL_DEAL WHERE CLIENT = :l_client AND IDENTIY_NO = :l_deal_ref  AND EXCH_CODE IS NOT NULL );
+
+
+						Alert("\n sqlca.sqlcode |%d|",sqlca.sqlcode);
+						Alert("\n Value of l_lien_status for Deal Reference |%s| is |%s|",l_lien_status,l_deal_ref);
+						IS_ANY_ORA_ERROR;
+
+						if(strcmp(l_lien_status,"IN")!=0)
+							{
+								continue; // Move to the next record
+							}
+					}
+
+				}
+				else //Value of Lien Required is NO 
+				{
+					Alert("\n Value of l_LienReqd for Client |%s| is |%s|",l_client,l_LienReqd);
+				}
+
+			}
+			else //value of Buy_Sell_Flag is Not B
+			{
+				printf("Value of Buy Sell Flag is ",l_buy_sell_flg);
+			}
+
+			/*Added By Prateek on 13092016 for Optimization of BSE Confirmation file Generation - END*/
+
+
+/**			l_matched_flg[1] = APL_NULL_CHAR;
+**/
+			printf("\n After fetch sqlca.sqlcode is |%d|",sqlca.sqlcode);
+			printf("l_line is |%s|\n",l_line);
+/**			printf("l_matched_flg is |%s|\n",l_matched_flg);
+**/			printf("l_matched_flg is |%c|\n",l_matched_flg);
+			printf("Amit:l_is_nodelv is |%s|\n",l_is_nodelv);
+
+			/* For No Delivery Orders System should report as not confirmed */
+			if (strcmp(l_is_nodelv,"Y")==0)
+			{
+/**				l_matched_flg[0] = 'N';
+**/				l_matched_flg = 'N';
+			}
+
+			memset(l_new_line, APL_NULL_CHAR,1001);
+			memset(l_temp,APL_NULL_CHAR,1001);
+			strcpy(l_temp,l_line);
+			l_temp[strlen(l_temp)+1]= APL_NULL_CHAR;
+			EXEC SQL SELECT SUBSTR(:l_temp,1,114)||:l_matched_flg||SUBSTR(:l_temp,116,58) INTO :l_new_line FROM DUAL;
+			printf("\n #1 sqlca.sqlcode is  |%d|",sqlca.sqlcode);
+			IS_ANY_ORA_ERROR;
+			printf("\n Line to print |%s|",l_new_line);
+
+			fputs(l_new_line,l_Download_File);
+			fprintf(l_Download_File,"\n");
+		}
+/** ISKB-501:ASHISH:for BSE Header Changes:29-10-2007  **/
+ 		//writeNoDlvDetails(l_Download_File,"BSE-ASCII",l_logfile,p_file_link,&l_no_records,l_debug_info_ptr);
+		fclose(l_Upload_File);
+		fclose(l_Download_File);
+
+   APL_GOBACK_SUCCESS
+   RETURN_SUCCESS :
+   {
+     printf("Exiting gen_cnf_file_BSE successfully\n");
+     return (APL_SUCCESS);
+   }
+   RETURN_FAILURE :
+   {
+     printf("Exiting gen_cnf_file_BSE unsuccessfully\n");
+     return (APL_FAILURE);
+   }
+}
+
+/* changes by amish - 30/10/2006 */
+int gen_cnf_file_NSE(char *p_file_name,int p_file_link,char **argv,FILE *l_logfile,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	char 	chr_l_downloadpath[200] = APL_NULL_STRING;
+	FILE 	*l_Download_File = (FILE *)NULL;
+
+	char 	chr_l_cnffilename[200] = APL_NULL_STRING;
+	char   l_is_nodelv[2] = APL_NULL_STRING;
+
+	char  chr_l_cnffilename_temp[1000] = APL_NULL_STRING;/* amish - 25/09 */
+	char  chr_l_cnffilename_path[1000] = APL_NULL_STRING;/* amish - 25/09 */
+	char  chr_l_cnffilename_path_nse[1000] = APL_NULL_STRING;/* AmitB - 21/05/07 */
+	char l_file_name[40] = APL_NULL_STRING;
+	char chr_l_sys_date[APL_DATE_LEN] = APL_NULL_STRING;
+	int l_conf_seq = 0;
+	char l_buf[1000];
+	int int_retval = 0; /* amish - 25/09 */
+	int retval = 0; /* amish - 25/09 */
+	int l_filesize = 0; /* amish -- 21/09/2006 */
+	char l_fsize_char[10] = APL_NULL_STRING; /*amish - 25/09/06 - */
+	char l_fsize_char_tmp[10] = APL_NULL_STRING; /*  23/02/07 - */
+	char l_temp[1001] = APL_NULL_STRING;
+	/** IsolveID-250:AmitB:for NSE Binary Header Changes:10-04-2007  **/
+	int l_no_records=0;
+	int l_no_records_nodel=0;
+	short int_l_condexists = 0; /* ISKB-492 : ASHISH 09-10-2007 *///AIX Warning Removal
+
+
+	DL_EXCHGORD_UPLD_STRUCT_H  *dl_exchgord_upld_struct=NULL;
+	DL_EXCHGORD_UPLD_STRUCT_I *dl_exchgord_upld_struct_i=NULL;
+
+	INTL_REPT_STRUCT_H            *l_intl_rept_struct_ha  =NULL;
+
+	l_intl_rept_struct_ha   = (INTL_REPT_STRUCT_H *)calloc(1, sizeof(INTL_REPT_STRUCT_H));
+	APL_MALLOC_FAIL(l_intl_rept_struct_ha);
+		
+	int l_reported_orders = 0;
+	FILE *fp_cfg = (FILE *)NULL;
+	char l_cfg_filename[100];
+
+	strcpy(l_cfg_filename,getenv("INTL_ROOT_PATH"));
+   strcat(l_cfg_filename,"/intl_sun.cfg");
+   APL_FUNCTION_ENTER(l_logfile)
+
+   fp_cfg = fopen(l_cfg_filename,"r");
+
+	  if(fp_cfg == (FILE *)NULL)
+   {
+		BT_IF_DEBUG
+	      fprintf(l_logfile, "Config File |%s|\n",l_cfg_filename);
+	BT_IF_DEBUG
+	      CO_ProcMonitor(l_logfile,"Failed To Open Config File",NULL,NULL);
+
+      APL_GOBACK_FAIL
+  }
+	/*Calloc*/
+	dl_exchgord_upld_struct=(DL_EXCHGORD_UPLD_STRUCT_H *)calloc(1,sizeof(DL_EXCHGORD_UPLD_STRUCT_H));	
+	dl_exchgord_upld_struct_i=(DL_EXCHGORD_UPLD_STRUCT_I *)calloc(1,sizeof(DL_EXCHGORD_UPLD_STRUCT_I));	
+
+	/*MemSet*/
+	memset(dl_exchgord_upld_struct, NULL, sizeof(DL_EXCHGORD_UPLD_STRUCT_H));
+	memset(dl_exchgord_upld_struct_i, NULL, sizeof(DL_EXCHGORD_UPLD_STRUCT_I));
+
+	if ( CO_ReadToken(fp_cfg,"INTL_DWNLD_PATH",chr_l_downloadpath,l_debug_info_ptr) == APL_FAILURE)
+      {
+         CO_ProcMonitor(l_logfile, "Failure From Retrieve Dir Path Of Download", NULL, NULL);
+         APL_GOBACK_FAIL
+      }
+	/*
+		strcpy(chr_l_cnffilename,"NSE_CNF_FILE.TXT");
+	*/
+	strcpy(chr_l_cnffilename,p_file_name);
+	strcat(chr_l_cnffilename,".CNF");
+
+   printf("\n Inside gen_cnf_file_NSE now Upload File Name=|%s| File Link=|%d| cnf File Name=|%s|.. \n",p_file_name,p_file_link,chr_l_cnffilename);
+
+      strcat(chr_l_downloadpath,chr_l_cnffilename);
+
+	if ( (l_Download_File = fopen(chr_l_downloadpath, "w")) == (FILE *)NULL )
+	{
+		printf("Could not open file |%s|\n",chr_l_downloadpath);
+		APL_GOBACK_FAIL
+	}
+   printf("\n Inside gen_cnf_file_NSE after openeing file File Name=|%s| .. \n",chr_l_downloadpath);
+	
+	strcpy(l_intl_rept_struct_ha->report_name, chr_l_cnffilename);
+	strcpy(l_intl_rept_struct_ha->report_desc, APL_HOFF_FILE_DESC);
+	strcpy(l_intl_rept_struct_ha->report_date, argv[2]);
+	l_intl_rept_struct_ha->report_width = 100;
+	strcpy(l_intl_rept_struct_ha->task_desc, argv[5]);
+	strcpy(l_intl_rept_struct_ha->fe_be_ind, APL_BE_IND);
+	strcpy(l_intl_rept_struct_ha->usr, argv[3]);
+
+
+	if (APL_FAILURE == CO_Proc_DBRptIns( l_intl_rept_struct_ha, l_debug_info_ptr))
+
+	{
+		APL_GOBACK_FAIL
+	}
+
+    printf("\n Inside gen_cnf_file_NSE declaring cursor cnf_orders .. \n");
+
+	printf("\n Amit ---- FileLinkInfo is %d\n",p_file_link );
+
+	/* ISKB-492 : Add by ASHISH 09-10-2007 Start */
+ 
+   /* 
+     EXEC SQL DECLARE cnf_orders CURSOR FOR
+	  	SELECT * FROM DL_EXCHGORD_UPLD
+            WHERE
+            FILELINKINFO = :p_file_link AND
+	  	    NVL(IS_NODELV,'N') !='Y' order by ROWSEQUENCE ; 
+         IS_ANY_ORA_ERROR;
+   printf("\n Inside gen_cnf_file_NSE after declaring cursor cnf_orders sqlca.sqlcode=|%d|.. \n",sqlca.sqlcode);	
+		EXEC SQL OPEN cnf_orders;
+   printf("\n Inside gen_cnf_file_NSE after opening cursor cnf_orders sqlca.sqlcode=|%d|.. \n",sqlca.sqlcode);		
+   */
+
+
+	 writeCnfHeader_NSE(l_Download_File); 
+		int_l_condexists = 0;
+
+		if  ( CO_Chk_CntryEnabled( "DL_CNFFILEGEN",
+								"CNFFILEGEN",
+								&int_l_condexists,
+								l_debug_info_ptr
+								)  == APL_FAILURE)
+			
+			{
+					APL_GOBACK_FAIL
+			}
+    
+		Alert("\n condition flag is |%d|\n",int_l_condexists);
+		if(int_l_condexists > 0)
+		{
+			Alert("\n condition exists ---Inside if \n");
+             /*Added by supriya on 02062015 for ISKB_1493(Lien/Margin Automation) -START*/ 
+               /*Added dl_match_rpt check--for M2M issue-ISKB_1493*/   
+                       IF_COND_EXISTS("DL_ACCTENT","DL_LIEN_ACCTENT_GEN")
+       {
+	   EXEC SQL DECLARE cnf_orders2 CURSOR FOR
+                        SELECT /*+ USE_HASH(A,B) */ * FROM DL_EXCHGORD_UPLD A,
+						DL_DEAL B
+                        WHERE
+                        A.FILELINKINFO = :p_file_link AND
+                        NVL(A.IS_NODELV,'N') !='Y'
+                        AND A.STATUS = 'PM'
+                        AND A.MATCHED = 'Y'
+                        AND A.NODELV_REPDATE IS NULL 
+	AND (A.DEAL_REF_NO = B.IDENTIY_NO
+	OR	A.order_no in (select C.order_no from dl_match_rpt C where C.status='PM' and C.exch_code='NSE'))
+                        /*AND (A.CLIENT = B.CLIENT OR (CP_EXCHORD_MAP(B.CLIENT,A.CLIENT,B.EXCH_CODE)='true' ) )*/
+                         AND A.CLIENT = B.CLIENT
+                        AND to_char(A.DEAL_DATE,'DD/MM/YYYY') = to_char(B.DEAL_DATE,'DD/MM/YYYY')
+                        AND (B.deal_cd            = '1'
+                        OR B.deal_cd              = '2'
+                        OR B.deal_cd              = '3'
+                        OR (B.deal_cd             = '4'
+                        AND B.dl_class            = '1'
+                        AND (GETCLIENTPARAMBYID('LIEN_MARK_REQD',B.CLIENT))= 'Y'
+                        AND EXISTS
+                        (SELECT 1
+                                 FROM dl_lien D
+                                  WHERE D.client = B.client
+                                  AND D.ref_no   = B.identiy_no
+                                  AND D.status  IN ('IN','MI')
+                                  ))
+                                OR(B.deal_cd             = '4'
+                                AND B.dl_class            = '1'
+                                AND (GETCLIENTPARAMBYID('LIEN_MARK_REQD',B.CLIENT))= 'N')
+                                 OR (B.deal_cd   = '4'
+                                AND B.dl_class != '1'))
+                        order by ROWSEQUENCE ; 
+			}
+			else
+			{
+              /*Added by supriya on 02062015 for ISKB_1493(Lien/Margin Automation) -END*/
+			EXEC SQL DECLARE cnf_orders2 CURSOR FOR
+			SELECT * FROM DL_EXCHGORD_UPLD
+			WHERE
+			FILELINKINFO = :p_file_link AND
+			NVL(IS_NODELV,'N') !='Y' 
+			AND STATUS = 'PM'
+			AND MATCHED = 'Y' 
+			AND NODELV_REPDATE IS NULL /* IN NSE,ONLY MATCHED ORDERS R REPORTED AND ONCE REPORTED SHOULD NOT BE INCLUDED IN NEXT FILE HENCE FIELD 'NODELV_REPDATE' IS USED */
+			order by ROWSEQUENCE ; /* it shld not pick No delv records here !! */
+                       }
+			IS_ANY_ORA_ERROR;
+			Alert("\n Inside gen_cnf_file_NSE after declaring cursor cnf_orders sqlca.sqlcode=|%d|.. \n",sqlca.sqlcode);	
+			EXEC SQL OPEN cnf_orders2;
+			Alert("\n Inside gen_cnf_file_NSE after opening cursor cnf_orders sqlca.sqlcode=|%d|.. \n",sqlca.sqlcode);		
+		}
+		else
+		{
+			Alert("\n condition dosent exists ---Inside else \n");
+                /*Added by supriya on 02062015 for ISKB_1493(Lien/Margin Automation) -START*/ 
+                    /*Added dl_match_rpt check--for M2M issue-ISKB_1493*/   
+                       IF_COND_EXISTS("DL_ACCTENT","DL_LIEN_ACCTENT_GEN")
+       {
+
+                   EXEC SQL DECLARE cnf_orders CURSOR FOR
+                        SELECT /*+ USE_HASH(A,B) */* FROM DL_EXCHGORD_UPLD A,
+						DL_DEAL B
+                        WHERE
+                        A.FILELINKINFO = :p_file_link AND
+                        NVL(A.IS_NODELV,'N') !='Y'
+	AND (A.DEAL_REF_NO = B.IDENTIY_NO
+	OR	A.order_no in (select C.order_no from dl_match_rpt C where C.status='PM' and C.exch_code='NSE'))
+                        /*AND (A.CLIENT = B.CLIENT OR (CP_EXCHORD_MAP(B.CLIENT,A.CLIENT,B.EXCH_CODE)='true' ) )*/
+                        AND A.CLIENT = B.CLIENT
+                        AND to_char(A.DEAL_DATE,'DD/MM/YYYY') = to_char(B.DEAL_DATE,'DD/MM/YYYY')
+                        AND (B.deal_cd            = '1'
+                        OR B.deal_cd              = '2'
+                        OR B.deal_cd              = '3'
+                        OR (B.deal_cd             = '4'
+                                AND B.dl_class            = '1'
+                                AND (GETCLIENTPARAMBYID('LIEN_MARK_REQD',B.CLIENT))= 'Y'
+                                AND EXISTS
+                                (SELECT 1
+                                 FROM dl_lien D
+                                  WHERE D.client = B.client
+                                  AND D.ref_no   = B.identiy_no
+                                  AND D.status  IN ('IN','MI')
+                                  ))
+                                OR(B.deal_cd             = '4'
+                                AND B.dl_class            = '1'
+                                AND (GETCLIENTPARAMBYID('LIEN_MARK_REQD',B.CLIENT))= 'N')
+                                 OR (B.deal_cd   = '4'
+                                AND B.dl_class != '1'))
+						    order by ROWSEQUENCE ; 
+			}
+			else
+			{
+               /*Added by supriya on 02062015 for ISKB_1493(Lien/Margin Automation) -END*/
+			EXEC SQL DECLARE cnf_orders CURSOR FOR
+			SELECT * FROM DL_EXCHGORD_UPLD
+			WHERE
+			FILELINKINFO = :p_file_link AND
+			NVL(IS_NODELV,'N') !='Y' order by ROWSEQUENCE ; /* it shld not pick No delv records here !! */
+                        }
+			IS_ANY_ORA_ERROR;
+			Alert("\n Inside gen_cnf_file_NSE after declaring cursor cnf_orders sqlca.sqlcode=|%d|.. \n",sqlca.sqlcode);	
+			EXEC SQL OPEN cnf_orders;
+			Alert("\n Inside gen_cnf_file_NSE after opening cursor cnf_orders sqlca.sqlcode=|%d|.. \n",sqlca.sqlcode);		
+		}
+
+	/* ISKB-492 : ASHISH 09-10-2007 End */
+
+		for(;;)
+		{
+			/* ISKB-492 : Changed by ASHISH 09-10-2007 Start */
+			
+		/*	
+			EXEC SQL FETCH cnf_orders INTO :dl_exchgord_upld_struct:dl_exchgord_upld_struct_i;
+   printf("\n Inside gen_cnf_file_NSE after fetching cursor cnf_orders sqlca.sqlcode=|%d|.. \n",sqlca.sqlcode);		
+			printf("SqlCode=%d",sqlca.sqlcode);
+			if(APL_ZERO_RESULT_SET)
+    			 break;	
+			if (l_reported_orders ==0)
+			{
+				writeCnfHeader_NSE(l_Download_File);
+			}
+		*/
+
+		    if(int_l_condexists > 0)
+			{
+				Alert("\n 2 condition exists ---Inside if \n");
+				EXEC SQL FETCH cnf_orders2 INTO :dl_exchgord_upld_struct:dl_exchgord_upld_struct_i;
+			    Alert("\n Inside gen_cnf_file_NSE after fetching cursor cnf_orders sqlca.sqlcode=|%d|.. \n",sqlca.sqlcode);
+				Alert("SqlCode=%d",sqlca.sqlcode);
+				if(APL_ZERO_RESULT_SET)
+    				 break;	
+			}
+
+			else
+			{
+
+				Alert("\n 2 condition dosent exists ---Inside if \n");
+				EXEC SQL FETCH cnf_orders INTO :dl_exchgord_upld_struct:dl_exchgord_upld_struct_i;
+			    Alert("\n Inside gen_cnf_file_NSE after fetching cursor cnf_orders sqlca.sqlcode=|%d|.. \n",sqlca.sqlcode);		
+				Alert("SqlCode=%d",sqlca.sqlcode);
+				if(APL_ZERO_RESULT_SET)
+    				 break;	
+			}
+		
+           /* ISKB-492 : ASHISH 09-10-2007 End */
+	
+			writeCnfDetails_NSE(l_Download_File,dl_exchgord_upld_struct,l_debug_info_ptr);
+/** Start-IsolveID-250:AmitB:for NSE Binary Header Changes:10-04-2007  **/
+			if(strlen(dl_exchgord_upld_struct->h_order_no) > 19)
+				l_no_records=l_no_records+2;
+			else
+				l_no_records++;
+			l_reported_orders++;
+		}
+
+       /* ISKB-492 : ASHISH 09-10-2007 Start */
+		if(int_l_condexists > 0)
+		{
+				EXEC SQL CLOSE cnf_orders2;
+				IS_ANY_ORA_ERROR
+		}
+		else
+	    {
+				EXEC SQL CLOSE cnf_orders;
+				IS_ANY_ORA_ERROR
+	    }
+        /* ISKB-492 : ASHISH 09-10-2007 End */
+				 
+   printf("\n Inside gen_cnf_file_NSE outside for loop sqlca.sqlcode=|%d|.. \n",sqlca.sqlcode);		
+
+/* ISKB-492 : Changed by ASHISH 09-10-2007 */
+
+/* writeNoDlvDetails(l_Download_File,"NSE-BIN",l_logfile,p_file_link,l_no_records_nodel,l_debug_info_ptr); */
+
+writeNoDlvDetails(l_Download_File,"NSE-BIN",l_logfile,p_file_link,&l_no_records_nodel,l_debug_info_ptr);
+ l_no_records=l_no_records+l_no_records_nodel;
+/** End-IsolveID-250:AmitB:for NSE Binary Header Changes:10-04-2007  **/
+
+/*** Added By Amish - To get size of conf_file - START ***/
+	
+
+ 	printf("\n ******* download path is |%s|\n",chr_l_downloadpath);
+
+	fclose(l_Download_File);
+
+	if(CO_Rtv_FileSize_From_Pointer(chr_l_downloadpath,&l_filesize) == APL_FAILURE)
+	{
+		APL_GOBACK_FAIL
+	}
+	
+	printf("\n*************testing*********file size is |%d|\n",l_filesize);
+	
+	strcpy(l_fsize_char,ltoa(l_filesize));
+	
+	printf("\n*************file name in character*********file size is |%s|\n",l_fsize_char);
+	
+	int_retval =   CO_PadString(l_fsize_char,"L",4,"0",l_debug_info_ptr);
+
+	/* restrict filesize to 4 char - 22-02-07 */	
+	strcpy(l_fsize_char_tmp,l_fsize_char);
+	printf("\n l_fsize_char_tmp=|%s| \n",l_fsize_char_tmp);
+	strcpy(l_fsize_char,APL_NULL_STRING);	
+	strncpy(l_fsize_char,l_fsize_char_tmp,4);
+	printf("\n l_fsize_char=|%s| \n",l_fsize_char);
+	
+	if (int_retval != APL_SUCCESS)
+		APL_GOBACK_FAIL
+	printf("*************file name in char after pad func*********file size is |%s|",l_fsize_char);
+	strcpy(chr_l_cnffilename_path,chr_l_downloadpath);
+	strcpy(chr_l_cnffilename_temp,chr_l_cnffilename_path);
+	strcat(chr_l_cnffilename_temp,"_temp");
+	printf("\nfile name with path issssssss |%s|\n",chr_l_cnffilename_path);
+/** Start-IsolveID-250:AmitB:for NSE Binary Header Changes:10-04-2007  **/
+	printf("\n Finaly No of rec=|%d| \n",l_no_records);
+	l_filesize=100+(l_no_records*12);
+	strcpy(l_fsize_char,ltoa(l_filesize));
+	if (strlen(l_fsize_char) < 8)
+	{
+		CO_PadString(l_fsize_char,'L',8,"0",l_debug_info_ptr);
+	}
+/** End-IsolveID-250:AmitB:for NSE Binary Header Changes:10-04-2007  **/
+
+	sprintf(l_buf,"sed 's/####/%s/g' %s > %s",l_fsize_char,chr_l_cnffilename_path,chr_l_cnffilename_temp);
+	printf("\nCommand = |%s| ",l_buf);
+	retval = system(l_buf);
+	printf("\n GREP COMMAND EXECUTED WITH status = |%d|\n ",retval);
+	memset(l_buf,APL_NULL_CHAR,1000);
+
+
+	sprintf(l_buf,"mv %s %s",chr_l_cnffilename_temp,chr_l_cnffilename_path);
+	printf("\nCommand = |%s| ",l_buf);
+	retval = system(l_buf);
+	printf("\n GREP COMMAND EXECUTED WITH status = |%d|\n ",retval);
+	memset(l_buf,APL_NULL_CHAR ,1000);
+
+ /*** Added By Amish - To get size of conf_file - END ***/
+ 
+		sprintf(l_buf,"unix2dos %s %s",chr_l_cnffilename_path,chr_l_cnffilename_path);
+		retval = system(l_buf);	
+		printf("\n Unix2DOS status=|%d| \n",retval);
+		
+ 
+   APL_GOBACK_SUCCESS
+   RETURN_SUCCESS :
+   {
+     printf("Exiting gen_cnf_file_NSE successfully\n");
+     return (APL_SUCCESS);
+   }
+   RETURN_FAILURE :
+   {
+     printf("Exiting gen_cnf_file_NSE unsuccessfully\n");
+     return (APL_FAILURE);
+   }
+}
+
+void writeCnfHeader_NSE(FILE *p_DownLoad_File)
+{
+/** Start-IsolveID-250:AmitB:for NSE Binary Header Changes:10-04-2007  **/	
+	char l_sys_date[9] = APL_NULL_STRING;
+	char l_sys_time[9] = APL_NULL_STRING;
+
+	EXEC SQL SELECT to_char(SYS_DATE,'DDMMYY') into :l_sys_date  FROM PRO_SYS_DATE;
+	EXEC SQL SELECT to_char(SYSDATE,'hh24miss') into :l_sys_time FROM DUAL;
+
+//	fprintf(p_DownLoad_File,"%c",toascii(14)); //Kalyan --14 is ASCII value of N
+//	fprintf(p_DownLoad_File,"%c",toascii(19)); //Kalyan --19 is ASCII value of S
+//	fprintf(p_DownLoad_File,"%c",toascii(5)); //Kalyan --5 is ASCII value of E
+//	fprintf(p_DownLoad_File,"%c",toascii(3)); //Kalyan --3 is ASCII value of C
+
+	fprintf(p_DownLoad_File,"14"); //Kalyan --14 is ASCII value of N
+	fprintf(p_DownLoad_File,"19"); //Kalyan --19 is ASCII value of S
+	fprintf(p_DownLoad_File,"05"); //Kalyan --5 is ASCII value of E
+	fprintf(p_DownLoad_File,"03"); //Kalyan --3 is ASCII value of C
+
+	//fprintf(p_DownLoad_File,OBG_HDR_SIGN); // Commented By Kalyan
+	fprintf(p_DownLoad_File,OBG_HDR_FILE_SENT);
+	fprintf(p_DownLoad_File,OBG_HDR_GEN_PLACE);
+	//fprintf(p_DownLoad_File,OBG_HDR_SIGN); // Commented by Kalyan
+/**	fprintf(p_DownLoad_File,OBG_HDR_HP_CREATE_DT);
+	fprintf(p_DownLoad_File,OBG_HDR_HP_CREATE_TM);
+	fprintf(p_DownLoad_File,OBG_HDR_OTH_CREATE_DT);
+	fprintf(p_DownLoad_File,OBG_HDR_OTH_CREATE_TM);
+	fprintf(p_DownLoad_File,OBG_HDR_EXP_CREATE_DT);
+	fprintf(p_DownLoad_File,OBG_HDR_EXP_CREATE_TM);
+**/	fprintf(p_DownLoad_File,l_sys_date);
+	fprintf(p_DownLoad_File,l_sys_time);
+	fprintf(p_DownLoad_File,l_sys_date);
+	fprintf(p_DownLoad_File,l_sys_time);
+	fprintf(p_DownLoad_File,l_sys_date);
+	fprintf(p_DownLoad_File,l_sys_time);
+/** End-IsolveID-250:AmitB:for NSE Binary Header Changes:10-04-2007  **/
+	fprintf(p_DownLoad_File,OBG_HDR_CHK_SUM);
+	fprintf(p_DownLoad_File,OBG_HDR_FILLER1);
+	fprintf(p_DownLoad_File,OBG_HDR_VER);
+	fprintf(p_DownLoad_File,OBG_HDR_FILLER2);
+	fprintf(p_DownLoad_File,"\n");
+
+}
+
+/* changes by amish -- 30/10/2006 */
+/*
+void writeCnfDetails_NSE(FILE *p_DownLoad_File,DL_EXCHGORD_UPLD_STRUCT_H *dl_exchgord_upld_struct,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+*/
+int writeCnfDetails_NSE(FILE *p_DownLoad_File,DL_EXCHGORD_UPLD_STRUCT_H *dl_exchgord_upld_struct,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	char chr_l_sys_date[APL_DATE_LEN] = APL_NULL_STRING;
+	char chr_no_del_to[APL_DATE_LEN] = APL_NULL_STRING;
+	short i_no_del_to = 0;
+	int int_ru_diff = 0;
+
+	if (CO_RtvSysDt(chr_l_sys_date, l_debug_info_ptr) == APL_FAILURE)
+				  APL_GOBACK_FAIL
+
+
+	fprintf(p_DownLoad_File,OBG_DET_REC_TYP);
+	fprintf(p_DownLoad_File,OBG_DET_ACT_TYP);
+	fprintf(p_DownLoad_File,dl_exchgord_upld_struct->h_order_no);
+	fprintf(p_DownLoad_File,dl_exchgord_upld_struct->h_buy_sell_flg);
+
+	/* commented by amish -- 23/10/2006  -- matched flag of NO delv will alwayz go 'N' evn after it is matched -- wrong!!*/
+	/*
+	if((strcmp(dl_exchgord_upld_struct->h_matched,APL_NULL_STRING) == 0) || (strlen(dl_exchgord_upld_struct->h_matched) == 0) || (strcmp(dl_exchgord_upld_struct->h_is_nodelv,"Y") == 0))
+	{
+		fprintf(p_DownLoad_File,"N");
+	}
+	else
+	{
+		fprintf(p_DownLoad_File,dl_exchgord_upld_struct->h_matched);
+	}
+	*/
+	
+	/* changes by amish -- 30/10/2006  --------start*/
+
+	if(strcmp(dl_exchgord_upld_struct->h_is_nodelv,"Y") == 0)
+	{
+		/* COMMENTED BY AMISH - 15/11/2006 - PAY IN DATE TO BE USED INSTEAD OF NO DEL TO DATE 
+		EXEC SQL SELECT  (ND.NO_DEL_TO + 1) into :chr_no_del_to:i_no_del_to FROM MT_NO_DELV ND 
+		 WHERE 
+		 ND.EXCH_CODE = :dl_exchgord_upld_struct->h_exchg_code  AND
+		 ND.INSTR_CODE = :dl_exchgord_upld_struct->h_instr_code
+		 AND 
+		 ND.CARRY_FW_STLNO = :dl_exchgord_upld_struct->h_settl_no;
+			
+		IS_ANY_ORA_ERROR
+		*/
+		 EXEC SQL SELECT  mt.PAY_IN_DT into :chr_no_del_to:i_no_del_to FROM MT_SETTL_CAL mt 
+		 WHERE 
+		 mt.EXCH_CODE = :dl_exchgord_upld_struct->h_exchg_code 
+		 AND  mt.SETTL_NO = :dl_exchgord_upld_struct->h_settl_no
+		 AND mt.SETTL_TYPE = :dl_exchgord_upld_struct->h_mkt_type; /*Retro with HDFC to add Settl Type in Query - Rahul - 01-Apr-2007*/
+			
+		IS_ANY_ORA_ERROR
+
+
+		printf("\n IN FUNCTION writeCnfDetails_NSE: After fetching  no_dlv_order sqlca.sqlcode=|%d|.. \n",sqlca.sqlcode);		
+		printf("\nIN FUNCTION writeCnfDetails_NSE: *************PAY IN date is  |%s|\n",chr_no_del_to);
+
+		if(strcmp(chr_no_del_to,APL_NULL_STRING) != 0)
+		{
+			printf("\n******sys date is ===|%s|\n",chr_l_sys_date);
+			if ( APL_FAILURE  ==   CO_Pro_DateComp(chr_l_sys_date,chr_no_del_to,&
+													int_ru_diff,l_debug_info_ptr))
+				{
+						APL_GOBACK_FAIL
+				}
+			printf("\n IN FUNCTION writeCnfDetails_NSE:result of date compasrions is |%d|\n",int_ru_diff);
+			printf("\n IN FUNCTION writeCnfDetails_NSE:matched flag is |%s|\n",dl_exchgord_upld_struct->h_matched);
+			/*
+			if (int_ru_diff > 0)
+			{
+				  printf("\n********in if\n");
+				 strcpy(l_matched_flg,"N");
+
+			}
+			*/
+
+				if(strcmp(dl_exchgord_upld_struct->h_matched,"Y") == 0 && int_ru_diff <= 0)/* CHANGES BY AMISH -- FLAG SHOULD GO AS 'Y' ALSO ON PAYIN DATE */
+				{
+					printf("IN FUNCTION writeCnfDetails_NSE:Inside if, no delv record matched and date >= PAY IN date-printing flag as Y");
+					fprintf(p_DownLoad_File,dl_exchgord_upld_struct->h_matched);
+
+					  /* ISKB-492 : ASHISH 09-10-2007 */
+					   Alert("\n 1:Order No = |%s| \n",dl_exchgord_upld_struct->h_order_no);
+
+							/* UPDATING REPDATE FIELD ONLY IF FLAG IS 'Y' AND SYS DATE > DO DELV END DATE */
+
+							/* ISKB-492 : Changed by ASHISH 09-10-2007 */
+
+/************************************condition added by jeoti************************************/
+
+  IF_COND_EXISTS("DL_DEAL","EXCH")     //bank specific condition added by jeoti
+
+{
+
+      if(strcmp(dl_exchgord_upld_struct->h_exchg_code,"BSE") != 0)
+
+					{
+
+							EXEC SQL UPDATE DL_EXCHGORD_UPLD 
+							SET NODELV_REPDATE=:chr_l_sys_date
+							WHERE 
+							ORDER_NO = :dl_exchgord_upld_struct->h_order_no AND 
+							TO_CHAR(DEAL_DATE,'DD/MM/YYYY HH24:MI:SS')=:dl_exchgord_upld_struct->h_deal_date AND
+							broker_cd=:dl_exchgord_upld_struct->h_broker_cd AND
+							MATCHED='Y';
+
+							printf("1:error|%d| \n",sqlca.sqlcode);
+							IS_ANY_ORA_ERROR
+
+				}
+
+else
+
+
+					{
+                          
+						  
+							EXEC SQL UPDATE DL_EXCHGORD_UPLD 
+							SET NODELV_REPDATE=:chr_l_sys_date
+							WHERE  order_no=:dl_exchgord_upld_struct->h_order_no
+							AND   settl_no=:dl_exchgord_upld_struct->h_settl_no 
+							AND   broker_cd=:dl_exchgord_upld_struct->h_broker_cd 
+							AND   MATCHED='Y';
+
+				       IS_ANY_ORA_ERROR
+
+					}
+
+
+}
+
+else
+					{
+
+                           EXEC SQL UPDATE DL_EXCHGORD_UPLD 
+							SET NODELV_REPDATE=:chr_l_sys_date
+							WHERE 
+							ORDER_NO = :dl_exchgord_upld_struct->h_order_no AND
+							TO_CHAR(DEAL_DATE,'DD/MM/YYYY HH24:MI:SS')=:dl_exchgord_upld_struct->h_deal_date AND
+							EXCHG_CODE=:dl_exchgord_upld_struct->h_exchg_code AND
+                            MATCHED='Y';
+
+							IS_ANY_ORA_ERROR
+
+
+					}
+
+				}
+				else
+				{
+
+				fprintf(p_DownLoad_File,"N");
+				}
+
+			}
+	}
+	else
+	{
+			if(strcmp(dl_exchgord_upld_struct->h_matched,"Y") == 0)
+			{
+				fprintf(p_DownLoad_File,dl_exchgord_upld_struct->h_matched);
+
+				/* UPDATING REPDATE FIELD ONLY IF FLAG IS 'Y' AND SYS DATE > DO DELV END DATE */
+
+  /************************condition added by jeoti************************************/
+
+if(strcmp(dl_exchgord_upld_struct->h_exchg_code,"BSE") != 0)
+
+
+				{
+							EXEC SQL UPDATE DL_EXCHGORD_UPLD 
+							SET NODELV_REPDATE=:chr_l_sys_date
+							WHERE 
+							ORDER_NO = :dl_exchgord_upld_struct->h_order_no AND
+						TO_CHAR(DEAL_DATE,'DD/MM/YYYY HH24:MI:SS')=:dl_exchgord_upld_struct->h_deal_date AND
+						broker_cd=:dl_exchgord_upld_struct->h_broker_cd  AND
+							MATCHED='Y';
+                            Alert("\n Error in update = |%d| \n",sqlca.sqlcode);
+							IS_ANY_ORA_ERROR
+
+				}
+else        
+				{
+								   EXEC SQL UPDATE DL_EXCHGORD_UPLD  
+									SET NODELV_REPDATE=:chr_l_sys_date						 
+									 WHERE
+										  order_no=:dl_exchgord_upld_struct->h_order_no
+									AND   settl_no=:dl_exchgord_upld_struct->h_settl_no 
+									AND   broker_cd=:dl_exchgord_upld_struct->h_broker_cd 
+									AND   MATCHED='Y';
+
+
+								   IS_ANY_ORA_ERROR
+				}
+
+
+			}
+			else
+			{
+				fprintf(p_DownLoad_File,"N");
+			}
+
+	}
+	
+
+/* changes by amish -- 30/10/2006 --- end*/
+
+/* commented by amish -- 30/10/2006 */
+/*
+	if(strcmp(dl_exchgord_upld_struct->h_matched,"Y") == 0)
+	{
+		fprintf(p_DownLoad_File,dl_exchgord_upld_struct->h_matched);
+	}
+	else
+	{
+			fprintf(p_DownLoad_File,"N");
+	}
+
+*/
+	fprintf(p_DownLoad_File,"\n");
+
+   APL_GOBACK_SUCCESS
+   RETURN_SUCCESS :
+   {
+     printf("Exiting gen_cnf_file_NSE successfully\n");
+     return (APL_SUCCESS);
+   }
+   RETURN_FAILURE :
+   {
+     printf("Exiting gen_cnf_file_NSE unsuccessfully\n");
+     return (APL_FAILURE);
+   }
+
+}
+int writeCnfDetails_MCS(FILE *p_DownLoad_File,DL_EXCHGORD_UPLD_STRUCT_H *dl_exchgord_upld_struct,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	char chr_l_sys_date[APL_DATE_LEN] = APL_NULL_STRING;
+	char chr_no_del_to[APL_DATE_LEN] = APL_NULL_STRING;
+	short i_no_del_to = 0;
+	int int_ru_diff = 0;
+
+	if (CO_RtvSysDt(chr_l_sys_date, l_debug_info_ptr) == APL_FAILURE)
+				  APL_GOBACK_FAIL
+
+
+//	fprintf(p_DownLoad_File,OBG_DET_REC_TYP);
+	//fprintf(p_DownLoad_File,OBG_DET_ACT_TYP);
+//	fprintf(p_DownLoad_File,dl_exchgord_upld_struct->h_order_no);
+	//fprintf(p_DownLoad_File,dl_exchgord_upld_struct->h_buy_sell_flg);
+
+	/* commented by amish -- 23/10/2006  -- matched flag of NO delv will alwayz go 'N' evn after it is matched -- wrong!!*/
+	/*
+	if((strcmp(dl_exchgord_upld_struct->h_matched,APL_NULL_STRING) == 0) || (strlen(dl_exchgord_upld_struct->h_matched) == 0) || (strcmp(dl_exchgord_upld_struct->h_is_nodelv,"Y") == 0))
+	{
+		fprintf(p_DownLoad_File,"N");
+	}
+	else
+	{
+		fprintf(p_DownLoad_File,dl_exchgord_upld_struct->h_matched);
+	}
+	*/
+	
+	/* changes by amish -- 30/10/2006  --------start*/
+
+	if(strcmp(dl_exchgord_upld_struct->h_is_nodelv,"Y") == 0)
+	{
+		/* COMMENTED BY AMISH - 15/11/2006 - PAY IN DATE TO BE USED INSTEAD OF NO DEL TO DATE 
+		EXEC SQL SELECT  (ND.NO_DEL_TO + 1) into :chr_no_del_to:i_no_del_to FROM MT_NO_DELV ND 
+		 WHERE 
+		 ND.EXCH_CODE = :dl_exchgord_upld_struct->h_exchg_code  AND
+		 ND.INSTR_CODE = :dl_exchgord_upld_struct->h_instr_code
+		 AND 
+		 ND.CARRY_FW_STLNO = :dl_exchgord_upld_struct->h_settl_no;
+			
+		IS_ANY_ORA_ERROR
+		*/
+		 EXEC SQL SELECT  mt.START_DATE into :chr_no_del_to:i_no_del_to FROM MT_SETTL_CAL mt 
+		 WHERE 
+		 mt.EXCH_CODE = :dl_exchgord_upld_struct->h_exchg_code 
+		 AND  mt.SETTL_NO = :dl_exchgord_upld_struct->h_settl_no
+		 AND mt.SETTL_TYPE = :dl_exchgord_upld_struct->h_mkt_type; /* changes by amish - 08/12/2006  */
+
+		 IS_ANY_ORA_ERROR
+
+
+		Alert("\n IN FUNCTION writeCnfDetails_NSE: After fetching  no_dlv_order sqlca.sqlcode=|%d|.. \n",sqlca.sqlcode);		
+		Alert("\nIN FUNCTION writeCnfDetails_NSE: *************PAY IN date is  |%s|\n",chr_no_del_to);
+
+		if(strcmp(chr_no_del_to,APL_NULL_STRING) != 0)
+		{
+			Alert("\n******sys date is ===|%s|\n",chr_l_sys_date);
+			if ( APL_FAILURE  ==   CO_Pro_DateComp(chr_l_sys_date,chr_no_del_to,&
+													int_ru_diff,l_debug_info_ptr))
+				{
+						APL_GOBACK_FAIL
+				}
+			Alert("\n IN FUNCTION writeCnfDetails_NSE:result of date compasrions is |%d|\n",int_ru_diff);
+			Alert("\n IN FUNCTION writeCnfDetails_NSE:matched flag is |%s|\n",dl_exchgord_upld_struct->h_matched);
+			/*
+			if (int_ru_diff > 0)
+			{
+				  Alert("\n********in if\n");
+				 strcpy(l_matched_flg,"N");
+
+			}
+			*/
+
+				if(strcmp(dl_exchgord_upld_struct->h_matched,"Y") == 0 && int_ru_diff <= 0)/* CHANGES BY AMISH -- FLAG SHOULD GO AS 'Y' ALSO ON PAYIN DATE */
+				{
+					Alert("IN FUNCTION writeCnfDetails_NSE:Inside if, no delv record matched and date >= PAY IN date-printing flag as Y");
+					fprintf(p_DownLoad_File,dl_exchgord_upld_struct->h_order_data);
+					fprintf(p_DownLoad_File,"A");
+
+							/* UPDATING REPDATE FIELD ONLY IF FLAG IS 'Y' AND SYS DATE > DO DELV END DATE */
+
+							/* Kalyan -- Added Deal_date and Exchange Condition for Log HBDL_012 */
+
+/************************************condition added by jeoti************************************/
+
+					IF_COND_EXISTS("DL_DEAL","EXCH")     //bank specific condition added by jeoti
+
+					{
+
+						if(strcmp(dl_exchgord_upld_struct->h_exchg_code,"BSE") != 0)
+						{
+
+							EXEC SQL UPDATE DL_EXCHGORD_UPLD 
+							SET NODELV_REPDATE=:chr_l_sys_date
+							WHERE 
+							ORDER_NO = :dl_exchgord_upld_struct->h_order_no AND
+							TO_CHAR(DEAL_DATE,'DD/MM/YYYY HH24:MI:SS')=:dl_exchgord_upld_struct->h_deal_date AND
+							EXCHG_CODE=:dl_exchgord_upld_struct->h_exchg_code AND
+                            MATCHED='Y';
+
+							IS_ANY_ORA_ERROR
+
+						}
+
+						else
+						{
+                          
+						  
+							EXEC SQL UPDATE DL_EXCHGORD_UPLD 
+							SET NODELV_REPDATE=:chr_l_sys_date
+							WHERE  order_no=:dl_exchgord_upld_struct->h_order_no
+							AND   settl_no=:dl_exchgord_upld_struct->h_settl_no 
+							AND   broker_cd=:dl_exchgord_upld_struct->h_broker_cd 
+							AND   MATCHED='Y';
+
+							IS_ANY_ORA_ERROR
+
+						}
+
+
+					}
+
+					else
+					{
+
+							EXEC SQL UPDATE DL_EXCHGORD_UPLD 
+							SET NODELV_REPDATE=:chr_l_sys_date
+							WHERE 
+							ORDER_NO = :dl_exchgord_upld_struct->h_order_no AND
+							TO_CHAR(DEAL_DATE,'DD/MM/YYYY HH24:MI:SS')=:dl_exchgord_upld_struct->h_deal_date AND
+							EXCHG_CODE=:dl_exchgord_upld_struct->h_exchg_code AND
+                            MATCHED='Y';
+
+							IS_ANY_ORA_ERROR
+
+
+					}
+
+				}
+				else
+				{
+
+				fprintf(p_DownLoad_File,dl_exchgord_upld_struct->h_order_data);
+				fprintf(p_DownLoad_File,"R");
+				}
+				if(strcmp(dl_exchgord_upld_struct->h_matched,NULL) == 0)
+				{
+				fprintf(p_DownLoad_File,dl_exchgord_upld_struct->h_order_data);
+				fprintf(p_DownLoad_File,"1");
+				}
+
+			}
+	}
+	else
+	{
+			if(strcmp(dl_exchgord_upld_struct->h_matched,"Y") == 0)
+			{
+				fprintf(p_DownLoad_File,dl_exchgord_upld_struct->h_order_data);
+				fprintf(p_DownLoad_File,"A");
+
+				/* AMISH - 20/04/2007  IN NSE,ONLY MATCHED ORDERS R REPORTED AND ONCE REPORTED SHOULD NOT BE INCLUDED IN NEXT FILE HENCE FIELD 'NODELV_REPDATE' IS USED */
+
+				Alert("\n amisn******************sysdate is |%s|\n",chr_l_sys_date);
+				/* Kalyan -- Added Deal_date and Exchange Condition for Log HBDL_012 */
+
+/************************condition added by jeoti************************************/
+
+if(strcmp(dl_exchgord_upld_struct->h_exchg_code,"BSE") != 0)
+
+
+				{
+				EXEC SQL UPDATE DL_EXCHGORD_UPLD  
+				SET NODELV_REPDATE=:chr_l_sys_date
+				WHERE 
+				ORDER_NO = :dl_exchgord_upld_struct->h_order_no AND
+				TO_CHAR(DEAL_DATE,'DD/MM/YYYY HH24:MI:SS')=:dl_exchgord_upld_struct->h_deal_date AND
+				EXCHG_CODE=:dl_exchgord_upld_struct->h_exchg_code AND
+				MATCHED='Y';
+
+				IS_ANY_ORA_ERROR
+
+				}
+else        
+				{
+						   EXEC SQL UPDATE DL_EXCHGORD_UPLD  
+							SET NODELV_REPDATE=:chr_l_sys_date						 
+						     WHERE
+							      order_no=:dl_exchgord_upld_struct->h_order_no
+							AND   settl_no=:dl_exchgord_upld_struct->h_settl_no 
+							AND   broker_cd=:dl_exchgord_upld_struct->h_broker_cd 
+							AND   MATCHED='Y';
+
+
+						   IS_ANY_ORA_ERROR
+				}
+
+
+			}
+			else
+			{
+				fprintf(p_DownLoad_File,dl_exchgord_upld_struct->h_order_data);
+				fprintf(p_DownLoad_File,"R");
+			}
+			if(strcmp(dl_exchgord_upld_struct->h_matched,NULL) == 0)
+				{
+				fprintf(p_DownLoad_File,dl_exchgord_upld_struct->h_order_data);
+				fprintf(p_DownLoad_File,"1");
+				}
+
+	}
+	
+
+/* changes by amish -- 30/10/2006 --- end*/
+
+/* commented by amish -- 30/10/2006 */
+/*
+	if(strcmp(dl_exchgord_upld_struct->h_matched,"Y") == 0)
+	{
+		fprintf(p_DownLoad_File,dl_exchgord_upld_struct->h_matched);
+	}
+	else
+	{
+			fprintf(p_DownLoad_File,"N");
+	}
+
+*/
+	fprintf(p_DownLoad_File,"\n");
+
+   APL_GOBACK_SUCCESS
+   RETURN_SUCCESS :
+   {
+     Alert("Exiting gen_cnf_file_MCS successfully\n");
+     return (APL_SUCCESS);
+   }
+   RETURN_FAILURE :
+   {
+     Alert("Exiting gen_cnf_file_MCS unsuccessfully\n");
+     return (APL_FAILURE);
+   }
+
+}
+
+int gen_cnf_file_MCS(char *p_file_name,int p_file_link,char **argv,FILE *l_logfile,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	char 	chr_l_downloadpath[200] = APL_NULL_STRING;
+	FILE 	*l_Download_File = (FILE *)NULL;
+
+	char 	chr_l_cnffilename[200] = APL_NULL_STRING;
+	char   l_is_nodelv[2] = APL_NULL_STRING;
+
+	char  chr_l_cnffilename_temp[1000] = APL_NULL_STRING;/* amish - 25/09 */
+	char  chr_l_cnffilename_path[1000] = APL_NULL_STRING;/* amish - 25/09 */
+	char l_buf[1000];
+	int int_retval = 0; /* amish - 25/09 */
+	int retval = 0; /* amish - 25/09 */
+	int l_filesize = 0; /* amish -- 21/09/2006 */
+	char l_fsize_char[10] = APL_NULL_STRING; /*amish - 25/09/06 - */
+	char l_temp[1001] = APL_NULL_STRING;
+	short int_l_condexists = 0;/* amish - HDFC SPECIFIC */
+	int flag=0;
+	// Retro from SBI - Priyanka 
+	char  strTmpFileName[1000] = APL_NULL_STRING; // Tarkeshwar added for sequence no wise file generation issue
+
+/** IsolveID-250:AmitB:for NSE Binary Header Changes:10-04-2007  **/
+	int l_no_records=0;
+	int l_no_records_nodel=0;
+
+	char l_cnffile[10] = APL_NULL_STRING; /* changes by amish - 20/04/2007 */
+
+        PRO_GSEQNUM_STRUCT_H    l_pro_gseqno_struct_h; // Sequence structure: ASHISH 03-05-2007
+        int int_l_seqnum_a=0; //ASHISH 03-05-2007
+        int int_return_val=0; //ASHISH 03-05-2007
+        char chr_l_seqnum_a[10] = APL_NULL_STRING; //ASHISH 03-05-2007
+
+	DL_EXCHGORD_UPLD_STRUCT_H  *dl_exchgord_upld_struct=NULL;
+	DL_EXCHGORD_UPLD_STRUCT_I *dl_exchgord_upld_struct_i=NULL;
+
+	INTL_REPT_STRUCT_H            *l_intl_rept_struct_ha  =NULL;
+
+	l_intl_rept_struct_ha   = (INTL_REPT_STRUCT_H *)calloc(1, sizeof(INTL_REPT_STRUCT_H));
+	APL_MALLOC_FAIL(l_intl_rept_struct_ha);
+		
+	int l_reported_orders = 0;
+	FILE *fp_cfg = (FILE *)NULL;
+	char l_cfg_filename[100];
+
+	strcpy(l_cfg_filename,getenv("INTL_ROOT_PATH"));
+   strcat(l_cfg_filename,"/intl_sun.cfg");
+   APL_FUNCTION_ENTER(l_logfile)
+
+   fp_cfg = fopen(l_cfg_filename,"r");
+
+   if(fp_cfg == (FILE *)NULL)
+   {
+		BT_IF_DEBUG
+	      fprintf(l_logfile, "Config File |%s|\n",l_cfg_filename);
+		BT_IF_DEBUG
+	      CO_ProcMonitor(l_logfile,"Failed To Open Config File",NULL,NULL);
+
+      APL_GOBACK_FAIL
+	}
+	/*Calloc*/
+	dl_exchgord_upld_struct=(DL_EXCHGORD_UPLD_STRUCT_H *)calloc(1,sizeof(DL_EXCHGORD_UPLD_STRUCT_H));	
+	dl_exchgord_upld_struct_i=(DL_EXCHGORD_UPLD_STRUCT_I *)calloc(1,sizeof(DL_EXCHGORD_UPLD_STRUCT_I));	
+
+	/*MemSet*/
+	memset(dl_exchgord_upld_struct, NULL, sizeof(DL_EXCHGORD_UPLD_STRUCT_H));
+	memset(dl_exchgord_upld_struct_i, NULL, sizeof(DL_EXCHGORD_UPLD_STRUCT_I));
+
+	if ( CO_ReadToken(fp_cfg,"INTL_DWNLD_PATH",chr_l_downloadpath,l_debug_info_ptr) == APL_FAILURE)
+    {
+         CO_ProcMonitor(l_logfile, "Failure From Retrieve Dir Path Of Download", NULL, NULL);
+         APL_GOBACK_FAIL
+    }
+	/*
+		strcpy(chr_l_cnffilename,"NSE_CNF_FILE.TXT");
+	*/
+
+	/* changes by amish - 20/04/2007 */
+        /* Commeny by ASHISH 03-05-2007 */
+/*	EXEC SQL SELECT DL_CONFILE_SEQ.NEXTVAL INTO  :l_cnffile FROM DUAL; */
+
+        /* Change by ASHISH 03-05-2007 START
+
+        EXEC SQL SELECT DL_NSE_CNF_SEQ.NEXTVAL INTO  :l_cnffile FROM DUAL;
+
+         Change by ASHISH 03-05-2007 END */
+
+// 	IS_ANY_ORA_ERROR
+
+/* ASHISH 03-05-2007 START */
+        strcpy(l_pro_gseqno_struct_h.sequencename, "DL_MCS_CNF_SEQ");
+strcpy(l_pro_gseqno_struct_h.seq_attrb_a, APL_NULL_STRING);
+strcpy(l_pro_gseqno_struct_h.seq_attrb_b, APL_NULL_STRING);
+strcpy(l_pro_gseqno_struct_h.seq_attrb_c, APL_NULL_STRING);
+
+l_pro_gseqno_struct_h.seq_stepby = 1;
+l_pro_gseqno_struct_h.seq_start = 1;
+l_pro_gseqno_struct_h.last_seqnum = 99999999;
+l_pro_gseqno_struct_h.recycle_ind = RECYCLE_EOD;
+
+
+//int_return_val = CO_RtvNxtSeqNum(&l_pro_gseqno_struct_h,l_debug_info_ptr);
+// Retro from SBI- Priyanka 
+memcpy(strTmpFileName,p_file_name,strlen(p_file_name)-5); // Tarkeshwar added for sequence no wise file generation issue.
+int_return_val = getNextSeq(strTmpFileName); // Tarkeshwar added for sequence no wise file generation issue.
+
+ if (int_return_val != APL_FAILURE)
+     int_l_seqnum_a = int_return_val;
+ else
+     APL_GOBACK_FAIL
+
+if(int_l_seqnum_a>9)
+	flag=0;
+else
+	flag=1;
+
+
+sprintf(chr_l_seqnum_a,"%d",int_l_seqnum_a);
+strcpy(l_cnffile,chr_l_seqnum_a);
+/* ASHISH 03-05-2007 END */
+
+//	IS_ANY_ORA_ERROR
+
+	/*strcpy(chr_l_cnffilename,p_file_name);
+*/
+
+if(flag=1)
+{
+        memcpy(chr_l_cnffilename,p_file_name,strlen(p_file_name)-3);
+        //strcat(chr_l_cnffilename,"_");
+        //strcat(chr_l_cnffilename,l_cnffile); /* changes by amish - 20/04/2007 */
+        strcat(chr_l_cnffilename,"C0");
+        strcat(chr_l_cnffilename,l_cnffile);
+}
+else
+{
+	memcpy(chr_l_cnffilename,p_file_name,strlen(p_file_name)-3);
+        //strcat(chr_l_cnffilename,"_");
+        //strcat(chr_l_cnffilename,l_cnffile); /* changes by amish - 20/04/2007 */
+        strcat(chr_l_cnffilename,"C");
+        strcat(chr_l_cnffilename,l_cnffile);
+
+}
+	
+	/*strcpy(chr_l_cnffilename,p_file_name);
+	strcat(chr_l_cnffilename,"_");
+	strcat(chr_l_cnffilename,l_cnffile); */ /* changes by amish - 20/04/2007 */
+	//strcat(chr_l_cnffilename,".CNF");
+	
+    Alert("\n Inside gen_cnf_file_MCS now Upload File Name=|%s| File Link=|%d| cnf File Name=|%s|.. \n",p_file_name,p_file_link,chr_l_cnffilename);
+
+    strcat(chr_l_downloadpath,chr_l_cnffilename);
+
+	if ( (l_Download_File = fopen(chr_l_downloadpath, "w")) == (FILE *)NULL )
+	{
+		Alert("Could not open file |%s|\n",chr_l_downloadpath);
+		APL_GOBACK_FAIL
+	}
+    Alert("\n Inside gen_cnf_file_MCS after openeing file File Name=|%s| .. \n",chr_l_downloadpath);
+	
+	strcpy(l_intl_rept_struct_ha->report_name, chr_l_cnffilename);
+	strcpy(l_intl_rept_struct_ha->report_desc, APL_HOFF_FILE_DESC);
+	strcpy(l_intl_rept_struct_ha->report_date, argv[2]);
+	l_intl_rept_struct_ha->report_width = 100;
+	strcpy(l_intl_rept_struct_ha->task_desc, argv[5]);
+	strcpy(l_intl_rept_struct_ha->fe_be_ind, APL_BE_IND);
+	strcpy(l_intl_rept_struct_ha->usr, argv[3]);
+
+
+		if (APL_FAILURE == CO_Proc_DBRptIns( l_intl_rept_struct_ha, l_debug_info_ptr))
+
+		{
+			APL_GOBACK_FAIL
+		}
+
+	
+	    Alert("\n Inside gen_cnf_file_MCS declaring cursor cnf_orders .. \n");
+
+		Alert("\n Amit ---- FileLinkInfo is %d\n",p_file_link );
+
+		 // writeCnfHeader_NSE(l_Download_File); /* changes by amish -- 31/07/2007 */
+		int_l_condexists = 0;
+
+		if  ( CO_Chk_CntryEnabled( "DL_CNFFILEGEN",
+								"CNFFILEGEN",
+								&int_l_condexists,
+								l_debug_info_ptr
+								)  == APL_FAILURE)
+			
+			{
+					APL_GOBACK_FAIL
+			}
+    
+		Alert("\n condition flag is |%d|\n",int_l_condexists);
+		if(int_l_condexists > 0)
+		{
+			Alert("\n condition exists ---Inside if \n");
+                /*Added by supriya on 02062015 for ISKB_1493(Lien/Margin Automation) -START*/
+/*Added dl_match_rpt check--for M2M issue-ISKB_1493*/   
+		IF_COND_EXISTS("DL_ACCTENT","DL_LIEN_ACCTENT_GEN")
+        {
+					/*Commented - and Re-written - for Slowness Issue-ISKB-1493-Production-01092016 START */
+					/*
+						EXEC SQL DECLARE cnf_orders2 CURSOR FOR
+                        SELECT * FROM DL_EXCHGORD_UPLD A,
+						DL_DEAL B
+                        WHERE
+                        A.FILELINKINFO = :p_file_link AND
+                        NVL(A.IS_NODELV,'N') !='Y'
+                        AND A.STATUS = 'PM'
+                        AND A.MATCHED = 'Y'
+                        AND A.NODELV_REPDATE IS NULL 
+						AND (A.DEAL_REF_NO = B.IDENTIY_NO
+						OR	A.order_no in (select C.order_no from dl_match_rpt C where C.status='PM' and C.exch_code='MCS'))
+                        //AND (A.CLIENT = B.CLIENT OR (CP_EXCHORD_MAP(B.CLIENT,A.CLIENT,B.EXCH_CODE)='true' ) )
+                        AND A.CLIENT = B.CLIENT
+                        AND to_char(A.DEAL_DATE,'DD/MM/YYYY') = to_char(B.DEAL_DATE,'DD/MM/YYYY')
+                        AND (B.deal_cd            = '1'
+                        OR B.deal_cd              = '2'
+                        OR B.deal_cd              = '3'
+                        OR (B.deal_cd             = '4'
+                         AND B.dl_class            = '1'
+                         AND (GETCLIENTPARAMBYID('LIEN_MARK_REQD',B.CLIENT))= 'Y'
+                                AND EXISTS
+                                (SELECT 1
+                                 FROM dl_lien D
+                                  WHERE D.client = B.client
+                                  AND D.ref_no   = B.identiy_no
+                                  AND D.status  IN ('IN','MI')
+                                  ))
+                                OR(B.deal_cd             = '4'
+                                AND B.dl_class            = '1'
+                                AND (GETCLIENTPARAMBYID('LIEN_MARK_REQD',B.CLIENT))= 'N')
+                                 OR (B.deal_cd   = '4'
+                                AND B.dl_class != '1'))
+                              order by ROWSEQUENCE ; */
+							  
+							  
+						EXEC SQL DECLARE cnf_orders2 CURSOR FOR
+                        SELECT /*+ USE_HASH(A,B) */ * FROM DL_EXCHGORD_UPLD A,
+						DL_DEAL B
+                        WHERE
+                        A.FILELINKINFO = :p_file_link AND
+                        NVL(A.IS_NODELV,'N') !='Y'
+                        AND A.STATUS = 'PM'
+                        AND A.MATCHED = 'Y'
+                        AND A.NODELV_REPDATE IS NULL 
+						AND (A.DEAL_REF_NO = B.IDENTIY_NO
+						OR	A.order_no in (select C.order_no from dl_match_rpt C where C.status='PM' and C.exch_code='MCS'
+						AND C.SETTLEMENT_NO = B.SETTLEMENT_NO AND C.STATUS= B.DEAL_STAT ))                       
+                        AND A.CLIENT = B.CLIENT
+                        AND to_char(A.DEAL_DATE,'DD/MM/YYYY') = to_char(B.DEAL_DATE,'DD/MM/YYYY')
+                        AND (B.deal_cd            = '1'
+                        OR B.deal_cd              = '2'
+                        OR B.deal_cd              = '3'
+                        OR (B.deal_cd             = '4'
+                         AND B.dl_class            = '1'
+                         AND (GETCLIENTPARAMBYID('LIEN_MARK_REQD',B.CLIENT))= 'Y'
+                                AND EXISTS
+                                (SELECT 1
+                                 FROM dl_lien D
+                                  WHERE D.client = B.client
+                                  AND D.ref_no   = B.identiy_no
+                                  AND D.status  ='IN'
+                                  ))
+                                OR(B.deal_cd             = '4'
+                                AND B.dl_class            = '1'
+                                AND (GETCLIENTPARAMBYID('LIEN_MARK_REQD',B.CLIENT))= 'N')
+                                 OR (B.deal_cd   = '4'
+                                AND B.dl_class != '1'))
+						UNION		
+						SELECT /*+ USE_HASH(A,B) */ * FROM DL_EXCHGORD_UPLD A,
+						DL_DEAL B, MT_CLI_EXCH_MAP M1,MT_CLI_EXCH_MAP M2
+                        WHERE
+                        A.FILELINKINFO = :p_file_link AND
+                        NVL(A.IS_NODELV,'N') !='Y'
+                        AND A.STATUS = 'PM'
+                        AND A.MATCHED = 'Y'
+                        AND A.NODELV_REPDATE IS NULL 
+						AND (A.DEAL_REF_NO = B.IDENTIY_NO
+						OR	A.order_no in (select C.order_no from dl_match_rpt C where C.status='PM' and C.exch_code='MCS'
+						AND C.SETTLEMENT_NO = B.SETTLEMENT_NO AND C.STATUS= B.DEAL_STAT ))                       
+                        AND A.CLIENT = M1.cln_code
+						AND B.CLIENT = M2.cln_code
+						AND M1.cln_exch_map_code= M2.cln_exch_map_code
+                        AND to_char(A.DEAL_DATE,'DD/MM/YYYY') = to_char(B.DEAL_DATE,'DD/MM/YYYY')
+                        AND (B.deal_cd            = '1'
+                        OR B.deal_cd              = '2'
+                        OR B.deal_cd              = '3'
+                        OR (B.deal_cd             = '4'
+                         AND B.dl_class            = '1'
+                         AND (GETCLIENTPARAMBYID('LIEN_MARK_REQD',B.CLIENT))= 'Y'
+                                AND EXISTS
+                                (SELECT 1
+                                 FROM dl_lien D
+                                  WHERE D.client = B.client
+                                  AND D.ref_no   = B.identiy_no
+                                  AND D.status  ='IN'
+                                  ))
+                                OR(B.deal_cd             = '4'
+                                AND B.dl_class            = '1'
+                                AND (GETCLIENTPARAMBYID('LIEN_MARK_REQD',B.CLIENT))= 'N')
+                                 OR (B.deal_cd   = '4'
+                                AND B.dl_class != '1'))		
+                              order by ROWSEQUENCE ;
+							  
+					/*Commented - and Re-written - for Slowness Issue-ISKB-1493-Production-01092016 END */			  
+		}
+		else
+		{
+              /*Added by supriya on 02062015 for ISKB_1493(Lien/Margin Automation) -END*/
+			EXEC SQL DECLARE cnf_orders2 CURSOR FOR
+			SELECT * FROM DL_EXCHGORD_UPLD
+			WHERE
+			FILELINKINFO = :p_file_link AND
+			NVL(IS_NODELV,'N') !='Y' 
+			AND STATUS = 'PM'
+			AND MATCHED = 'Y' 
+			AND NODELV_REPDATE IS NULL /* AMISH - 20/04/2007  IN NSE,ONLY MATCHED ORDERS R REPORTED AND ONCE REPORTED SHOULD NOT BE INCLUDED IN NEXT FILE HENCE FIELD 'NODELV_REPDATE' IS USED */
+			order by ROWSEQUENCE ; /* changes by amish -- 24/10/2006 - it shld not pick No delv records here !! */
+		}
+			IS_ANY_ORA_ERROR;
+			Alert("\n Inside gen_cnf_file_MCS after declaring cursor cnf_orders sqlca.sqlcode=|%d|.. \n",sqlca.sqlcode);	
+			EXEC SQL OPEN cnf_orders2;
+			Alert("\n Inside gen_cnf_file_MCS after opening cursor cnf_orders sqlca.sqlcode=|%d|.. \n",sqlca.sqlcode);		
+		}
+		else
+		{
+			Alert("\n condition dosent exists ---Inside else \n");
+             /*Added by supriya on 02062015 for ISKB_1493(Lien/Margin Automation) -START*/
+              /*Added dl_match_rpt check--for M2M issue-ISKB_1493*/   
+                      IF_COND_EXISTS("DL_ACCTENT","DL_LIEN_ACCTENT_GEN")
+       {
+						/*Commented - and Re-written - for Slowness Issue-ISKB-1493-Production-01092016 START */
+						/*
+						EXEC SQL DECLARE cnf_orders CURSOR FOR
+                        SELECT * FROM DL_EXCHGORD_UPLD A,
+						DL_DEAL B
+                        WHERE
+                        A.FILELINKINFO = :p_file_link AND
+                        NVL(A.IS_NODELV,'N') !='Y'
+                        AND (A.DEAL_REF_NO = B.IDENTIY_NO
+	OR	A.order_no in (select C.order_no from dl_match_rpt C where C.status='PM' and C.exch_code='MCS'))
+                        //AND (A.CLIENT = B.CLIENT OR (CP_EXCHORD_MAP(B.CLIENT,A.CLIENT,B.EXCH_CODE)='true' ) )
+                        AND A.CLIENT = B.CLIENT
+                        AND to_char(A.DEAL_DATE,'DD/MM/YYYY') = to_char(B.DEAL_DATE,'DD/MM/YYYY')
+                        AND (B.deal_cd            = '1'
+                        OR B.deal_cd              = '2'
+                        OR B.deal_cd              = '3'
+                        OR (B.deal_cd             = '4'
+                         AND B.dl_class            = '1'
+                         AND (GETCLIENTPARAMBYID('LIEN_MARK_REQD',B.CLIENT))= 'Y'
+                                AND EXISTS
+                                (SELECT 1
+                                 FROM dl_lien D
+                                  WHERE D.client = B.client
+                                  AND D.ref_no   = B.identiy_no
+                                  AND D.status  IN ('IN','MI')
+                                  ))
+                                OR(B.deal_cd             = '4'
+                                AND B.dl_class            = '1'
+                                AND (GETCLIENTPARAMBYID('LIEN_MARK_REQD',B.CLIENT))= 'N')
+                                 OR (B.deal_cd   = '4'
+                                AND B.dl_class != '1'))					
+						    order by ROWSEQUENCE ; 
+							*/
+						EXEC SQL DECLARE cnf_orders CURSOR FOR
+                        SELECT /*+ USE_HASH(A,B) */ * FROM DL_EXCHGORD_UPLD A,
+						DL_DEAL B
+                        WHERE
+                        A.FILELINKINFO = :p_file_link AND
+                        NVL(A.IS_NODELV,'N') !='Y'
+                        AND A.STATUS = 'PM'
+                        AND A.MATCHED = 'Y'
+                        AND A.NODELV_REPDATE IS NULL 
+						AND (A.DEAL_REF_NO = B.IDENTIY_NO
+						OR	A.order_no in (select C.order_no from dl_match_rpt C where C.status='PM' and C.exch_code='MCS'
+						AND C.SETTLEMENT_NO = B.SETTLEMENT_NO AND C.STATUS= B.DEAL_STAT ))                       
+                        AND A.CLIENT = B.CLIENT
+                        AND to_char(A.DEAL_DATE,'DD/MM/YYYY') = to_char(B.DEAL_DATE,'DD/MM/YYYY')
+                        AND (B.deal_cd            = '1'
+                        OR B.deal_cd              = '2'
+                        OR B.deal_cd              = '3'
+                        OR (B.deal_cd             = '4'
+                         AND B.dl_class            = '1'
+                         AND (GETCLIENTPARAMBYID('LIEN_MARK_REQD',B.CLIENT))= 'Y'
+                                AND EXISTS
+                                (SELECT 1
+                                 FROM dl_lien D
+                                  WHERE D.client = B.client
+                                  AND D.ref_no   = B.identiy_no
+                                  AND D.status  ='IN'
+                                  ))
+                                OR(B.deal_cd             = '4'
+                                AND B.dl_class            = '1'
+                                AND (GETCLIENTPARAMBYID('LIEN_MARK_REQD',B.CLIENT))= 'N')
+                                 OR (B.deal_cd   = '4'
+                                AND B.dl_class != '1'))
+						UNION		
+						SELECT /*+ USE_HASH(A,B) */* FROM DL_EXCHGORD_UPLD A,
+						DL_DEAL B, MT_CLI_EXCH_MAP M1,MT_CLI_EXCH_MAP M2
+                        WHERE
+                        A.FILELINKINFO = :p_file_link AND
+                        NVL(A.IS_NODELV,'N') !='Y'
+                        AND A.STATUS = 'PM'
+                        AND A.MATCHED = 'Y'
+                        AND A.NODELV_REPDATE IS NULL 
+						AND (A.DEAL_REF_NO = B.IDENTIY_NO
+						OR	A.order_no in (select C.order_no from dl_match_rpt C where C.status='PM' and C.exch_code='MCS'
+						AND C.SETTLEMENT_NO = B.SETTLEMENT_NO AND C.STATUS= B.DEAL_STAT ))                       
+                        AND A.CLIENT = M1.cln_code
+						AND B.CLIENT = M2.cln_code
+						AND M1.cln_exch_map_code= M2.cln_exch_map_code
+                        AND to_char(A.DEAL_DATE,'DD/MM/YYYY') = to_char(B.DEAL_DATE,'DD/MM/YYYY')
+                        AND (B.deal_cd            = '1'
+                        OR B.deal_cd              = '2'
+                        OR B.deal_cd              = '3'
+                        OR (B.deal_cd             = '4'
+                         AND B.dl_class            = '1'
+                         AND (GETCLIENTPARAMBYID('LIEN_MARK_REQD',B.CLIENT))= 'Y'
+                                AND EXISTS
+                                (SELECT 1
+                                 FROM dl_lien D
+                                  WHERE D.client = B.client
+                                  AND D.ref_no   = B.identiy_no
+                                  AND D.status  ='IN'
+                                  ))
+                                OR(B.deal_cd             = '4'
+                                AND B.dl_class            = '1'
+                                AND (GETCLIENTPARAMBYID('LIEN_MARK_REQD',B.CLIENT))= 'N')
+                                 OR (B.deal_cd   = '4'
+                                AND B.dl_class != '1'))		
+                              order by ROWSEQUENCE ;	
+				/*Commented - and Re-written - for Slowness Issue-ISKB-1493-Production-01092016 START */		
+		}
+		else
+		{
+            /*Added by supriya on 02062015 for ISKB_1493(Lien/Margin Automation) -END*/
+			EXEC SQL DECLARE cnf_orders CURSOR FOR
+			SELECT * FROM DL_EXCHGORD_UPLD
+			WHERE
+			FILELINKINFO = :p_file_link AND
+			NVL(IS_NODELV,'N') !='Y' order by ROWSEQUENCE ; /* changes by amish -- 24/10/2006 - it shld not pick No delv records here !! */
+               }
+			IS_ANY_ORA_ERROR;
+			Alert("\n Inside gen_cnf_file_MCS after declaring cursor cnf_orders sqlca.sqlcode=|%d|.. \n",sqlca.sqlcode);	
+			EXEC SQL OPEN cnf_orders;
+			Alert("\n Inside gen_cnf_file_MCS after opening cursor cnf_orders sqlca.sqlcode=|%d|.. \n",sqlca.sqlcode);		
+		}
+
+		for(;;)
+		{
+			if(int_l_condexists > 0)
+			{
+
+				Alert("\n 2 condition exists ---Inside if \n");
+                                memset(dl_exchgord_upld_struct, NULL, sizeof(DL_EXCHGORD_UPLD_STRUCT_H));/*to remove junk characters in confirmation file- Priyanka*/
+				EXEC SQL FETCH cnf_orders2 INTO :dl_exchgord_upld_struct:dl_exchgord_upld_struct_i;
+			    Alert("\n Inside gen_cnf_file_MCS after fetching cursor cnf_orders sqlca.sqlcode=|%d|.. \n",sqlca.sqlcode);
+				Alert("SqlCode=%d",sqlca.sqlcode);
+				if(APL_ZERO_RESULT_SET)
+    				 break;	
+//				if (l_reported_orders ==0)			/* commented by amish -- 31/07/2007 */
+//				{
+//					writeCnfHeader_NSE(l_Download_File);
+//				}
+			}
+			else
+			{
+
+				Alert("\n 2 condition dosent exists ---Inside if \n");
+				memset(dl_exchgord_upld_struct, NULL, sizeof(DL_EXCHGORD_UPLD_STRUCT_H));/*to remove junk characters in confirmation file- Priyanka*/
+				EXEC SQL FETCH cnf_orders INTO :dl_exchgord_upld_struct:dl_exchgord_upld_struct_i;
+			    Alert("\n Inside gen_cnf_file_MCS after fetching cursor cnf_orders sqlca.sqlcode=|%d|.. \n",sqlca.sqlcode);		
+				Alert("SqlCode=%d",sqlca.sqlcode);
+				if(APL_ZERO_RESULT_SET)
+    				 break;	
+//				if (l_reported_orders ==0)        /* commented by amish -- 31/07/2007 */
+//				{
+//					writeCnfHeader_NSE(l_Download_File);
+//				}
+
+			}
+
+			writeCnfDetails_MCS(l_Download_File,dl_exchgord_upld_struct,l_debug_info_ptr);
+			 /** Start-IsolveID-250:AmitB:for NSE Binary Header Changes:10-04-2007  **/
+			if(strlen(dl_exchgord_upld_struct->h_order_no) > 19)
+				l_no_records=l_no_records+2;
+			else
+				l_no_records++;
+
+			l_reported_orders++;
+		}
+		if(int_l_condexists > 0)
+		{
+				EXEC SQL CLOSE cnf_orders2;
+				IS_ANY_ORA_ERROR
+		}
+		else
+	    {
+				EXEC SQL CLOSE cnf_orders;
+				IS_ANY_ORA_ERROR
+	    }
+        
+	    Alert("\n Inside gen_cnf_file_MCS outside for loop sqlca.sqlcode=|%d|.. \n",sqlca.sqlcode);		
+
+		/* ISKB-492 :(retro from KOTAK) Changed by ASHISH 09-10-2007 */
+
+	 /*   writeNoDlvDetails(l_Download_File,"NSE-BIN",l_logfile,p_file_link,l_no_records_nodel,l_debug_info_ptr); */
+
+         writeNoDlvDetails(l_Download_File,"MCS-BIN",l_logfile,p_file_link,&l_no_records_nodel,l_debug_info_ptr);
+		 l_no_records=l_no_records+l_no_records_nodel;
+		/** End-IsolveID-250:AmitB:for NSE Binary Header Changes:10-04-2007  **/
+
+		/*** Added By Amish - To get size of conf_file - START ***/
+
+
+ 		Alert("\n ******* download path is |%s|\n",chr_l_downloadpath);
+
+		fclose(l_Download_File);
+
+		if(CO_Rtv_FileSize_From_Pointer(chr_l_downloadpath,&l_filesize) == APL_FAILURE)
+		{
+			APL_GOBACK_FAIL
+		}
+	
+		Alert("\n*************testing*********file size is |%d|\n",l_filesize);
+	
+		strcpy(l_fsize_char,ltoa(l_filesize));
+	
+		Alert("\n*************file name in character*********file size is |%s|\n",l_fsize_char);
+	
+		int_retval =   CO_PadString(l_fsize_char,"L",4,"0",l_debug_info_ptr);
+
+		if (int_retval != APL_SUCCESS)
+			APL_GOBACK_FAIL
+		Alert("*************file name in char after pad func*********file size is |%s|",l_fsize_char);
+	
+		strcpy(chr_l_cnffilename_path,chr_l_downloadpath);
+		strcpy(chr_l_cnffilename_temp,chr_l_cnffilename_path);
+		strcat(chr_l_cnffilename_temp,"_temp");
+		Alert("\nfile name with path issssssss |%s|\n",chr_l_cnffilename_path);
+
+		/** Start-IsolveID-250:AmitB:for NSE Binary Header Changes:10-04-2007  **/
+		Alert("\n Finaly No of rec=|%d| \n",l_no_records);
+
+          /* Changed by ASHISH 16-08-2007 */
+		l_filesize=100+(l_no_records*12);
+		strcpy(l_fsize_char,ltoa(l_filesize));
+		if (strlen(l_fsize_char) < 8)
+		{
+			CO_PadString(l_fsize_char,'L',8,"0",l_debug_info_ptr);
+		}
+		/** End-IsolveID-250:AmitB:for NSE Binary Header Changes:10-04-2007  **/
+		
+	sprintf(l_buf,"sed 's/####/%s/g' %s > %s",l_fsize_char,chr_l_cnffilename_path,chr_l_cnffilename_temp);
+		Alert("\nCommand = |%s| ",l_buf);
+		retval = system(l_buf);
+		Alert("\n GREP COMMAND EXECUTED WITH status = |%d|\n ",retval);
+		memset(l_buf,APL_NULL_CHAR,1000);
+
+
+		sprintf(l_buf,"mv %s %s",chr_l_cnffilename_temp,chr_l_cnffilename_path);
+		Alert("\nCommand = |%s| ",l_buf);
+		retval = system(l_buf);
+		Alert("\n GREP COMMAND EXECUTED WITH status = |%d|\n ",retval);
+		memset(l_buf,APL_NULL_CHAR ,1000);
+
+		/*** Added By Amish - To get size of conf_file - END ***/
+
+ /* System command added by ASHISH 16-08-2007 */
+              /*  sprintf(l_buf,"unix2dos %s %s",chr_l_cnffilename_path,chr_l_cnffilename_path);
+		retval = system(l_buf);	
+		Alert("\n Unix2DOS status=|%d| \n",retval);
+*/
+
+/* Added by Brundavan   as per IB_2B_019 */
+	   char  chr_l_tmp_file_name_path[1000] = APL_NULL_STRING; 
+	   strcpy(chr_l_tmp_file_name_path,chr_l_cnffilename_path);
+	   strcat(chr_l_tmp_file_name_path,".ASC");
+	   sprintf(l_buf,"cp  %s %s",chr_l_cnffilename_path,chr_l_tmp_file_name_path );
+           printf("Command to take the back up of the generated file =|%s|",l_buf);
+           retval = system(l_buf);
+           Alert("After changing the extention status= |%d| \n",retval);
+	   Alert("Name of the temp file name is =|%s|",chr_l_tmp_file_name_path);
+
+  if(CO_Rtv_FileSize_From_Pointer(chr_l_cnffilename_path,&l_filesize) == APL_FAILURE)
+      {
+         APL_GOBACK_FAIL
+       }
+
+  	   Alert("Before ConvAsciiToBin  progrrame the file size is |%d|\n",l_filesize);
+	   sprintf(l_buf,"ConvAsciiToBin  %s %s",chr_l_cnffilename_path,chr_l_cnffilename_temp);
+	   Alert("\nCommand = |%s| ",l_buf);
+           retval = system(l_buf);
+           Alert(" ConvAsciiToBin programe execution status= |%d| \n",retval);
+
+	   sprintf(l_buf,"mv %s %s",chr_l_cnffilename_temp,chr_l_cnffilename_path);
+	   Alert("\nCommand = |%s| ",l_buf);
+           retval = system(l_buf);
+	   Alert("\n MOVE COMMAND EXECUTE WITH status = |%d|\n ",retval);
+
+  if(CO_Rtv_FileSize_From_Pointer(chr_l_cnffilename_path,&l_filesize) == APL_FAILURE)
+      {
+         APL_GOBACK_FAIL
+       }
+
+           Alert("After ConvAsciiToBin  progrrame the file size is |%d|\n",l_filesize);
+/* End of Brundavan addition  as per IB_2B_019  */
+
+	   APL_GOBACK_SUCCESS
+	   RETURN_SUCCESS :
+	   {
+		 Alert("Exiting gen_cnf_file_NSE successfully\n");
+	     return (APL_SUCCESS);
+	   }
+	   RETURN_FAILURE :
+	   {
+		 Alert("Exiting gen_cnf_file_NSE unsuccessfully\n");
+	     return (APL_FAILURE);
+	   }
+}
+
+/***************************** Changes For OTR ****************************************/
+/* changes by amish - 30/10/2006 */
+int gen_cnf_file_OTR(char *p_file_name,int p_file_link,char **argv,FILE *l_logfile,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	char 	chr_l_downloadpath[200] = APL_NULL_STRING;
+	FILE 	*l_Download_File = (FILE *)NULL;
+
+	char 	chr_l_uploadpath[200] = APL_NULL_STRING;
+	FILE 	*l_Upload_File = (FILE *)NULL;
+
+	char 	chr_l_cnffilename[200] = APL_NULL_STRING;
+	char                 l_temp[1000] = APL_NULL_STRING;
+	char   l_is_nodelv[2] = APL_NULL_STRING;
+	int l_counter = 0;
+	int line_number = 0;
+	int l_no_records=0;/** ISKB-501:ASHISH:for NSE OTR Changes:29-10-2007  **/
+	   INTL_REPT_STRUCT_H            *l_intl_rept_struct_ha  =NULL;
+
+	char   l_matched_flg[2] = APL_NULL_STRING;
+
+	char                 l_new_line[1000] = APL_NULL_STRING;
+	char                 l_line[1000] = APL_NULL_STRING;
+
+	FILE *fp_cfg = (FILE *)NULL;
+	char l_cfg_filename[100];
+	
+	/* Start - ISKB - Header change in OTR Conf. File -Rahul - 29May2007 */
+	int l_resetSeq_cnt = 0;
+	int l_seq_cuurval = 0;
+	char l_hdr_line[1000] = APL_NULL_STRING;
+	char l_chr_query[500] = APL_NULL_STRING;
+	/* End - ISKB - Header change in OTR Conf. File -Rahul - 29May2007 */
+
+	/*
+	strcpy(chr_l_cnffilename,"OTR_CNF_FILE.TXT");
+	*/
+// Priyanka - Retro from SBI
+	char  strTmpFileName[1000] = APL_NULL_STRING; // Tarkeshwar added for sequence no wise file generation issue
+           /* Jeevan-- SIT OTR FILE Upload Naming Convention */
+
+	 PRO_GSEQNUM_STRUCT_H    l_pro_gseqno_struct_h; // Sequence structure: ASHISH 03-05-2007
+	 int int_l_seqnum_a=0; //ASHISH 03-05-2007
+	 int int_return_val=0; //ASHISH 03-05-2007
+	 char chr_l_seqnum_a[10] = APL_NULL_STRING; //ASHISH 03-05-2007
+         char l_otrfile[10] = APL_NULL_STRING; //Jeevan --MCS CHGS
+         memset(l_otrfile,APL_NULL_CHAR,sizeof(l_otrfile));
+	
+	
+	
+	/* ASHISH 03-05-2007 START */
+	strcpy(l_pro_gseqno_struct_h.sequencename, "DL_MCS_CNF_SEQ");
+	strcpy(l_pro_gseqno_struct_h.seq_attrb_a, APL_NULL_STRING);
+	strcpy(l_pro_gseqno_struct_h.seq_attrb_b, APL_NULL_STRING);
+	strcpy(l_pro_gseqno_struct_h.seq_attrb_c, APL_NULL_STRING);
+
+	l_pro_gseqno_struct_h.seq_stepby = 1;
+	l_pro_gseqno_struct_h.seq_start = 1;
+	l_pro_gseqno_struct_h.last_seqnum = 99999999;
+	l_pro_gseqno_struct_h.recycle_ind = RECYCLE_EOD;
+
+
+	//int_return_val = CO_RtvNxtSeqNum(&l_pro_gseqno_struct_h,l_debug_info_ptr);
+// Priyanka - Retro from SBI 
+		memcpy(strTmpFileName,p_file_name,strlen(p_file_name)-5); // Tarkeshwar added for sequence no wise file generation issue.
+		int_return_val = getNextSeq(strTmpFileName); // Tarkeshwar added for sequence no wise file generation issue.
+
+
+	 if (int_return_val != APL_FAILURE)
+	     int_l_seqnum_a = int_return_val;
+	 else
+	     APL_GOBACK_FAIL
+
+
+	sprintf(chr_l_seqnum_a,"%d",int_l_seqnum_a);
+	strcpy(l_otrfile,chr_l_seqnum_a);
+	/* ASHISH 03-05-2007 END */
+
+	if(strstr(p_file_name,"MCX")!= NULL)
+	{
+		
+		memcpy(chr_l_cnffilename,p_file_name,strlen(p_file_name)-3);
+		strcat(chr_l_cnffilename,"C0");
+	        strcat(chr_l_cnffilename,l_otrfile);
+
+	}
+
+	else
+	{
+		strcpy(chr_l_cnffilename,p_file_name);
+		strcat(chr_l_cnffilename,".CNF");
+	}
+    
+     /* Jeevan-- SIT OTR FILE Upload Naming Convention*/
+
+	l_intl_rept_struct_ha   = (INTL_REPT_STRUCT_H *)calloc(1, sizeof(INTL_REPT_STRUCT_H));
+	APL_MALLOC_FAIL(l_intl_rept_struct_ha);
+	strcpy(l_cfg_filename,getenv("INTL_ROOT_PATH"));
+	strcat(l_cfg_filename,"/intl_sun.cfg");
+	APL_FUNCTION_ENTER(l_logfile)
+		fp_cfg = fopen(l_cfg_filename,"r");
+
+	if(fp_cfg == (FILE *)NULL)
+	{
+		BT_IF_DEBUG
+			fprintf(l_logfile, "Config File |%s|\n",l_cfg_filename);
+		BT_IF_DEBUG
+			CO_ProcMonitor(l_logfile,"Failed To Open Config File",NULL,NULL);
+
+		APL_GOBACK_FAIL
+	}
+
+	if ( CO_ReadToken(fp_cfg,"INTL_UPL_PATH",chr_l_uploadpath,l_debug_info_ptr) == APL_FAILURE)
+	{
+		CO_ProcMonitor(l_logfile, "Failure From Retrieve Dir Path Of Upload", NULL, NULL);
+		APL_GOBACK_FAIL
+	}
+	strcat(chr_l_uploadpath,p_file_name);
+
+	if((l_Upload_File = fopen(chr_l_uploadpath,"r")) == NULL)
+	{
+		printf("Could not open File |%s|",chr_l_uploadpath);
+		APL_GOBACK_FAIL;
+	}
+
+	if ( CO_ReadToken(fp_cfg,"INTL_DWNLD_PATH",chr_l_downloadpath,l_debug_info_ptr) == APL_FAILURE)
+	{
+		CO_ProcMonitor(l_logfile, "Failure From Retrieve Dir Path Of Download", NULL, NULL);
+		APL_GOBACK_FAIL
+	}
+	strcat(chr_l_downloadpath,chr_l_cnffilename);
+	
+
+	if((l_Download_File = fopen(chr_l_downloadpath,"w")) == NULL)
+	{
+		printf("Could not open File |%s|",chr_l_downloadpath);
+		APL_GOBACK_FAIL;
+	}
+
+
+	strcpy(l_intl_rept_struct_ha->report_name, chr_l_cnffilename);
+	strcpy(l_intl_rept_struct_ha->report_desc, APL_HOFF_FILE_DESC);
+  strcpy(l_intl_rept_struct_ha->report_date, argv[2]);
+  l_intl_rept_struct_ha->report_width = 100;
+  strcpy(l_intl_rept_struct_ha->task_desc, argv[5]);
+  strcpy(l_intl_rept_struct_ha->fe_be_ind, APL_BE_IND);
+  strcpy(l_intl_rept_struct_ha->usr, argv[3]);
+
+	/* Start - ISKB - Header change in OTR Conf. File -Rahul - 29May2007 */
+	EXEC SQL SELECT count(*) INTO :l_resetSeq_cnt FROM PRO_COMMON_REPORT,DL_ORD_SUMM
+	WHERE FILE_NAME = SUBSTR(REPORT_NAME,1,LENGTH(REPORT_NAME)-4) AND FILE_NAME LIKE '%OT%' 
+				AND TRIM(TASK_DESC) = 'GenerateConfFile' AND TRUNC(REPORT_DATE) = (SELECT TRUNC(SYS_DATE) FROM PRO_SYS_DATE)
+				AND F_CODE = 'NSE' AND FILELINKINFO IN  (SELECT DISTINCT FILELINKINFO FROM DL_EXCHGORD_UPLD);
+	IS_ANY_ORA_ERROR
+	printf("\nISKB- Reset Sequence Changes --> Count is |%d|\n",l_resetSeq_cnt);
+	if (l_resetSeq_cnt == 0)
+	{
+		EXEC SQL SELECT DL_CONF_SEQ.NEXTVAL INTO :l_seq_cuurval FROM DUAL;
+		IS_ANY_ORA_ERROR	
+		l_seq_cuurval  = 0;
+
+		printf("\nISKB- Reset Sequence Changes --> Going to reset Sequence\n");
+		EXEC SQL SELECT -DL_CONF_SEQ.CURRVAL INTO :l_seq_cuurval FROM DUAL;
+		IS_ANY_ORA_ERROR	
+		printf("\nISKB- Reset Sequence Changes --> Current Val is |%d|\n",l_seq_cuurval);
+
+		sprintf(l_chr_query,"ALTER SEQUENCE DL_CONF_SEQ increment by %d minvalue 0",l_seq_cuurval);
+		printf("\nISKB- Reset Sequence Changes --> QUERY IS |%s|\n",l_chr_query);
+
+		EXEC SQL EXECUTE IMMEDIATE :l_chr_query;
+		IS_ANY_ORA_ERROR
+
+		l_seq_cuurval = 0;
+		EXEC SQL SELECT DL_CONF_SEQ.NEXTVAL  INTO :l_seq_cuurval  FROM DUAL;
+		IS_ANY_ORA_ERROR	
+		printf("\nISKB- Reset Sequence Changes --> Current Val After change is |%d|\n",l_seq_cuurval);
+
+		EXEC SQL alter sequence DL_CONF_SEQ 
+			increment by 1
+			minvalue 0;
+		IS_ANY_ORA_ERROR
+	}
+	/* End- ISKB - Header change in OTR Conf. File -Rahul - 29May2007 */
+
+ if (APL_FAILURE == CO_Proc_DBRptIns( l_intl_rept_struct_ha, l_debug_info_ptr))
+  {
+     APL_GOBACK_FAIL
+  }
+
+
+	fscanf(l_Upload_File, "%[^\n]\n",l_line);
+	printf("l_line is |%s|\n ",l_line);
+	
+	/* Start - ISKB - Header change in OTR Conf. File -Rahul - 29May2007 */
+		EXEC SQL SELECT substr(:l_line,1,instr(:l_line,',',1,4))||to_char(SYS_DATE,'YYYYMMDD')||','||lpad(DL_CONF_SEQ.NEXTVAL,2,'0')||
+										substr(:l_line,instr(:l_line,',',1,6)) into :l_hdr_line FROM PRO_SYS_DATE;
+		IS_ANY_ORA_ERROR
+
+		printf("\nISKB- New Header line change --> l_hdr_line |%s|\n",l_hdr_line);
+		strcpy(l_line,l_hdr_line);
+	/* End - ISKB - Header change in OTR Conf. File -Rahul - 29May2007 */
+
+	fputs(l_line,l_Download_File);
+	fprintf(l_Download_File,"\n");
+	strcat(l_line,APL_NULL_STRING);
+	strcat(l_new_line,APL_NULL_STRING);
+
+	printf("entering while loop !!!\n");
+		l_counter++;
+	while(!feof(l_Upload_File))
+	{
+
+		printf("inside while loop !!!\n");
+		l_counter++;
+		line_number = l_counter;
+		fscanf(l_Upload_File, "%[^\n]\n",l_line);
+		l_line[strlen(l_line)] =APL_NULL_CHAR;
+		printf(" l_line is |%s|\n",l_line);
+		if(strlen(l_line)==0)
+			continue;
+        /*Added by supriya on 02062015 for ISKB_1493(Lien/Margin Automation) -START*/
+         /*Added dl_match_rpt check--for M2M issue-ISKB_1493*/   
+               IF_COND_EXISTS("DL_ACCTENT","DL_LIEN_ACCTENT_GEN")
+       {
+EXEC SQL SELECT /*+ USE_HASH(A,B) */ NVL(A.MATCHED,'N'),nvl(A.IS_NODELV,'N') INTO :l_matched_flg,l_is_nodelv FROM 
+DL_EXCHGORD_UPLD A,DL_DEAL B
+                        WHERE
+                        A.FILELINKINFO = :p_file_link AND
+                        A.ROWSEQUENCE = :line_number AND
+                        NVL(A.IS_NODELV,'N') !='Y' 
+	AND (A.DEAL_REF_NO = B.IDENTIY_NO
+	OR	A.order_no in (select C.order_no from dl_match_rpt C where C.status='PM' and C.exch_code='NSE'))
+                       /*AND (A.CLIENT = B.CLIENT OR (CP_EXCHORD_MAP(B.CLIENT,A.CLIENT,B.EXCH_CODE)='true' ) )*/
+                        AND A.CLIENT = B.CLIENT
+                        AND to_char(A.DEAL_DATE,'DD/MM/YYYY') = to_char(B.DEAL_DATE,'DD/MM/YYYY')
+                        AND (B.deal_cd            = '1'
+                        OR B.deal_cd              = '2'
+                        OR B.deal_cd              = '3'
+                        OR (B.deal_cd             = '4'
+                         AND B.dl_class            = '1'
+                         AND (GETCLIENTPARAMBYID('LIEN_MARK_REQD',B.CLIENT))= 'Y'
+                                AND EXISTS
+                                (SELECT 1
+                                 FROM dl_lien D
+                                  WHERE D.client = B.client
+                                  AND D.ref_no   = B.identiy_no
+                                  AND D.status  IN ('IN','MI')
+                                  ))
+                                OR(B.deal_cd             = '4'
+                                AND B.dl_class            = '1'
+                                AND (GETCLIENTPARAMBYID('LIEN_MARK_REQD',B.CLIENT))= 'N')
+                                 OR (B.deal_cd   = '4'
+                                AND B.dl_class != '1'));	
+		}
+		else
+		{ 
+           /*Added by supriya on 02062015 for ISKB_1493(Lien/Margin Automation) -END*/
+
+		EXEC SQL SELECT NVL(MATCHED,'N'),nvl(IS_NODELV,'N') INTO :l_matched_flg,l_is_nodelv FROM DL_EXCHGORD_UPLD
+			WHERE
+			FILELINKINFO = :p_file_link AND
+			ROWSEQUENCE = :line_number AND
+			NVL(IS_NODELV,'N') !='Y'; /* changes by amish -- 24/10/2006 - it shld not pick No delv records here !! */
+              }
+		printf(" #B sqlca.sqlcode is %d|\n",sqlca.sqlcode);
+		if(sqlca.sqlcode==1403)
+			continue;
+		IS_ANY_ORA_ERROR;
+
+		memset(l_temp,APL_NULL_CHAR,1000);
+		strcpy(l_temp,l_line);
+
+		printf(" l_line is |%s|\n",l_line);
+
+    /* For No Delivery Orders System should report as not confirmed */
+    if (strcmp(l_is_nodelv,"Y")==0)
+    {
+       l_matched_flg[0] = 'N';
+    }
+
+		/** TUX ***/
+		if ( l_line[strlen(l_line) -1 ] == ',')   /*** Then append comma ***/
+		{
+			printf("\n ** TUX: COMMA FOUND at the end of line ");
+			EXEC SQL select substr(:l_temp,1,(instr(:l_temp,',',-3)-1))||','||:l_matched_flg ||',' 
+				INTO :l_new_line FROM DUAL;
+			IS_ANY_ORA_ERROR;
+		}
+		else
+		{
+			printf("\n ** TUX: COMMA NOT FOUND at the end of line matched = |%s| temp = |%s| ",l_matched_flg,l_temp);
+			EXEC SQL select substr(:l_temp,1,(instr(:l_temp,',',-1)-1))||','||:l_matched_flg 
+				INTO :l_new_line FROM DUAL;
+			IS_ANY_ORA_ERROR;
+		}
+
+
+		fputs(l_new_line,l_Download_File);
+		fprintf(l_Download_File,"\n");
+	}
+/** ISKB-501:ASHISH:for NSE OTR Header Changes:29-10-2007  **/
+ writeNoDlvDetails(l_Download_File,"NSE-OTR",l_logfile,p_file_link,&l_no_records,l_debug_info_ptr);
+
+	fclose(l_Upload_File);
+	fclose(l_Download_File);
+
+	APL_GOBACK_SUCCESS
+		RETURN_SUCCESS :
+		{
+			printf("Exiting gen_cnf_file_OTR successfully\n");
+			return (APL_SUCCESS);
+		}
+RETURN_FAILURE :
+	{
+		printf("Exiting gen_cnf_file_OTR unsuccessfully\n");
+		return (APL_FAILURE);
+	}
+}
+/***************************** Changes For OTR ****************************************/
+
+/** IsolveID-250:AmitB:for NSE Binary Header Changes:10-04-2007  **/
+int writeNoDlvDetails(FILE *p_DownLoad_File,char *l_file_type,FILE *l_logfile,int p_file_link,int *p_no_records,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	char     l_no_dlv_line[1000] = APL_NULL_STRING;
+	short	 i_no_dlv_line = 0;
+	char     l_rowid[APL_ROWID_LEN]  = APL_NULL_STRING;
+    char     chr_l_sys_date_time[APL_DATE_LEN] = APL_NULL_STRING;
+    char 	 l_exchange_code[4] = APL_NULL_STRING;
+
+	char   l_matched_flg[2] = APL_NULL_STRING;
+	char                 l_temp[1000] = APL_NULL_STRING;
+	char                 l_new_line[1000] = APL_NULL_STRING;
+	char		chr_file_name[101]	= APL_NULL_STRING; /* amish  - for writing other no delv details*/
+	short i_file_name = 0; /* amish  - for writing other no delv details*/	
+	int l_no_delv_oth = 0; /* amish  - for writing other no delv details*/
+	/** New Variable by AmitB 31/07/06	**/
+ 	
+	char 						l_prev_date_temp[20]= APL_NULL_STRING;
+	char 						l_prev_date[20]= APL_NULL_STRING;
+ 	short 					i_prev_date=0;	
+	
+	/* added by amish - 27/10  - start*/
+	char chr_no_del_to[APL_DATE_LEN] =  APL_NULL_STRING;
+	short i_no_del_to = 0;
+	int int_ru_diff = 0;
+	/* added by amish - 27/10 - end*/
+	/* OPT:AIX int int_l_condexists = 0; */
+	short int_l_condexists = 0;
+	int l_no_records=0;/** IsolveID-250:AmitB:for NSE Binary Header Changes:10-04-2007  **/
+	/*int int_l_condexists = 0;   ISKB-492 : ASHISH 09-10-2007 *///AIX Warning Removal
+
+	DL_EXCHGORD_UPLD_STRUCT_H  *dl_exchgord_upld_struct=NULL;
+	DL_EXCHGORD_UPLD_STRUCT_I *dl_exchgord_upld_struct_i=NULL;
+
+	int		l_no_dlv_orders = 0;
+
+	printf("Entered writeNoDlvDetails \n");
+	 	/*Calloc*/
+	dl_exchgord_upld_struct=(DL_EXCHGORD_UPLD_STRUCT_H *)calloc(1,sizeof(DL_EXCHGORD_UPLD_STRUCT_H));
+	dl_exchgord_upld_struct_i=(DL_EXCHGORD_UPLD_STRUCT_I *)calloc(1,sizeof(DL_EXCHGORD_UPLD_STRUCT_I));
+	
+	 	/*MemSet*/
+	memset(dl_exchgord_upld_struct, NULL, sizeof(DL_EXCHGORD_UPLD_STRUCT_H));
+	memset(dl_exchgord_upld_struct_i, NULL, sizeof(DL_EXCHGORD_UPLD_STRUCT_I));
+	
+		/*
+	 	if (CO_RtvSysDtTime(chr_l_sys_date_time, l_debug_info_ptr) == APL_FAILURE)
+	    APL_GOBACK_FAIL
+		*/
+		/* changes by amish -- 20/06 */
+	if (CO_RtvSysDt(chr_l_sys_date_time, l_debug_info_ptr) == APL_FAILURE)
+				  APL_GOBACK_FAIL
+			 
+	printf("System Date is |%s|\n",chr_l_sys_date_time);
+	printf("File Type is |%s|\n",l_file_type);
+
+	l_no_dlv_orders = 0;
+
+
+	if (strcmp(l_file_type,"NSE-BIN")==0)
+	{
+		strcpy(l_exchange_code,"NSE");
+	}
+	else if (strcmp(l_file_type,"NSE-OTR")==0)
+	{
+		strcpy(l_exchange_code,"NSE");
+	}
+	else if (strcmp(l_file_type,"BSE-ASCII")==0)
+	{
+		strcpy(l_exchange_code,"BSE");
+	}
+	else if (strcmp(l_file_type,"MCS-BIN")==0)
+	{
+		strcpy(l_exchange_code,"MCS");
+	}
+	else if (strcmp(l_file_type,"MCS-OTR")==0)
+	{
+		strcpy(l_exchange_code,"MCS");
+	}
+
+	if (APL_FAILURE == Rtv_Prev_BussDate(chr_l_sys_date_time,
+				l_prev_date_temp,
+				l_exchange_code,
+				l_debug_info_ptr ))
+	{
+		printf("\n Failed in Rtv_Prev_BussDate \n");
+		APL_GOBACK_FAIL
+	}
+
+	printf("\n Amit:l_prev_date_temp=|%s| \n",l_prev_date_temp);
+
+	EXEC SQL SELECT SUBSTR(trunc(to_date(:l_prev_date_temp,'DD/MM/YYYY HH24:MI:SS')),1,10) INTO :l_prev_date:i_prev_date FROM DUAL;
+	
+	printf("\n Before Appending time l_prev_date=|%s| \n",l_prev_date);
+	strcat(l_prev_date,APL_NULL_TIME);
+	printf("\n After Appending l_prev_date=|%s| \n",l_prev_date);
+	
+	strcpy(l_prev_date,l_prev_date_temp);
+	
+	printf("\n SYS DATE TIME ISSSSSSSSSSS|%s|n",chr_l_sys_date_time);
+		/*Commented By Amol -21082006*/
+	/*		if (strcmp(l_file_type,"NSE-BIN")==0)
+		{
+			EXEC SQL SELECT COUNT(*) INTO :l_no_dlv_orders 
+			FROM DL_EXCHGORD_UPLD a,MT_SETTL_CAL b
+			 WHERE 
+				a.EXCHG_CODE=:l_exchange_code AND
+				a.IS_NODELV='Y' AND 
+				(a.NODELV_REPDATE IS NULL OR a.NODELV_REPDATE=:chr_l_sys_date_time OR a.NODELV_REPDATE=:l_prev_date) AND
+				a.SETTL_NO=b.SETTL_NO AND 
+				a.ORDER_DATA IS NULL
+				AND
+				b.START_DATE=:chr_l_sys_date_time ;
+				
+		}
+		else 
+		{*/
+
+		/* ISKB-492 : Add by ASHISH 09-10-2007 Start */
+
+		if( CO_Chk_CntryEnabled( "DL_CNFFILEGEN",
+								"CNFFILEGEN",
+								&int_l_condexists,
+								l_debug_info_ptr
+								)  == APL_FAILURE)
+			
+					{
+						APL_GOBACK_FAIL
+					}
+    
+		if(int_l_condexists > 0 && (strcmp(l_file_type,"NSE-OTR")==0)||int_l_condexists > 0 && (strcmp(l_file_type,"MCS-OTR")==0))
+		{
+
+				EXEC SQL SELECT COUNT(*) INTO :l_no_dlv_orders 
+				FROM DL_EXCHGORD_UPLD a,MT_SETTL_CAL b,mt_no_delv c
+				WHERE 
+				a.EXCHG_CODE=:l_exchange_code AND
+				a.IS_NODELV='Y' AND 
+				/**			(a.NODELV_REPDATE IS NULL or a.NODELV_REPDATE=:chr_l_sys_date_time) AND	
+				(a.NODELV_REPDATE IS NULL OR a.NODELV_REPDATE=:chr_l_sys_date_time OR a.NODELV_REPDATE=:l_prev_date) AND **/
+				a.NODELV_REPDATE IS NULL AND
+				a.SETTL_NO=b.SETTL_NO AND 
+				a.SETTL_NO=c.carry_fw_stlno and
+				a.mkt_type = b.settl_type and /*Retro with HDFC to add Settl Type in Query - Rahul - 01-Apr-2007*/
+				a.mkt_type = c.mkt_type and /*Retro with HDFC to add Settl Type in Query - Rahul - 01-Apr-2007*/
+				a.INSTR_CODE = c.INSTR_CODE and
+				a.ORDER_DATA IS NOT NULL AND
+				(:chr_l_sys_date_time >= b.START_DATE )
+				AND FILELINKINFO = :p_file_link
+				AND a.STATUS = 'PM'
+				AND a.matched = 'Y'
+				AND c.STATUS = 'AA';
+		}
+
+		else
+		{
+				 EXEC SQL SELECT COUNT(*) INTO :l_no_dlv_orders 
+				FROM DL_EXCHGORD_UPLD a,MT_SETTL_CAL b,mt_no_delv c
+				WHERE a.EXCHG_CODE=:l_exchange_code AND
+				a.IS_NODELV='Y' AND 
+				/**			(a.NODELV_REPDATE IS NULL or a.NODELV_REPDATE=:chr_l_sys_date_time) AND	
+				(a.NODELV_REPDATE IS NULL OR a.NODELV_REPDATE=:chr_l_sys_date_time OR a.NODELV_REPDATE=:l_prev_date) AND **/
+				a.NODELV_REPDATE IS NULL AND
+				a.SETTL_NO=b.SETTL_NO AND 
+				a.SETTL_NO=c.carry_fw_stlno and
+				a.mkt_type = b.settl_type and /*Retro with HDFC to add Settl Type in Query - Rahul - 01-Apr-2007*/
+				a.mkt_type = c.mkt_type and /*Retro with HDFC to add Settl Type in Query - Rahul - 01-Apr-2007*/
+				a.INSTR_CODE = c.INSTR_CODE and
+				a.ORDER_DATA IS NOT NULL AND
+				((:chr_l_sys_date_time BETWEEN b.START_DATE AND b.END_DATE) OR (:chr_l_sys_date_time BETWEEN c.NO_DEL_FROM AND c.NO_DEL_TO)) AND/* changes by amish - 31/10/2006 */
+				:chr_l_sys_date_time <> a.access_stamp
+				AND FILELINKINFO = :p_file_link
+				AND c.STATUS = 'AA';
+		
+		}
+
+		/* ISKB-492 : Add by ASHISH 09-10-2007 End */
+
+		IS_ANY_ORA_ERROR;
+
+		printf("No Of Orders Available for No Delivery are |%d|\n",l_no_dlv_orders);
+
+		if (l_no_dlv_orders)
+		{
+			if ( (strcmp(l_file_type,"NSE-OTR")==0) || (strcmp(l_file_type,"BSE-ASCII")==0))
+			{
+				printf("Now Selecting Orders for NSE-OTR or BSE-ASCII \n");
+				/* changes by amish -- 30/10/2006 */
+				/* COMMENTED BY AMISH - 15/11/2006 PAY IN DATE TO BE USED INSTEAD OF NO DEL TO DATE */
+
+
+				/* ISKB-492 : Changed by ASHISH 09-10-2007 Start */
+
+				if( CO_Chk_CntryEnabled( "DL_CNFFILEGEN",
+								"CNFFILEGEN",
+								&int_l_condexists,
+								l_debug_info_ptr
+								)  == APL_FAILURE)
+			
+					{
+						APL_GOBACK_FAIL
+					}
+    
+				if(int_l_condexists > 0 && (strcmp(l_file_type,"NSE-OTR")==0)||int_l_condexists > 0 && (strcmp(l_file_type,"MCS-OTR")==0))
+				{
+					EXEC SQL DECLARE no_dlv_orders2 CURSOR FOR
+					SELECT a.rowid, a.ORDER_DATA , NVL(a.MATCHED,'N'), b.START_DATE/*(dl.no_del_to + 1) */
+					FROM DL_EXCHGORD_UPLD a,MT_SETTL_CAL b, mt_no_delv dl
+					 WHERE 
+						a.EXCHG_CODE=:l_exchange_code AND
+						a.IS_NODELV='Y' AND 
+		/*					(a.NODELV_REPDATE IS NULL or a.NODELV_REPDATE=:chr_l_sys_date_time OR a.NODELV_REPDATE=:l_prev_date) AND */
+						a.NODELV_REPDATE IS NULL AND
+						a.SETTL_NO=b.SETTL_NO AND 
+						a.SETTL_NO=dl.carry_fw_stlno and
+						a.mkt_type = b.settl_type and /*Retro with HDFC to add Settl Type in Query - Rahul - 01-Apr-2007*/
+						a.mkt_type = dl.mkt_type and /*Retro with HDFC to add Settl Type in Query - Rahul - 01-Apr-2007*/
+						a.INSTR_CODE = dl.INSTR_CODE and
+						a.ORDER_DATA IS NOT NULL AND
+						(:chr_l_sys_date_time >= b.START_DATE )  AND /* changes by amish - 31/10/2006 */
+						 FILELINKINFO = :p_file_link
+						AND a.status = 'PM'
+						AND a.matched = 'Y'
+						AND dl.STATUS = 'AA';
+			
+			
+					Alert("\n Error11=|%d| \n",sqlca.sqlcode);
+					IS_ANY_ORA_ERROR;
+					
+					EXEC SQL OPEN no_dlv_orders2;
+		        }
+				else
+				{
+		  		EXEC SQL DECLARE no_dlv_orders CURSOR FOR
+			  	SELECT a.rowid, a.ORDER_DATA , NVL(a.MATCHED,'N'), b.PAY_IN_DT/*(dl.no_del_to + 1) */
+				FROM DL_EXCHGORD_UPLD a,MT_SETTL_CAL b, mt_no_delv dl
+				 WHERE 
+					a.EXCHG_CODE=:l_exchange_code AND
+					a.IS_NODELV='Y' AND 
+/*					(a.NODELV_REPDATE IS NULL or a.NODELV_REPDATE=:chr_l_sys_date_time OR a.NODELV_REPDATE=:l_prev_date) AND */
+					a.NODELV_REPDATE IS NULL AND
+					a.SETTL_NO=b.SETTL_NO AND 
+			                a.SETTL_NO=dl.carry_fw_stlno and
+					a.mkt_type = b.settl_type and /*Retro with HDFC to add Settl Type in Query - Rahul - 01-Apr-2007*/
+					a.mkt_type = dl.mkt_type and /*Retro with HDFC to add Settl Type in Query - Rahul - 01-Apr-2007*/
+		            a.INSTR_CODE = dl.INSTR_CODE and
+					a.ORDER_DATA IS NOT NULL AND
+					((:chr_l_sys_date_time BETWEEN b.START_DATE AND b.END_DATE) OR (:chr_l_sys_date_time BETWEEN dl.NO_DEL_FROM AND dl.NO_DEL_TO)) AND /* changes by amish - 31/10/2006 */
+				    :chr_l_sys_date_time <> a.ACCESS_STAMP
+					AND FILELINKINFO = :p_file_link
+					AND dl.STATUS = 'AA';
+		        }
+		       
+				Alert("\n Error11=|%d| \n",sqlca.sqlcode);
+				IS_ANY_ORA_ERROR;
+				
+				EXEC SQL OPEN no_dlv_orders;	
+				
+				for(;;)
+				{
+					
+					strcpy(l_no_dlv_line,APL_NULL_STRING);
+					strcpy(l_new_line,APL_NULL_STRING);
+		
+		    		/* ISKB-492 : Changed by ASHISH 09-10-2007 */
+					
+					if(int_l_condexists > 0 && (strcmp(l_file_type,"NSE-OTR")==0))
+					{
+	
+						EXEC SQL FETCH no_dlv_orders2 INTO :l_rowid,:l_no_dlv_line:i_no_dlv_line,:l_matched_flg,chr_no_del_to:i_no_del_to;
+					}
+					else
+					{
+						EXEC SQL FETCH no_dlv_orders INTO :l_rowid,:l_no_dlv_line:i_no_dlv_line,:l_matched_flg,chr_no_del_to:i_no_del_to;
+					}
+					
+				
+		
+					if(APL_ZERO_RESULT_SET)
+		    			 break;	
+					
+					IS_ANY_ORA_ERROR;
+
+					
+		   	    	printf("\n IN FUNCTION writeNoDlvDetails: After fetching cursor no_dlv_orders sqlca.sqlcode=|%d|.. \n",sqlca.sqlcode);		
+				    printf("\n IN FUNCTION writeNoDlvDetails: PAY IN date is  |%s|\n",chr_no_del_to);
+     				if(strcmp(chr_no_del_to,APL_NULL_STRING) != 0)
+					{
+						printf("\n******sys date is ===|%s|\n",chr_l_sys_date_time);
+						if ( APL_FAILURE  ==   CO_Pro_DateComp(chr_l_sys_date_time,chr_no_del_to,&
+                          int_ru_diff,l_debug_info_ptr))
+						  {
+					          APL_GOBACK_FAIL
+						  }
+						  printf("\n result of date compasrions is |%d|\n",int_ru_diff);
+						  printf("\n matched flag is |%s|\n",l_matched_flg);
+						  
+						  /* changes by amish -- 21/11  flag should go 'Y' even on payin date*/
+						  /*
+						  if (int_ru_diff >= 0)
+						  */
+							if (int_ru_diff > 0)
+						  {
+							Alert("\n********in if\n");
+                                                         if(strcmp(l_exchange_code,"MCS"))
+							{
+								fprintf(p_DownLoad_File,dl_exchgord_upld_struct->h_order_data);
+								fprintf(p_DownLoad_File,"R");
+							}
+							else
+							strcpy(l_matched_flg,"N");
+						  }
+				
+					}
+					/* changes by amish -- 30/10/2006  end*/
+					memset(l_temp,APL_NULL_CHAR,1000);
+					strcpy(l_temp,l_no_dlv_line);
+		
+					printf("l_no_dlv_line is |%s|\n",l_no_dlv_line);
+		
+					if (strcmp(l_file_type,"NSE-OTR")==0) 
+					{
+						printf(" Now formatting Line for NSE-OTR \n");
+						if ( l_no_dlv_line[strlen(l_no_dlv_line) -1 ] == ',')   /*** Then append comma ***/
+						{
+							printf("\n ** TUX: COMMA FOUND at the end of line ");
+							EXEC SQL select substr(:l_temp,1,(instr(:l_temp,',',-3)-1))||','||:l_matched_flg ||',' 
+								INTO :l_new_line FROM DUAL;
+							IS_ANY_ORA_ERROR;
+						}
+						else
+						{
+							printf("\n ** TUX: COMMA NOT FOUND at the end of line matched = |%s| temp = |%s| ",l_matched_flg,l_temp);
+							EXEC SQL select substr(:l_temp,1,(instr(:l_temp,',',-1)-1))||','||:l_matched_flg 
+								INTO :l_new_line FROM DUAL;
+							IS_ANY_ORA_ERROR;
+						}
+					}
+					else if (strcmp(l_file_type,"BSE-ASCII")==0) 
+					{
+						printf(" Now formatting Line for BSE-ASCII \n");
+						l_temp[strlen(l_temp)+1]= APL_NULL_CHAR;
+	         			EXEC SQL SELECT SUBSTR(:l_temp,1,114)||:l_matched_flg||SUBSTR(:l_temp,116,58) INTO :l_new_line FROM DUAL;
+		     			printf("\n #1 sqlca.sqlcode is  |%d|",sqlca.sqlcode);
+			 			IS_ANY_ORA_ERROR;
+         				printf("\n Line to print |%s|",l_new_line);
+					}	
+			
+					fputs(l_new_line,p_DownLoad_File);
+					fprintf(p_DownLoad_File,"\n");
+
+				/** New code added -AmitB	17/07/06		**/
+				/*Condition added by Amol 16/08/2006*/
+				if(!strcmp(l_matched_flg,"Y")) 
+				{
+					Alert("\n Rowid = |%s| \n",l_rowid); // ISKB-492 : ASHISH 09-10-2007
+
+					EXEC SQL UPDATE DL_EXCHGORD_UPLD 
+					SET NODELV_REPDATE=:chr_l_sys_date_time 
+					WHERE ROWID=:l_rowid;
+					printf("\n Error Update 1=|%d| \n",sqlca.sqlcode);	
+					
+					IS_ANY_ORA_ERROR;
+				}					
+		
+				}
+							
+				/**	Commented by AmitB on 17/07/06	**/
+				/** 
+ 				EXEC SQL UPDATE DL_EXCHGORD_UPLD 
+				SET NODELV_REPDATE=:chr_l_sys_date_time 
+				WHERE ROWID=:l_rowid;
+				printf("\n Error Update 1=|%d| \n",sqlca.sqlcode);	
+				
+				IS_ANY_ORA_ERROR;
+
+				**/		  
+				if(int_l_condexists > 0 && (strcmp(l_file_type,"NSE-OTR")==0)||int_l_condexists > 0 && (strcmp(l_file_type,"MCS-OTR")==0))
+				{
+					EXEC SQL CLOSE no_dlv_orders2; 
+					IS_ANY_ORA_ERROR;
+				}
+				else
+				{
+					EXEC SQL CLOSE no_dlv_orders; 
+					IS_ANY_ORA_ERROR;
+				}
+				
+	
+			}
+			else if (strcmp(l_file_type,"NSE-BIN")==0||strcmp(l_file_type,"MCS-BIN")==0)
+			{
+			
+				printf("Now Selecting Orders for NSE-BIN/MCS-BIN\n");
+				printf("\n  exchange code is |%s|\n",l_exchange_code);
+				/*Commented By Amol - 21082006*/
+				/*			  EXEC SQL DECLARE no_dlv_orders1 CURSOR FOR
+				  	SELECT a.rowid,a.* 
+					FROM DL_EXCHGORD_UPLD a,MT_SETTL_CAL b
+			 		WHERE 
+					a.EXCHG_CODE=:l_exchange_code AND
+					a.IS_NODELV='Y' AND 
+					(a.NODELV_REPDATE IS NULL or a.NODELV_REPDATE=:chr_l_sys_date_time OR a.NODELV_REPDATE=:l_prev_date) AND
+					a.SETTL_NO=b.SETTL_NO AND 
+					a.ORDER_DATA IS NULL
+				  	AND
+					b.START_DATE=:chr_l_sys_date_time ;
+				*/				
+
+                /* ISKB-492 : Add by ASHISH 09-10-2007 Start */
+				if( CO_Chk_CntryEnabled( "DL_CNFFILEGEN",
+								"CNFFILEGEN",
+								&int_l_condexists,
+								l_debug_info_ptr
+								)  == APL_FAILURE)
+			
+					{
+						APL_GOBACK_FAIL
+					}
+
+					if(int_l_condexists > 0 )
+				    {
+				  EXEC SQL DECLARE no_dlv_orders3 CURSOR FOR
+				  	SELECT a.rowid,a.* 
+					FROM DL_EXCHGORD_UPLD a,MT_SETTL_CAL b,MT_NO_DELV c
+			 		WHERE 
+					a.EXCHG_CODE=:l_exchange_code AND
+					a.IS_NODELV='Y' AND 
+					a.NODELV_REPDATE IS NULL AND
+					a.SETTL_NO=b.SETTL_NO AND 
+					a.SETTL_NO=c.carry_fw_stlno and
+					a.mkt_type = b.settl_type and /* changes by amish - 08/12/2006  */
+					a.mkt_type = c.mkt_type and /* changes by amish - 08/12/2006 */
+		            a.INSTR_CODE = c.INSTR_CODE and
+					a.ORDER_DATA IS NOT NULL AND
+					:chr_l_sys_date_time >= b.START_DATE  /* changes by amish - 31/07/2007 */
+						/*
+					((:chr_l_sys_date_time BETWEEN b.START_DATE AND b.END_DATE) OR (:chr_l_sys_date_time BETWEEN c.NO_DEL_FROM AND c.NO_DEL_TO)) AND 
+				    :chr_l_sys_date_time <> a.ACCESS_STAMP
+						*//* commented by amish - 31/10/2006 */
+					AND FILELINKINFO = :p_file_link
+					AND a.status = 'PM'
+					AND a.matched = 'Y'
+					AND c.STATUS = 'AA';
+
+			        IS_ANY_ORA_ERROR;
+
+					EXEC SQL OPEN no_dlv_orders3;
+				}
+				else
+				{
+				  EXEC SQL DECLARE no_dlv_orders1 CURSOR FOR
+				  	SELECT a.rowid,a.* 
+					FROM DL_EXCHGORD_UPLD a,MT_SETTL_CAL b,MT_NO_DELV c
+			 		WHERE 
+					a.EXCHG_CODE=:l_exchange_code AND
+					a.IS_NODELV='Y' AND 
+					a.NODELV_REPDATE IS NULL AND
+					a.SETTL_NO=b.SETTL_NO AND 
+					a.SETTL_NO=c.carry_fw_stlno and
+					a.mkt_type = b.settl_type and /*Retro with HDFC to add Settl Type in Query - Rahul - 01-Apr-2007*/
+					a.mkt_type = c.mkt_type and /*Retro with HDFC to add Settl Type in Query - Rahul - 01-Apr-2007*/
+		            a.INSTR_CODE = c.INSTR_CODE and
+					a.ORDER_DATA IS NOT NULL AND
+					((:chr_l_sys_date_time BETWEEN b.START_DATE AND b.END_DATE) OR (:chr_l_sys_date_time BETWEEN c.NO_DEL_FROM AND c.NO_DEL_TO)) AND /* changes by amish - 31/10/2006 */
+				    :chr_l_sys_date_time <> a.ACCESS_STAMP
+					AND FILELINKINFO = :p_file_link
+					AND c.STATUS = 'AA';
+			        IS_ANY_ORA_ERROR;
+
+					EXEC SQL OPEN no_dlv_orders1;
+				}
+
+					
+			   
+					for(;;)
+					{
+						/* ISKB-492 : Changed by ASHISH 09-10-2007 */
+						if(int_l_condexists > 0 )
+						{
+							EXEC SQL FETCH no_dlv_orders3 INTO :l_rowid,:dl_exchgord_upld_struct:dl_exchgord_upld_struct_i;
+						}
+						else
+						{
+							EXEC SQL FETCH no_dlv_orders1 INTO :l_rowid,:dl_exchgord_upld_struct:dl_exchgord_upld_struct_i;
+						}
+						
+						
+						printf("SqlCode=%d",sqlca.sqlcode);
+						if(APL_ZERO_RESULT_SET)
+			    			 break;	
+				
+						printf("Now Writing NSE BIN Details in File \n");
+						/** IsolveID-250:AmitB:for NSE Binary Header Changes:10-04-2007  **/
+						if(strcmp(l_exchange_code,"NSE"))
+						{
+						if (APL_FAILURE  == writeCnfDetails_NSE(p_DownLoad_File,dl_exchgord_upld_struct,l_debug_info_ptr))
+						{
+							APL_GOBACK_FAIL;
+						}
+						else
+						{
+							printf("\n A:Order No=|%s| Length=|%d| \n",dl_exchgord_upld_struct->h_order_no,(int)strlen(dl_exchgord_upld_struct->h_order_no));//AIX Warning Removal
+							if(strlen(dl_exchgord_upld_struct->h_order_no) > 19)
+								l_no_records=l_no_records+2;
+							else
+							l_no_records++;
+						}
+						}
+						else if(strcmp(l_exchange_code,"MCS"))
+						{
+						if (APL_FAILURE  == writeCnfDetails_MCS(p_DownLoad_File,dl_exchgord_upld_struct,l_debug_info_ptr))
+						{
+							APL_GOBACK_FAIL;	
+						}
+						else
+						{
+							Alert("\n A:Order No=|%s| Length=|%d| \n",dl_exchgord_upld_struct->h_order_no,strlen(dl_exchgord_upld_struct->h_order_no));
+							if(strlen(dl_exchgord_upld_struct->h_order_no) > 19)
+								l_no_records=l_no_records+2;
+							else
+								l_no_records++;
+						}
+						}
+						/*
+						printf("\n matched flag is*************|%s|\n",l_matched_flg);
+						*/
+						/* - changes by amish - 24/10/2006 - l_matched_flg is never populated in this loop - !! */
+						/*
+						if(!strcmp(l_matched_flg,"Y"))
+						{
+							*/
+							/*
+							printf("\n inside iffffffffff*************|%s|\n",l_matched_flg);
+							*/
+							/* commented by amish -- update statement in function writeCnfDetails_NSE */
+							/*
+							EXEC SQL UPDATE DL_EXCHGORD_UPLD 
+							SET NODELV_REPDATE=:chr_l_sys_date_time 
+							WHERE ROWID=:l_rowid AND
+                            MATCHED='Y'; 
+			
+							IS_ANY_ORA_ERROR;
+							*/
+							/*
+						}
+						*/
+					}
+
+					/* ISKB-492 : Changed by ASHISH 09-10-2007 */
+
+					if(int_l_condexists > 0 )
+						{
+					  		EXEC SQL CLOSE no_dlv_orders3; 
+						}
+						else
+						{
+					  		EXEC SQL CLOSE no_dlv_orders1; 
+						}
+	  					IS_ANY_ORA_ERROR;
+			}
+
+		}
+
+/* changes for writing no delivery records of other files -- start */
+
+		EXEC SQL SELECT COUNT(*) into :l_no_delv_oth
+			 FROM DL_EXCHGORD_UPLD a,MT_SETTL_CAL b,DL_ORD_SUMM C
+		  /*      --, mt_no_delv dl*/
+			 WHERE 
+				a.EXCHG_CODE=:l_exchange_code AND
+				a.IS_NODELV='Y' AND 
+	            a.matched = 'Y' AND
+				a.NODELV_REPDATE IS NULL AND
+				a.SETTL_NO=b.SETTL_NO AND 
+				a.mkt_type = b.settl_type and /*Retro with HDFC to add Settl Type in Query - Rahul - 01-Apr-2007*/
+          		        a.ORDER_DATA IS NOT NULL 
+/*			        AND a.SETTL_NO=dl.carry_fw_stlno and
+		            a.INSTR_CODE = dl.INSTR_CODE and
+					((:chr_l_sys_date_time BETWEEN b.START_DATE AND b.END_DATE)
+				OR (:chr_l_sys_date_time BETWEEN dl.NO_DEL_FROM AND dl.NO_DEL_TO)) 
+				and		    :chr_l_sys_date_time <> a.ACCESS_STAMP */
+				AND A.FILELINKINFO in
+					      (select FILELINKINFO from DL_EXCHGORD_UPLD b
+				            where
+				            a.IS_NODELV='Y' and
+				            a.NODELV_REPDATE IS NULL and
+				            a.EXCHG_CODE=:l_exchange_code
+							and a.matched = 'Y')
+			    AND
+	            A.FILELINKINFO = C.FILELINKINFO;
+
+
+		IS_ANY_ORA_ERROR;
+
+		printf("No Of Orders Available for other No Delivery are |%d|\n",l_no_delv_oth);
+
+		if (l_no_delv_oth)
+		{
+			if ( (strcmp(l_file_type,"NSE-OTR")==0) || (strcmp(l_file_type,"BSE-ASCII")==0))
+			{
+				printf("Now Selecting Orders for NSE-OTR or BSE-ASCII \n");
+		
+		  		EXEC SQL DECLARE no_dlv_orders_oth CURSOR FOR
+				SELECT a.rowid, a.ORDER_DATA , NVL(a.MATCHED,'N'), b.PAY_IN_DT,C.FILE_NAME  /*(dl.no_del_to + 1) */
+					FROM DL_EXCHGORD_UPLD a,MT_SETTL_CAL b,DL_ORD_SUMM C
+					  /*      --, mt_no_delv dl*/
+					 WHERE 
+					a.EXCHG_CODE=:l_exchange_code AND
+					a.IS_NODELV='Y' AND 
+			                a.matched = 'Y' AND
+					a.NODELV_REPDATE IS NULL AND
+					a.SETTL_NO=b.SETTL_NO AND 
+					a.mkt_type = b.settl_type and /*Retro with HDFC to add Settl Type in Query - Rahul - 01-Apr-2007*/
+          			        a.ORDER_DATA IS NOT NULL 	 
+/*			        AND     a.SETTL_NO=dl.carry_fw_stlno and
+		            a.INSTR_CODE = dl.INSTR_CODE and
+					((:chr_l_sys_date_time BETWEEN b.START_DATE AND b.END_DATE)
+					 OR (:chr_l_sys_date_time BETWEEN dl.NO_DEL_FROM AND dl.NO_DEL_TO)) 
+					 and		    :chr_l_sys_date_time <> a.ACCESS_STAMP */
+					AND A.FILELINKINFO in
+			          (select FILELINKINFO from DL_EXCHGORD_UPLD b
+						where
+			            a.IS_NODELV='Y' and
+						a.NODELV_REPDATE IS NULL and
+			            a.EXCHG_CODE=:l_exchange_code
+						and a.matched ='Y')
+		            AND a.FILELINKINFO = C.FILELINKINFO
+				    AND C.FILE_NAME like (decode(:l_exchange_code,'BSE','%','NSE',(decode(:l_file_type,'NSE-OTR','%OT%','NSE-BIN','%'))));
+		
+		
+					printf("\n Error11=|%d| \n",sqlca.sqlcode);
+					IS_ANY_ORA_ERROR;
+				
+					EXEC SQL OPEN no_dlv_orders_oth;	
+				
+				for(;;)
+				{
+					
+						strcpy(l_no_dlv_line,APL_NULL_STRING);
+						strcpy(l_new_line,APL_NULL_STRING);
+						strcpy(l_matched_flg,APL_NULL_STRING);
+						strcpy(chr_no_del_to,APL_NULL_STRING);
+						strcpy(chr_file_name,APL_NULL_STRING);
+						EXEC SQL FETCH no_dlv_orders_oth INTO :l_rowid,:l_no_dlv_line:i_no_dlv_line,:l_matched_flg,chr_no_del_to:i_no_del_to,:chr_file_name:i_file_name;
+					
+		
+						if(APL_ZERO_RESULT_SET)
+							 break;	
+					
+						IS_ANY_ORA_ERROR;
+
+					
+				   		printf("\n IN FUNCTION writeOthNoDlvDetails: After fetching cursor no_dlv_orders sqlca.sqlcode=|%d|.. \n",sqlca.sqlcode);
+
+						printf("\n IN FUNCTION writeOthNoDlvDetails: PAY IN date is  |%s|\n",chr_no_del_to);
+				
+						/*
+						if( ((strcmp(l_file_type,"NSE-OTR")==0) && ((strstr(chr_file_name,"OTR") != NULL) || ( strstr(chr_file_name,"OT") != NULL)) ) || (strcmp(l_file_type,"BSE-ASCII")==0) )
+						  {
+							  */
+							  
+
+						if(strcmp(chr_no_del_to,APL_NULL_STRING) != 0)
+						{
+							printf("\n******sys date is ===|%s|\n",chr_l_sys_date_time);
+							if ( APL_FAILURE  ==   CO_Pro_DateComp(chr_l_sys_date_time,chr_no_del_to,&
+					          int_ru_diff,l_debug_info_ptr))
+							  {
+							      APL_GOBACK_FAIL
+							  }
+							  printf("\n result of date compasrions is |%d|\n",int_ru_diff);
+							  /*
+							  printf("\n matched flag is |%s|\n",l_matched_flg);
+							  */
+						  
+							if (int_ru_diff <= 0)
+						    {
+								memset(l_temp,APL_NULL_CHAR,1000);
+								strcpy(l_temp,l_no_dlv_line);
+		
+								printf("l_no_dlv_line is |%s|\n",l_no_dlv_line);
+		
+								if (strcmp(l_file_type,"NSE-OTR")==0) 
+								{
+									printf("\n WRITING OTHER NO DELV - ---NSE OTR DETAILS\n");
+									printf(" Now formatting Line for NSE-OTR \n");
+									if ( l_no_dlv_line[strlen(l_no_dlv_line) -1 ] == ',')   /*** Then append comma ***/
+									{
+										printf("\n ** TUX: COMMA FOUND at the end of line ");
+										EXEC SQL select substr(:l_temp,1,(instr(:l_temp,',',-3)-1))||','||:l_matched_flg ||',' 
+											INTO :l_new_line FROM DUAL;
+											IS_ANY_ORA_ERROR;
+									}
+									else
+									{
+										printf("\n ** TUX: COMMA NOT FOUND at the end of line matched = |%s| temp = |%s| ",l_matched_flg,l_temp);
+										EXEC SQL select substr(:l_temp,1,(instr(:l_temp,',',-1)-1))||','||:l_matched_flg 
+											INTO :l_new_line FROM DUAL;
+										IS_ANY_ORA_ERROR;
+									}
+								}
+								else if (strcmp(l_file_type,"BSE-ASCII")==0) 
+								{
+									printf("\n WRITING OTHER NO DELV - ---NSE BINARY DETAILS\n");
+									printf(" Now formatting Line for BSE-ASCII \n");
+									l_temp[strlen(l_temp)+1]= APL_NULL_CHAR;
+									EXEC SQL SELECT SUBSTR(:l_temp,1,114)||:l_matched_flg||SUBSTR(:l_temp,116,58) INTO :l_new_line FROM DUAL;
+									printf("\n #1 sqlca.sqlcode is  |%d|",sqlca.sqlcode);
+									IS_ANY_ORA_ERROR;
+									printf("\n Line to print |%s|",l_new_line);
+								}	
+			
+								fputs(l_new_line,p_DownLoad_File);
+								fprintf(p_DownLoad_File,"\n");
+		    
+								if(!strcmp(l_matched_flg,"Y")) 
+								{
+									Alert("\n Row ID = |%s| \n",l_rowid); // ISKB-492 : ASHISH 09-10-2007
+
+									EXEC SQL UPDATE DL_EXCHGORD_UPLD 
+									SET NODELV_REPDATE=:chr_l_sys_date_time 
+									WHERE ROWID=:l_rowid;
+									printf("\n Error Update 2=|%d| \n",sqlca.sqlcode);	
+									
+									IS_ANY_ORA_ERROR;
+								}					
+							}
+						}
+					/*
+				  }
+				  */
+				}
+							
+				EXEC SQL CLOSE no_dlv_orders_oth; 
+				IS_ANY_ORA_ERROR;
+	
+			}
+			else if (strcmp(l_file_type,"NSE-BIN")==0||strcmp(l_file_type,"MCS-BIN")==0)
+			{
+
+				printf("Now Selecting Orders for NSE-BIN \n");
+				printf("\n  exchange code is |%s|\n",l_exchange_code);
+
+					EXEC SQL DECLARE no_dlv_orders_oth1 CURSOR FOR
+					SELECT a.rowid,a.* ,C.FILE_NAME, b.PAY_IN_DT
+					FROM DL_EXCHGORD_UPLD a,MT_SETTL_CAL b,DL_ORD_SUMM C
+					  /*      --, mt_no_delv dl*/
+					 WHERE 
+					a.EXCHG_CODE=:l_exchange_code AND
+					a.IS_NODELV='Y' AND 
+			        a.matched = 'Y' AND
+					a.NODELV_REPDATE IS NULL AND
+					a.SETTL_NO=b.SETTL_NO AND 
+                    a.mkt_type = b.settl_type and /*Retro with HDFC to add Settl Type in Query - Rahul - 01-Apr-2007*/
+          			a.ORDER_DATA IS NOT NULL 
+/*			        AND     a.SETTL_NO=dl.carry_fw_stlno and
+		            a.INSTR_CODE = dl.INSTR_CODE and
+					((:chr_l_sys_date_time BETWEEN b.START_DATE AND b.END_DATE)
+					 OR (:chr_l_sys_date_time BETWEEN dl.NO_DEL_FROM AND dl.NO_DEL_TO)) 
+					 and		    :chr_l_sys_date_time <> a.ACCESS_STAMP */
+					AND a.FILELINKINFO in
+			          (select FILELINKINFO from DL_EXCHGORD_UPLD b
+						where
+			            a.IS_NODELV='Y' and
+						a.NODELV_REPDATE IS NULL and
+			            a.EXCHG_CODE=:l_exchange_code and
+						a.matched = 'Y' 
+						)
+		            AND a.FILELINKINFO = c.FILELINKINFO
+					AND c.FILE_NAME like (decode(:l_exchange_code,'BSE','%','NSE',(decode(:l_file_type,'NSE-OTR','%OT%','NSE-BIN','%','MCS-OTR','%OT%','MCS-BIN','%'))));
+
+			        IS_ANY_ORA_ERROR;
+
+					EXEC SQL OPEN no_dlv_orders_oth1;
+			   
+					for(;;)
+					{
+						EXEC SQL FETCH no_dlv_orders_oth1 INTO :l_rowid,:dl_exchgord_upld_struct:dl_exchgord_upld_struct_i,:chr_file_name:i_file_name,chr_no_del_to:i_no_del_to;
+						
+						printf("SqlCode = |%d|",sqlca.sqlcode);
+
+						if(APL_ZERO_RESULT_SET)
+			    			 break;	
+				
+						printf("Now Writing NSE BIN Details in File- file name is |%s| \n",chr_file_name);
+						/*
+						writeCnfDetails_NSE(p_DownLoad_File,dl_exchgord_upld_struct,l_debug_info_ptr);
+						*/
+
+						if((strstr(chr_file_name,"OTR") == NULL) && ( strstr(chr_file_name,"OT") == NULL))
+						{
+
+							printf("\n IN FUNCTION writeOthNoDlvDetails: After fetching cursor no_dlv_orders sqlca.sqlcode=|%d|.. \n",sqlca.sqlcode);
+
+							printf("\n IN FUNCTION writeOthNoDlvDetails: PAY IN date is  |%s|\n",chr_no_del_to);
+				
+							/*
+							if( ((strcmp(l_file_type,"NSE-OTR")==0) && ((strstr(chr_file_name,"OTR") != NULL) || ( strstr(chr_file_name,"OT") != NULL)) ) || (strcmp(l_file_type,"BSE-ASCII")==0) )
+							  {
+							  */
+							  
+
+							if(strcmp(chr_no_del_to,APL_NULL_STRING) != 0)
+							{
+								printf("\n******sys date is ===|%s|\n",chr_l_sys_date_time);
+								if ( APL_FAILURE  ==   CO_Pro_DateComp(chr_l_sys_date_time,chr_no_del_to,&
+								  int_ru_diff,l_debug_info_ptr))
+								  {
+								      APL_GOBACK_FAIL
+								  }
+								  printf("\n result of date compasrions is |%d|\n",int_ru_diff);
+								  /*
+								  printf("\n matched flag is |%s|\n",l_matched_flg);
+								  */
+						  
+								if (int_ru_diff <= 0)
+							    {
+					if(strcmp(l_exchange_code,"MCS")==0)
+									{
+										fprintf(p_DownLoad_File,dl_exchgord_upld_struct->h_order_data);
+										fprintf(p_DownLoad_File,",A");
+										EXEC SQL UPDATE DL_EXCHGORD_UPLD 
+									SET NODELV_REPDATE=:chr_l_sys_date_time 
+									WHERE ROWID=:l_rowid AND
+									MATCHED='Y';
+	
+									IS_ANY_ORA_ERROR;
+					
+									/** IsolveID-250:AmitB:for NSE Binary Header Changes:10-04-2007  **/
+									Alert("\n B:Order No=|%s| Length=|%d| \n",dl_exchgord_upld_struct->h_order_no,strlen(dl_exchgord_upld_struct->h_order_no));
+									if(strlen(dl_exchgord_upld_struct->h_order_no) > 19)
+										l_no_records=l_no_records+2;
+									else
+										l_no_records++;
+									}
+									else{
+									Alert("\nINSIDE IFF---Writing NSE BIN Details  for other no delv recors\n");
+									fprintf(p_DownLoad_File,OBG_DET_REC_TYP);
+									fprintf(p_DownLoad_File,OBG_DET_ACT_TYP);
+									fprintf(p_DownLoad_File,dl_exchgord_upld_struct->h_order_no);
+									fprintf(p_DownLoad_File,dl_exchgord_upld_struct->h_buy_sell_flg);
+									fprintf(p_DownLoad_File,dl_exchgord_upld_struct->h_matched);
+									fprintf(p_DownLoad_File,"\n");
+
+									Alert("\n Row Id = |%s| \n",l_rowid); // ISKB-492 : ASHISH 09-10-2007
+
+									EXEC SQL UPDATE DL_EXCHGORD_UPLD 
+									SET NODELV_REPDATE=:chr_l_sys_date_time 
+									WHERE ROWID=:l_rowid AND
+									MATCHED='Y';
+									Alert("\n sqlca.sqlcode ashish= |%d| \n",sqlca.sqlcode); // ISKB-492 : ASHISH 09-10-2007
+	
+									IS_ANY_ORA_ERROR;
+									/** IsolveID-250:AmitB:for NSE Binary Header Changes:10-04-2007  **/
+                                      //AIX-Warnings Removal
+									printf("\n B:Order No=|%s| Length=|%d| \n",dl_exchgord_upld_struct->h_order_no,(int)strlen(dl_exchgord_upld_struct->h_order_no));
+									if(strlen(dl_exchgord_upld_struct->h_order_no) > 19)
+										l_no_records=l_no_records+2;
+									else
+										l_no_records++;
+								}
+							}
+						}
+						}
+
+					}
+
+		  		EXEC SQL CLOSE no_dlv_orders_oth1; 
+				IS_ANY_ORA_ERROR;
+			}
+		}
+
+		/* ISKB-492 : Changed by ASHISH 09-10-2007 */
+	/*	p_no_records=l_no_records; */
+
+          /* ISKB-501 : ASHISH 29-10-2007 */
+		printf("\n amit:l_no_records=|%d| \n",l_no_records);
+                fflush(stdout);	   
+
+	    *p_no_records=l_no_records;
+
+		/* changes for no delv records of other files -------end*/
+	
+		APL_GOBACK_SUCCESS
+
+		RETURN_SUCCESS :
+		{
+				printf("Exiting writeNoDlvDetails successfully\n");
+				return APL_SUCCESS;
+		}
+		RETURN_FAILURE :
+		{
+				printf("Exiting writeNoDlvDetails unsuccessfully\n");
+				return APL_FAILURE;
+		}
+
+}
+/* NEW FUNCTION WRITTEN FOR SLB CONFIRMATION FILE GENERATION */
+
+int gen_cnf_NSE_SLB(char *p_file_name,int p_file_link,char **argv,FILE *l_logfile,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	char 	chr_l_downloadpath[200] = APL_NULL_STRING;
+	FILE 	*l_Download_File = (FILE *)NULL;
+
+	char 	chr_l_uploadpath[200] = APL_NULL_STRING;
+	FILE 	*l_Upload_File = (FILE *)NULL;
+
+	char 	chr_l_cnffilename[200] = APL_NULL_STRING;
+	char                 l_temp[1000] = APL_NULL_STRING;
+	char   l_is_nodelv[2] = APL_NULL_STRING;
+	int l_counter = 0;
+	int line_number = 0;
+	int l_no_records=0;
+	   INTL_REPT_STRUCT_H            *l_intl_rept_struct_ha  =NULL;
+
+	char   l_matched_flg[2] = APL_NULL_STRING;
+
+	char                 l_new_line[1000] = APL_NULL_STRING;
+	char                 l_line[1000] = APL_NULL_STRING;
+
+	FILE *fp_cfg = (FILE *)NULL;
+	char l_cfg_filename[100];
+	
+
+	int l_resetSeq_cnt = 0;
+	int l_seq_cuurval = 0;
+	char l_hdr_line[1000] = APL_NULL_STRING;
+	char l_chr_query[500] = APL_NULL_STRING;
+	strcpy(chr_l_cnffilename,p_file_name);
+	strcat(chr_l_cnffilename,".CNF");
+
+
+	l_intl_rept_struct_ha   = (INTL_REPT_STRUCT_H *)calloc(1, sizeof(INTL_REPT_STRUCT_H));
+	APL_MALLOC_FAIL(l_intl_rept_struct_ha);
+	strcpy(l_cfg_filename,getenv("INTL_ROOT_PATH"));
+	strcat(l_cfg_filename,"/intl_sun.cfg");
+	APL_FUNCTION_ENTER(l_logfile)
+		fp_cfg = fopen(l_cfg_filename,"r");
+
+	if(fp_cfg == (FILE *)NULL)
+	{
+		BT_IF_DEBUG
+			fprintf(l_logfile, "Config File |%s|\n",l_cfg_filename);
+		BT_IF_DEBUG
+			CO_ProcMonitor(l_logfile,"Failed To Open Config File",NULL,NULL);
+
+		APL_GOBACK_FAIL
+	}
+
+	if ( CO_ReadToken(fp_cfg,"INTL_UPL_PATH",chr_l_uploadpath,l_debug_info_ptr) == APL_FAILURE)
+	{
+		CO_ProcMonitor(l_logfile, "Failure From Retrieve Dir Path Of Upload", NULL, NULL);
+		APL_GOBACK_FAIL
+	}
+	strcat(chr_l_uploadpath,p_file_name);
+
+	if((l_Upload_File = fopen(chr_l_uploadpath,"r")) == NULL)
+	{
+		printf("Could not open File |%s|",chr_l_uploadpath);
+		APL_GOBACK_FAIL;
+	}
+
+	if ( CO_ReadToken(fp_cfg,"INTL_DWNLD_PATH",chr_l_downloadpath,l_debug_info_ptr) == APL_FAILURE)
+	{
+		CO_ProcMonitor(l_logfile, "Failure From Retrieve Dir Path Of Download", NULL, NULL);
+		APL_GOBACK_FAIL
+	}
+	strcat(chr_l_downloadpath,chr_l_cnffilename);
+	
+
+	if((l_Download_File = fopen(chr_l_downloadpath,"w")) == NULL)
+	{
+		printf("Could not open File |%s|",chr_l_downloadpath);
+		APL_GOBACK_FAIL;
+	}
+
+
+	strcpy(l_intl_rept_struct_ha->report_name, chr_l_cnffilename);
+	strcpy(l_intl_rept_struct_ha->report_desc, APL_HOFF_FILE_DESC);
+  strcpy(l_intl_rept_struct_ha->report_date, argv[2]);
+  l_intl_rept_struct_ha->report_width = 100;
+  strcpy(l_intl_rept_struct_ha->task_desc, argv[5]);
+  strcpy(l_intl_rept_struct_ha->fe_be_ind, APL_BE_IND);
+  strcpy(l_intl_rept_struct_ha->usr, argv[3]);
+
+
+	EXEC SQL SELECT count(*) INTO :l_resetSeq_cnt FROM PRO_COMMON_REPORT,DL_ORD_SUMM
+	WHERE FILE_NAME = SUBSTR(REPORT_NAME,1,LENGTH(REPORT_NAME)-4) AND FILE_NAME LIKE '%OT%' 
+				AND TRIM(TASK_DESC) = 'GenerateConfFile' AND TRUNC(REPORT_DATE) = (SELECT TRUNC(SYS_DATE) FROM PRO_SYS_DATE)
+				AND F_CODE = 'NSE' AND FILELINKINFO IN  (SELECT DISTINCT FILELINKINFO FROM DL_EXCHGORD_UPLD);
+	IS_ANY_ORA_ERROR
+	printf("\nISKB- Reset Sequence Changes --> Count is |%d|\n",l_resetSeq_cnt);
+	if (l_resetSeq_cnt == 0)
+	{
+		EXEC SQL SELECT DL_CONF_SEQ.NEXTVAL INTO :l_seq_cuurval FROM DUAL;
+		IS_ANY_ORA_ERROR	
+		l_seq_cuurval  = 0;
+
+		printf("\nISKB- Reset Sequence Changes --> Going to reset Sequence\n");
+		EXEC SQL SELECT -DL_CONF_SEQ.CURRVAL INTO :l_seq_cuurval FROM DUAL;
+		IS_ANY_ORA_ERROR	
+		printf("\nISKB- Reset Sequence Changes --> Current Val is |%d|\n",l_seq_cuurval);
+
+		sprintf(l_chr_query,"ALTER SEQUENCE DL_CONF_SEQ increment by %d minvalue 0",l_seq_cuurval);
+		printf("\nISKB- Reset Sequence Changes --> QUERY IS |%s|\n",l_chr_query);
+
+		EXEC SQL EXECUTE IMMEDIATE :l_chr_query;
+		IS_ANY_ORA_ERROR
+
+		l_seq_cuurval = 0;
+		EXEC SQL SELECT DL_CONF_SEQ.NEXTVAL  INTO :l_seq_cuurval  FROM DUAL;
+		IS_ANY_ORA_ERROR	
+		printf("\nISKB- Reset Sequence Changes --> Current Val After change is |%d|\n",l_seq_cuurval);
+
+		EXEC SQL alter sequence DL_CONF_SEQ 
+			increment by 1
+			minvalue 0;
+		IS_ANY_ORA_ERROR
+	}
+
+
+ if (APL_FAILURE == CO_Proc_DBRptIns( l_intl_rept_struct_ha, l_debug_info_ptr))
+  {
+     APL_GOBACK_FAIL
+  }
+
+
+	fscanf(l_Upload_File, "%[^\n]\n",l_line);
+	printf("l_line is |%s|\n ",l_line);
+	
+
+		EXEC SQL SELECT substr(:l_line,1,instr(:l_line,',',1,4))||to_char(SYS_DATE,'YYYYMMDD')||','||lpad(DL_CONF_SEQ.NEXTVAL,2,'0')||
+										substr(:l_line,instr(:l_line,',',1,6)) into :l_hdr_line FROM PRO_SYS_DATE;
+		IS_ANY_ORA_ERROR
+
+		printf("\nISKB- New Header line change --> l_hdr_line |%s|\n",l_hdr_line);
+		strcpy(l_line,l_hdr_line);
+
+
+	fputs(l_line,l_Download_File);
+	fprintf(l_Download_File,"\n");
+	strcat(l_line,APL_NULL_STRING);
+	strcat(l_new_line,APL_NULL_STRING);
+
+	printf("entering while loop !!!\n");
+		l_counter++;
+	while(!feof(l_Upload_File))
+	{
+
+		printf("inside while loop !!!\n");
+		l_counter++;
+		line_number = l_counter;
+		fscanf(l_Upload_File, "%[^\n]\n",l_line);
+		l_line[strlen(l_line)] =APL_NULL_CHAR;
+		printf(" l_line is |%s|\n",l_line);
+		if(strlen(l_line)==0)
+			continue;
+              /*START added by supriya or kotak*/
+              IF_COND_EXISTS("DL_ACCTENT","DL_LIEN_ACCTENT_GEN")
+       {
+EXEC SQL SELECT /*+ USE_HASH(A,B) */ NVL(A.MATCHED,'N'),nvl(A.IS_NODELV,'N') INTO :l_matched_flg,l_is_nodelv 
+FROM DL_EXCHGORD_UPLD A,DL_DEAL B
+                        WHERE
+                        A.FILELINKINFO = :p_file_link AND
+                        A.ROWSEQUENCE = :line_number AND
+                        NVL(A.IS_NODELV,'N') !='Y'
+	 AND (A.DEAL_REF_NO = B.IDENTIY_NO
+	OR	A.order_no in (select c.order_no from dl_match_rpt c where c.status='PM' and c.exch_code='NSE'))
+                        /*AND (A.CLIENT = B.CLIENT OR (CP_EXCHORD_MAP(B.CLIENT,A.CLIENT,B.EXCH_CODE)='true' ) )*/
+	                    AND A.CLIENT = B.CLIENT 
+                        AND to_char(A.DEAL_DATE,'DD/MM/YYYY') = to_char(B.DEAL_DATE,'DD/MM/YYYY')
+                        AND (B.deal_cd            = '1'
+                        OR B.deal_cd              = '2'
+                        OR B.deal_cd              = '3'
+                        OR (B.deal_cd             = '4'
+                                AND B.dl_class            = '1'
+                                AND (GETCLIENTPARAMBYID('LIEN_MARK_REQD',B.CLIENT))= 'Y'
+                                AND EXISTS
+                                (SELECT 1
+                                 FROM dl_lien D
+                                  WHERE D.client = B.client
+                                  AND D.ref_no   = B.identiy_no
+                                  AND D.status  IN ('IN','MI')
+                                  ))
+                                OR(B.deal_cd             = '4'
+                                AND B.dl_class            = '1'
+                                AND (GETCLIENTPARAMBYID('LIEN_MARK_REQD',B.CLIENT))= 'N')
+                                 OR (B.deal_cd   = '4'
+                                AND B.dl_class != '1')) ;
+			}
+			else
+			{
+                 /*END added by supriya for kotak */
+
+		EXEC SQL SELECT NVL(MATCHED,'N'),nvl(IS_NODELV,'N') INTO :l_matched_flg,l_is_nodelv FROM DL_EXCHGORD_UPLD
+			WHERE
+			FILELINKINFO = :p_file_link AND
+			ROWSEQUENCE = :line_number AND
+			NVL(IS_NODELV,'N') !='Y'; 
+                       }
+		printf(" #B sqlca.sqlcode is %d|\n",sqlca.sqlcode);
+		if(sqlca.sqlcode==1403)
+			continue;
+		IS_ANY_ORA_ERROR;
+
+		memset(l_temp,APL_NULL_CHAR,1000);
+		strcpy(l_temp,l_line);
+
+		printf(" l_line is |%s|\n",l_line);
+
+
+    if (strcmp(l_is_nodelv,"Y")==0)
+    {
+       l_matched_flg[0] = 'N';
+    }
+
+		strcat(l_temp,",");
+		Alert(" SLB l_line is |%s|\n",l_line);
+		strcat(l_temp,l_matched_flg);
+		strcpy(l_new_line,l_temp);
+
+		fputs(l_new_line,l_Download_File);
+		fprintf(l_Download_File,"\n");
+	}
+
+/* There would be no  nodelivery record for SLB Trades */
+/* writeNoDlvDetails(l_Download_File,"NSE-OTR",l_logfile,p_file_link,&l_no_records,l_debug_info_ptr); */
+
+	fclose(l_Upload_File);
+	fclose(l_Download_File);
+
+	APL_GOBACK_SUCCESS
+		RETURN_SUCCESS :
+		{
+			APL_FUNCTION_RET_SUCCESS(APL_OUT_FILE)//AIX Warning Removal
+			return (APL_SUCCESS);
+		}
+RETURN_FAILURE :
+	{
+       APL_FUNCTION_RET_FAILURE(APL_OUT_FILE)//AIX Warning Removal
+		return (APL_FAILURE);
+	}
+}
+
+int gen_cnf_file_MCS_OTR(char *p_file_name,int p_file_link,char **argv,FILE *l_logfile,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	char 	chr_l_downloadpath[200] = APL_NULL_STRING;
+	FILE 	*l_Download_File = (FILE *)NULL;
+
+	char 	chr_l_cnffilename[200] = APL_NULL_STRING;
+	char   l_is_nodelv[2] = APL_NULL_STRING;
+
+	char  chr_l_cnffilename_temp[1000] = APL_NULL_STRING;/* amish - 25/09 */
+	char  chr_l_cnffilename_path[1000] = APL_NULL_STRING;/* amish - 25/09 */
+	char l_buf[1000];
+	int int_retval = 0; /* amish - 25/09 */
+	int retval = 0; /* amish - 25/09 */
+	int l_filesize = 0; /* amish -- 21/09/2006 */
+	char l_fsize_char[10] = APL_NULL_STRING; /*amish - 25/09/06 - */
+	char l_temp[1001] = APL_NULL_STRING;
+	short int_l_condexists = 0;/* amish - HDFC SPECIFIC */
+	int flag=0;
+
+/** IsolveID-250:AmitB:for NSE Binary Header Changes:10-04-2007  **/
+	int l_no_records=0;
+	int l_no_records_nodel=0;
+
+	char l_cnffile[10] = APL_NULL_STRING; /* changes by amish - 20/04/2007 */
+
+        PRO_GSEQNUM_STRUCT_H    l_pro_gseqno_struct_h; // Sequence structure: ASHISH 03-05-2007
+        int int_l_seqnum_a=0; //ASHISH 03-05-2007
+        int int_return_val=0; //ASHISH 03-05-2007
+        char chr_l_seqnum_a[10] = APL_NULL_STRING; //ASHISH 03-05-2007
+
+	DL_EXCHGORD_UPLD_STRUCT_H  *dl_exchgord_upld_struct=NULL;
+	DL_EXCHGORD_UPLD_STRUCT_I *dl_exchgord_upld_struct_i=NULL;
+
+	INTL_REPT_STRUCT_H            *l_intl_rept_struct_ha  =NULL;
+
+	l_intl_rept_struct_ha   = (INTL_REPT_STRUCT_H *)calloc(1, sizeof(INTL_REPT_STRUCT_H));
+	APL_MALLOC_FAIL(l_intl_rept_struct_ha);
+		
+	int l_reported_orders = 0;
+	FILE *fp_cfg = (FILE *)NULL;
+	char l_cfg_filename[100];
+
+	strcpy(l_cfg_filename,getenv("INTL_ROOT_PATH"));
+   strcat(l_cfg_filename,"/intl_sun.cfg");
+   APL_FUNCTION_ENTER(l_logfile)
+
+   fp_cfg = fopen(l_cfg_filename,"r");
+
+   if(fp_cfg == (FILE *)NULL)
+   {
+		BT_IF_DEBUG
+	      fprintf(l_logfile, "Config File |%s|\n",l_cfg_filename);
+		BT_IF_DEBUG
+	      CO_ProcMonitor(l_logfile,"Failed To Open Config File",NULL,NULL);
+
+      APL_GOBACK_FAIL
+	}
+	/*Calloc*/
+	dl_exchgord_upld_struct=(DL_EXCHGORD_UPLD_STRUCT_H *)calloc(1,sizeof(DL_EXCHGORD_UPLD_STRUCT_H));	
+	dl_exchgord_upld_struct_i=(DL_EXCHGORD_UPLD_STRUCT_I *)calloc(1,sizeof(DL_EXCHGORD_UPLD_STRUCT_I));	
+
+	/*MemSet*/
+	memset(dl_exchgord_upld_struct, NULL, sizeof(DL_EXCHGORD_UPLD_STRUCT_H));
+	memset(dl_exchgord_upld_struct_i, NULL, sizeof(DL_EXCHGORD_UPLD_STRUCT_I));
+
+	if ( CO_ReadToken(fp_cfg,"INTL_DWNLD_PATH",chr_l_downloadpath,l_debug_info_ptr) == APL_FAILURE)
+    {
+         CO_ProcMonitor(l_logfile, "Failure From Retrieve Dir Path Of Download", NULL, NULL);
+         APL_GOBACK_FAIL
+    }
+	/*
+		strcpy(chr_l_cnffilename,"NSE_CNF_FILE.TXT");
+	*/
+
+	/* changes by amish - 20/04/2007 */
+        /* Commeny by ASHISH 03-05-2007 */
+/*	EXEC SQL SELECT DL_CONFILE_SEQ.NEXTVAL INTO  :l_cnffile FROM DUAL; */
+
+        /* Change by ASHISH 03-05-2007 START
+
+        EXEC SQL SELECT DL_NSE_CNF_SEQ.NEXTVAL INTO  :l_cnffile FROM DUAL;
+
+         Change by ASHISH 03-05-2007 END */
+
+// 	IS_ANY_ORA_ERROR
+
+/* ASHISH 03-05-2007 START */
+        strcpy(l_pro_gseqno_struct_h.sequencename, "DL_MCS_CNF_OTR_SEQ");
+strcpy(l_pro_gseqno_struct_h.seq_attrb_a, APL_NULL_STRING);
+strcpy(l_pro_gseqno_struct_h.seq_attrb_b, APL_NULL_STRING);
+strcpy(l_pro_gseqno_struct_h.seq_attrb_c, APL_NULL_STRING);
+
+l_pro_gseqno_struct_h.seq_stepby = 1;
+l_pro_gseqno_struct_h.seq_start = 1;
+l_pro_gseqno_struct_h.last_seqnum = 99999999;
+l_pro_gseqno_struct_h.recycle_ind = RECYCLE_EOD;
+
+
+int_return_val = CO_RtvNxtSeqNum(&l_pro_gseqno_struct_h,l_debug_info_ptr);
+
+ if (int_return_val != APL_FAILURE)
+     int_l_seqnum_a = int_return_val;
+ else
+     APL_GOBACK_FAIL
+	 
+if(int_l_seqnum_a>9)
+	flag=0;
+else
+	flag=1;
+
+
+sprintf(chr_l_seqnum_a,"%d",int_l_seqnum_a);
+strcpy(l_cnffile,chr_l_seqnum_a);
+/* ASHISH 03-05-2007 END */
+
+//	IS_ANY_ORA_ERROR
+
+	/*strcpy(chr_l_cnffilename,p_file_name);
+*/
+
+if(flag==1)
+{
+        memcpy(chr_l_cnffilename,p_file_name,strlen(p_file_name)-3);
+        //strcat(chr_l_cnffilename,"_");
+        //strcat(chr_l_cnffilename,l_cnffile); /* changes by amish - 20/04/2007 */
+        strcat(chr_l_cnffilename,"C0");
+        strcat(chr_l_cnffilename,l_cnffile);
+}
+else
+{
+memcpy(chr_l_cnffilename,p_file_name,strlen(p_file_name)-3);
+        //strcat(chr_l_cnffilename,"_");
+        //strcat(chr_l_cnffilename,l_cnffile); /* changes by amish - 20/04/2007 */
+        strcat(chr_l_cnffilename,"C");
+        strcat(chr_l_cnffilename,l_cnffile);
+}
+	
+	/*strcpy(chr_l_cnffilename,p_file_name);
+	strcat(chr_l_cnffilename,"_");
+	strcat(chr_l_cnffilename,l_cnffile); */ /* changes by amish - 20/04/2007 */
+	//strcat(chr_l_cnffilename,".CNF");
+	
+    Alert("\n Inside gen_cnf_file_MCS now Upload File Name=|%s| File Link=|%d| cnf File Name=|%s|.. \n",p_file_name,p_file_link,chr_l_cnffilename);
+
+    strcat(chr_l_downloadpath,chr_l_cnffilename);
+
+	if ( (l_Download_File = fopen(chr_l_downloadpath, "w")) == (FILE *)NULL )
+	{
+		Alert("Could not open file |%s|\n",chr_l_downloadpath);
+		APL_GOBACK_FAIL
+	}
+    Alert("\n Inside gen_cnf_file_MCS after openeing file File Name=|%s| .. \n",chr_l_downloadpath);
+	
+	strcpy(l_intl_rept_struct_ha->report_name, chr_l_cnffilename);
+	strcpy(l_intl_rept_struct_ha->report_desc, APL_HOFF_FILE_DESC);
+	strcpy(l_intl_rept_struct_ha->report_date, argv[2]);
+	l_intl_rept_struct_ha->report_width = 100;
+	strcpy(l_intl_rept_struct_ha->task_desc, argv[5]);
+	strcpy(l_intl_rept_struct_ha->fe_be_ind, APL_BE_IND);
+	strcpy(l_intl_rept_struct_ha->usr, argv[3]);
+
+
+		if (APL_FAILURE == CO_Proc_DBRptIns( l_intl_rept_struct_ha, l_debug_info_ptr))
+
+		{
+			APL_GOBACK_FAIL
+		}
+
+	
+	    Alert("\n Inside gen_cnf_file_MCS declaring cursor cnf_orders .. \n");
+
+		Alert("\n Amit ---- FileLinkInfo is %d\n",p_file_link );
+
+		 // writeCnfHeader_NSE(l_Download_File); /* changes by amish -- 31/07/2007 */
+		int_l_condexists = 0;
+
+		if  ( CO_Chk_CntryEnabled( "DL_CNFFILEGEN",
+								"CNFFILEGEN",
+								&int_l_condexists,
+								l_debug_info_ptr
+								)  == APL_FAILURE)
+			
+			{
+					APL_GOBACK_FAIL
+			}
+    
+		Alert("\n condition flag is |%d|\n",int_l_condexists);
+		if(int_l_condexists > 0)
+		{
+/*START added by supriya for kotak */
+                       IF_COND_EXISTS("DL_ACCTENT","DL_LIEN_ACCTENT_GEN")
+       {EXEC SQL DECLARE cnf_orders22 CURSOR FOR
+                        SELECT /*+ USE_HASH(A,B) */ * FROM DL_EXCHGORD_UPLD A,
+						DL_DEAL B
+                        WHERE
+                        A.FILELINKINFO = :p_file_link AND
+                        NVL(A.IS_NODELV,'N') !='Y'
+                        AND A.STATUS = 'PM'
+                        AND A.MATCHED = 'Y'
+                        AND A.NODELV_REPDATE IS NULL 
+	 AND (A.DEAL_REF_NO = B.IDENTIY_NO
+	OR	A.order_no in (select c.order_no from dl_match_rpt c where c.status='PM' and c.exch_code='MCS'))
+                        /*AND (A.CLIENT = B.CLIENT OR (CP_EXCHORD_MAP(B.CLIENT,A.CLIENT,B.EXCH_CODE)='true' ) )*/
+                        AND A.CLIENT = B.CLIENT
+                        AND to_char(A.DEAL_DATE,'DD/MM/YYYY') = to_char(B.DEAL_DATE,'DD/MM/YYYY')
+                        AND (B.deal_cd            = '1'
+                        OR B.deal_cd              = '2'
+                        OR B.deal_cd              = '3'
+                        OR (B.deal_cd             = '4'
+                                AND B.dl_class            = '1'
+                                AND (GETCLIENTPARAMBYID('LIEN_MARK_REQD',B.CLIENT))= 'Y'
+                                AND EXISTS
+                                (SELECT 1
+                                 FROM dl_lien D
+                                  WHERE D.client = B.client
+                                  AND D.ref_no   = B.identiy_no
+                                  AND D.status  IN ('IN','MI')
+                                  ))
+                                OR(B.deal_cd             = '4'
+                                AND B.dl_class            = '1'
+                                AND (GETCLIENTPARAMBYID('LIEN_MARK_REQD',B.CLIENT))= 'N')
+                                 OR (B.deal_cd   = '4'
+                                AND B.dl_class != '1')) 	
+						 order by ROWSEQUENCE ; 
+		}
+		else
+		{ /*END added by supriya for kotak */
+			Alert("\n condition exists ---Inside if \n");
+			EXEC SQL DECLARE cnf_orders22 CURSOR FOR
+			SELECT * FROM DL_EXCHGORD_UPLD
+			WHERE
+			FILELINKINFO = :p_file_link AND
+			NVL(IS_NODELV,'N') !='Y' 
+			AND STATUS = 'PM'
+			AND MATCHED = 'Y' 
+			AND NODELV_REPDATE IS NULL /* AMISH - 20/04/2007  IN NSE,ONLY MATCHED ORDERS R REPORTED AND ONCE REPORTED SHOULD NOT BE INCLUDED IN NEXT FILE HENCE FIELD 'NODELV_REPDATE' IS USED */
+			order by ROWSEQUENCE ; /* changes by amish -- 24/10/2006 - it shld not pick No delv records here !! */
+             }
+			IS_ANY_ORA_ERROR;
+			Alert("\n Inside gen_cnf_file_MCS after declaring cursor cnf_orders sqlca.sqlcode=|%d|.. \n",sqlca.sqlcode);	
+			EXEC SQL OPEN cnf_orders22;
+			Alert("\n Inside gen_cnf_file_MCS after opening cursor cnf_orders sqlca.sqlcode=|%d|.. \n",sqlca.sqlcode);		
+		}
+		else
+		{
+			Alert("\n condition dosent exists ---Inside else \n");
+                      /*START added by supriya for kotak */
+                       IF_COND_EXISTS("DL_ACCTENT","DL_LIEN_ACCTENT_GEN")
+       {
+		EXEC SQL DECLARE cnf_orders11 CURSOR FOR
+                        SELECT /*+ USE_HASH(A,B) */ * FROM DL_EXCHGORD_UPLD A,
+						DL_DEAL B
+                        WHERE
+                        A.FILELINKINFO = :p_file_link AND
+                        NVL(A.IS_NODELV,'N') !='Y' 
+	 AND (A.DEAL_REF_NO = B.IDENTIY_NO
+	OR	A.order_no in (select c.order_no from dl_match_rpt c where c.status='PM' and c.exch_code='MCS'))
+                        /*AND (A.CLIENT = B.CLIENT OR (CP_EXCHORD_MAP(B.CLIENT,A.CLIENT,B.EXCH_CODE)='true' ) )*/
+                        AND A.CLIENT = B.CLIENT
+                        AND to_char(A.DEAL_DATE,'DD/MM/YYYY') = to_char(B.DEAL_DATE,'DD/MM/YYYY')
+                        AND (B.deal_cd            = '1'
+                        OR B.deal_cd              = '2'
+                        OR B.deal_cd              = '3'
+                        OR (B.deal_cd             = '4'
+                                AND B.dl_class            = '1'
+                                AND (GETCLIENTPARAMBYID('LIEN_MARK_REQD',B.CLIENT))= 'Y'
+                                AND EXISTS
+                                (SELECT 1
+                                 FROM dl_lien D
+                                  WHERE D.client = B.client
+                                  AND D.ref_no   = B.identiy_no
+                                  AND D.status  IN ('IN','MI')
+                                  ))
+                                OR(B.deal_cd             = '4'
+                                AND B.dl_class            = '1'
+                                AND (GETCLIENTPARAMBYID('LIEN_MARK_REQD',B.CLIENT))= 'N')
+                                 OR (B.deal_cd   = '4'
+                                AND B.dl_class != '1')) 
+					     order by ROWSEQUENCE ; 
+		}
+		else
+		{/*END added by supriya for kotak */
+			EXEC SQL DECLARE cnf_orders11 CURSOR FOR
+			SELECT * FROM DL_EXCHGORD_UPLD
+			WHERE
+			FILELINKINFO = :p_file_link AND
+			NVL(IS_NODELV,'N') !='Y' order by ROWSEQUENCE ; /* changes by amish -- 24/10/2006 - it shld not pick No delv records here !! */
+                 }
+			IS_ANY_ORA_ERROR;
+			Alert("\n Inside gen_cnf_file_MCS after declaring cursor cnf_orders sqlca.sqlcode=|%d|.. \n",sqlca.sqlcode);	
+			EXEC SQL OPEN cnf_orders11;
+			Alert("\n Inside gen_cnf_file_MCS after opening cursor cnf_orders sqlca.sqlcode=|%d|.. \n",sqlca.sqlcode);		
+		}
+
+		for(;;)
+		{
+			if(int_l_condexists > 0)
+			{
+
+				Alert("\n 2 condition exists ---Inside if \n");
+
+				EXEC SQL FETCH cnf_orders22 INTO :dl_exchgord_upld_struct:dl_exchgord_upld_struct_i;
+			    Alert("\n Inside gen_cnf_file_MCS after fetching cursor cnf_orders sqlca.sqlcode=|%d|.. \n",sqlca.sqlcode);
+				Alert("SqlCode=%d",sqlca.sqlcode);
+				if(APL_ZERO_RESULT_SET)
+    				 break;	
+//				if (l_reported_orders ==0)			/* commented by amish -- 31/07/2007 */
+//				{
+//					writeCnfHeader_NSE(l_Download_File);
+//				}
+			}
+			else
+			{
+
+				Alert("\n 2 condition dosent exists ---Inside if \n");
+
+				EXEC SQL FETCH cnf_orders11 INTO :dl_exchgord_upld_struct:dl_exchgord_upld_struct_i;
+			    Alert("\n Inside gen_cnf_file_MCS after fetching cursor cnf_orders sqlca.sqlcode=|%d|.. \n",sqlca.sqlcode);		
+				Alert("SqlCode=%d",sqlca.sqlcode);
+				if(APL_ZERO_RESULT_SET)
+    				 break;	
+//				if (l_reported_orders ==0)        /* commented by amish -- 31/07/2007 */
+//				{
+//					writeCnfHeader_NSE(l_Download_File);
+//				}
+
+			}
+
+			writeCnfDetailsOTR_MCS(l_Download_File,dl_exchgord_upld_struct,l_debug_info_ptr);
+			 /** Start-IsolveID-250:AmitB:for NSE Binary Header Changes:10-04-2007  **/
+			if(strlen(dl_exchgord_upld_struct->h_order_no) > 19)
+				l_no_records=l_no_records+2;
+			else
+				l_no_records++;
+
+			l_reported_orders++;
+		}
+		if(int_l_condexists > 0)
+		{
+				EXEC SQL CLOSE cnf_orders22;
+				IS_ANY_ORA_ERROR
+		}
+		else
+	    {
+				EXEC SQL CLOSE cnf_orders11;
+				IS_ANY_ORA_ERROR
+	    }
+        
+	    Alert("\n Inside gen_cnf_file_MCS outside for loop sqlca.sqlcode=|%d|.. \n",sqlca.sqlcode);		
+
+		/* ISKB-492 :(retro from KOTAK) Changed by ASHISH 09-10-2007 */
+
+	 /*   writeNoDlvDetails(l_Download_File,"NSE-BIN",l_logfile,p_file_link,l_no_records_nodel,l_debug_info_ptr); */
+
+         writeNoDlvDetails(l_Download_File,"MCS-BIN",l_logfile,p_file_link,&l_no_records_nodel,l_debug_info_ptr);
+		 l_no_records=l_no_records+l_no_records_nodel;
+		/** End-IsolveID-250:AmitB:for NSE Binary Header Changes:10-04-2007  **/
+
+		/*** Added By Amish - To get size of conf_file - START ***/
+
+
+ 		Alert("\n ******* download path is |%s|\n",chr_l_downloadpath);
+
+		fclose(l_Download_File);
+
+		if(CO_Rtv_FileSize_From_Pointer(chr_l_downloadpath,&l_filesize) == APL_FAILURE)
+		{
+			APL_GOBACK_FAIL
+		}
+	
+		Alert("\n*************testing*********file size is |%d|\n",l_filesize);
+	
+		strcpy(l_fsize_char,ltoa(l_filesize));
+	
+		Alert("\n*************file name in character*********file size is |%s|\n",l_fsize_char);
+	
+		int_retval =   CO_PadString(l_fsize_char,"L",4,"0",l_debug_info_ptr);
+
+		if (int_retval != APL_SUCCESS)
+			APL_GOBACK_FAIL
+		Alert("*************file name in char after pad func*********file size is |%s|",l_fsize_char);
+	
+		strcpy(chr_l_cnffilename_path,chr_l_downloadpath);
+		strcpy(chr_l_cnffilename_temp,chr_l_cnffilename_path);
+		strcat(chr_l_cnffilename_temp,"_temp");
+		Alert("\nfile name with path issssssss |%s|\n",chr_l_cnffilename_path);
+
+		/** Start-IsolveID-250:AmitB:for NSE Binary Header Changes:10-04-2007  **/
+		Alert("\n Finaly No of rec=|%d| \n",l_no_records);
+
+          /* Changed by ASHISH 16-08-2007 */
+		l_filesize=100+(l_no_records*12);
+		strcpy(l_fsize_char,ltoa(l_filesize));
+		if (strlen(l_fsize_char) < 8)
+		{
+			CO_PadString(l_fsize_char,'L',8,"0",l_debug_info_ptr);
+		}
+		/** End-IsolveID-250:AmitB:for NSE Binary Header Changes:10-04-2007  **/
+		
+	sprintf(l_buf,"sed 's/####/%s/g' %s > %s",l_fsize_char,chr_l_cnffilename_path,chr_l_cnffilename_temp);
+		Alert("\nCommand = |%s| ",l_buf);
+		retval = system(l_buf);
+		Alert("\n GREP COMMAND EXECUTED WITH status = |%d|\n ",retval);
+		memset(l_buf,APL_NULL_CHAR,1000);
+
+
+		sprintf(l_buf,"mv %s %s",chr_l_cnffilename_temp,chr_l_cnffilename_path);
+		Alert("\nCommand = |%s| ",l_buf);
+		retval = system(l_buf);
+		Alert("\n GREP COMMAND EXECUTED WITH status = |%d|\n ",retval);
+		memset(l_buf,APL_NULL_CHAR ,1000);
+
+		/*** Added By Amish - To get size of conf_file - END ***/
+
+ /* System command added by ASHISH 16-08-2007 */
+              /*  sprintf(l_buf,"unix2dos %s %s",chr_l_cnffilename_path,chr_l_cnffilename_path);
+		retval = system(l_buf);	
+		Alert("\n Unix2DOS status=|%d| \n",retval);
+*/
+
+/* Added by Brundavan   as per IB_2B_019 */
+	   char  chr_l_tmp_file_name_path[1000] = APL_NULL_STRING; 
+	   strcpy(chr_l_tmp_file_name_path,chr_l_cnffilename_path);
+	   strcat(chr_l_tmp_file_name_path,".ASC");
+	   sprintf(l_buf,"cp  %s %s",chr_l_cnffilename_path,chr_l_tmp_file_name_path );
+           printf("Command to take the back up of the generated file =|%s|",l_buf);
+           retval = system(l_buf);
+           Alert("After changing the extention status= |%d| \n",retval);
+	   Alert("Name of the temp file name is =|%s|",chr_l_tmp_file_name_path);
+
+  if(CO_Rtv_FileSize_From_Pointer(chr_l_cnffilename_path,&l_filesize) == APL_FAILURE)
+      {
+         APL_GOBACK_FAIL
+       }
+
+  	   Alert("Before ConvAsciiToBin  progrrame the file size is |%d|\n",l_filesize);
+	   sprintf(l_buf,"ConvAsciiToBin  %s %s",chr_l_cnffilename_path,chr_l_cnffilename_temp);
+	   Alert("\nCommand = |%s| ",l_buf);
+           retval = system(l_buf);
+           Alert(" ConvAsciiToBin programe execution status= |%d| \n",retval);
+
+	   sprintf(l_buf,"mv %s %s",chr_l_cnffilename_temp,chr_l_cnffilename_path);
+	   Alert("\nCommand = |%s| ",l_buf);
+           retval = system(l_buf);
+	   Alert("\n MOVE COMMAND EXECUTE WITH status = |%d|\n ",retval);
+
+  if(CO_Rtv_FileSize_From_Pointer(chr_l_cnffilename_path,&l_filesize) == APL_FAILURE)
+      {
+         APL_GOBACK_FAIL
+       }
+
+           Alert("After ConvAsciiToBin  progrrame the file size is |%d|\n",l_filesize);
+/* End of Brundavan addition  as per IB_2B_019  */
+
+	   APL_GOBACK_SUCCESS
+	   RETURN_SUCCESS :
+	   {
+		 Alert("Exiting gen_cnf_file_NSE successfully\n");
+	     return (APL_SUCCESS);
+	   }
+	   RETURN_FAILURE :
+	   {
+		 Alert("Exiting gen_cnf_file_NSE unsuccessfully\n");
+	     return (APL_FAILURE);
+	   }
+}
+
+int writeCnfDetailsOTR_MCS(FILE *p_DownLoad_File,DL_EXCHGORD_UPLD_STRUCT_H *dl_exchgord_upld_struct,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)   // MCS-SX OTR file generation- Manasi- Start
+{
+	char chr_l_sys_date[APL_DATE_LEN] = APL_NULL_STRING;
+	char chr_no_del_to[APL_DATE_LEN] = APL_NULL_STRING;
+	short i_no_del_to = 0;
+	int int_ru_diff = 0;
+	char* ptr = APL_NULL_STRING;
+	char temp[1000]=APL_NULL_STRING;// Priyanka
+	int i = 0;
+	int length=0;
+
+	memset(temp,APL_NULL_CHAR,1000);//Priyanka 
+	if (CO_RtvSysDt(chr_l_sys_date, l_debug_info_ptr) == APL_FAILURE)
+				  APL_GOBACK_FAIL
+
+
+
+
+//	fprintf(p_DownLoad_File,OBG_DET_REC_TYP);
+//	fprintf(p_DownLoad_File,OBG_DET_ACT_TYP);
+//	fprintf(p_DownLoad_File,dl_exchgord_upld_struct->h_order_no);
+//	fprintf(p_DownLoad_File,dl_exchgord_upld_struct->h_buy_sell_flg);
+
+	/* commented by amish -- 23/10/2006  -- matched flag of NO delv will alwayz go 'N' evn after it is matched -- wrong!!*/
+	/*
+	if((strcmp(dl_exchgord_upld_struct->h_matched,APL_NULL_STRING) == 0) || (strlen(dl_exchgord_upld_struct->h_matched) == 0) || (strcmp(dl_exchgord_upld_struct->h_is_nodelv,"Y") == 0))
+	{
+		fprintf(p_DownLoad_File,"N");
+	}
+	else
+	{
+		fprintf(p_DownLoad_File,dl_exchgord_upld_struct->h_matched);
+	}
+	*/
+	
+	/* changes by amish -- 30/10/2006  --------start*/
+
+	if(strcmp(dl_exchgord_upld_struct->h_is_nodelv,"Y") == 0)
+	{
+		/* COMMENTED BY AMISH - 15/11/2006 - PAY IN DATE TO BE USED INSTEAD OF NO DEL TO DATE 
+		EXEC SQL SELECT  (ND.NO_DEL_TO + 1) into :chr_no_del_to:i_no_del_to FROM MT_NO_DELV ND 
+		 WHERE 
+		 ND.EXCH_CODE = :dl_exchgord_upld_struct->h_exchg_code  AND
+		 ND.INSTR_CODE = :dl_exchgord_upld_struct->h_instr_code
+		 AND 
+		 ND.CARRY_FW_STLNO = :dl_exchgord_upld_struct->h_settl_no;
+			
+		IS_ANY_ORA_ERROR
+		*/
+		 EXEC SQL SELECT  mt.START_DATE into :chr_no_del_to:i_no_del_to FROM MT_SETTL_CAL mt 
+		 WHERE 
+		 mt.EXCH_CODE = :dl_exchgord_upld_struct->h_exchg_code 
+		 AND  mt.SETTL_NO = :dl_exchgord_upld_struct->h_settl_no
+		 AND mt.SETTL_TYPE = :dl_exchgord_upld_struct->h_mkt_type; /* changes by amish - 08/12/2006  */
+
+		 IS_ANY_ORA_ERROR
+
+
+		Alert("\n IN FUNCTION writeCnfDetails_NSE: After fetching  no_dlv_order sqlca.sqlcode=|%d|.. \n",sqlca.sqlcode);		
+		Alert("\nIN FUNCTION writeCnfDetails_NSE: *************PAY IN date is  |%s|\n",chr_no_del_to);
+
+		if(strcmp(chr_no_del_to,APL_NULL_STRING) != 0)
+		{
+			Alert("\n******sys date is ===|%s|\n",chr_l_sys_date);
+			if ( APL_FAILURE  ==   CO_Pro_DateComp(chr_l_sys_date,chr_no_del_to,&
+													int_ru_diff,l_debug_info_ptr))
+				{
+						APL_GOBACK_FAIL
+				}
+			Alert("\n IN FUNCTION writeCnfDetails_NSE:result of date compasrions is |%d|\n",int_ru_diff);
+			Alert("\n IN FUNCTION writeCnfDetails_NSE:matched flag is |%s|\n",dl_exchgord_upld_struct->h_matched);
+			/*
+			if (int_ru_diff > 0)
+			{
+				  Alert("\n********in if\n");
+				 strcpy(l_matched_flg,"N");
+
+			}
+			*/
+
+				if(strcmp(dl_exchgord_upld_struct->h_matched,"Y") == 0 && int_ru_diff <= 0)/* CHANGES BY AMISH -- FLAG SHOULD GO AS 'Y' ALSO ON PAYIN DATE */
+				{
+					Alert("IN FUNCTION writeCnfDetails_NSE:Inside if, no delv record matched and date >= PAY IN date-printing flag as Y");
+					//fprintf(p_DownLoad_File,dl_exchgord_upld_struct->h_order_data);
+					length=strlen(dl_exchgord_upld_struct->h_order_data)-strlen(dl_exchgord_upld_struct->h_order_no);//Priyanka - UAT issue  fix - giving junk char in conf file
+					//length=strlen(dl_exchgord_upld_struct->h_order_data);
+					ptr = dl_exchgord_upld_struct->h_order_data;
+					for(i=0;i<(length-1);i++){
+						temp[i]=ptr[i];
+					}
+					fprintf(p_DownLoad_File,temp);
+					fprintf(p_DownLoad_File,"A,"); //Tarkeshwar added comma here for issue raised by Dhaval during SIT 09-Jan-2013 //Comma removed for HDFC Retrofit- Manasi
+					fprintf(p_DownLoad_File,dl_exchgord_upld_struct->h_order_no);
+
+					temp[i] = NULL;
+
+
+
+							/* UPDATING REPDATE FIELD ONLY IF FLAG IS 'Y' AND SYS DATE > DO DELV END DATE */
+
+							/* Kalyan -- Added Deal_date and Exchange Condition for Log HBDL_012 */
+							EXEC SQL UPDATE DL_EXCHGORD_UPLD 
+							SET NODELV_REPDATE=:chr_l_sys_date
+							WHERE 
+							ORDER_NO = :dl_exchgord_upld_struct->h_order_no AND
+							TO_CHAR(DEAL_DATE,'DD/MM/YYYY HH24:MI:SS')=:dl_exchgord_upld_struct->h_deal_date AND
+							EXCHG_CODE=:dl_exchgord_upld_struct->h_exchg_code AND
+                            MATCHED='Y';
+
+							IS_ANY_ORA_ERROR
+
+				}
+				else
+				{
+				length=strlen(dl_exchgord_upld_struct->h_order_data)-strlen(dl_exchgord_upld_struct->h_order_no);//Priyanka - UAT issue  fix - giving junk char in conf file
+				//length=strlen(dl_exchgord_upld_struct->h_order_data);
+					ptr = dl_exchgord_upld_struct->h_order_data;
+				for(i=0;i<(length-1);i++){
+						temp[i]=ptr[i];
+					}
+					fprintf(p_DownLoad_File,temp);
+					fprintf(p_DownLoad_File,"R,"); //Tarkeshwar added comma here for issue raised by Dhaval during SIT 09-Jan-2013 //Comma removed for HDFC Retrofit- Manasi
+					fprintf(p_DownLoad_File,dl_exchgord_upld_struct->h_order_no);
+					temp[i] = NULL;
+
+
+					
+				}
+
+			}
+	}
+	else
+	{
+			if(strcmp(dl_exchgord_upld_struct->h_matched,"Y") == 0)
+			{
+				length=strlen(dl_exchgord_upld_struct->h_order_data)-strlen(dl_exchgord_upld_struct->h_order_no);//Priyanka - UAT issue  fix - giving junk char in conf file
+			//length=strlen(dl_exchgord_upld_struct->h_order_data);
+					ptr = dl_exchgord_upld_struct->h_order_data;
+				for(i=0;i<(length-1);i++){
+						temp[i]=ptr[i];
+					}
+					fprintf(p_DownLoad_File,temp);
+					fprintf(p_DownLoad_File,"A,"); //Tarkeshwar added comma here for issue raised by Dhaval during SIT 09-Jan-2013 //Comma removed for HDFC Retrofit- Manasi
+
+
+					fprintf(p_DownLoad_File,dl_exchgord_upld_struct->h_order_no);
+					temp[i] = NULL;
+
+
+					
+
+				/* AMISH - 20/04/2007  IN NSE,ONLY MATCHED ORDERS R REPORTED AND ONCE REPORTED SHOULD NOT BE INCLUDED IN NEXT FILE HENCE FIELD 'NODELV_REPDATE' IS USED */
+
+				Alert("\n amisn******************sysdate is |%s|\n",chr_l_sys_date);
+				/* Kalyan -- Added Deal_date and Exchange Condition for Log HBDL_012 */
+				EXEC SQL UPDATE DL_EXCHGORD_UPLD  
+				SET NODELV_REPDATE=:chr_l_sys_date
+				WHERE 
+				ORDER_NO = :dl_exchgord_upld_struct->h_order_no AND
+				TO_CHAR(DEAL_DATE,'DD/MM/YYYY HH24:MI:SS')=:dl_exchgord_upld_struct->h_deal_date AND
+				EXCHG_CODE=:dl_exchgord_upld_struct->h_exchg_code AND
+				MATCHED='Y';
+
+				IS_ANY_ORA_ERROR
+			}
+			else
+			{
+			length=strlen(dl_exchgord_upld_struct->h_order_data)-strlen(dl_exchgord_upld_struct->h_order_no);//Priyanka - UAT issue  fix - giving junk char in conf file
+			//length=strlen(dl_exchgord_upld_struct->h_order_data);
+					ptr = dl_exchgord_upld_struct->h_order_data;
+				for(i=0;i<(length-1);i++){
+						temp[i]=ptr[i];
+					}
+					fprintf(p_DownLoad_File,temp);
+					fprintf(p_DownLoad_File,"R,"); //Tarkeshwar added comma here for issue raised by Dhaval during SIT 09-Jan-2013 //Comma removed for HDFC Retrofit- Manasi
+
+
+					fprintf(p_DownLoad_File,dl_exchgord_upld_struct->h_order_no);
+					temp[i] = NULL;
+
+
+					
+			}
+
+	}
+	
+
+/* changes by amish -- 30/10/2006 --- end*/
+
+/* commented by amish -- 30/10/2006 */
+/*
+	if(strcmp(dl_exchgord_upld_struct->h_matched,"Y") == 0)
+	{
+		fprintf(p_DownLoad_File,dl_exchgord_upld_struct->h_matched);
+	}
+	else
+	{
+			fprintf(p_DownLoad_File,"N");
+	}
+
+*/
+	fprintf(p_DownLoad_File,"\n");
+
+   APL_GOBACK_SUCCESS
+   RETURN_SUCCESS :
+   {
+     Alert("Exiting gen_cnf_file_MCS successfully\n");
+     return (APL_SUCCESS);
+   }
+   RETURN_FAILURE :
+   {
+     Alert("Exiting gen_cnf_file_MCS unsuccessfully\n");
+     return (APL_FAILURE);
+   }
+
+}    // MCS-SX OTR file generation- Manasi-End
+
+// Retro from SBI -Priyanka 
+// Tarkeshwar defined the function for sequence no wise file generation issue fix STARTS 
+/*************************************************************************************************
+* Function name : getNextSeq()                                                                   *
+* Description   : It generates the sequnce number based on the files present in the repts area.  *
+* Author        : TARKESHWAR                                                                     *
+* Date          : 20-02-2013                                                                     *
+* Issue         : Sequnce no wise file generation.                                               *
+* ICICI			: Retro from Kotak with some modifications into it.								      *
+*************************************************************************************************/
+int getNextSeq(char *sFileName)
+{
+	DIR *dp;
+	struct dirent *ep;
+	int iSeqCtr=0;
+	FILE *l_init_file = (FILE *)NULL;
+	char sReptPath[300] = APL_NULL_STRING;
+	DEBUG_INFO_STRUCT_H **l_debug_info_ptr;
+
+	//dp = opendir ("/usr15/SIR05448/mydomain/installedApps/PSLAIX05Node42Cell/ICUSTODY.ear/ICUSTODY.war/Reports/");
+	
+	memset(sReptPath,0,300);
+
+	strcpy(sReptPath,getenv("INTL_ROOT_PATH"));
+	strcat(sReptPath,"intl_sun.cfg");
+    printf("\nsReptPath:[%s]",sReptPath);	
+	if ((l_init_file = fopen(sReptPath,"r")) == (FILE *)NULL)
+	{
+                printf("Failed to Open file for PATH :[%s]\n",sReptPath);
+                APL_GOBACK_FAIL
+	}
+	printf("\nl_init_file:::[%s]",l_init_file);
+ if (APL_FAILURE == CO_ReadToken(l_init_file,"INTL_DWNLD_PATH",sReptPath,l_debug_info_ptr))
+ {
+	  printf("Error : INTL_CUST_OUT not set in intl_sun.cfg File \n");
+   APL_GOBACK_FAIL
+ }
+
+	//sPath = getenv(); // Get the reports path from the environment variable defined in the .profile file
+	printf("\nTK::: 4431 sFileName = [%s]", sFileName); // Tarkeshwar
+	dp = opendir(sReptPath);
+	if (dp != NULL)
+	{
+		while (ep = readdir (dp))
+		{
+			printf("\nTK::: ep->d_name: [%s]\nsFileName: [%s]\n",ep->d_name,sFileName); //Tarkeshwar
+			if(((strstr(ep->d_name,sFileName)) != NULL) && ((strstr(ep->d_name,"ASC")) != NULL))
+			{
+				puts (ep->d_name);
+				iSeqCtr++; //Increment the counter with presence of the file.
+				printf("\nTK::: 4443 iSeqCtr = %d",iSeqCtr);
+			}
+		}
+	   printf("\nNext sequence is %d\n\n",iSeqCtr + 1);
+		(void) closedir (dp);
+	}
+	else
+		perror ("Couldn't open the directory");
+	fclose(l_init_file);
+	RETURN_SUCCESS:
+		return(iSeqCtr+1);
+	RETURN_FAILURE:
+		return(APL_FAILURE);
+}
+// Tarkeshwar defined the function for sequence no wise file generation issue fix ENDS
+
+

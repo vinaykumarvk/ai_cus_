@@ -1,0 +1,881 @@
+
+
+
+
+
+#include "CO_HostStructdef.h"
+#define MQ_DATA_DEAL_LEN 2500
+#define MQ_DATA_HOL_LEN 200
+#define MQ_PUT_DATA_LEN 4000
+EXEC SQL INCLUDE SQLCA.H;
+ 
+int  EI_Mod_MQData(char *p_client,char *p_ident,char *p_instrcode,char *p_locncode,char *dealholflg_t,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+ {
+ struct sqlca sqlca;
+ 
+ char chr_l_mq_data_trd[MQ_DATA_DEAL_LEN]  = APL_NULL_STRING ;
+ char chr_l_mq_data_hol[MQ_DATA_HOL_LEN]  = APL_NULL_STRING ;
+ char	chr_l_mq_data[MQ_PUT_DATA_LEN]      = APL_NULL_STRING ;
+
+ char	chr_l_business_dt[APL_DATE_LEN]     = APL_NULL_STRING;
+ char	int_l_status[2]                     = APL_NULL_STRING;
+ char chr_l_buf[BUFFER_LEN]                = APL_NULL_STRING;
+ char chr_l_h_instrcode[APL_INSTRUMENTCODE_LEN]      = APL_NULL_STRING;
+ char chr_l_h_locncode[APL_LOCNCODE_LENGTH]  = APL_NULL_STRING;
+ char chr_l_h_sys_access_stamp[APL_DATE_LEN] = APL_NULL_STRING;
+
+ 
+ char chr_l_hdr_country_code[3]			  = APL_NULL_STRING;  
+ char chr_l_hdr_business_dt[11]			  = APL_NULL_STRING;
+ char chr_l_hdr_app_name[9]					  = APL_NULL_STRING;
+ char chr_l_hdr_event_type[3]				  = APL_NULL_STRING;
+ char chr_l_pos_header[23]					  = APL_NULL_STRING;
+ char eod_ind[2];
+ char chr_trdholflg[2]						  = APL_NULL_STRING;
+ char **temp								  = NULL;
+
+ int int_num     								  = 0;
+
+ short i_hdr_country_code             = 0;
+ short i_hdr_business_dt				  = 0;
+
+ short l_i_Instrode=0;
+ short l_i_LocnCode;
+
+   #ifdef APL_THREADS
+      APL_SET_CONTEXT
+      EXEC SQL CONTEXT USE :my_ctx_local;
+   #endif
+ 
+
+ sqlca.sqlcode=0;
+
+ EXEC SQL VAR chr_l_h_instrcode                      IS STRING;
+ EXEC SQL VAR chr_l_h_locncode                    IS STRING;
+ EXEC SQL VAR chr_l_mq_data_trd                   IS STRING;
+ EXEC SQL VAR chr_l_mq_data_hol                   IS STRING;
+ EXEC  SQL VAR chr_l_mq_data                      IS STRING;
+ EXEC SQL VAR eod_ind                         IS STRING;
+
+/* 
+
+ if (APL_FAILURE ==	CO_SplitStr(dealholflg_t,'|',&int_num,&temp))
+	 {
+			CO_ProcMonitor(APL_OUT_FILE, "Failure from CBStrSplitFn", NULL, NULL);
+         APL_GOBACK_FAIL
+    }
+ else
+    {
+			CO_ProcMonitor(APL_OUT_FILE,"Successful in CBStrSplitFn",NULL,NULL);
+			if (int_num > 0)
+				{
+					strcpy(chr_trdholflg,temp[0]);
+					strcpy(chr_l_hdr_event_type,temp[1]);
+				}
+			else
+				{
+					strcpy(chr_trdholflg,dealholflg_t);
+					strcpy(chr_l_hdr_event_type,"PO");
+				}
+	 }
+						
+
+ APL_IF_DEBUG
+ {
+    CO_ProcMonitor(	APL_OUT_FILE,
+					"Entering Function EI_Mod_MQData\n",
+					NULL,
+					NULL);
+  	 memset(chr_l_buf,NULL,BUFFER_LEN);
+    sprintf(  chr_l_buf,
+				  "The Account is : %s\n",
+               p_client);
+    CO_ProcMonitor(   APL_OUT_FILE,
+                  chr_l_buf,
+                  NULL,
+                  NULL );
+    memset( chr_l_buf, NULL, BUFFER_LEN );
+    sprintf(    chr_l_buf,
+                "The Reference Number is : %s\n",
+                p_ident);
+
+    CO_ProcMonitor(   APL_OUT_FILE,
+                chr_l_buf,
+                NULL,
+                NULL );
+    memset( chr_l_buf, NULL, BUFFER_LEN );
+    sprintf(    chr_l_buf,
+                "The Trade or Holding Flag is : %s\n",
+                chr_trdholflg);
+
+     CO_ProcMonitor(   APL_OUT_FILE,
+                  chr_l_buf,
+                  NULL,
+                  NULL ); 
+   }
+
+
+
+   if ( !strlen(p_client) )
+   {
+      APL_DATA_MISSING( "Account",
+                        APL_NULL_STRING,
+                        APL_NULL_STRING );
+   }
+
+   if ( !strlen(p_ident) && strcmp(chr_trdholflg,"H"))
+   {
+      APL_DATA_MISSING( "RefNo",
+                        APL_NULL_STRING,
+                        APL_NULL_STRING );
+   }
+
+   if ( !strlen(chr_trdholflg) )
+   {
+      APL_DATA_MISSING( "Trade or Holding Flag",
+                        APL_NULL_STRING,
+                        APL_NULL_STRING );
+   }
+
+  if (!strcmp(chr_trdholflg,"H")&&!strlen(p_instrcode))
+     {
+      APL_DATA_MISSING( "Instrode",
+                        APL_NULL_STRING,
+                        APL_NULL_STRING );
+     }
+  if (!strcmp(l_mt_core_sys_params_struct_h.loc_proc_ind, "Y") ) 
+  {
+
+	  if (!strcmp(chr_trdholflg,"H")&&!strlen(p_locncode))
+   	  {
+      	APL_DATA_MISSING( "LocnCode",
+                        APL_NULL_STRING,
+                        APL_NULL_STRING );
+     	  }
+  }
+
+
+   EXEC SQL select instr_code ,location_cd 
+        into :chr_l_h_instrcode:l_i_Instrode , :chr_l_h_locncode:l_i_LocnCode
+        from DL_DEAL
+        where client=rtrim(:p_client) AND IDENTIY_NO=rtrim(:p_ident);
+	IS_ANY_ORA_ERROR
+        
+if(!strcmp(chr_trdholflg,"B") || !strcmp(chr_trdholflg,"T"))
+	{
+ EXEC SQL 	select (
+        rpad(client,10,' ')||
+        rpad(IDENTIY_NO,16,' ')||
+        rpad(to_char(deal_date),19,' ')||
+        rpad(to_char(setl_date),19,' ')||
+        rpad(to_char(COST),19,' ')||
+        rpad(ex_arena,2,' ')||
+        rpad(nvl(to_char(AMOUNT),' '),19,' ')||
+        rpad(nvl(to_char(CUSTODYCOMM),' '),19,' ')||
+        rpad(nvl(to_char(brokercomm),' '),19,' ')||
+        rpad(nvl(to_char(STX_COMM),' '),19,' ')||
+        rpad(nvl(to_char(OTH_COMM),' '),19,' ')||
+        rpad(nvl(to_char(INSTRUMENT_DT),' '),19,' ')||
+        rpad(nvl(to_char(MONEY_SETL_DT),' '),19,' ') ||
+        rpad(to_char(QTY),26,' ')||
+        rpad(domestic_cpclt,10,' ')||
+        rpad(SPOTTRD_IND,1,' ')||
+        rpad(to_char(ORIG_QTY),26,' ')||
+        rpad(to_char(ORIG_AMOUNT),19,' ')||
+        rpad(DEAL_FRM_ORD,1,' ')||
+        rpad(ENTRY,1,' ')||
+        rpad(nvl(REAPIRED_IND,' '),1,' ')||
+        rpad(DOMCP_CUSTODYCLT,10,' ')||
+        rpad(nvl(cp_clt,' '),10,' ')||
+        rpad(nvl(translate(nvl(CP_CLTNAME,' '),chr(10)||chr(13)||chr(9)||chr(24)||chr(32),'     '),' '),65,' ')||
+        rpad(nvl(translate(nvl(clientof,' '),chr(10)||chr(13)||chr(9)||chr(24)||chr(32),'     '),' '),65,' ')||
+        rpad(nvl(translate(nvl(client_note,' '),chr(10)||chr(13)||chr(9)||chr(24)||chr(32),'     '),' '),70,' ')|| 
+        rpad(FX_REQD,1,' ')||
+        rpad(PAYLOC_IND,1,' ')||
+        rpad(nvl(translate(nvl(VERFIED_WITH,' '),chr(10)||chr(13)||chr(9)||chr(24)||chr(32),'     '),' '),25,' ')||
+        rpad(' ',3,' ') || 
+        rpad(nvl(to_char(AMT_DIFFER),' '),10,' ')||
+        rpad(nvl(BRK_NO,' '),12,' ')||
+        rpad(nvl(failreason_cd,' '),2,' ')||
+        rpad(nvl(translate(nvl(fail_det,' '),chr(10)||chr(13)||chr(9)||chr(24)||chr(32),'     '),' '),35,' ')||
+        rpad(nvl(PARTIAL_IND_B,' '),1,' ')||
+        rpad(nvl(to_char(FX_RT),' '),19,' ')||
+        rpad(nvl(to_char(AMEND_COUNT),' '),4,' ')||
+        rpad(nvl(to_char(number_a),' '),7,' ')||
+        rpad(nvl(REPORT_AT_EOM_IND,' '),1,' ')||
+        rpad(nvl(to_char(DATEOFBILLING),' '),19,' ')||
+        rpad(nvl(lcl_identno,' '),16,' ')||
+        rpad(nvl(INSTRUCT_PERSON,' '),10,' ')||
+        rpad(nvl(to_char(REC_INT_000),' '),26,' ')||
+        rpad(deal_cd,1,' ')||
+        rpad(instr_code,8,' ')||
+        rpad(currency_cd,3,' ')||
+        rpad(dl_class,2,' ')||
+        rpad(ORIG_REFNO,16,' ')||
+        rpad(to_char(DATEOF_INPUT),19,' ')||
+        rpad(maker,14,' ')||
+        rpad(to_char(maker_dt),19,' ')||
+        rpad(DEAL_STAT,2,' ')||
+        rpad(to_char(access_stamp),19,' ')|| 
+        rpad(nvl(translate(nvl(INFO1,' '),chr(10)||chr(13)||chr(9)||chr(24)||chr(32),'     '),' '),260,' ')||
+        rpad(nvl(location_cd,' '),4,' ')||
+        rpad(REGINSTR_IND,1,' ')||
+        rpad(nvl(STATUS_POS,' '),3,' ')||
+        rpad(nvl(STATUS,' '),1,' ')||
+        rpad(nvl(to_char(VAL_FDT),' '),19,' ')||
+        rpad(nvl(COMPREFNO,' '),16,' ')||
+        rpad(nvl(to_char(DATEOF_MARKFAIL),' '),19,' ')||
+        rpad(nvl(to_char(ALLOW_DROPDT),' '),19,' ')||
+        rpad(nvl(checker,' '),14,' ')||
+        rpad(nvl(to_char(checker_dt),' '),19,' ')||
+        rpad(nvl(INSTRCONV_IND,' '),1,' ')||
+        rpad(nvl(to_char(NDS_BLK_DT),' '),19,' ')||
+        rpad(nvl(LR_DL_CLASS,' '),2,' ')||
+        rpad(nvl(to_char(NDS_DATE),' '),19,' ')||
+        rpad(nvl(to_char(UNBLK_DATE),' '),19,' ') ||
+        rpad(nvl(to_char(DELTA_000),' '),26,' ')||
+        rpad(nvl(to_char(DELTA_001),' '),26,' ')||
+        rpad(nvl(to_char(DELTA_003),' '),26,' ')||
+        rpad(nvl(to_char(DEL_REC_DATE),' '),19,' ')||
+        rpad(nvl(to_char(LAST_REG_DATE),' '),19,' ')||
+        rpad(nvl(to_char(LR_CHECK_DATE),' '),19,' ')||
+        rpad(nvl(to_char(LR_VALDATE),' '),19,' ')||
+        rpad(nvl(to_char(LRINSTR_DATE),' '),19,' ')||
+        rpad(nvl(to_char(REG_MSG_QTY),' '),26,' ')|| 
+        rpad(nvl(to_char(TMP_OUT_DT),' '),19,' ')||
+        rpad(nvl(to_char(TMP_OUT_DATE),' '),19,' ')||
+        rpad(nvl(to_char(trans_date),' '),19,' ')||
+        rpad(nvl(to_char(TOT_QTY),' '),26,' ')||
+        rpad(nvl(to_char(QTY_LOST),' '),26,' ')||
+        rpad(nvl(to_char(MRK_DL_FAILQTY),' '),26,' ')||
+        rpad(nvl(to_char(DL_COMPLETEQTY),' '),26,' ')||
+        rpad(nvl(to_char(OUT_REG_QTY),' '),26,' ')||
+        rpad(nvl(to_char(PEND_REG_QTY),' '),26,' ') ||
+        rpad(nvl(to_char(RET_REG_QTY),' '),26,' ')||
+        rpad(nvl(to_char(STAMP_QTY),' '),26,' ')||
+        rpad(nvl(to_char(TEMP_OUT_QUANTITY),' '),26,' ')||
+        rpad(nvl(to_char(TEMP_RET_QUANTITY),' '),26,' ')||
+        rpad(nvl(to_char(VAL_DEED_QTY),' '),26,' ')|| 
+        rpad(nvl(to_char(HOST_DATE),' '),19,' ')||
+        rpad(nvl(to_char(LRNDS_BILLDT),' '),19,' ')||
+        rpad(nvl(to_char(LRNDS_DATE),' '),19,' ')||
+        rpad(nvl(to_char(LR_UNBLK_DATE),' '),19,' ')||
+        rpad(nvl(to_char(NUMBER_B),' '),7,' ')||
+        rpad(nvl(CLT_REQDEL_IND,' '),1,' ')||
+        rpad(nvl(MOD_HISPOS_IND,' '),1,' ')||
+        rpad(nvl(to_char(MOD_HISPOS_DATE),' '),19,' ')
+		  )  into  :chr_l_mq_data_trd from dl_deal  where client=rtrim(:p_client) AND  IDENTIY_NO=rtrim(:p_ident) ;
+IS_ANY_ORA_ERROR
+   }
+
+  if (!strcmp(l_mt_core_sys_params_struct_h.loc_proc_ind, "Y") )  
+  {
+		if(!strcmp(chr_trdholflg,"B"))
+ 		{
+	 	  EXEC SQL 	select
+	            (
+                rpad(instr_code,8,' ')||
+                rpad(nvl(location_cd,' '),4,' ')||
+                rpad(client,10,' ')||
+                rpad(to_char(access_stamp),19,' ')||
+                rpad(nvl(STATUS,' '),3,' ')||
+                rpad(nvl(to_char(START_SAFEK),' '),25,' ')||
+                rpad(nvl(to_char(safekeep_pos),' '),25,' ')||
+                rpad(nvl(to_char(NVALRECEIVE),' '),25,' ')||
+                rpad(nvl(to_char(NVALDELIVER),' '),25,' ')||
+                rpad(nvl(to_char(VAL_REC),' '),25,' ')||
+                rpad(nvl(to_char(VAL_DEL),' '),25,' ') 
+               )
+		 	into :chr_l_mq_data_hol  from DL_SAFEK where instr_code=rtrim(:chr_l_h_instrcode) AND client=rtrim(:p_client) AND location_cd=rtrim(:chr_l_h_locncode)  ;
+ 			IS_ANY_ORA_ERROR
+		}
+  }
+  else 
+  {
+			if(!strcmp(chr_trdholflg,"B"))
+      	{
+
+ 		       EXEC SQL  select
+               (
+                rpad(instr_code,8,' ')||
+                rpad(nvl(location_cd,' '),4,' ')||
+                rpad(client,10,' ')||
+                rpad(to_char(access_stamp),19,' ')||
+                rpad(nvl(STATUS,' '),3,' ')||
+                rpad(nvl(to_char(START_SAFEK),' '),25,' ')||
+                rpad(nvl(to_char(safekeep_pos),' '),25,' ')||
+                rpad(nvl(to_char(NVALRECEIVE),' '),25,' ')||
+                rpad(nvl(to_char(NVALDELIVER),' '),25,' ')||
+                rpad(nvl(to_char(VAL_REC),' '),25,' ')||
+                rpad(nvl(to_char(VAL_DEL),' '),25,' ')
+               )
+      	   into :chr_l_mq_data_hol  from DL_SAFEK where instr_code=rtrim(:chr_l_h_instrcode) AND client=rtrim(:p_client) AND location_cd is null;
+				IS_ANY_ORA_ERROR
+      	}
+  }	
+   if(!strcmp(chr_trdholflg,"H"))
+	{	
+		if (!strcmp(l_mt_core_sys_params_struct_h.loc_proc_ind, "Y") )  
+  		{
+
+ 				  EXEC SQL    select
+               (
+                rpad(instr_code,8,' ')||
+                rpad(nvl(location_cd,' '),4,' ')||
+                rpad(client,10,' ')||
+                rpad(to_char(access_stamp),19,' ')||
+                rpad(nvl(STATUS,' '),3,' ')||
+                rpad(nvl(to_char(START_SAFEK),' '),25,' ')||
+                rpad(nvl(to_char(safekeep_pos),' '),25,' ')||
+                rpad(nvl(to_char(NVALRECEIVE),' '),25,' ')||
+                rpad(nvl(to_char(NVALDELIVER),' '),25,' ')||
+                rpad(nvl(to_char(VAL_REC),' '),25,' ')||
+                rpad(nvl(to_char(VAL_DEL),' '),25,' ')
+               )
+    				into :chr_l_mq_data_hol  from DL_SAFEK where instr_code=rtrim(:p_instrcode) AND client=rtrim(:p_client) AND location_cd=rtrim(:p_locncode)  ;
+		}
+		else  
+		{
+
+              EXEC SQL    select
+               (
+                rpad(instr_code,8,' ')||
+                rpad(nvl(location_cd,' '),4,' ')||
+                rpad(client,10,' ')||
+                rpad(to_char(access_stamp),19,' ')||
+                rpad(nvl(STATUS,' '),3,' ')||
+                rpad(nvl(to_char(START_SAFEK),' '),25,' ')||
+                rpad(nvl(to_char(safekeep_pos),' '),25,' ')||
+                rpad(nvl(to_char(NVALRECEIVE),' '),25,' ')||
+                rpad(nvl(to_char(NVALDELIVER),' '),25,' ')||
+                rpad(nvl(to_char(VAL_REC),' '),25,' ')||
+                rpad(nvl(to_char(VAL_DEL),' '),25,' ')
+               )
+               into :chr_l_mq_data_hol  from DL_SAFEK where instr_code=rtrim(:p_instrcode) AND client=rtrim(:p_client) AND location_cd is null;
+		}
+		printf ("\n mq_dta_hol is %s\n", chr_l_mq_data_hol);
+
+ 		IS_ANY_ORA_ERROR
+	
+		if (sqlca.sqlcode == 1403)
+	 	{		
+		   if (CO_RtvSysDtTime(chr_l_h_sys_access_stamp, l_debug_info_ptr) != APL_SUCCESS)
+             APL_GOBACK_FAIL
+			 
+      	CO_ProcMonitor(   APL_OUT_FILE,
+                     "ENTERED THE LOOP FOR NO DATA FOUND WITH 'H'\n",
+                     NULL,
+                     NULL );
+			
+			EXEC SQL  SELECT 
+						( 
+					    rpad(:p_instrcode,8,' ')||
+                   rpad(:p_locncode,4,' ')||
+                   rpad(:p_client,10,' ')||
+                   rpad(:chr_l_h_sys_access_stamp,19,' ')||
+                   rpad(' ',3,' ')||
+                   rpad('0',25,' ')||
+                   rpad('0',25,' ')||
+                   rpad('0',25,' ')||
+                   rpad('0',25,' ')||
+                   rpad('0',25,' ')||
+                   rpad('0',25,' ')
+                  )
+			 INTO :chr_l_mq_data_hol FROM DUAL;
+
+		IS_ANY_ORA_ERROR	
+
+		 CO_ProcMonitor(   APL_OUT_FILE,
+                     "SUCCESSFULLY DONE PADDING WITH ZERO VALUES\n",
+                     NULL,
+                     NULL );
+		}
+ }	
+  
+
+if (CO_RtvSysDt(chr_l_business_dt,l_debug_info_ptr) != APL_SUCCESS)
+  APL_GOBACK_FAIL
+
+
+EXEC SQL SELECT nation_code INTO :chr_l_hdr_country_code:i_hdr_country_code FROM MT_COMMON_SYS_PARAMS;
+
+EXEC SQL SELECT to_char(to_date(:chr_l_business_dt),'DD/MM/YYYY') INTO :chr_l_hdr_business_dt:i_hdr_business_dt from DUAL;
+
+EXEC SQL SELECT EOD_IND INTO :eod_ind
+      FROM PRO_SYS_DATE;
+strcpy(chr_l_hdr_app_name,"SMAC2000");
+
+strcpy(chr_l_pos_header,chr_l_hdr_country_code);
+strcat(chr_l_pos_header,chr_l_hdr_business_dt);
+strcat(chr_l_pos_header,chr_l_hdr_app_name);
+strcat(chr_l_pos_header,chr_l_hdr_event_type); 
+
+printf("\n country h_code is %s\n",chr_l_hdr_country_code);
+
+printf("\n business_dt is %s\n",chr_l_hdr_business_dt);
+
+printf("\n app_name is %s\n", chr_l_hdr_app_name);
+printf("\n  event type is %s\n", chr_l_hdr_event_type);
+
+
+if(!strcmp(chr_trdholflg,"B"))
+{
+ 	strcpy(chr_l_mq_data,chr_l_mq_data_trd);
+ 	strcat(chr_l_mq_data,chr_l_pos_header);
+ 	strcat(chr_l_mq_data,chr_l_mq_data_hol);
+}
+
+if(!strcmp(chr_trdholflg,"H"))
+{
+	strcpy(chr_l_mq_data,chr_l_pos_header);
+	strcat(chr_l_mq_data,chr_l_mq_data_hol);
+}
+
+if(!strcmp(chr_trdholflg,"T"))
+{
+	strcpy(chr_l_mq_data,chr_l_mq_data_trd);
+}
+ strcpy(int_l_status,"N");
+ if(!strcmp(eod_ind,"E")) 
+	{  
+
+		EXEC SQL   INSERT INTO PRO_TEMP_MQDATA VALUES('TX',MQ_DATA_SEQ.NEXTVAL,:chr_l_mq_data);
+		IS_ANY_ORA_ERROR
+	}
+ else
+	{
+ 		EXEC SQL   insert into PRO_MQ_DATA values('TX',:chr_l_business_dt,MQ_DATA_SEQ.NEXTVAL,:int_l_status,:chr_l_mq_data);
+ 		IS_ANY_ORA_ERROR
+   }***/
+ APL_GOBACK_SUCCESS
+
+   RETURN_SUCCESS :
+      APL_IF_DEBUG
+      {
+         CO_ProcMonitor(   APL_OUT_FILE,
+                     "Leaving Function EI_Mod_MQData with success\n",
+                     NULL,
+                     NULL );
+      }
+      return(APL_SUCCESS);
+
+   RETURN_FAILURE :
+      APL_IF_DEBUG
+      {
+         CO_ProcMonitor(   APL_OUT_FILE,
+                     "Leaving Function EI_Mod_MQData with errors\n",
+                     NULL,
+                     NULL );
+      }
+      return(APL_FAILURE);
+}
+
+
+int EI_Proc_MQSeqRst(FILE *p_ptr_log_file,INTL_ENV_DATA_STRUCT_H *p_intl_env_data_struct_h_d,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+   FILE *l_finifile;
+   struct sqlca            sqlca;
+   int                     int_l_next_number  = 0 ;
+   char                    chr_l_str_sqlstmt[50]    = APL_NULL_STRING ;
+   char chr_l_inifile[31]   = APL_NULL_STRING;
+   char chr_owner[31] = APL_NULL_STRING;
+
+   #ifdef APL_THREADS
+      APL_SET_CONTEXT
+      EXEC SQL CONTEXT USE :my_ctx_local;
+   #endif
+
+   CO_ProcMonitor(p_ptr_log_file,"Entered processtion EI_Proc_MQSeqRst \n",NULL,p_intl_env_data_struct_h_d);
+   sqlca.sqlcode = 0;
+
+   
+
+   strcpy(chr_l_inifile,getenv("INTL_ROOT_PATH"));
+   strcat(chr_l_inifile,"intl_sun.cfg");
+
+   if ( ( l_finifile=fopen(chr_l_inifile,"r") ) == NULL)
+   {
+      printf("\nNot able to open the intl_sun.cfg h_file\n");
+      exit(-1);
+   }
+
+   EXEC SQL SELECT MQ_DATA_SEQ.NEXTVAL into :int_l_next_number FROM DUAL ;
+
+   if(sqlca.sqlcode == -2289)
+   {
+      fprintf(p_ptr_log_file,"sqlca.sqlcode = %d\n",sqlca.sqlcode);
+      CO_ProcMonitor(p_ptr_log_file,"Sequence does not exist/Insufficient Privileges \n",NULL,p_intl_env_data_struct_h_d);
+      APL_GOBACK_FAIL
+   }
+   else if(sqlca.sqlcode == -1031)
+   {
+      fprintf(p_ptr_log_file,"sqlca.sqlcode = %d\n",sqlca.sqlcode);
+      CO_ProcMonitor(p_ptr_log_file,"Insufficient Privileges to perform SELECT on Sequence MSGDATSEQ\n",NULL,p_intl_env_data_struct_h_d);
+      APL_GOBACK_FAIL
+   }
+   else if(sqlca.sqlcode != 0)
+   {
+      fprintf(p_ptr_log_file,"sqlca.sqlcode = %d\n",sqlca.sqlcode);
+      APL_GOBACK_FAIL
+   }
+
+   fprintf(p_ptr_log_file,"NextVal Of Sequence MQ_DATA_SEQ =<%d>\n",int_l_next_number);
+
+   if(CO_ReadToken(l_finifile,"INTL_DB_ADM",chr_owner,l_debug_info_ptr) == APL_FAILURE)
+     {
+         CO_InsertErr(l_debug_info_ptr,ERR_FILE_NOTFND, APL_NULL_STRING,
+                                                APL_NULL_STRING,
+                                                APL_NULL_STRING, __LINE__, __FILE__);
+         APL_GOBACK_FAIL;
+     }
+
+   printf("\n The chr_owner is : %s\n",chr_owner);
+
+   sprintf(chr_l_str_sqlstmt,"ALTER SEQUENCE %s.MQ_DATA_SEQ MAXVALUE %d",chr_owner,int_l_next_number) ;
+
+   EXEC SQL EXECUTE IMMEDIATE :chr_l_str_sqlstmt ;
+
+   if(sqlca.sqlcode == -1031)
+   {
+      fprintf(p_ptr_log_file,"sqlca.sqlcode = %d\n",sqlca.sqlcode);
+      CO_ProcMonitor(p_ptr_log_file,"Insufficient Privileges to Alter the Sequence\n",NULL,p_intl_env_data_struct_h_d);
+      APL_GOBACK_FAIL
+   }
+   else if(sqlca.sqlcode != 0)
+   {
+      fprintf(p_ptr_log_file,"sqlca.sqlcode = %d\n",sqlca.sqlcode);
+      APL_GOBACK_FAIL
+   }
+
+   EXEC SQL SELECT MQ_DATA_SEQ.NEXTVAL into :int_l_next_number FROM DUAL ;
+   
+
+   IS_ANY_ORA_ERROR
+
+   strcpy(chr_l_str_sqlstmt,"");
+   sprintf(chr_l_str_sqlstmt,"ALTER SEQUENCE %s.MQ_DATA_SEQ MAXVALUE 999999",chr_owner );
+
+   EXEC SQL EXECUTE IMMEDIATE :chr_l_str_sqlstmt ;
+
+   IS_ANY_ORA_ERROR
+
+   fprintf(p_ptr_log_file,"Sequence Reset.The Currval of Sequence MQ_DATA_SEQ =<%d>\n",int_l_next_number);
+
+   APL_GOBACK_SUCCESS
+
+   RETURN_SUCCESS :
+   {
+      CO_ProcMonitor(p_ptr_log_file,"Leaving processtion EI_Proc_MQSeqRst SUCCESS\n",NULL,p_intl_env_data_struct_h_d);
+
+      return(APL_SUCCESS);
+   }
+
+   RETURN_FAILURE :
+   {
+      CO_ProcMonitor(p_ptr_log_file,"Leaving processtion EI_Proc_MQSeqRst FAILURE\n",NULL,p_intl_env_data_struct_h_d);
+
+      return(APL_FAILURE);
+   }
+}
+
+
+int  EI_Mod_MQOnDelAccInstr(MT_CLIENT_STRUCT_H *p_client,MT_INSTRUMENT_STRUCT_H *p_mt_instrument_struct_h,char *cltinstr_flg,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+ struct sqlca sqlca;
+ 
+ char	chr_l_mq_data_instr[MQ_PUT_DATA_LEN]      = APL_NULL_STRING ;
+ char	chr_l_mq_data_acc[MQ_PUT_DATA_LEN]      = APL_NULL_STRING ;
+
+ char	chr_l_business_dt[APL_DATE_LEN]     = APL_NULL_STRING;
+ char	int_l_status[2]                     = APL_NULL_STRING;
+ char chr_l_buf[BUFFER_LEN]                = APL_NULL_STRING;
+ char chr_l_h_instrcode[APL_INSTRUMENTCODE_LEN]      = APL_NULL_STRING;
+ char chr_l_h_client[APL_CLIENT_LENGTH]    = APL_NULL_STRING;
+ char chr_l_h_sys_access_stamp[APL_DATE_LEN] = APL_NULL_STRING;
+
+ char chr_l_accinstr_flg[2]						  = APL_NULL_STRING;
+
+ int int_num     								  = 0;
+
+   #ifdef APL_THREADS
+      APL_SET_CONTEXT
+      EXEC SQL CONTEXT USE :my_ctx_local;
+   #endif
+
+ sqlca.sqlcode=0;
+
+ EXEC SQL VAR chr_l_h_instrcode                      IS STRING;
+ EXEC SQL VAR chr_l_h_client                     IS STRING;
+ EXEC SQL VAR chr_l_mq_data_instr                   IS STRING;
+ EXEC SQL VAR chr_l_mq_data_acc                   IS STRING;
+
+ strcpy(chr_l_accinstr_flg,cltinstr_flg);
+
+ APL_IF_DEBUG
+ {
+    CO_ProcMonitor(	APL_OUT_FILE,
+					"Entering Function EI_Mod_MQOnDelAccInstr\n",
+					NULL,
+					NULL);
+  	 memset(chr_l_buf,NULL,BUFFER_LEN);
+
+    if( strcmp(chr_l_accinstr_flg,"A") == 0 ) 
+	 {
+    sprintf(  chr_l_buf,
+				  "The Account is : %s\n",
+               p_client->h_dl_client);
+    CO_ProcMonitor(   APL_OUT_FILE,
+                  chr_l_buf,
+                  NULL,
+                  NULL );
+    }
+
+    if( strcmp(chr_l_accinstr_flg,"S") == 0 ) 
+	 {
+    memset( chr_l_buf, NULL, BUFFER_LEN );
+    sprintf(    chr_l_buf,
+                "The Instrcode is : %s\n",
+                p_mt_instrument_struct_h->h_instr_code);
+
+    CO_ProcMonitor(   APL_OUT_FILE,
+                chr_l_buf,
+                NULL,
+                NULL );
+	 }
+
+    memset( chr_l_buf, NULL, BUFFER_LEN );
+    sprintf(    chr_l_buf,
+                "The Account or Instrurity  Flag is : %s\n",
+                chr_l_accinstr_flg);
+
+     CO_ProcMonitor(   APL_OUT_FILE,
+                  chr_l_buf,
+                  NULL,
+                  NULL ); 
+   }
+
+ 
+
+    if( strcmp(chr_l_accinstr_flg,"A") == 0 ) 
+	 {
+       if ( !strlen(p_client->h_dl_client) )
+       {
+         APL_DATA_MISSING( "Account",
+                          APL_NULL_STRING,
+                          APL_NULL_STRING );
+       }
+    }
+
+    if( strcmp(chr_l_accinstr_flg,"S") == 0 ) 
+	 {
+       if ( !strlen(p_mt_instrument_struct_h->h_instr_code) )
+       {
+         APL_DATA_MISSING( "Instrurity",
+                          APL_NULL_STRING,
+                          APL_NULL_STRING );
+       }
+    }
+
+   if ( !strlen(chr_l_accinstr_flg) )
+   {
+      APL_DATA_MISSING( "Account or Instrurity Flag",
+                        APL_NULL_STRING,
+                        APL_NULL_STRING );
+   }
+
+   
+   if( strcmp(chr_l_accinstr_flg,"A") == 0 ) 
+	{
+     EXEC SQL SELECT (
+                 rpad(:p_client->h_dl_client,10,' ')||
+                 rpad(:p_client->h_currencycode,3,' ')||
+                 rpad(:p_client->h_our_their_ind,1,' ')||
+                 rpad(nvl(:p_client->h_iscc_ind,' '),1,' ')||
+                 rpad(nvl(:p_client->h_instr_isinuseflg,' '),1,' ')||
+                 rpad(nvl(:p_client->h_clnt_class,' '),2,' ')||
+                 rpad(nvl(translate(nvl(:p_client->h_regclr_name,' '),chr(10)||chr(13),' '),' '),80,' ')||
+                 rpad(nvl(:p_client->h_clt_class,' '),2,' ')||
+                 rpad(:p_client->h_billableflag,1,' ')||
+                 rpad(nvl(:p_client->h_classofclt,' '),1,' ')||
+                 rpad(nvl(:p_client->h_vtbclient,' '),10,' ')||
+                 rpad(nvl(:p_client->h_cltreg,' '),12,' ') ||
+                 rpad(nvl(translate(nvl(:p_client->h_cltmemo,' '),chr(10)||chr(13),' '),' '),200,' ')||
+                 rpad(nvl(:p_client->h_internal_clt,' '),20,' ')||
+                 rpad(nvl(to_char(:p_client->h_posdt),' '),19,' ') ||
+                 rpad(nvl(:p_client->h_base_id,' '),6,' ')||
+                 rpad(nvl(to_char(:p_client->h_count_swf_mon),' '),4,' ')||
+                 rpad(nvl(to_char(:p_client->h_tlxmonth_cnt),' '),4,' ')||
+                 rpad(nvl(to_char(:p_client->h_count_swf_yr),' '),6,' ')||
+                 rpad(nvl(to_char(:p_client->h_tlxyr_cnt),' '),6,' ')||
+                 rpad(:p_client->h_mstclt,10,' ')||
+                 rpad(:p_client->h_clnt_clr_name,65,' ')||
+                 rpad(:p_client->h_ibbsclient,10,' ')||
+                 rpad(:p_client->h_clt_brk_all,1,' ')||
+                 rpad(:p_client->h_shortclr_name,12,' ')||
+                 rpad(nvl(:p_client->h_ord_clt,' '),1,' ')||
+                 rpad(:p_client->h_spotdlflg,1,' ')||
+                 rpad(:p_client->h_fx_sell_flag,1,' ')||
+                 rpad(:p_client->h_fx_buy_flag,1,' ')||
+                 rpad(:p_client->h_fx_inc_flag,1,' ')||
+                 rpad(to_char(:p_client->h_newdt),19,' ')||
+                 rpad(nvl(:p_client->h_brnchcode,' '),3,' ')||
+                 rpad(:p_client->h_nationcode,2,' ')||
+                 rpad(:p_client->h_fmt_rptflag,1,' ')||
+                 rpad(:p_client->h_maker,14,' ')||
+                 rpad(to_char(:p_client->h_maker_dt),19,' ')||
+                 rpad(to_char(:p_client->h_access_stamp),19,' ')||
+                 rpad(nvl(:p_client->h_checker,' '),14,' ')||
+                 rpad(nvl(to_char(:p_client->h_checker_dt),' '),19,' ')||
+                 rpad(nvl(:p_client->h_uniq_gcustody_id,' '),12,' ')||
+                 rpad(nvl(:p_client->h_cltprdcd,' '),5,' ')||
+                 rpad(:p_client->h_domestic,1,' ')||
+                 rpad(:p_client->h_part_flg,1,' ')||
+                 rpad(:p_client->h_allow_regflag,1,' ')||
+                 rpad(:p_client->h_regsetlflg,1,' ')||
+                 rpad(:p_client->h_reg_bcl_ind,1,' ')||
+                 rpad(:p_client->h_clt_status,2,' ')||
+                 rpad(nvl(:p_client->h_clhclient,' '),15,' ')||
+                 rpad(nvl(:p_client->h_taxable_ind,' '),1,' ')||
+                 rpad(nvl(:p_client->brk_cd,' '),12,' ')||
+                 rpad(nvl(:p_client->h_tax_id,' '),10,' ')||
+                 rpad(nvl(translate(nvl(:p_client->h_contactinfo,' '),chr(10)||chr(13),' '),' '),160,' ')||
+                 rpad(nvl(:p_client->h_extclhclient,' '),12,' ')|| 
+                 rpad(nvl(:p_client->h_rhts_ret,' '),1,' ')||
+                 rpad(nvl(:p_client->h_valcredit,' '),1,' ')
+                 ) INTO :chr_l_mq_data_acc FROM DUAL;
+      IS_ANY_ORA_ERROR
+  }
+  
+
+  if( strcmp(chr_l_accinstr_flg,"S") == 0 ) 
+  {
+  
+     EXEC SQL SELECT (
+                 rpad(:p_mt_instrument_struct_h->h_instr_code,8,' ')||
+                 rpad(:p_mt_instrument_struct_h->h_currency_cd,3,' ')||
+                 rpad(nvl(:p_mt_instrument_struct_h->h_location_cd,' '),4,' ')||
+                 rpad(:p_mt_instrument_struct_h->h_nominal_value,18,' ')||
+                 rpad(:p_mt_instrument_struct_h->h_reg_br_ind,2,' ')||
+                 rpad(:p_mt_instrument_struct_h->h_allow_rf,1,' ')||
+                 rpad(:p_mt_instrument_struct_h->h_allow_rvp,1,' ')||
+                 rpad(:p_mt_instrument_struct_h->h_allow_df,1,' ')||
+                 rpad(:p_mt_instrument_struct_h->h_allow_dvp,1,' ')||
+                 rpad(:p_mt_instrument_struct_h->h_ord_type,1,' ')||
+                 rpad(:p_mt_instrument_struct_h->h_mother_sec_ind,1,' ')||
+                 rpad(:p_mt_instrument_struct_h->h_ex_arena,2,' ')||
+                 rpad(:p_mt_instrument_struct_h->h_listed_ind,1,' ')||
+                 rpad(:p_mt_instrument_struct_h->h_dateof_input,19,' ')||
+                 rpad(:p_mt_instrument_struct_h->h_threshold_qty,5,' ')||
+                 rpad(nvl(:p_mt_instrument_struct_h->h_new_maker,' '),14,' ')||
+                 rpad(:p_mt_instrument_struct_h->h_maker,14,' ')||
+                 rpad(:p_mt_instrument_struct_h->h_maker_dt,19,' ')||
+                 rpad(:p_mt_instrument_struct_h->h_access_stamp,19,' ')||
+                 rpad(nvl(:p_mt_instrument_struct_h->h_checker,' '),14,' ')||
+                 rpad(nvl(to_char(:p_mt_instrument_struct_h->h_checker_dt),' '),19,' ')||
+                 rpad(to_char(:p_mt_instrument_struct_h->h_total_pdcapita),19,' ')||
+                 rpad(:p_mt_instrument_struct_h->h_status,2,' ')||
+                 rpad(:p_mt_instrument_struct_h->h_new_issue,1,' ')||
+                 rpad(nvl(:p_mt_instrument_struct_h->h_new_checker,' '),14,' ')||
+                 rpad(nvl(:p_mt_instrument_struct_h->h_chng_lst_ind,' '),1,' ')||
+                 rpad(nvl(:p_mt_instrument_struct_h->h_cert_of_own_in,' '),1,' ')||
+                 rpad(nvl(translate(:p_mt_instrument_struct_h->h_instr_name,chr(10)||chr(13),' '),' '),130,' ')||
+                 rpad(:p_mt_instrument_struct_h->h_instr_isin,12,' ')||
+                 rpad(:p_mt_instrument_struct_h->h_tipo_inv,2,' ')||
+                 rpad(:p_mt_instrument_struct_h->h_instr_type,3,' ')||
+                 rpad(nvl(:p_mt_instrument_struct_h->h_instr_parent,' '),8,' ')||
+                 rpad(:p_mt_instrument_struct_h->h_prod_class,2,' ')||
+                 rpad(:p_mt_instrument_struct_h->h_sec_dl_code,3,' ')||
+                 rpad(nvl(:p_mt_instrument_struct_h->h_classcd,' '),4,' ')||
+                 rpad(nvl(:p_mt_instrument_struct_h->h_new_cd,' '),8,' ')||
+                 rpad(nvl(:p_mt_instrument_struct_h->h_chng_isin,' '),12,' ')||
+                 rpad(nvl(to_char(:p_mt_instrument_struct_h->h_issue_date),' '),19,' ')||
+                 rpad(nvl(:p_mt_instrument_struct_h->h_chg_mkr,' '),14,' ')||
+                 rpad(nvl(translate(nvl(:p_mt_instrument_struct_h->h_ca_name,' '),chr(10)||chr(13),' '),' '),60,' ')||
+                 rpad(nvl(:p_mt_instrument_struct_h->h_chng_cd,' '),8,' ')||
+                 rpad(nvl(to_char(:p_mt_instrument_struct_h->h_mature_dt),' '),19,' ')||
+                 /*rpad(nvl(:p_mt_instrument_struct_h->h_interest_class,' '),1,' ')||*/
+                 rpad(nvl(:p_mt_instrument_struct_h->h_int_typ,' '),1,' ')||
+                 /*rpad(nvl(to_char(:p_mt_instrument_struct_h->h_inc_rate),' '),22,' ')||*/
+                 rpad(nvl(to_char(:p_mt_instrument_struct_h->h_instr_int_rate),' '),22,' ')||
+                 rpad(nvl(:p_mt_instrument_struct_h->h_freq_code,' '),1,' ')||
+                 /*rpad(nvl(:p_mt_instrument_struct_h->h_int_clttyp,' '),1,' ')||*/
+                 rpad(nvl(:p_mt_instrument_struct_h->h_int_acctyp,' '),1,' ')||
+                 rpad(nvl(to_char(:p_mt_instrument_struct_h->h_last_pymt_date),' '),19,' ')||
+                 rpad(nvl(to_char(:p_mt_instrument_struct_h->h_last_incom_rt),' '),22,' ')||
+                 rpad(nvl(to_char(:p_mt_instrument_struct_h->h_next_pay_date),' '),19,' ')||
+                 rpad(nvl(to_char(:p_mt_instrument_struct_h->h_old_lst_paydt),' '),19,' ')||
+                 rpad(nvl(:p_mt_instrument_struct_h->h_mod_last_paydt,' '),1,' ')||
+                 rpad(nvl(:p_mt_instrument_struct_h->h_taxonmat_ind,' '),1,' ')||
+                 rpad(nvl(:p_mt_instrument_struct_h->h_disct_ind,' '),1,' ')||
+                 rpad(nvl(translate(nvl(:p_mt_instrument_struct_h->h_ca_addrdet,' '),chr(10)||chr(13),' '),' '),180,' ')||
+                 rpad(nvl(to_char(:p_mt_instrument_struct_h->h_min_fmt_dl_qty),' '),25,' ')
+					  ) INTO :chr_l_mq_data_instr FROM DUAL;	
+
+      IS_ANY_ORA_ERROR 
+  }
+
+
+  if(CO_RtvSysDt(chr_l_business_dt,l_debug_info_ptr)== APL_FAILURE)
+  		APL_GOBACK_FAIL
+
+  strcpy(int_l_status,"N");
+
+  memset( chr_l_buf, NULL, BUFFER_LEN);
+  sprintf(chr_l_buf,
+					"Inserting Record to mq_data table for Data Warehouse. \n"
+			);
+  CO_ProcMonitor(APL_OUT_FILE,chr_l_buf,NULL,NULL);
+
+  if( strcmp(chr_l_accinstr_flg,"A") == 0 ) 
+  {
+  memset( chr_l_buf, NULL, BUFFER_LEN);
+  sprintf(chr_l_buf,
+					"Inserting Record to mq_data table during Account deletion. \n"
+			);
+  CO_ProcMonitor(APL_OUT_FILE,chr_l_buf,NULL,NULL);
+
+ 		EXEC SQL   insert into PRO_MQ_DATA values('CA',:chr_l_business_dt,MQ_DATA_SEQ.NEXTVAL,:int_l_status,:chr_l_mq_data_acc);
+ 		IS_ANY_ORA_ERROR
+  }
+
+  if( strcmp(chr_l_accinstr_flg,"S") == 0 ) 
+  {
+  memset( chr_l_buf, NULL, BUFFER_LEN);
+  sprintf(chr_l_buf,
+					"Inserting Record to mq_data table during Instrurity deletion. \n"
+			);
+  CO_ProcMonitor(APL_OUT_FILE,chr_l_buf,NULL,NULL);
+
+ 		EXEC SQL   insert into PRO_MQ_DATA values('CS',:chr_l_business_dt,MQ_DATA_SEQ.NEXTVAL,:int_l_status,:chr_l_mq_data_instr);
+ 		IS_ANY_ORA_ERROR
+  }
+
+  memset( chr_l_buf, NULL, BUFFER_LEN);
+  sprintf(chr_l_buf,
+					"SQLCA.SQLCODE %d while Inserting Record to mq_data table for Data Warehouse. \n",
+		    sqlca.sqlcode
+			);
+  CO_ProcMonitor(APL_OUT_FILE,chr_l_buf,NULL,NULL);
+
+ APL_GOBACK_SUCCESS
+
+   RETURN_SUCCESS :
+      APL_IF_DEBUG
+      {
+         CO_ProcMonitor(   APL_OUT_FILE,
+                     "Leaving Function EI_Mod_MQOnDelAccInstr with success\n",
+                     NULL,
+                     NULL );
+      }
+      return(APL_SUCCESS);
+
+   RETURN_FAILURE :
+      APL_IF_DEBUG
+      {
+         CO_ProcMonitor(   APL_OUT_FILE,
+                     "Leaving Function EI_Mod_MQOnDelAccInstr with errors\n",
+                     NULL,
+                     NULL );
+      }
+      return(APL_FAILURE);
+}

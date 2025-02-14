@@ -1,0 +1,835 @@
+/*
+ *   COPYRIGHT NOTICE
+ *   
+ *   Copyright 2005 Polaris Software Lab Limited. All rights reserved.
+ *   
+ *   These materials are confidential and proprietary to
+ *   Polaris Software Lab Limited and no part of these materials should
+ *   be reproduced, published, transmitted or distributed in any form or
+ *   by any means, electronic, mechanical, photocopying, recording or
+ *   otherwise, or stored in any information storage or retrieval system
+ *   of any nature nor should the materials be disclosed to third parties
+ *   or used in any other manner for which this is not authorized, without
+ *   the prior express written authorization of Polaris Software Lab Limited.
+ */
+/*******************************************************************************
+ *  
+ *    Module Name         :         Billing Module 
+ *    
+ *    File Name           :         IV_PayAEPass.pc
+ *    
+ *    Description         :         This file contains all functions for Passing
+					Billing Payment Acounting Entries.
+ *    
+ *                Version Control Block
+ *     
+ *    Date        Version     Author              Description     RFS No.
+ *   ---------   --------  ---------------  ----------------------------------
+ *   21/12/2006   1.0        Bageshri Salvi	New File   	HB_IV_005 
+ *
+ *******************************************************************************/
+
+
+ 
+
+#include "BT_Common.h"
+#include "CO_IndStructdef.h"
+#include "DL_Csd.h"
+#include "CO_Commdef.h"
+#include "CO_OthStructdef.h"
+
+
+#define  AE_PASS_IND   "P"
+
+EXEC SQL INCLUDE SQLCA.H;
+
+char chr_g_appl_id[5]=   "ITLC";
+char chr_g_processed_flg[2]= "N";
+char chr_g_intr_cd[4]=       "IFT";
+char chr_g_immed_flg[2]=     "N";
+int  int_g_retry_no=          0;
+int  int_g_debit_opt=        30;
+
+
+char  chr_g_progname        [APL_BATCH_PROGNAME_LEN] = APL_NULL_STRING;
+char  chr_g_key             [APL_BATCH_KEY_LEN] = APL_NULL_STRING;
+char  chr_g_start_date      [APL_DATE_LEN] = APL_NULL_STRING;
+char  chr_g_sys_date[APL_DATE_LEN] = APL_NULL_STRING;
+char  chr_g_sys_date_time[APL_DATE_LEN] = APL_NULL_STRING;
+char chr_l_flag[2]=APL_NULL_STRING; /* Added By pavan for ISKB_2020 ( A.E.Passing Radio Button )  */
+
+void writeGEFU_Header(FILE *);
+
+/*void writeGEFU_Header(FILE *p_ptr_handoff_file)
+{
+	fprintf(p_ptr_handoff_file,"<HTML xmlns:x=\"urn:schemas-microsoft-com:office:excel\"><HEAD><META http-equiv='Content-Type' content='text/html; charset=UTF-16'></META>");
+	fprintf(p_ptr_handoff_file,"</HEAD>");
+	fprintf(p_ptr_handoff_file,"<BODY>");
+	fprintf(p_ptr_handoff_file,"<table class='normal' cellSpacing='0' cellPadding='0' width='100%%' border='1'><tr><th>Account No</th><th>Client Name</th><th>Debit(D)/Credit(C)</th><th>Amount</th><th>Narration</th><th>Branch Code</th><th>Ref No</th></TR>");
+}*/
+
+char  chr_g_log_buffer[BUFFER_LEN] = APL_NULL_STRING;
+FILE *g_flogfile = NULL;
+
+
+
+int main(int argc,char **argv) //AIX - Warnings Removal
+{
+
+	/*   DEBUG_INFO_STRUCT_H **l_debug_info_ptr           =  NULL;	*/
+	DEBUG_INFO_STRUCT_H   *l_debug_info_struct = NULL, **l_debug_info_ptr = &l_debug_info_struct;
+	INTL_ENV_DATA_STRUCT_H   l_intlenv_datastruct_h;
+
+	struct sqlca sqlca;
+
+
+	memset(&l_intlenv_datastruct_h,NULL,sizeof(INTL_ENV_DATA_STRUCT_H));
+
+
+	int  int_num=0;
+	char **temp= NULL;
+	char *int_pos;
+	char chr_l_process_name[BT_PROCESS_NAME_LEN]=APL_NULL_STRING;
+	char chr_l_process_key[BT_PROCESS_KEY_LEN]=APL_NULL_STRING;
+	char chr_l_start_date[20]=APL_NULL_STRING;
+	char chr_l_batch_no[6]=APL_NULL_STRING;
+	short pass_rej_ind=0;
+
+	strcpy(l_intlenv_datastruct_h.usr,argv[3]);
+	strcpy(l_intlenv_datastruct_h.h_mode, argv[4]);
+	strcpy(l_intlenv_datastruct_h.processtion, argv[5]);
+	strcpy(l_intlenv_datastruct_h.auth_req, argv[6]);
+	strcpy(l_intlenv_datastruct_h.subprocess, argv[7]);
+	strcpy(l_intlenv_datastruct_h.h_process, argv[8]);
+
+
+	printf("\n Env Values Are: \n");
+	printf("\n l_intlenv_datastruct_h.usr=|%s| \n",l_intlenv_datastruct_h.usr);
+	printf("\n l_intlenv_datastruct_h.h_mode=|%s| \n",l_intlenv_datastruct_h.h_mode);
+	printf("\n l_intlenv_datastruct_h.processtion=|%s| \n",l_intlenv_datastruct_h.processtion);
+	printf("\n l_intlenv_datastruct_h.auth_req=|%s| \n",l_intlenv_datastruct_h.auth_req);
+	printf("\n l_intlenv_datastruct_h.subprocess=|%s| \n",l_intlenv_datastruct_h.subprocess);
+	printf("\n l_intlenv_datastruct_h.h_process=|%s| \n",l_intlenv_datastruct_h.h_process);
+
+
+	if(CO_Get_DBConnect(l_debug_info_ptr) == APL_FAILURE)
+	{
+		APL_GOBACK_FAIL
+	}
+
+Alert("success from CO_Get_DBConnect ***********************************");
+	if (APL_FAILURE == CO_Rtv_RptFileName( "IV_PAYPASS",
+				APL_LOGFILE_DESC,
+				100,
+				argv[5],
+				argv,
+				&g_flogfile,
+				&l_debug_info_ptr ) )
+
+	{
+		CO_ProcMonitor(g_flogfile, "Failure from CO_Rtv_RptFileName:", l_debug_info_ptr,&l_intlenv_datastruct_h);
+		APL_GOBACK_FAIL
+	}
+
+Alert("success from CO_Rtv_RptFileName***********************************");
+
+	if(BT_Status_Update(argv[0],
+				argv[1],
+				argv[2],
+				APL_STARTED_STATUS,
+				l_debug_info_ptr) ==APL_FAILURE)
+	{
+		APL_GOBACK_FAIL
+	}		
+
+
+	if ( CO_RtvSysDtTime(chr_g_sys_date_time,l_debug_info_ptr) == APL_FAILURE )
+		APL_GOBACK_FAIL
+
+			if ( CO_RtvSysParams(l_debug_info_ptr) == APL_FAILURE)
+				APL_GOBACK_FAIL
+
+					strcpy(chr_g_sys_date,chr_g_sys_date_time);
+	strcpy(chr_g_sys_date,strtok_r(chr_g_sys_date," ",&int_pos));
+	strcat(chr_g_sys_date,APL_NULL_TIME);
+
+
+	strcpy(chr_l_process_name,argv[0]);
+	strcpy(chr_l_process_key,argv[1]);
+	strcpy(chr_l_start_date,argv[2]);
+
+	if ( argc < 10 )
+	{
+		fprintf(g_flogfile,"All Arguments expected by  program not passed");
+		APL_GOBACK_FAIL
+	}
+
+	if (APL_FAILURE == CO_SplitStr( argv[9],
+				'|',
+				&int_num,
+				&temp ))
+	{
+		fprintf(g_flogfile,"Returns Unsuccessfully from CO_SplitStr\n");
+	}
+
+	strcpy(chr_g_progname,   argv[0]);
+	strcpy(chr_g_key,        argv[1]);
+	strcpy(chr_g_start_date, argv[2]);
+
+	strcpy(chr_l_batch_no,temp[0]);
+	strcpy(chr_l_flag,temp[1]);    /* Added By pavan for ISKB_2020 ( A.E.Passing Radio Button ) */  
+	printf("\n chr_l_flag=|%s|\n",chr_l_flag);
+	sprintf(chr_g_log_buffer,"\n chr_l_flag=|%s|\n",chr_l_flag);
+
+	printf("\n chr_l_batch_no=|%s|\n",chr_l_batch_no);
+	sprintf(chr_g_log_buffer,"Passed Batch Number=|%s|\n",chr_l_batch_no);
+	fprintf(g_flogfile,"%s",chr_g_log_buffer);
+
+
+	if (APL_FAILURE == IV_Proc_PassPayAE(chr_l_batch_no,
+				chr_g_progname,
+				chr_g_key,
+				chr_g_start_date,
+				&l_intlenv_datastruct_h,
+				l_debug_info_ptr))
+	{
+		fprintf(g_flogfile,"IV_Proc_PassPayAE Returned Failure.");
+		EXEC SQL ROLLBACK;
+		IS_ANY_ORA_ERROR
+			APL_GOBACK_FAIL
+	}
+
+
+
+	APL_GOBACK_SUCCESS
+
+		RETURN_SUCCESS:
+		{
+			if(BT_Status_Completed(argv[0],
+						argv[1],
+						argv[2],
+						l_debug_info_ptr)   ==  APL_FAILURE )
+			{
+				APL_GOBACK_FAIL
+			}
+
+			EXEC SQL COMMIT WORK;
+			if(sqlca.sqlcode != 0)
+				APL_GOBACK_FAIL
+					fprintf(g_flogfile, "\n Existing Successfully from IV Pymt Accounting Entries Passing! \n");
+			exit(0);
+		}
+
+RETURN_FAILURE:
+	{
+		printf("\n Failed To Pass IV Pymt Accounting Entries: ORA|%d|\n\n",sqlca.sqlcode);
+		sprintf(chr_g_log_buffer,"Failed To Pass IV Pymt Accounting Entries. Error=ORA|%d|\n",sqlca.sqlcode);
+		fprintf(g_flogfile,"%s",chr_g_log_buffer);
+		CO_Proc_RptClose(g_flogfile,l_debug_info_ptr);
+		exit(-1);
+	}
+}
+
+
+
+
+int IV_Proc_PassPayAE(char * chr_p_batch_no,
+		char *p_process_name,
+		char *p_process_key,
+		char *p_start_date,
+		INTL_ENV_DATA_STRUCT_H *p_intl_envdatastruct_h,
+		DEBUG_INFO_STRUCT_H      **l_debug_info_ptr)
+
+  {
+
+	  int counter1=0;
+	  int counter2=0;
+	  int draw_down_seq_no=0;
+	  char chr_l_comb_ref_no[21]=APL_NULL_STRING;
+	  char chr_l_batch_dt[20]=APL_NULL_STRING;
+	  char chr_l_pass_ind[2]="P";
+	
+ 	  FILE  *l_ptr_ini_file = NULL;
+	  FILE  *l_ptr_handoff_file = NULL;
+	  char chr_l_sysdate[9]= APL_NULL_STRING;
+		
+	  char  chr_l_inifile[PATH_LENGTH]= APL_NULL_STRING;
+	  char  chr_l_handoff_dir[FILEPATH_LEN]= APL_NULL_STRING;
+	  char  chr_l_handoff_file_name[FILENAME_LEN_A]= APL_NULL_STRING;	
+
+	  char  chr_l_header[100]= APL_NULL_STRING;
+	  char  chr_l_gefu_rec[1000] =APL_NULL_STRING;
+	  char  chr_l_gefu_hdr[10] =APL_NULL_STRING;
+	  char  chr_l_gefu_trailor[50] =APL_NULL_STRING;
+	  char chr_l_val_date[APL_DATE_LEN]=APL_NULL_STRING;
+	  char chr_l_cln_name[131]= APL_NULL_STRING;
+	  char l_chr_new_val_dt[11]=APL_NULL_STRING;
+	  char l_chr_proc_dt[11]=APL_NULL_STRING;
+	  int counter_tab=0;
+	
+	  short i_val_date=0;
+	  short i_cln_name=0;
+
+
+	  struct sqlca sqlca;
+
+
+	  PRO_ACCTENT_STRUCT_H 	*l_pro_cracctent_struct_h = NULL;
+	  PRO_ACCTENT_STRUCT_I 	*l_pro_cracctent_struct_i = NULL;	
+
+	  PRO_ACCTENT_PASSCLT_STRUCT_H  *l_pro_acctent_passclt_struct_h = NULL;
+	  PRO_ACCTENT_PASSCLT_STRUCT_I  *l_pro_acctent_passclt_struct_i = NULL;
+	  PRO_ACCTENT_PASSGL_STRUCT_H   *l_pro_acctent_passgl_struct_h = NULL;
+	  PRO_ACCTENT_PASSGL_STRUCT_I   *l_pro_acctent_passgl_struct_i = NULL;
+	
+
+	  l_pro_cracctent_struct_h = ( PRO_ACCTENT_STRUCT_H * )calloc ( 1, sizeof ( PRO_ACCTENT_STRUCT_H) );
+	  APL_MALLOC_FAIL(l_pro_cracctent_struct_h);	
+
+	  l_pro_cracctent_struct_i = ( PRO_ACCTENT_STRUCT_I * )calloc ( 1, sizeof ( PRO_ACCTENT_STRUCT_I) );
+      APL_MALLOC_FAIL(l_pro_cracctent_struct_i);
+
+	  memset(l_pro_cracctent_struct_i,-1,sizeof( PRO_ACCTENT_STRUCT_I) );	
+
+	  l_pro_acctent_passclt_struct_h =(PRO_ACCTENT_PASSCLT_STRUCT_H * )calloc( 1,sizeof(PRO_ACCTENT_PASSCLT_STRUCT_H));
+      APL_MALLOC_FAIL(l_pro_acctent_passclt_struct_h);
+	  l_pro_acctent_passclt_struct_i =(PRO_ACCTENT_PASSCLT_STRUCT_I * )calloc( 1,sizeof(PRO_ACCTENT_PASSCLT_STRUCT_I));
+      APL_MALLOC_FAIL(l_pro_acctent_passclt_struct_i);
+
+	  memset(l_pro_acctent_passclt_struct_i,-1,sizeof( PRO_ACCTENT_PASSCLT_STRUCT_I) );
+	  
+	  l_pro_acctent_passgl_struct_h =(PRO_ACCTENT_PASSGL_STRUCT_H * )calloc( 1,sizeof(PRO_ACCTENT_PASSGL_STRUCT_H));
+      APL_MALLOC_FAIL(l_pro_acctent_passgl_struct_h);
+	  l_pro_acctent_passgl_struct_i =(PRO_ACCTENT_PASSGL_STRUCT_I * )calloc( 1,sizeof(PRO_ACCTENT_PASSGL_STRUCT_I));
+      APL_MALLOC_FAIL(l_pro_acctent_passgl_struct_i);
+
+	  memset(l_pro_acctent_passgl_struct_i,-1,sizeof( PRO_ACCTENT_PASSGL_STRUCT_I) );
+
+	  int writeGEFU_File(char ,char *, char *, char *, FILE *, INTL_ENV_DATA_STRUCT_H *, DEBUG_INFO_STRUCT_H **);
+
+		
+	 EXEC SQL BEGIN DECLARE SECTION;	
+		EXEC SQL VAR chr_l_val_date IS STRING;
+		EXEC SQL VAR chr_l_cln_name IS STRING;
+	 EXEC SQL END DECLARE SECTION;
+
+	/* Commented by Kalyan
+
+	 fprintf(g_flogfile,"\n Entering function IV_Proc_PassPayAE() \n");
+	 fprintf(g_flogfile,"\n Before Updating  pro_acctent \n");
+
+	 EXEC SQL UPDATE pro_acctent
+		 SET status='P'
+		 WHERE module_ind ='P'
+		 AND proc_num=:chr_p_batch_no
+		 AND status='G';		
+
+	 if(sqlca.sqlcode)
+	 {
+		 printf("\n Error Updating pro_accctent =|%d| \n",sqlca.sqlcode);
+		 sprintf(chr_g_log_buffer,"Error Updating pro_acctent=|%d| \n",sqlca.sqlcode);
+		 fprintf(g_flogfile,"%s",chr_g_log_buffer);
+	 }
+	 IS_ANY_ORA_ERROR
+
+
+
+		 IF_COND_EXISTS("IV_PASSPAYAE","GEFUFMT")	
+		{
+			if(APL_FAILURE == writeGEFU_File('P',chr_p_batch_no,chr_g_progname,chr_g_start_date, g_flogfile, p_intl_envdatastruct_h,l_debug_info_ptr))
+			{
+				Alert("Failure !!!!!!!!!!!");
+		 APL_GOBACK_FAIL
+			}
+		}
+
+		*******************************************/
+		/* commented by shailesh 031007 ISKB430
+			EXEC SQL DECLARE l_cur_cln_ent CURSOR FOR
+				SELECT a.* FROM pro_acctent a
+					WHERE a.proc_num=:chr_p_batch_no
+					AND a.module_ind='P'
+					AND a.status='G'
+					AND DB_CR_IND='0'
+					ORDER BY TO_NUMBER(inden_num);
+
+		EXEC SQL OPEN l_cur_cln_ent;
+
+		IS_ANY_ORA_ERROR
+
+		for(;;)
+	    {
+			EXEC SQL FETCH l_cur_cln_ent 
+		    INTO :l_pro_acctent_passclt_struct_h:l_pro_acctent_passclt_struct_i;
+
+			if(APL_ZERO_RESULT_SET)
+			{
+				if(counter1==0)
+				{
+					fprintf(g_flogfile,"\n No Records Found in l_cur_cln_ent CURSOR! \n");
+				}
+				break;
+			}
+			IS_ANY_ORA_ERROR
+			
+			counter1++;	
+
+			fprintf(g_flogfile,"\n ***** Opened Cursor l_cur_cln_ent ***** \n");	
+
+			strcpy(chr_l_batch_dt,l_pro_acctent_passclt_struct_h->proc_dt);
+
+			sprintf(chr_g_log_buffer,"\n Batch_Date=|%s|\n",l_pro_acctent_passclt_struct_h->proc_dt);
+			fprintf(g_flogfile,"%s",chr_g_log_buffer);
+			
+			EXEC SQL SELECT b.* INTO :l_pro_acctent_passgl_struct_h:l_pro_acctent_passgl_struct_i 
+					 FROM pro_acctent b
+					 WHERE b.proc_num=:chr_p_batch_no
+							AND b.module_ind='P'
+							AND b.status='G'
+							AND DB_CR_IND='1' ;
+			
+			if(sqlca.sqlcode == 1403)
+			{
+				fprintf(g_flogfile,"no record found for credit entry for client.. going to fetch nxt record ");
+			}
+			else
+			{
+				IS_ANY_ORA_ERROR	
+			
+				counter2++;
+
+				EXEC SQL SELECT seq_draw_down_id.nextval@idb INTO :draw_down_seq_no FROM dual;
+	
+				IS_ANY_ORA_ERROR
+				
+				printf("\n For Client_Account|%s| DB/CR_Indicator=|%c|\n",
+							  l_pro_acctent_passclt_struct_h->client,
+							  l_pro_acctent_passclt_struct_h->db_cr_ind);
+			
+				sprintf(chr_g_log_buffer,"Client_Account=|%s| GL_Account=|%s|Client_DB/CR=|%c|\n",l_pro_acctent_passclt_struct_h->client,l_pro_acctent_passgl_struct_h->client,l_pro_acctent_passclt_struct_h->db_cr_ind);
+				
+				fprintf(g_flogfile,"%s",chr_g_log_buffer);
+				strcpy(chr_l_val_date,l_pro_acctent_passclt_struct_h->proc_dt);
+
+				printf("\n Draw:New Value Date=|%s| \n",chr_l_val_date);
+				sprintf(chr_g_log_buffer,"\n Draw: New Value Date=|%s| \n",chr_l_val_date);
+				fprintf(g_flogfile,"%s",chr_g_log_buffer);		
+					
+				sprintf(chr_g_log_buffer,"\n DRAW_DOWNID=|%d| \n",draw_down_seq_no);
+				fprintf(g_flogfile,"%s",chr_g_log_buffer);
+				sprintf(chr_g_log_buffer,"\n RETRY_NO=|%d| \n",int_g_retry_no);
+				fprintf(g_flogfile,"%s",chr_g_log_buffer);
+				sprintf(chr_g_log_buffer,"\n APPLICATION_ID=|%s| \n",chr_g_appl_id);
+				fprintf(g_flogfile,"%s",chr_g_log_buffer);
+				sprintf(chr_g_log_buffer,"\n ALLOC_ID=|%s%s| \n",l_pro_acctent_passclt_struct_h->proc_num,l_pro_acctent_passclt_struct_h->inden_num);
+				fprintf(g_flogfile,"%s",chr_g_log_buffer);
+				sprintf(chr_g_log_buffer,"\n AP_REF_NO=|%s%s| \n",l_pro_acctent_passclt_struct_h->proc_num,l_pro_acctent_passclt_struct_h->inden_num);
+				fprintf(g_flogfile,"%s",chr_g_log_buffer);
+				sprintf(chr_g_log_buffer,"\n SI_DATE=|%s| \n",l_pro_acctent_passclt_struct_h->proc_dt);
+				fprintf(g_flogfile,"%s",chr_g_log_buffer);
+				sprintf(chr_g_log_buffer,"\n DRAW_DOWN_DATE=|%s| \n",l_pro_acctent_passclt_struct_h->proc_dt);
+				fprintf(g_flogfile,"%s",chr_g_log_buffer);
+				sprintf(chr_g_log_buffer,"\n FC_APAC=|%s| \n",l_pro_acctent_passclt_struct_h->client);
+				fprintf(g_flogfile,"%s",chr_g_log_buffer);
+				sprintf(chr_g_log_buffer,"\n AP_GL_REF1=|%s| \n",l_pro_acctent_passgl_struct_h->client);
+				fprintf(g_flogfile,"%s",chr_g_log_buffer);
+				sprintf(chr_g_log_buffer,"\n AP_BRANCH_REF1=|%s| \n",l_pro_acctent_passclt_struct_h->brnch_cd);
+				fprintf(g_flogfile,"%s",chr_g_log_buffer);
+				sprintf(chr_g_log_buffer,"\n AMOUNT=|%lf| \n",l_pro_acctent_passclt_struct_h->report_amt);
+				fprintf(g_flogfile,"%s",chr_g_log_buffer);
+				sprintf(chr_g_log_buffer,"\n CURRENCY_CD=|%s| \n",l_pro_acctent_passclt_struct_h->curr_cd);
+				fprintf(g_flogfile,"%s",chr_g_log_buffer);
+				sprintf(chr_g_log_buffer,"\n CONVERSION_RATE=|%lf| \n",l_pro_acctent_passclt_struct_h->exchg_rt);
+				fprintf(g_flogfile,"%s",chr_g_log_buffer);
+				sprintf(chr_g_log_buffer,"\n LOCAL_CURRENCY_AMOUNT=|%lf| \n",l_pro_acctent_passclt_struct_h->lcl_amount);
+				fprintf(g_flogfile,"%s",chr_g_log_buffer);
+				sprintf(chr_g_log_buffer,"\n DEBIT_OPTION=|%d| \n",int_g_debit_opt);
+				fprintf(g_flogfile,"%s",chr_g_log_buffer);
+				sprintf(chr_g_log_buffer,"\n AP_REMARKS=|%s| \n",l_pro_acctent_passclt_struct_h->description); 
+				fprintf(g_flogfile,"%s",chr_g_log_buffer);
+				sprintf(chr_g_log_buffer,"\n AP_GL_REMARKS=|%s| \n",l_pro_acctent_passgl_struct_h->description);	 
+				fprintf(g_flogfile,"%s",chr_g_log_buffer);
+				sprintf(chr_g_log_buffer,"\n VALUE_DATE=|%s| \n",chr_l_val_date);
+				fprintf(g_flogfile,"%s",chr_g_log_buffer);
+				sprintf(chr_g_log_buffer,"\n FC_PROCESSED_FLAG=|%s| \n",chr_g_processed_flg);
+				fprintf(g_flogfile,"%s",chr_g_log_buffer);
+
+
+				EXEC SQL INSERT INTO draw_down_trans 
+						VALUES(:draw_down_seq_no,
+							 :int_g_retry_no,
+							 :chr_g_appl_id,
+							 :l_pro_acctent_passclt_struct_h->proc_num, 
+							 '00'||:l_pro_acctent_passclt_struct_h->proc_num||:l_pro_acctent_passclt_struct_h->inden_num, 
+							 TO_DATE(SUBSTR(:l_pro_acctent_passclt_struct_h->proc_dt,0,10),'DD/MM/YYYY'), 
+							 TO_DATE(SUBSTR(:l_pro_acctent_passclt_struct_h->proc_dt,0,10),'DD/MM/YYYY'),
+							 :l_pro_acctent_passclt_struct_h->client:l_pro_acctent_passclt_struct_i->i_dl_client,
+							 :l_pro_acctent_passgl_struct_h->client:l_pro_acctent_passgl_struct_i->i_dl_client,
+							 :l_pro_acctent_passclt_struct_h->brnch_cd:l_pro_acctent_passclt_struct_i->i_brnch_cd,
+							 :l_pro_acctent_passclt_struct_h->report_amt:l_pro_acctent_passclt_struct_i->i_rep_amount,
+							 :l_pro_acctent_passclt_struct_h->curr_cd:l_pro_acctent_passclt_struct_i->i_curr_cd,
+							 :l_pro_acctent_passclt_struct_h->exchg_rt:l_pro_acctent_passclt_struct_i->i_exch_rt,
+							 :l_pro_acctent_passclt_struct_h->lcl_amount:l_pro_acctent_passclt_struct_i->i_lcy_amount,	
+							 :int_g_debit_opt,
+							 :l_pro_acctent_passclt_struct_h->description:l_pro_acctent_passclt_struct_i->i_description,
+							 :l_pro_acctent_passgl_struct_h->description:l_pro_acctent_passgl_struct_i->i_description,
+							 TO_DATE(SUBSTR(:chr_l_val_date,0,10),'DD/MM/YYYY'),
+							 :chr_g_processed_flg);
+
+
+							  fprintf(g_flogfile,"\n  Error 2=|%d| \n",sqlca.sqlcode);
+
+					IS_ANY_ORA_ERROR
+
+		
+				fprintf(g_flogfile,"\n Before Updating  pro_acctent \n");
+
+				EXEC SQL UPDATE pro_acctent
+					SET status='P'
+				WHERE proc_num=:chr_p_batch_no
+				AND status='G'
+				And batch_date=:chr_l_batch_dt;		
+
+				if(sqlca.sqlcode != 0)
+				{
+					printf("\n Error Updating pro_accctent =|%d| \n",sqlca.sqlcode);
+					sprintf(chr_g_log_buffer,"Error Updating pro_acctent=|%d| \n",sqlca.sqlcode);
+					fprintf(g_flogfile,"%s",chr_g_log_buffer);
+				}
+				IS_ANY_ORA_ERROR
+
+	 	    }		
+			
+					
+		}
+
+			EXEC SQL CLOSE l_cur_cln_ent;
+			
+			IS_ANY_ORA_ERROR
+
+
+	fprintf(g_flogfile,"\n  Loop Conters are Counter1=|%d| Counter2=|%d| \n",counter1,counter2);
+	fprintf(g_flogfile,"\n p_start_date=|%s| chr_l_pass_ind=|%s| chr_p_batch_no=|%s| chr_l_batch_dt=|%s|\n",p_start_date,chr_l_pass_ind,chr_p_batch_no,chr_l_batch_dt);
+	*/
+
+
+
+	//shailesh 03-10-2007 ISKB 430 
+				EXEC SQL DECLARE l_cur_cln_ent CURSOR FOR
+					SELECT a.* FROM pro_acctent a
+					WHERE a.proc_num=:chr_p_batch_no
+					AND a.acc_type='C'
+					AND a.module_ind='P'
+					AND a.status='G'
+					ORDER BY TO_NUMBER(inden_num);
+	  
+	EXEC SQL OPEN l_cur_cln_ent;
+
+		IS_ANY_ORA_ERROR 
+
+		for(;;)  //outer for
+	    {
+
+		    EXEC SQL FETCH l_cur_cln_ent
+		    INTO :l_pro_acctent_passclt_struct_h:l_pro_acctent_passclt_struct_i;
+
+	      if(APL_ZERO_RESULT_SET)
+		   {
+			  if(counter1==0)
+				{
+					fprintf(g_flogfile,"\n No Records Found in l_cur_cln_ent CURSOR! \n");
+				}
+				break;
+		   }
+	      IS_ANY_ORA_ERROR
+			
+			counter1++;	
+
+			fprintf(g_flogfile,"\n ***** Opened Cursor l_cur_cln_ent ***** \n");	
+
+			strcpy(chr_l_batch_dt,l_pro_acctent_passclt_struct_h->proc_dt);
+
+			sprintf(chr_g_log_buffer,"\n Batch_Date=|%s|\n",l_pro_acctent_passclt_struct_h->proc_dt);
+			fprintf(g_flogfile,"%s",chr_g_log_buffer);
+
+			EXEC SQL DECLARE l_cur_gl_ent CURSOR  FOR
+						SELECT b.* FROM pro_acctent b
+					  	WHERE b.proc_num=:chr_p_batch_no
+						AND b.acc_type='G'
+					   	AND b.module_ind='P'
+						AND b.status='G'
+						AND b.leg_ind =  :l_pro_acctent_passclt_struct_h->inden_num
+						AND b.proc_num = :l_pro_acctent_passclt_struct_h->proc_num
+						ORDER BY TO_NUMBER(inden_num);
+			
+		 	EXEC SQL OPEN l_cur_gl_ent;
+
+			IS_ANY_ORA_ERROR	
+			for(;;) //inner for
+	      {
+	         EXEC SQL FETCH l_cur_gl_ent
+				           INTO :l_pro_acctent_passgl_struct_h:l_pro_acctent_passgl_struct_i;
+
+
+			if(APL_ZERO_RESULT_SET)
+	         {
+			  if(counter2==0)
+				{
+					fprintf(g_flogfile,"\n No Records Found in  l_cur_gl_ent CURSOR! \n");
+				}
+				break;
+			}
+		      IS_ANY_ORA_ERROR
+
+				counter2++;
+
+			if(!strcmp(chr_l_flag,"C"))  /* Added By pavan for ISKB_2020 ( A.E.Passing Radio Button ) */
+			{				
+				fprintf(g_flogfile,"\n Entries have passed into Core  \n");
+				
+				fprintf(g_flogfile,"\n **** Opened Cursor l_cur_gl_ent *****\n");
+				
+				sprintf(chr_g_log_buffer,"Inside Cursor:CLIENT INDEN_NUM=|%s| BATCH_NO=|%s|",l_pro_acctent_passclt_struct_h->inden_num,l_pro_acctent_passclt_struct_h->proc_num);
+				fprintf(g_flogfile,"%s",chr_g_log_buffer);
+				sprintf(chr_g_log_buffer,"Inside Cursor:GL INDEN_NUM=|%s| BATCH_NO=|%s|",l_pro_acctent_passgl_struct_h->inden_num,l_pro_acctent_passgl_struct_h->proc_num);
+				fprintf(g_flogfile,"%s",chr_g_log_buffer);
+
+				IS_ANY_ORA_ERROR
+				
+				printf("\n For Client_Account|%s| DB/CR_Indicator=|%c|\n",
+							  l_pro_acctent_passclt_struct_h->client,
+							  l_pro_acctent_passclt_struct_h->db_cr_ind);
+			
+				sprintf(chr_g_log_buffer,"Client_Account=|%s| GL_Account=|%s|Client_DB/CR=|%c|\n",l_pro_acctent_passclt_struct_h->client,l_pro_acctent_passgl_struct_h->client,l_pro_acctent_passclt_struct_h->db_cr_ind);
+				
+				fprintf(g_flogfile,"%s",chr_g_log_buffer);
+				
+	     
+				/*	Exchange Rate set when Exchange Rate not define	ISKB-1994	*/
+				printf(" Exchnage Rate |%lf| Indicator |%d|\n",l_pro_acctent_passgl_struct_h->exchg_rt, l_pro_acctent_passgl_struct_i->i_exch_rt);
+				if (l_pro_acctent_passgl_struct_i->i_exch_rt == -1)
+				{
+					l_pro_acctent_passclt_struct_h->exchg_rt = 1;
+					l_pro_acctent_passclt_struct_i->i_exch_rt = 0;
+				}
+
+		memset(chr_l_val_date,APL_NULL_CHAR,APL_DATE_LEN);
+		memset(l_chr_new_val_dt,APL_NULL_CHAR,APL_DATE_LEN);
+		memset(l_chr_proc_dt,APL_NULL_CHAR,APL_DATE_LEN);
+
+		if(l_pro_acctent_passclt_struct_h->db_cr_ind =='1' )
+				{
+					strncpy(chr_l_val_date,l_pro_acctent_passclt_struct_h->proc_dt,10);
+					printf("\n ***** Before Insert into payment_to_fc ***** \n");
+					fprintf(g_flogfile,"\n ***** Before Insert into payment_to_fc ***** \n");
+
+	EXEC SQL SELECT a.cln_name INTO :chr_l_cln_name:i_cln_name FROM MT_CLIENT a,
+	IV_CLIENTSETUP b WHERE b.client=:l_pro_acctent_passclt_struct_h->deal_ident
+	AND a.cln_code=b.client;
+
+	printf("\n sqlca.sqlcode for cln_name = [%d]",sqlca.sqlcode);			
+
+
+	sprintf(chr_g_log_buffer,"\n Here Got Client Name=|%s| Error=|%d|\n",chr_l_cln_name,sqlca.sqlcode);
+	fprintf(g_flogfile,"%s",chr_g_log_buffer);
+	sprintf(chr_g_log_buffer,"\n APPLICATION_ID=|%s| \n",chr_g_appl_id);
+	fprintf(g_flogfile,"%s",chr_g_log_buffer);
+	sprintf(chr_g_log_buffer,"\n AP_REF_NO=|%s%s| \n",l_pro_acctent_passclt_struct_h->proc_num,l_pro_acctent_passclt_struct_h->inden_num);
+	fprintf(g_flogfile,"%s",chr_g_log_buffer);
+	sprintf(chr_g_log_buffer,"\n AP_PAYMENT_DATE=|%s| \n",l_pro_acctent_passclt_struct_h->proc_dt);
+	fprintf(g_flogfile,"%s",chr_g_log_buffer);
+	sprintf(chr_g_log_buffer,"\n AP_INSTRUMENT_TYPE_CD=|%s| \n",chr_g_intr_cd);
+	fprintf(g_flogfile,"%s",chr_g_log_buffer);
+	sprintf(chr_g_log_buffer,"\n FC_APAC=|%s| \n",l_pro_acctent_passclt_struct_h->client);
+	fprintf(g_flogfile,"%s",chr_g_log_buffer);
+	sprintf(chr_g_log_buffer,"\n AP_GL_REF1=|%s| \n",l_pro_acctent_passgl_struct_h->client);
+	fprintf(g_flogfile,"%s",chr_g_log_buffer);
+	sprintf(chr_g_log_buffer,"\n AP_GL_REF2=|%s| \n",l_pro_acctent_passclt_struct_h->brnch_cd);
+	fprintf(g_flogfile,"%s",chr_g_log_buffer);
+	sprintf(chr_g_log_buffer,"\n AP_AMOUNT=|%lf| \n",l_pro_acctent_passclt_struct_h->report_amt);
+	fprintf(g_flogfile,"%s",chr_g_log_buffer);
+	sprintf(chr_g_log_buffer,"\n CURRENCY_CD=|%s| \n",l_pro_acctent_passclt_struct_h->curr_cd);
+	fprintf(g_flogfile,"%s",chr_g_log_buffer);
+	sprintf(chr_g_log_buffer,"\n CONVERSION_RATE=|%lf| \n",l_pro_acctent_passclt_struct_h->exchg_rt);
+	fprintf(g_flogfile,"%s",chr_g_log_buffer);
+	sprintf(chr_g_log_buffer,"\n LOCAL_CURRENCY_AMOUNT=|%lf| \n",l_pro_acctent_passclt_struct_h->lcl_amount);
+	fprintf(g_flogfile,"%s",chr_g_log_buffer);
+	sprintf(chr_g_log_buffer,"\n AP_PAYABLE_TO=|%s|",chr_l_cln_name);
+	fprintf(g_flogfile,"%s",chr_g_log_buffer);
+	sprintf(chr_g_log_buffer,"\n AP_PAYABLE_AT is Kept Blank");
+	fprintf(g_flogfile,"%s",chr_g_log_buffer);
+	sprintf(chr_g_log_buffer,"\n AP_REMARKS=|%s|",l_pro_acctent_passclt_struct_h->description);
+	fprintf(g_flogfile,"%s",chr_g_log_buffer);
+	sprintf(chr_g_log_buffer,"\n AP_GL_REMARKS=|%s| \n",l_pro_acctent_passgl_struct_h->description);
+	fprintf(g_flogfile,"%s",chr_g_log_buffer);
+	sprintf(chr_g_log_buffer,"\n AP_POST_DATE=|%s| \n",l_pro_acctent_passclt_struct_h->proc_dt);
+	fprintf(g_flogfile,"%s",chr_g_log_buffer);
+	sprintf(chr_g_log_buffer,"\n VALUE_DATE=|%s| \n",chr_l_val_date);
+	fprintf(g_flogfile,"%s",chr_g_log_buffer);
+	sprintf(chr_g_log_buffer,"\n AP_IMMEDIATE_PROCESS_FLAG=|%s| \n",chr_g_immed_flg);
+	fprintf(g_flogfile,"%s",chr_g_log_buffer);
+	sprintf(chr_g_log_buffer,"\n PROCESSED_FLAG=|%s| \n",chr_g_processed_flg);
+	fprintf(g_flogfile,"%s",chr_g_log_buffer);
+
+	EXEC SQL INSERT INTO payment_to_fc  
+	VALUES(:chr_g_appl_id,
+	      :l_pro_acctent_passclt_struct_h->proc_num||:l_pro_acctent_passclt_struct_h->inden_num,
+	      TO_DATE(SUBSTR(:l_pro_acctent_passclt_struct_h->proc_dt,0,10),'DD/MM/YYYY'),
+	      :chr_g_intr_cd,
+	      :l_pro_acctent_passclt_struct_h->client:l_pro_acctent_passclt_struct_i->i_dl_client,
+	      :l_pro_acctent_passgl_struct_h->client:l_pro_acctent_passgl_struct_i->i_dl_client,
+	      :l_pro_acctent_passclt_struct_h->brnch_cd:l_pro_acctent_passclt_struct_i->i_brnch_cd,
+	      :l_pro_acctent_passclt_struct_h->report_amt:l_pro_acctent_passclt_struct_i->i_rep_amount,
+	      :l_pro_acctent_passclt_struct_h->curr_cd:l_pro_acctent_passclt_struct_i->i_curr_cd,
+	      :l_pro_acctent_passclt_struct_h->exchg_rt:l_pro_acctent_passclt_struct_i->i_exch_rt,
+	      :l_pro_acctent_passclt_struct_h->lcl_amount:l_pro_acctent_passclt_struct_i->i_lcy_amount,
+	      :chr_l_cln_name,
+		 NULL,
+	      :l_pro_acctent_passclt_struct_h->description:l_pro_acctent_passclt_struct_i->i_description,
+	      :l_pro_acctent_passgl_struct_h->description:l_pro_acctent_passclt_struct_i->i_description,
+	      TO_DATE(SUBSTR(:l_pro_acctent_passclt_struct_h->proc_dt,0,10),'DD/MM/YYYY'),
+	      :chr_l_val_date:i_val_date,
+	      :chr_g_immed_flg,
+	      :chr_g_processed_flg);
+	
+		printf("\n sqlca.sqlcode after inserting in payment_to_fc [%d]",sqlca.sqlcode);
+		IS_ANY_ORA_ERROR
+				
+						
+				}//END OF DEBIT/CREDIT CHECK
+				else
+				{
+					/*Select IDB Seq for UAT/PROD Env
+					EXEC SQL SELECT seq_draw_down_id.NEXTVAL@idb INTO :draw_down_seq_no FROM DUAL;*/
+					/*Select this Seq for SIT/DEV Env*/
+					EXEC SQL SELECT seq_draw_down_id.NEXTVAL INTO :draw_down_seq_no FROM DUAL;	
+					IS_ANY_ORA_ERROR
+
+					printf("\nINSERT IN  DRAW_DOWN_TRANS :: \n");
+					strcpy(chr_l_val_date,l_pro_acctent_passclt_struct_h->proc_dt);
+					strncpy(l_chr_new_val_dt,chr_l_val_date,10);
+					strncpy(l_chr_proc_dt,l_pro_acctent_passclt_struct_h->proc_dt,10);
+
+					sprintf(chr_g_log_buffer,"\n Draw: New Value Date=|%s| \n",chr_l_val_date);
+					fprintf(g_flogfile,"%s",chr_g_log_buffer);
+					sprintf(chr_g_log_buffer,"\n DRAW_DOWNID=|%d| \n",draw_down_seq_no);
+					fprintf(g_flogfile,"%s",chr_g_log_buffer);
+					sprintf(chr_g_log_buffer,"\n RETRY_NO=|%d| \n",int_g_retry_no);
+					fprintf(g_flogfile,"%s",chr_g_log_buffer);
+					sprintf(chr_g_log_buffer,"\n APPLICATION_ID=|%s| \n",chr_g_appl_id);
+					fprintf(g_flogfile,"%s",chr_g_log_buffer);
+					sprintf(chr_g_log_buffer,"\n ALLOC_ID=|%s%s| \n",l_pro_acctent_passclt_struct_h->proc_num,l_pro_acctent_passclt_struct_h->inden_num);
+					fprintf(g_flogfile,"%s",chr_g_log_buffer);
+					sprintf(chr_g_log_buffer,"\n AP_REF_NO=|%s%s| \n",l_pro_acctent_passclt_struct_h->proc_num,l_pro_acctent_passclt_struct_h->inden_num);
+					fprintf(g_flogfile,"%s",chr_g_log_buffer);
+					sprintf(chr_g_log_buffer,"\n SI_DATE=|%s| \n",l_pro_acctent_passclt_struct_h->proc_dt);
+					fprintf(g_flogfile,"%s",chr_g_log_buffer);
+					sprintf(chr_g_log_buffer,"\n DRAW_DOWN_DATE=|%s| \n",l_pro_acctent_passclt_struct_h->proc_dt);
+					fprintf(g_flogfile,"%s",chr_g_log_buffer);
+					sprintf(chr_g_log_buffer,"\n FC_APAC=|%s| \n",l_pro_acctent_passclt_struct_h->client);
+					fprintf(g_flogfile,"%s",chr_g_log_buffer);
+					sprintf(chr_g_log_buffer,"\n AP_GL_REF1=|%s| \n",l_pro_acctent_passgl_struct_h->client);
+					fprintf(g_flogfile,"%s",chr_g_log_buffer);
+					sprintf(chr_g_log_buffer,"\n AP_BRANCH_REF1=|%s| \n",l_pro_acctent_passclt_struct_h->brnch_cd);
+					fprintf(g_flogfile,"%s",chr_g_log_buffer);
+					sprintf(chr_g_log_buffer,"\n AMOUNT=|%lf| \n",l_pro_acctent_passclt_struct_h->report_amt);
+					fprintf(g_flogfile,"%s",chr_g_log_buffer);
+					sprintf(chr_g_log_buffer,"\n CURRENCY_CD=|%s| \n",l_pro_acctent_passclt_struct_h->curr_cd);
+					fprintf(g_flogfile,"%s",chr_g_log_buffer);
+					sprintf(chr_g_log_buffer,"\n CONVERSION_RATE=|%lf| \n",l_pro_acctent_passclt_struct_h->exchg_rt);
+					fprintf(g_flogfile,"%s",chr_g_log_buffer);
+					sprintf(chr_g_log_buffer,"\n LOCAL_CURRENCY_AMOUNT=|%lf| \n",l_pro_acctent_passclt_struct_h->lcl_amount);
+					fprintf(g_flogfile,"%s",chr_g_log_buffer);
+					sprintf(chr_g_log_buffer,"\n DEBIT_OPTION=|%d| \n",int_g_debit_opt);
+					fprintf(g_flogfile,"%s",chr_g_log_buffer);
+
+					
+					EXEC SQL INSERT INTO draw_down_trans
+					VALUES(:draw_down_seq_no,
+					:int_g_retry_no,
+					:chr_g_appl_id,
+					:l_pro_acctent_passclt_struct_h->proc_num,
+					:l_pro_acctent_passclt_struct_h->proc_num||:l_pro_acctent_passclt_struct_h->inden_num,
+					:l_chr_proc_dt:l_pro_acctent_passclt_struct_i->i_batch_dt,
+					:l_chr_proc_dt:l_pro_acctent_passclt_struct_i->i_batch_dt,
+					:l_pro_acctent_passclt_struct_h->client:l_pro_acctent_passclt_struct_i->i_dl_client,
+					:l_pro_acctent_passgl_struct_h->client:l_pro_acctent_passgl_struct_i->i_dl_client,
+					:l_pro_acctent_passclt_struct_h->brnch_cd:l_pro_acctent_passclt_struct_i->i_brnch_cd,
+					:l_pro_acctent_passclt_struct_h->report_amt:l_pro_acctent_passclt_struct_i->i_rep_amount,
+					:l_pro_acctent_passclt_struct_h->curr_cd:l_pro_acctent_passclt_struct_i->i_curr_cd,
+					:l_pro_acctent_passclt_struct_h->exchg_rt:l_pro_acctent_passclt_struct_i->i_exch_rt,
+					:l_pro_acctent_passclt_struct_h->lcl_amount:l_pro_acctent_passclt_struct_i->i_lcy_amount,
+					:int_g_debit_opt,
+					:l_pro_acctent_passclt_struct_h->description:l_pro_acctent_passclt_struct_i->i_description,
+					:l_pro_acctent_passgl_struct_h->description:l_pro_acctent_passgl_struct_i->i_description,
+					:l_chr_new_val_dt:i_val_date,
+					:chr_g_processed_flg);
+
+					printf("\n sqlca.sqlcode after inserting in draw_down_trans [%d]",sqlca.sqlcode);
+					IS_ANY_ORA_ERROR
+
+				}
+			} /*End of if(!strcmp)*/
+			else if(!strcmp(chr_l_flag,"S"))
+	   		{
+				fprintf(g_flogfile,"\n Entries have passed into SYSTEM  \n");
+				fprintf(g_flogfile,"\n Before Updating  pro_acctent \n");
+			}
+				EXEC SQL UPDATE pro_acctent  SET status='P'
+						WHERE proc_num=:chr_p_batch_no
+						AND status='G'
+						AND MODULE_IND = 'P'
+						AND DEAL_IDENT = :l_pro_acctent_passgl_struct_h->deal_ident
+						AND batch_date=:chr_l_batch_dt
+						AND( INDEN_NUM =:l_pro_acctent_passgl_struct_h->inden_num
+						OR LEG_IND = :l_pro_acctent_passgl_struct_h->inden_num) ;//shailesh 080208
+
+                 printf("\n sqlca.sqlcode after updating pro_acctent =[%d]",sqlca.sqlcode);     
+		 IS_ANY_ORA_ERROR
+
+ 	    }//end of inner loop		
+			
+			EXEC SQL CLOSE l_cur_gl_ent;
+
+			IS_ANY_ORA_ERROR
+			
+	}//end of outer loop
+
+			EXEC SQL CLOSE l_cur_cln_ent;
+			
+			IS_ANY_ORA_ERROR
+	
+	fprintf(g_flogfile,"\n Before Updating  IV_CHEQUE \n");
+	
+			EXEC SQL UPDATE IV_CHEQUE 
+			SET   AE_DT = :chr_g_sys_date,
+				  ACCESS_STAMP = :p_start_date
+			WHERE PROC_NUM =:chr_p_batch_no;
+
+		if(sqlca.sqlcode)
+	    {
+			printf("\n Error Updating IV_CHEQUE =|%d| \n",sqlca.sqlcode);
+			sprintf(chr_g_log_buffer,"Error Updating IV_CHEQUE =|%d| \n",sqlca.sqlcode);
+			fprintf(g_flogfile,"%s",chr_g_log_buffer);
+			
+		}
+		IS_ANY_ORA_ERROR
+
+
+		APL_GOBACK_SUCCESS
+
+		RETURN_SUCCESS  :
+		{
+
+			 fprintf(g_flogfile,"\n Leaving IV_Proc_PassPayAE() with Success !\n ");
+		    return (APL_SUCCESS); 
+		}
+		RETURN_FAILURE  : 
+		{
+			 sprintf(chr_g_log_buffer,"\n Leaving IV_Proc_PassPayAE() with Failure:Error=|%d|\n",sqlca.sqlcode);		
+			 fprintf(g_flogfile,"%s",chr_g_log_buffer);
+		    return (APL_FAILURE);
+		}
+			
+  }
+

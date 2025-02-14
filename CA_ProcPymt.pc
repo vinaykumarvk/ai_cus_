@@ -1,0 +1,3887 @@
+/*
+ *    COPYRIGHT NOTICE
+ *
+ *   Copyright 2005 Polaris Software Lab Limited. All rights reserved.
+ *
+ *   These materials are confidential and proprietary to
+ *    Polaris Software Lab Limited and no part of these materials should
+ *    be reproduced, published, transmitted or distributed in any form or
+ *    by any means, electronic, mechanical, photocopying, recording or
+ *    otherwise, or stored in any information storage or retrieval system
+ *    of any nature nor should the materials be disclosed to third parties
+ *    or used in any other manner for which this is not authorized, without
+ *    the prior express written authorization of Polaris Software Lab Limited.
+ */
+/*********************************************************************
+ *
+ * Module Name         :      Corporate Actions
+ *
+ * File Name           :      CA_ProcPymt.pc
+ *
+ * Description         :      Contains Functions Related to Payment Processing
+ *
+ *
+ *
+ *            Version Control Block
+ *
+ * Date        Version     Author           Description        RFS No.
+ * ---------   --------  ---------------  ------------------   ---------
+ * 18/01/2006   1.2        Smita Bhat        New File          Base Version
+ * 30/01/2006	 1.3			Smita Bhat			Chgs Related to 	Base Version
+ * 														Col nmaes
+ * 24/03/2022   1.4         kotubabu N       Linux Migration    Kotak Implementation
+ *************************************************************************/
+
+
+
+#include	"CA_Common.h"
+#include	"CO_Commdef.h"
+#include	<strings.h>
+
+EXEC SQL INCLUDE SQLCA.H;
+char *strtok(char *s1, const char *s2); /** Biju For removing warnings **/
+char *strtok_r(char *s1, const char *s2, char **lasts); /** Biju For removing warnings **/
+
+
+#define	RTV_SYSTEM_DATA
+#define	S_LRDEAL_TYP				"16"
+#define	S_RESTART_SEP_TOKEN	"|"
+#define	S_HIGHEST_CHAR			'z'
+
+
+#define	S_PYMT_LEVEL			1
+#define	S_LEVEL_ENTITL			2
+#define	S_LEVEL_EVENT			3
+
+#define	S_REG_OUTTOTRANSFER	'2'
+#define	S_REG_RETFRMTRANSFER	'4'
+#define	S_REG_COMPLETED		'C'	
+
+#define OP_CONV_IND 		"CV"
+#define OP_WRNT_IND			"WC"
+#define OP_REPRIVIL_IND 		"PR"
+#define OP_REOFFER_IND 		"TO"
+#define OP_DVOP_IND		 		"DO"
+#define OP_DRIP_IND 			"DR"
+#define OP_MERG_IND        "MG"
+
+#define S_CLI_CLASS			 3
+
+
+#define	MSG_PARAM_STRUCT_SEP	";"
+#define 	LOCAL_LEN_EVNT_NBR 	 8
+
+
+
+#define	S_MOLRDEALTYP_RD	"11"
+#define	S_MOLRDEALTYP_SP1	"06"
+#define	S_MOLRDEALTYP_SP2	"07"
+#define	S_MOLRDEALTYP_SDB	"02"
+#define	S_MOLRDEALTYP_SDR	"04"
+#define	S_MOLRDEALTYP_RT	"15"	
+
+/* Added by kotubabu for Linux Migration -Start*/
+#ifdef OS_LINUX
+FILE*                                           g_inifile;
+FILE*                                           g_logfile;
+#else
+FILE*                                           g_inifile = APL_OUT_FILE;
+FILE*                                           g_logfile = APL_OUT_FILE;
+#endif
+/* Added by kotubabu for Linux Migration -End*/
+char						chr_g_progname			[APL_BATCH_PROGNAME_LEN];
+char						chr_g_key					[APL_BATCH_KEY_LEN];
+char						chr_g_start_date		[APL_DATE_LEN];
+char						chr_g_sys_date			[APL_DATE_LEN];
+char						chr_g_sys_date_time			[APL_DATE_LEN];
+char						chr_g_restart_ca_id		[CORP_ID_LEN];
+char						chr_g_restart_client	[APL_CLIENT_LENGTH];
+int						int_g_restart_srno;
+char						chr_g_restart_data_h	[APL_RESTARTDATA_LENGTH];
+short						g_restart_data_i;
+char						chr_g_tmp_restart_data[APL_RESTARTDATA_LENGTH];
+char						chr_g_log_buff			[200];
+char						chr_g_funccode			[CA_FUNC_CD_LEN]= APL_NULL_STRING;
+short						g_cond_exists=0;
+
+
+short                g_cond_exists_RT=0;
+
+CA_CAEVENT_STRUCT_H		g_ca_caevent_struct_h;
+CA_CAEVENT_STRUCT_I		g_ca_caevent_struct_i;
+CA_CASECEVENT_STRUCT_H	q_ca_casecevent_struct_h;
+CA_CAENTITLEMENT_STRUCT_H	g_ca_caentitlement_struct_h;
+CA_CAENTITLEMENT_STRUCT_I	g_ca_caentitlement_struct_i;
+CA_CACHEQUE_STRUCT_H	g_ca_cacheque_struct_h;
+CA_CACHEQUE_STRUCT_I	g_ca_cacheque_struct_i;
+CA_DEAL_STRUCT_H			l_ca_deal_struct_h;
+MT_INSTRUMENT_STRUCT_H	l_mt_instrument_struct_h;
+MT_INSTRUMENT_STRUCT_H	l_mt_resinstrument_struct_h;
+MT_CLIENT_STRUCT_H		l_mt_client_struct_h;
+//CA_CANOTIFY_STRUCT_H		l_ca_canotify_struct_h;//commented by Sunny 
+
+char						chr_g_userid[APL_USERID_LEN];
+static char	chr_g_splacc[APL_CLIENT_LENGTH] = APL_NULL_STRING;
+double l_quantity_paid;
+double l_tot_prev_df_quantity;
+double l_tmp_ent_quantity_received;
+
+
+char	chr_g_func_area_redenom[6]={FUNC_AREA_REDENOM};
+char	chr_g_eur_ccycode[APL_CCYCODE_LEN]={APL_EMU_CCYCODE};
+char	chr_g_grd_ccycode[APL_CCYCODE_LEN]={APL_GRD_CCYCODE};
+
+
+static	int	CA_Proc_PymtProcess( INTL_ENV_DATA_STRUCT_H	*p_intlenv_data_struct_h,
+											DEBUG_INFO_STRUCT_H			**l_debug_info_ptr);
+
+static	int	CA_Proc_PopulateTrade(DEBUG_INFO_STRUCT_H	**l_debug_info_ptr, char *delrec_flg);
+static	int	CA_Commit(int				p_status_ind,
+								int				p_level,
+								DEBUG_INFO_STRUCT_H	**l_debug_info_ptr);
+static	int	CA_Mod_EventEntitlement(int p_level, DEBUG_INFO_STRUCT_H	**l_debug_info_ptr);
+static	int	CA_Mod_Nominalvalue(INTL_ENV_DATA_STRUCT_H	*p_intlenv_data_struct_h,DEBUG_INFO_STRUCT_H	**l_debug_info_ptr);
+
+static 	int	CA_Proc_SendMsg(char				*chr_p_ca_id,
+								char				*p_ce_typ,
+								char				*chr_p_client,
+								int				 p_srl_nbr,
+								DEBUG_INFO_STRUCT_H	**l_debug_info_ptr);
+
+
+static int CA_Proc_PopulateTradeForRedonm(char *delrec_flg,
+												char * diff_deal_flg,
+												char * p_diffdeal_locncode,
+												double p_diff_qty,	
+												int * int_p_result,
+												DEBUG_INFO_STRUCT_H	**l_debug_info_ptr );
+
+
+static int CA_Proc_RedenomDiffTrdNew(DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+int main(int argc, char ** argv)  // AIX -Warnings Removal
+{
+    /* Added by kotubabu for Linux Migration-Start*/
+       #ifdef OS_LINUX 
+        g_logfile=APL_OUT_FILE;
+       #endif
+    /* Added by kotubabu for Linux Migration -End*/
+	struct sqlca sqlca;
+	DEBUG_INFO_STRUCT_H			**l_debug_info_ptr= NULL,
+								*l_debug_info_struct = NULL;
+	INTL_ENV_DATA_STRUCT_H	p_intlenv_data_struct_h;
+	char						chr_inifile[PATH_LENGTH];
+	char						chr_logfile[PATH_LENGTH];
+	char						chr_sys_date_time[APL_DATE_LEN];
+	char						chr_custody_id_b[APL_USERID_LEN];
+	char						chr_warn_cd_pymtunauth[CA_ALERT_CODE_LEN]={ALERT_PYMT_UAUTH};
+	int						int_retval=0;
+
+	EXEC SQL BEGIN DECLARE SECTION;
+		char chr_uname[APL_USERID_LEN];
+		char chr_passwd[APL_PASSWD_LEN];
+	EXEC SQL END DECLARE SECTION; 
+
+	EXEC SQL VAR chr_uname IS STRING;
+	EXEC SQL VAR chr_passwd IS STRING;
+	
+	l_debug_info_ptr = &l_debug_info_struct;
+	strcpy(chr_inifile,getenv("INTL_ROOT_PATH"));
+	strcat(chr_inifile,"/intl_sun.cfg");
+	if ( ( g_inifile=fopen(chr_inifile,"r") ) == NULL)
+		exit(-1);
+	
+
+
+	APL_FETCH_DB_LOGIN_DETAILS(g_inifile,chr_custody_id_b,chr_uname,chr_passwd,APL_OUT_FILE,l_debug_info_ptr)
+   
+	EXEC SQL CONNECT :chr_uname IDENTIFIED BY :chr_passwd;
+	IS_ANY_ORA_ERROR
+	
+	
+   if ( CO_Rtv_RptFileName("2G",
+								APL_LOGFILE_DESC,
+								100,
+								argv[5],
+								argv,
+								&g_logfile,
+								l_debug_info_ptr) == APL_FAILURE) 
+	{
+		exit (-1) ;
+	}
+
+	EXEC SQL COMMIT;
+	IS_ANY_ORA_ERROR
+	
+	
+   if ( argc < 4 )
+   {
+      CO_ProcMonitor(g_logfile,"All Arguments expected by  program not passed \n",NULL
+,NULL);
+      APL_GOBACK_FAIL
+   }
+
+	if (CO_RtvSysDtTime(chr_g_sys_date_time, l_debug_info_ptr) == APL_FAILURE)
+		APL_GOBACK_FAIL
+
+	sprintf(chr_g_log_buff,"T:Payment Processing started on %s\n", chr_g_sys_date_time);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+   memset(&p_intlenv_data_struct_h,NULL,sizeof(INTL_ENV_DATA_STRUCT_H)); 
+		
+	strcpy(chr_g_progname,	argv[0]);
+	strcpy(chr_g_key,			argv[1]);
+	strcpy(chr_g_start_date,	argv[2]);
+	strcpy(p_intlenv_data_struct_h.usr, argv[3]);
+	
+	strcpy(chr_g_userid, argv[3]);
+	
+	strcpy(chr_g_funccode,argv[5]);
+
+	if ( CO_RtvSysParams(l_debug_info_ptr) == APL_FAILURE)
+		APL_GOBACK_FAIL
+	if ( CA_Proc_BpymtGen(l_debug_info_ptr, &p_intlenv_data_struct_h) == APL_FAILURE)
+		APL_GOBACK_FAIL
+	/* Added By Sana for Closure of BuyBack and IPO events [kotak][start] */
+	if(CA_MarkEvtClose_NS_BB(l_debug_info_ptr, &p_intlenv_data_struct_h) == APL_FAILURE)
+		APL_GOBACK_FAIL
+	/* Added By Sana for Closure of BuyBack and IPO events [kotak][end] */
+	
+	APL_GOBACK_SUCCESS
+	RETURN_SUCCESS:
+	{
+		/*EXEC SQL INSERT INTO CANOTIFY
+		(select(:chr_g_sys_date_time),
+		:chr_g_funccode,
+		:chr_warn_cd_pymtunauth,
+		a.corp_id,
+		a.client,
+		b.instr_code,
+		a.SEQNUM_PAY,
+		NULL
+		
+		FROM CACHEQUE a, CAEVENT b where stat_pymt = 'UU' and a.corp_id = b.corp_id);
+		IS_ANY_ORA_ERROR */
+		//commented by Sunny 
+		
+		sprintf(chr_g_log_buff,"T:Payment Processing exiting successfully\n");
+		CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+		
+		EXEC SQL UPDATE SYS_BATCHPROC
+		SET status 			= 'completed'
+		WHERE process_name		=	RTRIM(:argv[0])
+		AND	proc_init			=	RTRIM(:argv[1])
+		AND	STARTDATE	=	:argv[2]
+		AND	usr		=	RTRIM(:argv[3])
+		AND	status		=	'started';
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"BATCH_IN_PROC",chr_g_progname,chr_g_key)
+		
+		EXEC SQL COMMIT;
+		IS_ANY_ORA_ERROR
+   	
+		CO_ProcMonitor(g_logfile,"RECORD COMMITTED \n",NULL,NULL);
+		fclose(g_logfile);
+		
+		exit(0);
+	}
+	RETURN_FAILURE:
+	{
+		/*EXEC SQL INSERT INTO CANOTIFY(DEALDT, TASK_CD, NOTIFY_CD, CORP_ID, CLIENT, 
+											 INSTR_CODE, SEQNUM_PAY, INFORMATION)
+		(select(:chr_g_sys_date_time),
+		:chr_g_funccode,
+		:chr_warn_cd_pymtunauth,
+		a.corp_id,
+		a.client,
+		b.instr_code,
+		a.SEQNUM_PAY,
+		NULL
+		
+		FROM CACHEQUE a, CAEVENT b where a.STAT_PYMT = 'UU' and a.corp_id = b.corp_id);
+		if (sqlca.sqlcode < 0)
+		{
+			sprintf(chr_g_log_buff,"T:Could Not Log Alert For Payment Processing\n");
+			CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+		}
+		else
+		{
+			EXEC SQL COMMIT;
+			if (sqlca.sqlcode !=0)
+			{
+				sprintf(chr_g_log_buff,"T:Could Not Commit The Record\n");
+				CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+			}
+		}*/
+		//commented by Sunny 
+		sprintf(chr_g_log_buff,"T:Payment Processing exiting with failure\n");
+		CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+		fclose(g_logfile);
+		exit(-1);
+	}
+}
+
+int	CA_Proc_BpymtGen(DEBUG_INFO_STRUCT_H			**l_debug_info_ptr,
+						INTL_ENV_DATA_STRUCT_H	*p_intlenv_data_struct_h)
+{
+		struct sqlca sqlca;
+		int	int_result			=	0;
+		int	int_init_flg;
+		int	int_commit_status;
+		int	int_level;
+		char	h_entitl_stat[APL_STATUS_LEN];
+		char	chr_h_ent_stat_rdy_pymt[APL_STATUS_LEN];
+		char	chr_h_ent_stat_rdy_pymt_frz[APL_STATUS_LEN] = {STATUS_FROZ_RP};
+		char 	chr_warn_cd_instrunauth[CA_ALERT_CODE_LEN] ={ALERT_INSTR_UAUTH};
+		char 	chr_warn_cd_instrnf[CA_ALERT_CODE_LEN] ={ALERT_INSTR_NOTFND};
+		char 	chr_h_to_entitl_account[APL_CLIENT_LENGTH]; 
+		short	i_to_entitl_account;
+		double	to_event_quantitydue, to_evnt_cashdue;
+		int	int_payment_exists	= 0;
+
+		EXEC SQL VAR g_ca_caevent_struct_h.h_corp_id is string;
+		EXEC SQL VAR g_ca_caevent_struct_h.h_instr_code is string;
+		EXEC SQL VAR g_ca_caevent_struct_h.h_res_instr_code is string;
+
+		EXEC SQL VAR g_ca_caentitlement_struct_h.h_corp_id is string;
+		EXEC SQL VAR g_ca_caentitlement_struct_h.h_dl_client is string;
+		EXEC SQL VAR g_ca_cacheque_struct_h.h_corp_id is string;
+		EXEC SQL VAR g_ca_cacheque_struct_h.h_dl_client is string;
+		EXEC SQL VAR g_ca_cacheque_struct_h.h_loccode is string;
+		EXEC SQL VAR chr_g_restart_data_h is string;
+		EXEC SQL VAR chr_h_to_entitl_account is string;
+		
+
+		
+		
+
+		
+
+		g_cond_exists=0;
+		
+		g_cond_exists_RT=0;
+		
+		if(CO_Chk_CntryEnabled("PAY_PROC",
+									"NO_VALIDATION_CD",
+									&g_cond_exists,
+									l_debug_info_ptr)==APL_FAILURE)
+			APL_GOBACK_FAIL
+                   
+      
+		
+      if(CO_Chk_CntryEnabled("PAY_PROC",
+									"SPL_VALIDATION_RT",
+									&g_cond_exists_RT,
+									l_debug_info_ptr)==APL_FAILURE)
+			APL_GOBACK_FAIL
+
+		/*Smita - Changed Col Name - HDFCCA_BaseVer*/ 
+/*		EXEC SQL DECLARE AevntCur_ge CURSOR FOR 
+		SELECT * FROM CAEVENT 
+		WHERE 	status       in ('RP','PP') 
+		AND 		CA_EVENT != 'SP'
+		AND      TO_DATE(DECODE(CA_EVENT,'RT',
+										    DECODE(:g_cond_exists_RT,1,EX_DATE,DECODE(:g_cond_exists,1,:chr_g_sys_date,dateof_payment)),
+										    decode(OP_EVT_CLASS,'TO',:chr_g_sys_date,DECODE(:g_cond_exists,1,:chr_g_sys_date,dateof_payment)))) <= TO_DATE(:chr_g_sys_date)
+
+		AND	corp_id	>= :chr_g_restart_ca_id
+		
+		AND ((NVL(OP_EVT_CLASS,' ') != 'TO') OR (to_char(EXPIRY_DATE,'DD/MM/YYYY HH:MI:SS') <= :chr_g_sys_date) OR (to_char(EFFECTIVE_DATE,'DD/MM/YYYY HH:MI:SS') = :chr_g_sys_date))
+		 
+		FOR UPDATE 
+		ORDER BY corp_id ;
+*/
+		/*HM :: Added by Tushar Benefit gen opt*/
+		/* PJ SP Amal and TO allowed in payment processing */
+		EXEC SQL DECLARE AevntCur_ge CURSOR FOR
+	    SELECT * FROM CAEVENT
+        WHERE	status       in ('RP','PP')
+		AND 	( CA_EVENT = 'SP' and op_evt_class not in ('SP','SR') OR CA_EVENT != 'CR')
+		AND 	((CA_EVENT != 'RT' 
+		AND  	:g_cond_exists != 1 and dateof_payment <= :chr_g_sys_date ) 
+		OR  	(CA_EVENT = 'RT' and ( :g_cond_exists_RT=1 and ex_Date <= :chr_g_sys_date) 
+		OR  	(:g_cond_exists_RT!=1 AND dateof_payment <= :chr_g_sys_date) )) 
+		AND (exists ( select corp_id from cacheque cc where cc.corp_id = caevent.corp_id and cc.stat_pymt='RP')
+				or exists(select corp_id from caentitlement ce where ce.corp_id = caevent.corp_id and ce.status in ('RP','RV') )) //Abhi  RE-ENGG 33 -- 30/06/2022 to pickup benefit generate events
+        AND   	corp_id  >= :chr_g_restart_ca_id      
+		FOR 	UPDATE 
+		ORDER 	BY corp_id ;
+
+		IS_ANY_ORA_ERROR
+      
+		/*EXEC SQL DECLARE AevntCur_ge CURSOR FOR
+	   SELECT * FROM CAEVENT
+      WHERE    status       in ('RP','PP')
+      AND      CA_EVENT NOT IN ('SP','RT')
+      AND      TO_DATE(decode(OP_EVT_CLASS,'TO',:chr_g_sys_date,DECODE(:g_cond_exists,1,:chr_g_sys_date,dateof_payment))
+                       )
+                        <= TO_DATE(:chr_g_sys_date)
+      AND   corp_id  >= :chr_g_restart_ca_id
+      AND (
+           (NVL(OP_EVT_CLASS,' ') != 'TO') OR 
+           (to_char(EXPIRY_DATE,'DD/MM/YYYY HH:MI:SS') <= :chr_g_sys_date) OR 
+           (to_char(EFFECTIVE_DATE,'DD/MM/YYYY HH:MI:SS') = :chr_g_sys_date)
+           )
+		FOR UPDATE 
+		ORDER BY corp_id ;
+
+		IS_ANY_ORA_ERROR*/
+
+/***		EXEC SQL DECLARE AevntCur_ge CURSOR FOR
+	   SELECT * FROM CAEVENT
+      WHERE    status       in ('RP','PP')
+      AND      CA_EVENT != 'SP'
+      AND      TO_DATE(DECODE(CA_EVENT,'RT',
+                      DECODE(:g_cond_exists_RT,1,EX_DATE,DECODE(:g_cond_exists,1,:chr_g_sys_date,dateof_payment)),
+                      decode(OP_EVT_CLASS,'TO',:chr_g_sys_date,DECODE(:g_cond_exists,1,:chr_g_sys_date,dateof_payment))
+                       ))
+                        <= TO_DATE(:chr_g_sys_date)
+      AND   corp_id  >= :chr_g_restart_ca_id
+      AND (
+           (NVL(OP_EVT_CLASS,' ') != 'TO') OR 
+           (to_char(EXPIRY_DATE,'DD/MM/YYYY HH:MI:SS') <= :chr_g_sys_date) OR 
+           (to_char(EFFECTIVE_DATE,'DD/MM/YYYY HH:MI:SS') = :chr_g_sys_date)
+           )
+		FOR UPDATE 
+		ORDER BY corp_id ;
+**/
+		/*HM :: Added by Tushar Benefit gen opt*/
+		EXEC SQL DECLARE AevntCur_gt CURSOR FOR 
+		SELECT * FROM CAEVENT
+		WHERE	status       in ('RP','PP')
+		AND 	( CA_EVENT = 'SP' and op_evt_class not in ('SP','SR') OR CA_EVENT != 'CR')
+		AND 	((CA_EVENT != 'RT' 
+		AND 	:g_cond_exists != 1 and dateof_payment <= :chr_g_sys_date ) 
+		OR  	(CA_EVENT = 'RT' and ( :g_cond_exists_RT=1 and ex_Date <= :chr_g_sys_date) 
+		OR  	(:g_cond_exists_RT!=1 AND dateof_payment <= :chr_g_sys_date) )) 
+		AND (exists ( select corp_id from cacheque cc where cc.corp_id = caevent.corp_id and cc.stat_pymt='RP')	
+			or exists(select corp_id from caentitlement ce where ce.corp_id = caevent.corp_id and ce.status in ('RP','RV') )) //Abhi  RE-ENGG 33 -- 30/06/2022 to pickup benefit generate events
+		AND  	corp_id  > :chr_g_restart_ca_id
+		FOR 	UPDATE
+		ORDER 	BY 	corp_id ;
+
+		IS_ANY_ORA_ERROR
+        
+
+		EXEC SQL DECLARE AentitlCur_ge CURSOR FOR 
+		SELECT * FROM CAENTITLEMENT 
+		WHERE		corp_id= :g_ca_caevent_struct_h.h_corp_id
+		AND		status in ('RP','PP')
+		AND exists ( select corp_id from cacheque cc where cc.corp_id = CAENTITLEMENT.corp_id and cc.client = CAENTITLEMENT.client 
+			and cc.stat_pymt='RP' ) //Abhi  RE-ENGG 33 -- 30/06/2022 to pickup benefit generate events	
+		AND	client >=	:chr_g_restart_client
+		FOR UPDATE 
+		ORDER BY 	client;
+
+		IS_ANY_ORA_ERROR
+
+		EXEC SQL DECLARE AentitlCur_gt CURSOR FOR 
+		SELECT * FROM CAENTITLEMENT 
+		WHERE		corp_id= :g_ca_caevent_struct_h.h_corp_id
+		AND		status in ('RP','PP')
+		AND exists ( select corp_id from cacheque cc where cc.corp_id = CAENTITLEMENT.corp_id and cc.client = CAENTITLEMENT.client 
+			and cc.stat_pymt='RP' ) //Abhi  RE-ENGG 33 -- 30/06/2022 to pickup benefit generate events
+		AND	client >	:chr_g_restart_client 
+		FOR UPDATE 
+		ORDER BY 	client;
+
+		IS_ANY_ORA_ERROR
+
+		EXEC SQL DECLARE Apaymentcur CURSOR FOR 
+		SELECT * FROM CACHEQUE 
+		WHERE	corp_id			=	:g_ca_caentitlement_struct_h.h_corp_id
+		AND 	client		=	:g_ca_caentitlement_struct_h.h_dl_client
+		AND	stat_pymt		= 	'RP'
+		AND	seqnum_pay >	:int_g_restart_srno
+		FOR UPDATE 
+		ORDER BY seqnum_pay;
+
+		IS_ANY_ORA_ERROR
+
+		
+		EXEC SQL DECLARE Aentitlcur_to CURSOR FOR
+		SELECT client FROM DL_SAFEK
+		WHERE instr_code = :g_ca_caevent_struct_h.h_instr_code
+		AND safekeep_pos > 0
+		AND client > :chr_g_restart_client
+		GROUP BY client
+		ORDER BY client;
+
+		IS_ANY_ORA_ERROR	
+
+		EXEC SQL DECLARE Apaymentcur_to CURSOR FOR
+		SELECT * FROM CACHEQUE
+		WHERE corp_id = :g_ca_caevent_struct_h.h_corp_id
+		AND client = :chr_h_to_entitl_account
+		AND stat_pymt = 'RP'
+		AND seqnum_pay >   :int_g_restart_srno
+	        FOR UPDATE
+		ORDER BY seqnum_pay;
+
+		IS_ANY_ORA_ERROR
+		
+
+		if ( CO_RtvSysDt(chr_g_sys_date,l_debug_info_ptr)	== APL_FAILURE )
+			APL_GOBACK_FAIL
+
+		EXEC SQL SELECT processing_status INTO :chr_g_restart_data_h:g_restart_data_i
+		FROM SYS_BATCHPROC
+		WHERE process_name	=:chr_g_progname
+		AND	proc_init		=:chr_g_key
+		AND	STARTDATE=:chr_g_start_date
+		AND 	status	='started'
+		FOR UPDATE OF processing_status,status;
+		
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"BATCH_IN_PROC",chr_g_progname,chr_g_key)
+
+		
+		strcpy(h_entitl_stat,STATUS_PENDING);
+		strcpy(chr_h_ent_stat_rdy_pymt,STATUS_RDY_PYMT);
+
+		
+		printf("TEST: Before NP\n");
+		sprintf(chr_g_log_buff,"T:Before Negative position entitlements as NP because payment doesn't exist");
+		CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+		EXEC SQL UPDATE CAENTITLEMENT 
+		SET 	status	= 	:h_entitl_stat,
+				PROCESSED_DATE		=	:chr_g_sys_date,
+				access_stamp=	:chr_g_sys_date_time
+		WHERE elig_entitl_pos < 0
+		AND	status =:chr_h_ent_stat_rdy_pymt
+		AND NOT EXISTS (
+						SELECT  	corp_id
+						FROM 		CACHEQUE
+						WHERE 	corp_id = CAENTITLEMENT.corp_id
+						AND 		client = CAENTITLEMENT.client
+						AND 		stat_pymt not in ('RV','DL') );
+		IS_ANY_ORA_ERROR
+		sprintf(chr_g_log_buff,"T:Marked %d Negative position entitlements as NP because payment doesn't exist",sqlca.sqlerrd[2]);
+		CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+
+		printf("TEST: Before frz pymt\n");
+		fflush(stdout);
+		EXEC SQL UPDATE CAENTITLEMENT 
+		SET 	status		= 	:chr_h_ent_stat_rdy_pymt_frz,
+				PROCESSED_DATE		=	:chr_g_sys_date,
+				access_stamp=	:chr_g_sys_date_time
+		WHERE elig_entitl_pos < 0
+		AND	status =:chr_h_ent_stat_rdy_pymt
+		AND EXISTS (
+						SELECT  	corp_id
+						FROM 		CACHEQUE
+						WHERE 	corp_id = CAENTITLEMENT.corp_id
+						AND 		client = CAENTITLEMENT.client
+						AND 		stat_pymt not in ('RV','DL') );
+		IS_ANY_ORA_ERROR
+		sprintf(chr_g_log_buff,"T:Marked %d Negative Entitlements as Frozen which had Pymts",sqlca.sqlerrd[2]);
+		CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+
+		
+
+		
+		printf("TEST: Before frz pymt due\n");
+		fflush(stdout);
+		EXEC SQL update CAENTITLEMENT
+		 set status=:chr_h_ent_stat_rdy_pymt_frz
+		 where ( 
+				 
+				 ((CAENTITLEMENT.INSTR_INC_BAL < (select  NVL(sum(curr_pymt),0) 
+											from CACHEQUE 
+											where CACHEQUE.corp_id = CAENTITLEMENT.corp_id 
+											and CACHEQUE.client = CAENTITLEMENT.client 
+											and stat_pymt not in ('RV','DL')	
+											)
+        								 ) AND EXISTS (SELECT 1 FROM CAEVENT WHERE CAEVENT.CORP_ID=CAENTITLEMENT.corp_id 
+										 AND FRACT_PR <> 0))
+        or  ( CAENTITLEMENT.QUANTITY_BAL < (select   NVL(sum(quantity_received),0)
+               						from CACHEQUE 
+											where CACHEQUE.corp_id = CAENTITLEMENT.corp_id
+                                 and  CACHEQUE.client = CAENTITLEMENT.client
+											and stat_pymt not in ('RV','DL')	
+                               )
+            ))
+			AND (elig_entitl_pos > 0);
+
+		IS_ANY_ORA_ERROR
+		if ( sqlca.sqlerrd[2] > 0 )
+		{
+		sprintf(chr_g_log_buff,"T:Marked %d Entitlements as frozen which had sum of pymts > due",sqlca.sqlerrd[2]);
+		CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+		}
+
+		if (g_restart_data_i == -1)
+		{
+			strcpy(chr_g_restart_ca_id,		" ");
+			strcpy(chr_g_restart_client,	" ");
+			int_g_restart_srno = 0;
+		}
+		else
+		{
+			strcpy(chr_g_tmp_restart_data,chr_g_restart_data_h);
+			strcpy(chr_g_restart_ca_id,
+				strtok(chr_g_tmp_restart_data,S_RESTART_SEP_TOKEN));
+			strcpy(chr_g_restart_client,
+				strtok(NULL,S_RESTART_SEP_TOKEN));
+			int_g_restart_srno =  atoi(strtok(NULL,S_RESTART_SEP_TOKEN));
+		}
+
+		EXEC SQL COMMIT;
+		IS_ANY_ORA_ERROR
+
+		printf("TEST: Before upd proc_status\n");
+		fflush(stdout);
+		EXEC SQL SELECT processing_status INTO :chr_g_restart_data_h:g_restart_data_i
+		FROM SYS_BATCHPROC
+		WHERE process_name	=:chr_g_progname
+		AND	proc_init		=:chr_g_key
+		AND	STARTDATE=:chr_g_start_date
+		AND 	status	='started'
+		FOR UPDATE OF processing_status,status;
+		
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"BATCH_IN_PROC",chr_g_progname,chr_g_key)
+
+		int_init_flg = 1;
+ 	EXEC SQL OPEN AevntCur_ge;
+		IS_ANY_ORA_ERROR
+		
+
+		printf("TEST: Before upd for loop\n");
+		fflush(stdout);
+		for(;;) 
+		{
+				  memset(&g_ca_caevent_struct_h,NULL,sizeof(CA_CAEVENT_STRUCT_H));
+				  memset(&g_ca_caevent_struct_i,NULL,sizeof(CA_CAEVENT_STRUCT_I));
+				  if ( int_init_flg == 1 )
+				  {
+						EXEC SQL FETCH AevntCur_ge INTO  
+					  :g_ca_caevent_struct_h:g_ca_caevent_struct_i;
+
+						  Alert(" %d ", sqlca.sqlcode);
+					  IS_ANY_ORA_ERROR_CURSOR
+					  int_init_flg = 0;
+				  }
+				  else
+				  {
+					  EXEC SQL FETCH AevntCur_gt INTO 
+					  :g_ca_caevent_struct_h:g_ca_caevent_struct_i; 
+
+						  Alert(" %d ", sqlca.sqlcode);
+					  if(sqlca.sqlcode !=  0)
+					  {
+						
+						break;
+					  }			
+
+					  IS_ANY_ORA_ERROR_CURSOR
+				  }
+
+				  
+                
+                CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+
+				 
+				 
+					 
+		sprintf(chr_g_log_buff,"T:Picked Event |%s| ",g_ca_caevent_struct_h.h_corp_id);
+		CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+						 
+					
+                                  /*Smita - Changes for Base Version of CA - Changed Fn Name*/
+				  if ( CA_ChkInstrument(	g_ca_caevent_struct_h.h_instr_code,
+									  &l_mt_instrument_struct_h,
+									  &int_result,
+									  l_debug_info_ptr) == APL_FAILURE)
+					  APL_GOBACK_FAIL
+				  CO_FreeErrLst(l_debug_info_ptr);
+				  if ( int_result == ERR_INSTR_NOTFND )
+				  {
+						
+						EXEC SQL ROLLBACK;
+						/*CA_WriteAlert((&l_ca_canotify_struct_h),
+											chr_g_funccode,
+											chr_warn_cd_instrnf,
+											g_ca_caevent_struct_h.h_corp_id,
+											APL_NULL_STRING,
+											g_ca_caevent_struct_h.h_instr_code)
+
+						EXEC SQL COMMIT;*/
+						//commented by Sunny 
+					  
+					  sprintf(chr_g_log_buff,
+					  "	E:Instrument %s does not exist,skipping event\n",g_ca_caevent_struct_h.h_instr_code);
+					  CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+					  if (CA_Commit(APL_FAILURE,S_LEVEL_EVENT,l_debug_info_ptr) == APL_FAILURE)
+						  APL_GOBACK_FAIL
+					  else
+						  continue;
+				  }	
+				  if ( int_result == ERR_UNAUTH_INSTR )
+				  {
+						
+						EXEC SQL ROLLBACK;
+						/*CA_WriteAlert((&l_ca_canotify_struct_h),
+											chr_g_funccode,
+											chr_warn_cd_instrunauth,
+											g_ca_caevent_struct_h.h_corp_id,
+											APL_NULL_STRING,
+											g_ca_caevent_struct_h.h_instr_code)
+
+						EXEC SQL COMMIT;*/
+						//commented by Sunny 
+					  
+					  sprintf(chr_g_log_buff,
+					  "	E:Instrument %s unauthorised ,skipping event\n",l_mt_instrument_struct_h.h_instr_code);
+					  CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+					  if (CA_Commit(APL_FAILURE,S_LEVEL_EVENT,l_debug_info_ptr) == APL_FAILURE)
+						  APL_GOBACK_FAIL
+					  else
+						  continue;
+				  }
+
+				/*Smita - Changes for Base Version CA - Changed column name*/
+			  if ( CA_RtvInstrEvnt( l_mt_instrument_struct_h.h_instr_type,
+									  g_ca_caevent_struct_h.h_evt_class,
+									  &q_ca_casecevent_struct_h,
+									  l_debug_info_ptr) == APL_FAILURE)
+				  APL_GOBACK_FAIL
+			  CO_FreeErrLst(l_debug_info_ptr);
+			  int_result = 0;
+
+			 if  ( strlen (g_ca_caevent_struct_h.h_res_instr_code) )
+			 {
+				 if ( CA_ChkInstrument(	g_ca_caevent_struct_h.h_res_instr_code,
+									  &l_mt_resinstrument_struct_h,
+									  &int_result,
+									  l_debug_info_ptr) == APL_FAILURE)
+			 		APL_GOBACK_FAIL
+			  		CO_FreeErrLst(l_debug_info_ptr);
+			 	if ( int_result == ERR_INSTR_NOTFND )
+			 	{
+					
+					EXEC SQL ROLLBACK;
+					/*CA_WriteAlert((&l_ca_canotify_struct_h),
+										chr_g_funccode,
+										chr_warn_cd_instrnf,
+										g_ca_caevent_struct_h.h_corp_id,
+										APL_NULL_STRING,
+										g_ca_caevent_struct_h.h_res_instr_code)
+
+					EXEC SQL COMMIT;*/
+					//commented by Sunny 
+			  		sprintf(chr_g_log_buff,
+			  		"	E:Instrument %s does not exist,skipping event\n",
+													  g_ca_caevent_struct_h.h_res_instr_code);
+				 	CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+				 	if (CA_Commit(APL_FAILURE,S_LEVEL_EVENT,l_debug_info_ptr) == APL_FAILURE)
+					  APL_GOBACK_FAIL
+				 else
+				  continue;
+				}	
+				if ( int_result == ERR_UNAUTH_INSTR )
+				{
+					
+					EXEC SQL ROLLBACK;
+					/*CA_WriteAlert((&l_ca_canotify_struct_h),
+										chr_g_funccode,
+										chr_warn_cd_instrunauth,
+										g_ca_caevent_struct_h.h_corp_id,
+										APL_NULL_STRING,
+										g_ca_caevent_struct_h.h_res_instr_code)
+
+										EXEC SQL COMMIT;*/
+										//commented by Sunny 
+					  
+			  		sprintf(chr_g_log_buff,
+			  					"	E:Instrument %s unauthorised ,skipping event\n",
+												  l_mt_resinstrument_struct_h.h_instr_code);
+			 		 CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+					  if (CA_Commit(APL_FAILURE,S_LEVEL_EVENT,l_debug_info_ptr) == APL_FAILURE)
+				 	 APL_GOBACK_FAIL
+			  			else
+				  		continue;
+			 		}
+			}
+			
+                
+			
+			if ((strcmp(g_ca_caevent_struct_h.h_evt_class,"OP") == 0) && (strcmp(g_ca_caevent_struct_h.h_op_evt_class,"TO") == 0))
+			{
+				for(;;) 
+				{
+					EXEC SQL OPEN Aentitlcur_to;
+					IS_ANY_ORA_ERROR
+                                        
+						EXEC SQL FETCH Aentitlcur_to INTO :chr_h_to_entitl_account:i_to_entitl_account;					
+					if(sqlca.sqlcode != 0 )
+					{
+						
+						
+					}
+                                        IS_ANY_ORA_ERROR_CURSOR
+					
+
+					int_result =0;
+                               		 if ( CA_ChkAcc(chr_h_to_entitl_account,
+                                                                                &l_mt_client_struct_h,
+                                                                                &int_result,
+                                                                                l_debug_info_ptr) == APL_FAILURE)
+                                       		 APL_GOBACK_FAIL
+                               		 CO_FreeErrLst(l_debug_info_ptr);
+                               		 if ( int_result == ERR_ACCNOT_FND )
+                               		 {
+                                       		 sprintf(chr_g_log_buff,
+                                       		 "E:Account %s not int_found, skipping\n",  chr_h_to_entitl_account);
+                                                                                                                
+
+                                       		 CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+                                       		 if (CA_Commit(APL_FAILURE,S_LEVEL_ENTITL,l_debug_info_ptr) == APL_FAILURE)
+                                               		 APL_GOBACK_FAIL
+                                       		 else
+                                               		 continue;
+                               		 }
+                               		 if ( int_result == ERR_ACCOUNT_UNAUTH )
+                               		 {
+                                       		 sprintf(chr_g_log_buff,
+                                       		 "E:Account %s is unauthorised, skipping\n",chr_h_to_entitl_account);
+                                                                                                    
+
+                                       		 CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+                                       		 if (CA_Commit(APL_FAILURE,S_LEVEL_ENTITL,l_debug_info_ptr) == APL_FAILURE)
+                                               		 APL_GOBACK_FAIL
+                                       		 else
+                                               		 continue;
+                               		 }
+					EXEC SQL OPEN Apaymentcur_to;
+                               	 	IS_ANY_ORA_ERROR
+
+                              	 	 for(;;) 
+                               		 {
+                                       		 memset(&g_ca_cacheque_struct_h,NULL,sizeof(CA_CACHEQUE_STRUCT_H));
+                                       		 memset(&g_ca_cacheque_struct_i,NULL,sizeof(CA_CACHEQUE_STRUCT_I));
+                                       		 EXEC SQL FETCH Apaymentcur_to INTO         :g_ca_cacheque_struct_h :g_ca_cacheque_struct_i;	
+						 sprintf(chr_g_log_buff,"Sqlca = %s, Restart = %d\n",chr_h_to_entitl_account,int_g_restart_srno);
+						 CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+						 if (sqlca.sqlcode != 0)
+						 {
+							
+							
+						 }
+                                       		 IS_ANY_ORA_ERROR_CURSOR
+
+                                       		 sprintf(chr_g_log_buff, "T:Processing client %s pymt number %d \n",
+                                                                                                g_ca_cacheque_struct_h.h_dl_client, g_ca_cacheque_struct_h.h_pymt_srl_nbr);
+
+                                       		 CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+						
+						 if ( (CA_Proc_PymtProcess( p_intlenv_data_struct_h,
+                                                                                                        l_debug_info_ptr
+                                                                                                ) == APL_SUCCESS)
+                                                        &&
+                                                        (CA_Mod_EventEntitlement(S_PYMT_LEVEL,l_debug_info_ptr) == APL_SUCCESS)
+                                                        &&
+                                                        (CA_Proc_SendMsg(      g_ca_cacheque_struct_h.h_corp_id,
+                                                                                        g_ca_caevent_struct_h.h_evt_class,
+                                                                                        g_ca_cacheque_struct_h.h_dl_client,
+                                                                                        g_ca_cacheque_struct_h.h_pymt_srl_nbr,
+                                                                                        l_debug_info_ptr)== APL_SUCCESS))
+                                                
+                                       		 {
+                                               		 sprintf(chr_g_log_buff, "T:Successfully created payment for event %s ,client %s ,pymt number %d \n",g_ca_cacheque_struct_h.h_corp_id,g_ca_cacheque_struct_h.h_dl_client, g_ca_cacheque_struct_h.h_pymt_srl_nbr);
+
+                                                                                        
+
+                                               		 CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+                                               		 int_commit_status = APL_SUCCESS;
+                                       		 }
+                                       		 else
+                                       		 {
+                                               		 IS_ANY_ERROR_FATAL
+                                               		 int_commit_status = APL_FAILURE;
+                                       		 }
+						 to_event_quantitydue = g_ca_cacheque_struct_h.h_quantity_recd;
+						 to_evnt_cashdue = g_ca_cacheque_struct_h.h_curr_pymt;
+
+
+
+						 if (CA_Commit(int_commit_status,9,l_debug_info_ptr) == APL_FAILURE)
+                                               		 APL_GOBACK_FAIL 
+						 int_g_restart_srno = 0;
+						 EXEC SQL OPEN Apaymentcur_to;
+						 IS_ANY_ORA_ERROR
+					}
+					strcpy(chr_g_restart_client,chr_h_to_entitl_account);
+					
+					g_ca_cacheque_struct_h.h_pymt_srl_nbr=0;
+				}
+				if ( CA_Commit(APL_SUCCESS,S_LEVEL_EVENT,l_debug_info_ptr) == APL_FAILURE )
+                                APL_GOBACK_FAIL
+				continue;
+			}
+
+			int_init_flg = 1;
+			EXEC SQL OPEN AentitlCur_ge;
+			IS_ANY_ORA_ERROR
+
+			for(;;) 
+			{
+				  memset(&g_ca_caentitlement_struct_h,NULL,sizeof(CA_CAENTITLEMENT_STRUCT_H));
+				  memset(&g_ca_caentitlement_struct_i,NULL,sizeof(CA_CAENTITLEMENT_STRUCT_I));
+				  if ( int_init_flg == 1 )
+				  {
+					  int_init_flg = 0;
+					  EXEC SQL FETCH AentitlCur_ge INTO 
+					  :g_ca_caentitlement_struct_h:g_ca_caentitlement_struct_i;
+
+					  IS_ANY_ORA_ERROR_CURSOR
+				  }
+				  else
+				  {
+					  EXEC SQL FETCH AentitlCur_gt INTO 
+					  :g_ca_caentitlement_struct_h:g_ca_caentitlement_struct_i;
+
+					  IS_ANY_ORA_ERROR_CURSOR
+				  }
+		sprintf(chr_g_log_buff,"T:Picked Account |%s| ",g_ca_caentitlement_struct_h.h_dl_client);
+		CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+				int_result =0;
+				//Swapnil for freeze client ISKB_2188 
+				printf(" Swapnil *** ");
+				if ( CA_ChkAcc_CA(g_ca_caentitlement_struct_h.h_dl_client,
+										&l_mt_client_struct_h,
+										&int_result,
+										l_debug_info_ptr) == APL_FAILURE)
+					APL_GOBACK_FAIL
+				CO_FreeErrLst(l_debug_info_ptr);
+				if ( int_result == ERR_ACCNOT_FND )
+				{
+					sprintf(chr_g_log_buff,
+					"E:Account %s not int_found, skipping\n",
+														g_ca_caentitlement_struct_h.h_dl_client);
+					CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+					if (CA_Commit(APL_FAILURE,S_LEVEL_ENTITL,l_debug_info_ptr) == APL_FAILURE)
+						APL_GOBACK_FAIL
+					else
+						continue;
+				}	
+				if ( int_result == ERR_ACCOUNT_UNAUTH )
+				{
+					sprintf(chr_g_log_buff,
+					"E:Account %s is unauthorised, skipping\n",
+														g_ca_caentitlement_struct_h.h_dl_client);
+					CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+					if (CA_Commit(APL_FAILURE,S_LEVEL_ENTITL,l_debug_info_ptr) == APL_FAILURE)
+						APL_GOBACK_FAIL
+					else
+						continue;
+				}	
+
+				EXEC SQL OPEN Apaymentcur;
+				IS_ANY_ORA_ERROR
+
+				for(;;) 
+				{
+				  	memset(&g_ca_cacheque_struct_h,NULL,sizeof(CA_CACHEQUE_STRUCT_H));
+				  	memset(&g_ca_cacheque_struct_i,NULL,sizeof(CA_CACHEQUE_STRUCT_I));
+					EXEC SQL FETCH Apaymentcur INTO 	:g_ca_cacheque_struct_h :g_ca_cacheque_struct_i;
+					IS_ANY_ORA_ERROR_CURSOR
+					sprintf(chr_g_log_buff, "T:Processing client %s pymt number %d \n",
+												g_ca_caentitlement_struct_h.h_dl_client, g_ca_cacheque_struct_h.h_pymt_srl_nbr);
+					CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+				
+					
+				if ( !strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_REDOM) )
+				{
+					if ( (CA_Proc_PymtProcess(	p_intlenv_data_struct_h,
+													l_debug_info_ptr
+												) == APL_SUCCESS)
+							&&
+							(CA_Mod_EventEntitlement(S_PYMT_LEVEL,l_debug_info_ptr) == APL_SUCCESS)
+						)
+					{
+						sprintf(chr_g_log_buff, "T:Successfully created payment for event %s ,client %s ,pymt number %d \n",
+											g_ca_cacheque_struct_h.h_corp_id,g_ca_cacheque_struct_h.h_dl_client, g_ca_cacheque_struct_h.h_pymt_srl_nbr);
+						CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+						int_commit_status = APL_SUCCESS;
+					}
+					else
+					{
+						IS_ANY_ERROR_FATAL
+						int_commit_status = APL_FAILURE;
+					}
+				}
+					
+				else
+				{
+					
+					if ( (CA_Proc_PymtProcess(	p_intlenv_data_struct_h,
+													l_debug_info_ptr
+												) == APL_SUCCESS)
+							&&
+							(CA_Mod_EventEntitlement(S_PYMT_LEVEL,l_debug_info_ptr) == APL_SUCCESS)
+							&&
+							(CA_Proc_SendMsg(	g_ca_cacheque_struct_h.h_corp_id,
+											g_ca_caevent_struct_h.h_evt_class,
+											g_ca_cacheque_struct_h.h_dl_client,
+											g_ca_cacheque_struct_h.h_pymt_srl_nbr,
+											l_debug_info_ptr)== APL_SUCCESS)
+						)
+					{
+						sprintf(chr_g_log_buff, "T:Successfully created payment for event %s ,client %s ,pymt number %d \n",
+											g_ca_cacheque_struct_h.h_corp_id,g_ca_cacheque_struct_h.h_dl_client, g_ca_cacheque_struct_h.h_pymt_srl_nbr);
+						CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+						int_commit_status = APL_SUCCESS;
+					}
+					else
+					{
+						IS_ANY_ERROR_FATAL
+						int_commit_status = APL_FAILURE;
+					}
+					
+				}
+
+					if (CA_Commit(int_commit_status,S_PYMT_LEVEL,l_debug_info_ptr) == APL_FAILURE)
+						APL_GOBACK_FAIL
+				}
+				sprintf(chr_g_log_buff, "T:After payment loop\n");
+				CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+				
+				sprintf(chr_g_log_buff, "T: before cacommit -f entitl level restartdata is |%s|\n",g_ca_caevent_struct_h.h_corp_id);
+				CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+				if ( CA_Mod_EventEntitlement(S_LEVEL_ENTITL,l_debug_info_ptr) == APL_FAILURE)
+					APL_GOBACK_FAIL
+				g_ca_cacheque_struct_h.h_pymt_srl_nbr=0;
+				sprintf(chr_g_log_buff, "T:Before payment commit\n");
+				if (CA_Commit(APL_SUCCESS,S_LEVEL_ENTITL,l_debug_info_ptr) == APL_FAILURE)
+					APL_GOBACK_FAIL
+				sprintf(chr_g_log_buff, "T:After payment commit\n");
+				CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+			}
+				sprintf(chr_g_log_buff, "T:After entitlement loop\n");
+				CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+	
+				
+			
+			if ( !strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_REDOM) )
+			{
+				if ( CA_Proc_RedenomDiffTrdNew(l_debug_info_ptr) == APL_FAILURE )
+				{
+					APL_GOBACK_FAIL
+				}
+			}
+				
+
+			
+			if ( CA_Mod_EventEntitlement(S_LEVEL_EVENT,l_debug_info_ptr) == APL_FAILURE)
+				APL_GOBACK_FAIL
+			strcpy(g_ca_caentitlement_struct_h.h_dl_client," ");
+
+				sprintf(chr_g_log_buff, "T: before cacommit -f event level restartdata is |%s|\n",g_ca_caevent_struct_h.h_corp_id);
+				CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+			if(CA_Mod_Nominalvalue(	p_intlenv_data_struct_h,l_debug_info_ptr) == APL_FAILURE)
+				APL_GOBACK_FAIL
+			
+			if ( CA_Commit(APL_SUCCESS,S_LEVEL_EVENT,l_debug_info_ptr) == APL_FAILURE )
+				APL_GOBACK_FAIL				
+				sprintf(chr_g_log_buff, "T:After entitlement commit\n");
+				CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+		}
+		 
+		Alert("TEST: Before upd event as CP\n");
+		fflush(stdout);
+                EXEC SQL UPDATE CAEVENT SET status = 'CP'
+                WHERE CA_EVENT = 'OP'
+                AND OP_EVT_CLASS = 'TO'
+                AND EFFECTIVE_DATE = TO_DATE(:chr_g_sys_date,'DD/MM/YYYY HH24:MI:SS');
+
+		IS_ANY_ORA_ERROR  
+		Alert("TEST: after upd event as CP\n");
+		fflush(stdout);
+					EXEC SQL UPDATE CAEVENT SET STATUS = 'CP'
+						WHERE ((CA_EVENT = 'SP' AND OP_EVT_CLASS IN ('SP','SR'))
+						OR CA_EVENT = 'CR')
+						AND DATEOF_PAYMENT+1 <= TO_DATE(:chr_g_sys_date,'DD/MM/YYYY HH24:MI:SS') 
+						AND STATUS IN ('RP','PP')
+        AND not exists
+        ( select 1 from dl_deal where deal_stat <> 'CS' and dl_deal.informaton=caevent.corp_id and informaton in (
+        (select corp_id from CAEVENT 
+        WHERE ((CA_EVENT = 'SP' AND OP_EVT_CLASS IN ('SP','SR'))
+        OR CA_EVENT = 'CR')
+        AND DATEOF_PAYMENT+1 <= TO_DATE(:chr_g_sys_date,'DD/MM/YYYY HH24:MI:SS')
+        AND STATUS IN ('RP','PP'))));
+		IS_ANY_ORA_ERROR
+					
+		Alert("TEST: after upd event for SP /  CR as CP\n");	
+		Alert("TEST: before upd entitlement as CP\n");			
+		
+				EXEC SQL UPDATE CAENTITLEMENT SET STATUS = 'CP'
+					WHERE	CORP_ID IN (SELECT CORP_ID FROM CAEVENT WHERE STATUS IN ('CP')
+							AND ((CA_EVENT = 'SP' AND OP_EVT_CLASS IN ('SP','SR')) OR CA_EVENT = 'CR')
+							AND DATEOF_PAYMENT+1 <= TO_DATE(:chr_g_sys_date,'DD/MM/YYYY HH24:MI:SS'));
+		IS_ANY_ORA_ERROR
+
+		Alert("TEST: after upd entitlement as CP\n");
+		 fflush(stdout);	 
+	
+	APL_GOBACK_SUCCESS
+	
+	RETURN_SUCCESS:
+	{
+		return (APL_SUCCESS);
+	}
+	RETURN_FAILURE:
+	{
+		return (APL_FAILURE);
+	}
+}
+
+static	int	CA_Proc_PymtProcess( INTL_ENV_DATA_STRUCT_H	*p_intlenv_data_struct_h,
+											DEBUG_INFO_STRUCT_H			**l_debug_info_ptr)
+{
+	struct sqlca sqlca;
+	char	txn_indentity_no[APL_TXNREFNO_LEN];
+	char	txn_indentity_no_rf[APL_TXNREFNO_LEN];
+	char chr_event_type[EVT_CLASS_] = APL_NULL_STRING;
+	char deal_cd[DEALTYPE_LEN_A]			= APL_NULL_STRING;
+	char chr_eventtype[8]						= APL_NULL_STRING;
+	DL_DEAL_FAIL_STRUCT_H	l_dl_deal_fail_struct_h;
+	
+	int	int_result=APL_SUCCESS;
+	char  chr_msg_param_struct[100]=APL_NULL_STRING;	
+	char  chr_msg_param_struct_send[100]=APL_NULL_STRING;	
+	
+   char chr_l_h_acc_class[S_CLI_CLASS] = APL_NULL_STRING ; 
+
+	short l_i_acc_class = 0 ;
+	//shailesh 290807 
+	double l_closing_pr=0.0; 
+	char	chr_g_sys_date1[APL_DATE_LEN] = APL_NULL_STRING;
+	int l_count = 0;
+        int l_nom_count = 0; /*VaibhavK 02/01/2008 KOTAK.........*/
+
+
+	//shailesh 290807
+	if ( CO_RtvSysDt(chr_g_sys_date1,l_debug_info_ptr) == APL_FAILURE )
+			APL_GOBACK_FAIL
+					Alert("System Date is |%s| ", chr_g_sys_date1 );
+	memset(chr_l_h_acc_class,'\0',S_CLI_CLASS);
+	memset(txn_indentity_no_rf,APL_NULL_CHAR,APL_TXNREFNO_LEN);
+
+     
+	strcpy(deal_cd,l_ca_deal_struct_h.h_dealcd);
+	if (!strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_BONUS))
+		strcpy(chr_eventtype,CA_BONUS_IND);
+	else if (!strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_BOND_REDMP))
+		strcpy(chr_eventtype,CA_BONDRD_IND);
+	else if (!strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_RHTS))
+		strcpy(chr_eventtype,RTS_ISSUE);
+	else if (!strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_STOK_DIV))
+		strcpy(chr_eventtype,STOCK_DIVIDEND);
+	else if (!strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_OFFER))
+		strcpy(chr_eventtype,OFFER_PRIVELEGE);
+	else if (!strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_SPLIT))
+		strcpy(chr_eventtype,STOCK_SPLIT);
+	else if (!strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_RHTS))
+		strcpy(chr_eventtype,RTS_PROC);
+	else if (!strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_REDOM))
+		strcpy(chr_eventtype,"REDNOM");
+	else if (!strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_CV))
+		strcpy(chr_eventtype,CACV_IND);
+
+	if(	(strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_CASH_DIV)	&&
+			strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_BOND) &&
+			strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_DECR_VAL)) &&
+			(!strcmp(q_ca_casecevent_struct_h.h_new_dl_ind,APL_YES_IND))
+		)		
+	{
+		if ( !strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_REDOM) )
+		{
+			
+			strcpy(chr_msg_param_struct,g_ca_caevent_struct_h.h_instr_code);
+			strcat(chr_msg_param_struct,MSG_PARAM_STRUCT_SEP);
+			strcat(chr_msg_param_struct,g_ca_caevent_struct_h.h_evt_class);
+			strcat(chr_msg_param_struct,MSG_PARAM_STRUCT_SEP);
+			strcat(chr_msg_param_struct,g_ca_caevent_struct_h.h_decl_date);
+			strcat(chr_msg_param_struct,MSG_PARAM_STRUCT_SEP);
+			strcat(chr_msg_param_struct,ltoa(g_ca_caevent_struct_h.h_evt_nbr));
+			strcat(chr_msg_param_struct,MSG_PARAM_STRUCT_SEP);
+
+			strcpy(chr_msg_param_struct_send,chr_msg_param_struct);
+			
+
+			if ( CA_Proc_PopulateTradeForRedonm(APL_DEAL_DF,
+											  "N",	
+												APL_NULL_STRING,
+												0,
+												&int_result,
+											  l_debug_info_ptr
+											) == APL_FAILURE
+				)
+					APL_GOBACK_FAIL	
+
+			memset(txn_indentity_no,APL_NULL_CHAR,APL_TXNREFNO_LEN);
+			if(APL_FAILURE == CO_GenRefno(chr_eventtype,
+													g_ca_caevent_struct_h.h_op_evt_class,
+													l_ca_deal_struct_h.h_dealcd,
+													txn_indentity_no,
+													l_debug_info_ptr))
+			{
+				APL_GOBACK_FAIL
+			}
+			strcpy(l_ca_deal_struct_h.h_indentity_no,txn_indentity_no);
+			strcpy(txn_indentity_no_rf,txn_indentity_no);
+
+			
+
+			//sleep(1); Ekta :: Retro from HDFC for ISHB_8740 Changes done w.r.t ref no gen so that sleep time can be remove on 07/08/2019
+			if ( CA_Mod_NewTrade(	&l_ca_deal_struct_h,
+										p_intlenv_data_struct_h,
+										txn_indentity_no,
+										l_debug_info_ptr) == APL_FAILURE)
+			{	
+				sprintf(chr_g_log_buff,"E:Failed in Create DELV_FREE Trade for :%s %s %d\n"
+							,g_ca_cacheque_struct_h.h_corp_id,
+							g_ca_cacheque_struct_h.h_dl_client,
+							g_ca_cacheque_struct_h.h_pymt_srl_nbr);
+				CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+				APL_GOBACK_FAIL
+			}
+				sprintf(chr_g_log_buff,"Created DELV_FREE Trade for [%s] [%s] [%1d] RefNo:[%s]\n"
+							,g_ca_cacheque_struct_h.h_corp_id,
+							g_ca_cacheque_struct_h.h_dl_client,
+							g_ca_cacheque_struct_h.h_pymt_srl_nbr,
+							txn_indentity_no);
+				CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+				/** Added By Biju **/
+				if(CA_MovePos(	&l_ca_deal_struct_h ,
+							g_ca_caevent_struct_h.h_evt_class,
+							g_ca_caevent_struct_h.h_op_evt_class,
+							l_debug_info_ptr) == APL_FAILURE)
+				{
+					APL_GOBACK_FAIL
+				}
+
+
+
+			
+			
+		 
+			
+			EXEC SQL UPDATE PRO_EURO_TEMP
+			SET  DF_IDENTNO=:l_ca_deal_struct_h.h_indentity_no
+			WHERE client=:l_ca_deal_struct_h.h_dl_client
+			AND	instr_code=:l_ca_deal_struct_h.h_instr_code
+			AND	location_cd=:l_ca_deal_struct_h.h_loccode
+			AND	PROC_AREA=:chr_g_func_area_redenom;
+		
+			IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,l_ca_deal_struct_h.h_dl_client,l_ca_deal_struct_h.h_instr_code,l_ca_deal_struct_h.h_loccode)
+						 		
+
+			
+			if ( CA_Proc_PopulateTradeForRedonm(APL_DEAL_RF,
+												"N",
+												APL_NULL_STRING,
+												0,
+												&int_result,
+											  l_debug_info_ptr
+											) == APL_FAILURE
+				)
+					APL_GOBACK_FAIL
+
+			memset(txn_indentity_no,APL_NULL_CHAR,APL_TXNREFNO_LEN);
+			if(APL_FAILURE == CO_GenRefno(chr_eventtype,
+													g_ca_caevent_struct_h.h_op_evt_class,
+													l_ca_deal_struct_h.h_dealcd,
+													txn_indentity_no,
+													l_debug_info_ptr))
+			{
+				APL_GOBACK_FAIL
+			}
+			strcpy(l_ca_deal_struct_h.h_indentity_no,txn_indentity_no);
+ 
+			
+
+			//sleep(1); Ekta :: Retro from HDFC for ISHB_8740 Changes done w.r.t ref no gen so that sleep time can be remove on 07/08/2019
+			if ( CA_Mod_NewTrade(	&l_ca_deal_struct_h,
+										p_intlenv_data_struct_h,
+										txn_indentity_no,
+										l_debug_info_ptr) == APL_FAILURE)
+			{	
+				sprintf(chr_g_log_buff,"E:Failed in Create Trade for :%s %s %d\n"
+							,g_ca_cacheque_struct_h.h_corp_id,
+							g_ca_cacheque_struct_h.h_dl_client,
+							g_ca_cacheque_struct_h.h_pymt_srl_nbr);
+				CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+				APL_GOBACK_FAIL
+			}
+	
+				sprintf(chr_g_log_buff,"Created RECEIVE_FREE Trade for [%s] [%s] [%1d] RefNo:[%s]\n"
+							,g_ca_cacheque_struct_h.h_corp_id,
+							g_ca_cacheque_struct_h.h_dl_client,
+							g_ca_cacheque_struct_h.h_pymt_srl_nbr,
+							txn_indentity_no);
+				CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+				if(CA_MovePos(	&l_ca_deal_struct_h ,
+							g_ca_caevent_struct_h.h_evt_class,
+							g_ca_caevent_struct_h.h_op_evt_class,
+							l_debug_info_ptr) == APL_FAILURE)
+				{
+					APL_GOBACK_FAIL
+				}
+
+	
+			
+			strcat(chr_msg_param_struct_send,txn_indentity_no);
+			strcat(chr_msg_param_struct_send,MSG_PARAM_STRUCT_SEP);
+
+			if	(GBDbInsIMSGENT(		"563N01",
+											g_ca_cacheque_struct_h.h_corp_id,
+											g_ca_cacheque_struct_h.h_dl_client,
+											'Y',
+											chr_msg_param_struct_send,
+											l_debug_info_ptr) == APL_FAILURE)
+				APL_GOBACK_FAIL
+
+
+	
+			 
+			
+			EXEC SQL UPDATE PRO_EURO_TEMP
+			SET  RF_IDENT_NO=:l_ca_deal_struct_h.h_indentity_no
+			WHERE client=:l_ca_deal_struct_h.h_dl_client
+			AND	instr_code=:l_ca_deal_struct_h.h_instr_code
+			AND	location_cd=:l_ca_deal_struct_h.h_loccode
+			AND	PROC_AREA=:chr_g_func_area_redenom;
+		
+			IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,l_ca_deal_struct_h.h_dl_client,l_ca_deal_struct_h.h_instr_code,l_ca_deal_struct_h.h_loccode)
+
+		} 
+
+		else
+
+		{
+		
+		printf("\nHere I am %s %d\n ",g_ca_caevent_struct_h.h_op_evt_class,g_ca_caevent_struct_i.i_res_instr_code);
+		printf("\nTUXY = |%lf| nomval = |%lf|\n",g_ca_caevent_struct_h.h_redem_rt,l_mt_instrument_struct_h.h_nominal_value);
+		if ((strcmp(g_ca_caevent_struct_h.h_op_evt_class,"TO") != 0) ||
+			((strcmp(g_ca_caevent_struct_h.h_op_evt_class,"TO") == 0) && (g_ca_caevent_struct_i.i_res_instr_code != -1)))	
+		{			 
+		printf("\nInside = |%lf| nomval = |%lf|\n",g_ca_caevent_struct_h.h_redem_rt,l_mt_instrument_struct_h.h_nominal_value);
+		/** Tuxy quick fix ****/
+		if	( ((strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_BOND_REDMP)==0)  && APL_DOUBLE_EQUAL(g_ca_caevent_struct_h.h_redem_rt,l_mt_instrument_struct_h.h_nominal_value)) || strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_BOND_REDMP)!=0)
+		{
+
+				  if ( CA_Proc_PopulateTrade(l_debug_info_ptr, APL_YES_IND)
+										== APL_FAILURE)
+							 APL_GOBACK_FAIL
+
+										CO_FreeErrLst(l_debug_info_ptr);
+
+				  memset(txn_indentity_no,APL_NULL_CHAR,APL_TXNREFNO_LEN);
+
+				  if (!strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_OFFER))
+				  {
+							 strcpy(chr_eventtype,OFFER_PRIVELEGE);
+							 if(!strcmp(g_ca_caevent_struct_h.h_op_evt_class,"CV"))	
+										strcat(chr_eventtype,"C");
+							 else if(!strcmp(g_ca_caevent_struct_h.h_op_evt_class,"WC"))	
+										strcat(chr_eventtype,"W");
+							 else if(!strcmp(g_ca_caevent_struct_h.h_op_evt_class,"PR"))		
+										strcat(chr_eventtype,"P");
+							 else if(!strcmp(g_ca_caevent_struct_h.h_op_evt_class,"TO"))		
+										strcat(chr_eventtype,"T");
+							 else if(!strcmp(g_ca_caevent_struct_h.h_op_evt_class,"DO"))		
+										strcat(chr_eventtype,"D");
+							 else if(!strcmp(g_ca_caevent_struct_h.h_op_evt_class,"DR"))		
+										strcat(chr_eventtype,"R");
+							 else if(!strcmp(g_ca_caevent_struct_h.h_op_evt_class,"MG"))      
+										strcat(chr_eventtype,"M");
+				  }
+
+				  if(APL_FAILURE == CO_GenRefno(chr_eventtype,
+												  g_ca_caevent_struct_h.h_op_evt_class,
+												  l_ca_deal_struct_h.h_dealcd,
+												  txn_indentity_no,
+												  l_debug_info_ptr))
+				  {
+							 APL_GOBACK_FAIL
+				  }
+				  strcpy(l_ca_deal_struct_h.h_indentity_no,txn_indentity_no);
+				  strcpy(txn_indentity_no_rf,txn_indentity_no);
+
+				  Alert(" create trade");	
+
+				  //sleep(1); Ekta :: Retro from HDFC for ISHB_8740 Changes done w.r.t ref no gen so that sleep time can be remove on 07/08/2019
+				  if ( CA_Mod_NewTrade(	&l_ca_deal_struct_h,
+												  p_intlenv_data_struct_h,
+												  txn_indentity_no,
+												  l_debug_info_ptr) == APL_FAILURE)
+				  {	
+							 sprintf(chr_g_log_buff,"E:Failed in Create Trade for :%s %s %d\n"
+												  ,g_ca_cacheque_struct_h.h_corp_id,
+												  g_ca_cacheque_struct_h.h_dl_client,
+												  g_ca_cacheque_struct_h.h_pymt_srl_nbr);
+							 CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+							 APL_GOBACK_FAIL
+				  }
+				  else
+				  {                   
+							 if(CA_MovePos(	&l_ca_deal_struct_h ,
+															 g_ca_caevent_struct_h.h_evt_class,
+															 g_ca_caevent_struct_h.h_op_evt_class,
+															 l_debug_info_ptr) == APL_FAILURE)
+							 {
+										APL_GOBACK_FAIL
+							 }
+
+							 if	((!strcmp(l_ca_deal_struct_h.h_deal_status,STATUS_AUTH))||
+												  (!strcmp(l_ca_deal_struct_h.h_deal_status,STATUS_CONF)))
+							 {
+
+
+
+										EXEC SQL select CLN_CLAS into :chr_l_h_acc_class:l_i_acc_class from MT_CLIENT
+																										 where cln_code = :l_ca_deal_struct_h.h_dl_client  ;  
+
+										IS_ANY_ORA_ERROR 
+
+												  if( !(( strcmp(g_mt_commonsys_params_struct_h.nation_code,"RU")  == 0 ) && ( strcmp(chr_l_h_acc_class,"2") == 0 )) )
+												  {
+
+															 if (!strcmp(chr_eventtype,CA_BONDRD_IND))	
+																		strcpy(l_ca_deal_struct_h.h_fail_cd,"98");
+															 else if ((!strncmp(chr_eventtype,OFFER_PRIVELEGE,5))||
+																				  (!strcmp(chr_eventtype,CA_BONUS_IND))||
+																				  (!strcmp(chr_eventtype,RTS_PROC)))
+																		strcpy(l_ca_deal_struct_h.h_fail_cd,"01");
+															 else if (!strcmp(chr_eventtype,STOCK_DIVIDEND))	
+																		strcpy(l_ca_deal_struct_h.h_fail_cd,"01");
+												  }
+
+
+										memset(&l_dl_deal_fail_struct_h,NULL,sizeof(DL_DEAL_FAIL_STRUCT_H));
+										strcpy(l_dl_deal_fail_struct_h.h_dl_client,l_ca_deal_struct_h.h_dl_client);
+										strcpy(l_dl_deal_fail_struct_h.h_indentity_no,l_ca_deal_struct_h.h_indentity_no);
+										strcpy(l_dl_deal_fail_struct_h.h_fail_cd,l_ca_deal_struct_h.h_fail_cd);
+										strcpy(l_dl_deal_fail_struct_h.h_failinfo,APL_NULL_STRING);
+										strcpy(l_dl_deal_fail_struct_h.h_custinfo,APL_NULL_STRING);
+										strcpy(p_intlenv_data_struct_h->h_mode,UFL_MODE);
+										if (APL_FAILURE == DL_Rtv_TrdChrVal(l_dl_deal_fail_struct_h.h_dl_client,
+																		l_dl_deal_fail_struct_h.h_indentity_no,
+																		"access_stamp",
+																		l_dl_deal_fail_struct_h.h_access_stamp,
+																		l_debug_info_ptr))
+										{
+												  CO_ProcMonitor(g_logfile, "Could not lock the trade record for updating fail reason.", NULL, NULL);
+												  APL_GOBACK_FAIL
+										}
+										if (APL_FAILURE == DL_Mod_DLFailReas(&l_dl_deal_fail_struct_h,
+																		p_intlenv_data_struct_h,
+																		l_debug_info_ptr))
+										{
+												  CO_ProcMonitor(g_logfile, "Could not update fail reason.", NULL, NULL);
+												  APL_GOBACK_FAIL
+										}
+							 }
+
+
+							 sprintf(chr_g_log_buff,"T:Successfully created trade with refno :%s\n",
+												  txn_indentity_no);
+							 CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+				  }
+
+	/* Chirag 13-12-2006 Updates Nominal Value of Instrument For Redemption Event KOTAK*/			
+
+				/*  Alert("Event |%s| with Full Redemption & Status |%s| Found\n",g_ca_caevent_struct_h.h_corp_id,g_ca_caevent_struct_h.h_evt_stat);
+				  if(!strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_BOND_REDMP) && strcmp(g_ca_caevent_struct_h.h_op_evt_class,"PO") && !strcmp(g_ca_caevent_struct_h.h_evt_stat,"RP"))
+				  { 
+							 Alert("Before Updating Face Value for Instrument |%s| is |%lf| \n",g_ca_caevent_struct_h.h_instr_code,l_mt_instrument_struct_h.h_nominal_value);
+
+ VaibhavK 02/01/2008 Kotak { Nominal Value is Update Only one time } 
+                                          EXEC SQL SELECT NVL(COUNT(*),0) INTO :l_nom_count 
+                                          FROM CACHEQUE 
+                                          WHERE CORP_ID = :g_ca_caevent_struct_h.h_corp_id 
+                                          AND STAT_PYMT ='CP';
+
+                                          IS_ANY_ORA_ERROR;
+     
+                                          printf("\n **COUNT = [%d]",l_nom_count);
+                                 
+                                      if(l_nom_count <= 0 )
+                                      {
+
+							 EXEC SQL UPDATE MT_INSTRUMENT
+										SET
+										NOMINAL_VALUE = NOMINAL_VALUE - :g_ca_caevent_struct_h.h_redem_rt
+										WHERE INSTR_CODE = :g_ca_caevent_struct_h.h_instr_code;
+
+							 IS_ANY_ORA_ERROR
+
+                                     }    
+                                     else
+                                     {
+                                       printf("\n\n **COUNT = [%d]",l_nom_count); 
+                                       printf("\n Already Updated...........");
+                                     }
+//shailesh 290807  Changes related to PTC charges(detailed custody charges)  in bill
+
+					EXEC SQL SELECT NOMINAL_VALUE INTO :l_closing_pr
+						FROM MT_INSTRUMENT 
+						 WHERE INSTR_CODE=:g_ca_caevent_struct_h.h_instr_code;
+
+					IS_ANY_ORA_ERROR
+
+					EXEC SQL SELECT COUNT(*) INTO :l_count
+								 FROM MT_DLYMKTPRC
+								 WHERE INSTR_CODE=:g_ca_caevent_struct_h.h_instr_code
+									AND PRICE_DATE= :chr_g_sys_date1;
+
+					IS_ANY_ORA_ERROR
+
+					if(l_count == 0)
+					{
+						Alert("------------------ Inserting Market price ----------------------");
+						Alert("\nClosing Price :|%lf| g_ca_caevent_struct_h.h_instr_code:|%s|chr_g_sys_date1:|%s|",l_closing_pr,g_ca_caevent_struct_h.h_instr_code,chr_g_sys_date1);
+						EXEC SQL INSERT INTO MT_DLYMKTPRC VALUES (:chr_g_sys_date1,:g_ca_caevent_struct_h.h_instr_code,
+							:l_closing_pr,'H',:chr_g_sys_date1,:p_intlenv_data_struct_h->usr,
+							:chr_g_sys_date1,'AA','SYSTEM',:chr_g_sys_date1);
+
+					}
+					else
+					{
+						Alert("------------------ Updating Market price ----------------------");
+						Alert("\nClosing Price :|%lf| chr_g_sys_date1 |%s|",l_closing_pr,chr_g_sys_date1);
+						EXEC SQL UPDATE MT_DLYMKTPRC SET CLOSING_PR=:l_closing_pr 			
+									WHERE INSTR_CODE=:g_ca_caevent_struct_h.h_instr_code
+									AND PRICE_DATE = : chr_g_sys_date1;
+					}
+
+					IS_ANY_ORA_ERROR
+
+					Alert("for mktprice sqlca.sqlcode is |%d| \n",sqlca.sqlcode);
+
+					/* shailesh  290807 change related to PTC charges  (detailed custody charges) - END 
+					
+
+										Alert("Face Value for Instrument |%s| changed to |%lf|\n",g_ca_caevent_struct_h.h_instr_code,l_mt_instrument_struct_h.h_nominal_value-g_ca_caevent_struct_h.h_redem_rt);
+				  }
+				  else
+				  {
+							 Alert("Nominal Value is Already Updated......\n");
+				  }
+				  */
+		/* Chirag 13-12-2006 Updates Nominal Value of Instrument For Redemption Event KOTAK*/
+		} /** Skip Bond Redm**/
+		/* Chirag 13-12-2006 Updates Nominal Value of Instrument For Redemption Event KOTAK*/
+		/*else
+		{
+				/*  Alert("Event |%s| with Part Redemption & Status |%s| Found\n",g_ca_caevent_struct_h.h_corp_id,g_ca_caevent_struct_h.h_evt_stat);
+				  if(!strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_BOND_REDMP) && strcmp(g_ca_caevent_struct_h.h_op_evt_class,"PO") && !strcmp(g_ca_caevent_struct_h.h_evt_stat,"RP"))
+				  {	
+							 Alert("Before Updating Face Value for Instrument |%s| is |%lf| \n",g_ca_caevent_struct_h.h_instr_code,l_mt_instrument_struct_h.h_nominal_value);
+
+
+
+                   /* VaibhavK 02/01/2008 Kotak { Nominal Value is Update Only one time } 
+                                          EXEC SQL SELECT NVL(COUNT(*),0) INTO :l_nom_count
+                                          FROM CACHEQUE
+                                          WHERE CORP_ID = :g_ca_caevent_struct_h.h_corp_id
+                                          AND STAT_PYMT ='CP';
+
+                                          IS_ANY_ORA_ERROR;
+ 
+                                           printf("\n **COUNT = [%d]",l_nom_count);
+                                          
+                                      if(l_nom_count <= 0 ) 
+                                      {
+
+
+							 EXEC SQL UPDATE MT_INSTRUMENT
+										SET NOMINAL_VALUE = NOMINAL_VALUE - :g_ca_caevent_struct_h.h_redem_rt
+										WHERE INSTR_CODE = :g_ca_caevent_struct_h.h_instr_code;
+
+							 IS_ANY_ORA_ERROR
+                                      } 
+                                      else
+                                      {
+                                       printf("\n\n **COUNT = [%d]",l_nom_count);
+                                       printf("\n Already Updated...........");
+                                      }                                      
+                                     
+                                              
+//shailesh 290807  Changes related to PTC charges(detailed custody charges)  in bill
+
+					EXEC SQL SELECT NOMINAL_VALUE INTO :l_closing_pr
+						FROM MT_INSTRUMENT 
+						 WHERE INSTR_CODE=:g_ca_caevent_struct_h.h_instr_code;
+
+					IS_ANY_ORA_ERROR
+
+					EXEC SQL SELECT COUNT(*) INTO :l_count
+								 FROM MT_DLYMKTPRC
+								 WHERE INSTR_CODE=:g_ca_caevent_struct_h.h_instr_code
+									AND PRICE_DATE= :chr_g_sys_date1;
+
+					IS_ANY_ORA_ERROR
+
+					if(l_count == 0)
+					{
+						Alert("------------------ Inserting Market price ----------------------");
+						Alert("\nClosing Price :|%lf| g_ca_caevent_struct_h.h_instr_code:|%s|chr_g_sys_date1:|%s|",l_closing_pr,g_ca_caevent_struct_h.h_instr_code,chr_g_sys_date1);
+						EXEC SQL INSERT INTO MT_DLYMKTPRC VALUES (:chr_g_sys_date1,:g_ca_caevent_struct_h.h_instr_code,
+							:l_closing_pr,'H',:chr_g_sys_date1,:p_intlenv_data_struct_h->usr,
+							:chr_g_sys_date1,'AA','SYSTEM',:chr_g_sys_date1);
+
+					}
+					else
+					{
+						Alert("------------------ Updating Market price ----------------------");
+						Alert("\nClosing Price :|%lf| chr_g_sys_date1 |%s|",l_closing_pr,chr_g_sys_date1);
+						EXEC SQL UPDATE MT_DLYMKTPRC SET CLOSING_PR=:l_closing_pr 			
+									WHERE INSTR_CODE=:g_ca_caevent_struct_h.h_instr_code
+									AND PRICE_DATE = : chr_g_sys_date1;
+					}
+
+					IS_ANY_ORA_ERROR
+
+					Alert("for mktprice sqlca.sqlcode is |%d| \n",sqlca.sqlcode);
+
+/* shailesh  290807 change related to PTC charges  (detailed custody charges) - END 
+										Alert("Face Value for Instrument |%s| changed to |%lf|\n",g_ca_caevent_struct_h.h_instr_code,l_mt_instrument_struct_h.h_nominal_value-g_ca_caevent_struct_h.h_redem_rt);
+				  }
+				  else
+				  {
+							 Alert("Nominal Value is Already Updated......\n");
+				  }
+		
+				  
+		
+		}*/
+		/* Chirag 13-12-2006 Updates Nominal Value of Instrument For Redemption Event KOTAK*/ 
+	}
+			
+			printf("Just before req. if %s\n",g_ca_caevent_struct_h.h_op_evt_class);
+			  
+			if ((!strcmp(g_ca_caevent_struct_h.h_evt_class, EVT_OFFER) &&
+				(!strcmp(g_ca_caevent_struct_h.h_op_evt_class, OP_CONV_IND) ||
+				 !strcmp(g_ca_caevent_struct_h.h_op_evt_class, OP_MERG_IND) ||
+					!strcmp(g_ca_caevent_struct_h.h_op_evt_class, OP_WRNT_IND) ||
+					!strcmp(g_ca_caevent_struct_h.h_op_evt_class, "TO"))) ||
+				(!strcmp(g_ca_caevent_struct_h.h_evt_class, EVT_SPLIT) &&
+					!strcmp(g_ca_caevent_struct_h.h_op_evt_class, "AM") ||
+					!strcmp(g_ca_caevent_struct_h.h_op_evt_class, "TO")) ||
+				!strcmp(g_ca_caevent_struct_h.h_evt_class, OP_CONV_IND)
+				)
+				{
+				  printf("\n Calling CA_Proc_PopulateTrade for Populating trade ... ");
+				  if ( CA_Proc_PopulateTrade(l_debug_info_ptr, APL_NO_IND)
+					  == APL_FAILURE)
+					  APL_GOBACK_FAIL
+
+				  CO_FreeErrLst(l_debug_info_ptr);
+
+					
+					memset(txn_indentity_no,APL_NULL_CHAR,APL_TXNREFNO_LEN);
+
+      
+			      if (!strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_OFFER))
+      			{
+						strcpy(chr_eventtype,OFFER_PRIVELEGE);
+         			if(!strcmp(g_ca_caevent_struct_h.h_op_evt_class,"CV"))  
+            			strcat(chr_eventtype,"C");
+         			else if(!strcmp(g_ca_caevent_struct_h.h_op_evt_class,"WC"))   
+            			strcat(chr_eventtype,"W");
+         			else if(!strcmp(g_ca_caevent_struct_h.h_op_evt_class,"PR"))      
+     						strcat(chr_eventtype,"P");
+         			else if(!strcmp(g_ca_caevent_struct_h.h_op_evt_class,"TO"))      
+            			strcat(chr_eventtype,"T");
+         			else if(!strcmp(g_ca_caevent_struct_h.h_op_evt_class,"DO"))      
+            			strcat(chr_eventtype,"D");
+         			else if(!strcmp(g_ca_caevent_struct_h.h_op_evt_class,"DR"))      
+            			strcat(chr_eventtype,"R");
+						else if(!strcmp(g_ca_caevent_struct_h.h_op_evt_class,"MG"))      
+							strcat(chr_eventtype,"M");
+      			}
+
+					if(APL_FAILURE == CO_GenRefno(chr_eventtype,
+															g_ca_caevent_struct_h.h_op_evt_class,
+															l_ca_deal_struct_h.h_dealcd,
+															txn_indentity_no,
+															l_debug_info_ptr))
+					{
+						APL_GOBACK_FAIL
+					}	
+					strcpy(l_ca_deal_struct_h.h_indentity_no,txn_indentity_no);
+
+					
+					
+					l_quantity_paid = l_ca_deal_struct_h.h_qty;
+
+					sprintf(chr_g_log_buff, "\n FINAL DELV_FREE TRD QTY AFTER ROUNDING %lf \n",l_ca_deal_struct_h.h_qty);
+					CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+
+				  //sleep(1); Ekta :: Retro from HDFC for ISHB_8740 Changes done w.r.t ref no gen so that sleep time can be remove on 07/08/2019
+				  printf("\n Calling CA_Mod_NewTrade with l_ca_deal_struct_h.h_dlt as :%s:",l_ca_deal_struct_h.h_dlt);
+				  if ( CA_Mod_NewTrade(	&l_ca_deal_struct_h,
+											  p_intlenv_data_struct_h,
+											  txn_indentity_no,
+											  l_debug_info_ptr) == APL_FAILURE)
+				  {	
+					  sprintf(chr_g_log_buff,"E:Failed in Create Trade for :%s %s %d\n"
+								  ,g_ca_cacheque_struct_h.h_corp_id,
+								  g_ca_cacheque_struct_h.h_dl_client,
+								  g_ca_cacheque_struct_h.h_pymt_srl_nbr);
+					  CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+					  APL_GOBACK_FAIL
+				  }
+				  else
+				  {       
+						
+						
+				if(CA_MovePos(	&l_ca_deal_struct_h ,
+							g_ca_caevent_struct_h.h_evt_class,
+							g_ca_caevent_struct_h.h_op_evt_class,
+							l_debug_info_ptr) == APL_FAILURE)
+				{
+					APL_GOBACK_FAIL
+				}
+						 
+						
+						if	((!strcmp(l_ca_deal_struct_h.h_deal_status,STATUS_CONF))||
+				 			(!strcmp(l_ca_deal_struct_h.h_deal_status,STATUS_AUTH)))
+						{
+							
+							
+						Alert("chr_eventtype |%s|\n",chr_eventtype);	
+			 				if (!strcmp(chr_eventtype,CA_BONDRD_IND))	
+								strcpy(l_ca_deal_struct_h.h_fail_cd,"98");
+							else if ((!strncmp(chr_eventtype,OFFER_PRIVELEGE,5))||
+										(!strcmp(chr_eventtype,CA_BONUS_IND))||
+										(!strcmp(chr_eventtype,RTS_PROC)))
+								strcpy(l_ca_deal_struct_h.h_fail_cd,"01");
+							else if (!strcmp(chr_eventtype,STOCK_DIVIDEND))
+								strcpy(l_ca_deal_struct_h.h_fail_cd,"01");
+							else if(!strcmp(chr_eventtype,"CNV"))
+								strcpy(l_ca_deal_struct_h.h_fail_cd,"95");
+							else if(!strcmp(chr_eventtype,"STKSPL"))
+								strcpy(l_ca_deal_struct_h.h_fail_cd,"95");
+
+							memset(&l_dl_deal_fail_struct_h,NULL,sizeof(DL_DEAL_FAIL_STRUCT_H));
+							strcpy(l_dl_deal_fail_struct_h.h_dl_client,l_ca_deal_struct_h.h_dl_client);
+							strcpy(l_dl_deal_fail_struct_h.h_indentity_no,l_ca_deal_struct_h.h_indentity_no);
+							strcpy(l_dl_deal_fail_struct_h.h_fail_cd,l_ca_deal_struct_h.h_fail_cd);
+							strcpy(l_dl_deal_fail_struct_h.h_failinfo,APL_NULL_STRING);
+							strcpy(l_dl_deal_fail_struct_h.h_custinfo,APL_NULL_STRING);
+							strcpy(p_intlenv_data_struct_h->h_mode,UFL_MODE);
+							if (APL_FAILURE == DL_Rtv_TrdChrVal(l_dl_deal_fail_struct_h.h_dl_client,
+																		 l_dl_deal_fail_struct_h.h_indentity_no,
+																		 "access_stamp",
+													 					 l_dl_deal_fail_struct_h.h_access_stamp,
+																 		 l_debug_info_ptr))
+							{
+								CO_ProcMonitor(g_logfile, "Could not lock the trade record for updating fail reason.", NULL, NULL);
+								APL_GOBACK_FAIL
+							}
+							if (APL_FAILURE == DL_Mod_DLFailReas(&l_dl_deal_fail_struct_h,
+																		  p_intlenv_data_struct_h,
+																		  l_debug_info_ptr))
+							{
+								CO_ProcMonitor(g_logfile, "Could not update fail reason.", NULL, NULL);
+								APL_GOBACK_FAIL
+							}
+						}
+					  sprintf(chr_g_log_buff,"T:Successfully created trade with refno :%s\n",
+								  txn_indentity_no);
+					  CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+				  }
+				  CO_FreeErrLst(l_debug_info_ptr);
+			}
+		CO_FreeErrLst(l_debug_info_ptr);
+		
+	 } 
+	} 
+	else
+	{
+		strcpy(txn_indentity_no,APL_NULL_STRING);
+	}
+
+	CO_ProcMonitor(g_logfile, "Now updating quantity_paid if event type is OP.", NULL, NULL);
+
+	if (!strcmp(g_ca_caevent_struct_h.h_evt_class, EVT_OFFER) &&
+		(!strcmp(g_ca_caevent_struct_h.h_op_evt_class, OP_CONV_IND) ||
+		!strcmp(g_ca_caevent_struct_h.h_op_evt_class, OP_MERG_IND) ||
+		!strcmp(g_ca_caevent_struct_h.h_op_evt_class, OP_WRNT_IND)) ||
+		!strcmp(g_ca_caevent_struct_h.h_evt_class, EVT_CV) ||
+		( !strcmp(g_ca_caevent_struct_h.h_evt_class, EVT_SPLIT) &&
+		  (!strcmp(g_ca_caevent_struct_h.h_op_evt_class, "AM") ||
+			!strcmp(g_ca_caevent_struct_h.h_op_evt_class, "TO")))
+		)
+	{
+		EXEC SQL UPDATE CACHEQUE 
+		SET 	quantity_paid 	=	:l_quantity_paid
+		WHERE corp_id			=	:g_ca_cacheque_struct_h.h_corp_id		AND
+				client		=	:g_ca_cacheque_struct_h.h_dl_client	AND
+				seqnum_pay	=	:g_ca_cacheque_struct_h.h_pymt_srl_nbr;
+		IS_ANY_ORA_ERROR
+	}
+
+	
+
+	CO_ProcMonitor(g_logfile, "Now updating payment status_ind as CP.", NULL, NULL);
+
+	/* To populate refno of recv trd */
+	if(strcmp(txn_indentity_no_rf,""))
+		strcpy(txn_indentity_no,txn_indentity_no_rf);
+
+	EXEC SQL UPDATE CACHEQUE 
+	SET 	stat_pymt 	= 'CP',
+			DEAL_IDENTITY_NO 	= :txn_indentity_no,
+			PROCESSED_DATE		=	:chr_g_sys_date,
+			access_stamp=	:chr_g_sys_date_time
+	WHERE corp_id			=	:g_ca_cacheque_struct_h.h_corp_id		AND
+			client		=	:g_ca_cacheque_struct_h.h_dl_client	AND
+			seqnum_pay	=	:g_ca_cacheque_struct_h.h_pymt_srl_nbr;
+	IS_ANY_ORA_ERROR
+
+	APL_GOBACK_SUCCESS
+	RETURN_SUCCESS:
+	{
+		return (APL_SUCCESS);
+	}
+	RETURN_FAILURE:
+	{
+		return (APL_FAILURE);
+	}
+}
+
+static int CA_Proc_PopulateTradeForRedonm(char *p_rec_del_flg,
+												char * diff_deal_flg,
+												char * p_diffdeal_locncode,
+												double p_diff_qty,	
+												int * int_p_result,
+												DEBUG_INFO_STRUCT_H	**l_debug_info_ptr )
+{		  
+	struct sqlca sqlca;
+	short	int_cond_exists 	= 0;
+	char	chr_l_manifldflg[APL_FLAG_LENGTH] 	= 	APL_NULL_STRING;
+	char	chr_l_clscode_a	[CLSCD_LEN]	=	APL_NULL_STRING;
+	char	chr_timeless_dt[APL_DATE_LEN] = APL_NULL_STRING;
+	char	*int_pos;
+	double 	l_round_quantity = 0.0;
+	double	grd_pos =0.0;
+
+   CO_ProcMonitor(g_logfile,"Entering processtion  CA_Proc_PopulateTradeForRedonm()",NULL,NULL);
+
+	*int_p_result = 0;	
+	memset(&l_ca_deal_struct_h,NULL,sizeof(CA_DEAL_STRUCT_H));
+
+	
+	strcpy(l_ca_deal_struct_h.h_instr_code,g_ca_caevent_struct_h.h_instr_code);
+
+	
+	if ( !strcmp(diff_deal_flg,"Y") )
+	{
+	strcpy(l_ca_deal_struct_h.h_dl_client,chr_g_splacc);
+	}
+	else
+	{
+	strcpy(l_ca_deal_struct_h.h_dl_client,		g_ca_cacheque_struct_h.h_dl_client);
+	}
+
+	
+	if ( !strcmp(diff_deal_flg,"Y") )
+	{
+	strcpy(l_ca_deal_struct_h.h_dlt,chr_g_sys_date);
+	}
+	else
+	{
+	strcpy(l_ca_deal_struct_h.h_dlt,			g_ca_cacheque_struct_h.h_pymt_dt);
+	}
+
+	
+	if(!strcmp(l_mt_core_sys_params_struct_h.loc_proc_ind, APL_YES_IND))
+	{
+		if ( !strcmp(diff_deal_flg,"Y") )
+		{
+			strcpy(l_ca_deal_struct_h.h_loccode,p_diffdeal_locncode);
+		}
+		else
+		{
+			strcpy(l_ca_deal_struct_h.h_loccode,g_ca_cacheque_struct_h.h_loccode);
+		}
+	}
+
+	
+	strcpy(l_ca_deal_struct_h.h_classofdl,	NONBILLDEAL	);
+
+		
+	strcpy(l_ca_deal_struct_h.h_ex_arena,	l_mt_instrument_struct_h.h_ex_arena);
+
+  
+	if(!strcmp(l_mt_instrument_struct_h.h_reg_br_ind,APL_INSTRU_REGD))
+		strcpy(l_ca_deal_struct_h.h_reginstr_ind,APL_YES_IND);
+	else
+		strcpy(l_ca_deal_struct_h.h_reginstr_ind,APL_NO_IND);
+	
+/**	
+	if(CO_Chk_CntryEnabled("TRD_LRTRDTYP",
+								"LRTRDTYP_NOT_NULL",
+								&int_cond_exists,
+								l_debug_info_ptr)==APL_FAILURE)
+		APL_GOBACK_FAIL
+	else
+	if(int_cond_exists>0)
+	{
+		strcpy(l_ca_deal_struct_h.h_lrdltype,S_LRDEAL_TYP);
+	}
+ **/
+	if(CA_Rtv_LrDealType(   EVT_REDOM,
+				p_rec_del_flg,
+				APL_NULL_STRING,
+				APL_NULL_STRING,
+				chr_g_sys_date,
+				l_ca_deal_struct_h.h_lrdltype,
+				l_ca_deal_struct_h.h_ndsbldate,
+				l_debug_info_ptr)	==	APL_FAILURE)
+	{
+		Alert("Failed In CA_Rtv_LrDealType");
+		APL_GOBACK_FAIL
+	}
+
+	
+		strcpy(l_ca_deal_struct_h.h_deal_status,STATUS_SETL);
+
+  if (!strcmp(p_rec_del_flg, APL_DEAL_RF)) 
+   {
+      int_cond_exists=0;
+
+		
+      strcpy(l_ca_deal_struct_h.h_dealcd,APL_DEAL_RF);
+
+		
+		strcpy(l_ca_deal_struct_h.h_currencycode,chr_g_eur_ccycode);
+
+
+      /*Smita - changes for Base Version CA - Changed Structure Variable Names*/	
+      if(!strcmp(l_mt_core_sys_params_struct_h.proc_reg_ind, APL_YES_IND) &&
+         !strcmp(l_mt_instrument_struct_h.h_reg_br_ind,APL_INSTRU_BEAR))
+         strcpy(l_ca_deal_struct_h.h_pos_stat, STATUS_POS_000);
+      else if(!strcmp(l_mt_core_sys_params_struct_h.proc_reg_ind, APL_YES_IND) &&
+               !strcmp(l_mt_instrument_struct_h.h_reg_br_ind,APL_INSTRU_REGD))
+         strcpy(l_ca_deal_struct_h.h_pos_stat, STATUS_POS_001);
+
+		
+		if (!strcmp(l_mt_core_sys_params_struct_h.proc_reg_ind, APL_YES_IND))
+		{
+				  if(CO_Chk_CntryEnabled("PAY_PROC",
+											  "REGSTAT_RETFRMTRF",
+											  &int_cond_exists,
+											  l_debug_info_ptr)==APL_FAILURE)
+					  APL_GOBACK_FAIL
+				  else
+				  if(int_cond_exists>0)
+					  l_ca_deal_struct_h.h_status_reg[0]=	S_REG_RETFRMTRANSFER;
+				  else
+				  {
+					  if( !strcmp(l_mt_client_struct_h.h_allow_regflag, APL_YES_IND)&&
+						  (!strcmp(l_mt_instrument_struct_h.h_reg_br_ind,APL_INSTRU_REGD)))
+						  l_ca_deal_struct_h.h_status_reg[0] = S_REG_OUTTOTRANSFER;
+					  else if ( !strcmp(l_mt_client_struct_h.h_allow_regflag, APL_NO_IND)&&
+								  (!strcmp(l_mt_instrument_struct_h.h_reg_br_ind,APL_INSTRU_REGD)))
+						  l_ca_deal_struct_h.h_status_reg[0] = S_REG_COMPLETED;
+
+					}
+		}
+
+		
+	if ( !strcmp(diff_deal_flg,"Y") )
+	{
+		l_ca_deal_struct_h.h_qty =  p_diff_qty;
+	}
+	else
+	{
+		l_ca_deal_struct_h.h_qty =  g_ca_cacheque_struct_h.h_quantity_recd;
+	}
+
+	}
+
+	else 
+	{
+		
+      strcpy(l_ca_deal_struct_h.h_dealcd,APL_DEAL_DF);
+
+		
+		if ( !strcmp(diff_deal_flg,"Y") )
+		{
+			strcpy(l_ca_deal_struct_h.h_currencycode,chr_g_eur_ccycode);
+		}
+		else
+		{
+			strcpy(l_ca_deal_struct_h.h_currencycode,chr_g_grd_ccycode);
+  		}
+		  
+	   if (!strcmp(l_mt_core_sys_params_struct_h.proc_reg_ind, APL_YES_IND) &&
+          !strcmp(l_mt_instrument_struct_h.h_reg_br_ind,APL_INSTRU_REGD) &&
+          !strcmp(l_mt_client_struct_h.h_allow_regflag, APL_YES_IND)
+          )
+         strcpy(l_ca_deal_struct_h.h_pos_stat, STATUS_POS_003);
+
+
+			
+			if ( !strcmp(diff_deal_flg,"Y") )
+			{
+				l_ca_deal_struct_h.h_qty =  p_diff_qty;
+			}
+			else
+			{
+				EXEC SQL SELECT NVL(grd_pos,0)
+				INTO :grd_pos
+				FROM PRO_EURO_TEMP
+				WHERE	instr_code=:l_mt_instrument_struct_h.h_instr_code
+				AND	client=:l_mt_client_struct_h.h_dl_client
+				AND	location_cd=:g_ca_cacheque_struct_h.h_loccode
+				AND	PROC_AREA=:chr_g_func_area_redenom;	
+
+				IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,l_mt_instrument_struct_h.h_instr_code,l_mt_client_struct_h.h_dl_client,g_ca_cacheque_struct_h.h_loccode);
+					l_ca_deal_struct_h.h_qty	=	grd_pos;
+			}
+
+	}
+
+	
+	if(!strcmp(l_ca_deal_struct_h.h_deal_status,STATUS_SETL) &&
+		!strcmp(l_mt_core_sys_params_struct_h.manifld_print_ind, APL_YES_IND) ) 
+	{
+		if(!strcmp(l_mt_core_sys_params_struct_h.loc_proc_ind, APL_YES_IND))
+		{
+			if ( 	CO_Rtv_FldValChar(	"manifld_ind",
+												"mt_location", 
+												"location_cd",
+												l_ca_deal_struct_h.h_loccode,	
+												chr_l_manifldflg,
+												l_debug_info_ptr )==APL_FAILURE)
+				APL_GOBACK_FAIL
+			
+			if(chr_l_manifldflg[0]==APL_YES_FLAG)
+			{	int_cond_exists=0;
+				if ( CR_Rtv_InstrChrVal(	l_ca_deal_struct_h.h_instr_code, 
+											"clscode", 
+											chr_l_clscode_a, 
+											l_debug_info_ptr ) ==APL_FAILURE)
+					APL_GOBACK_FAIL
+				if(CO_Chk_CntryEnabled("TRD_MANIFOLD",
+											"MANI_NOTREQD_FOR_MIN",
+											&int_cond_exists,
+											l_debug_info_ptr)==APL_FAILURE)
+					APL_GOBACK_FAIL
+				if((int_cond_exists >0)&& (!strcmp(chr_l_clscode_a,"MIN"))) 
+					strcpy(l_ca_deal_struct_h.h_delrecdate,APL_NULL_STRING);
+				else
+					strcpy(l_ca_deal_struct_h.h_delrecdate,chr_g_sys_date);
+			}
+			else
+				strcpy(l_ca_deal_struct_h.h_delrecdate,APL_NULL_STRING);
+			}	
+		else		
+		{	int_cond_exists=0;
+			if ( CR_Rtv_InstrChrVal(	l_ca_deal_struct_h.h_instr_code, 
+										"clscode", 
+										chr_l_clscode_a, 
+										l_debug_info_ptr ) ==APL_FAILURE)
+				APL_GOBACK_FAIL
+			if(CO_Chk_CntryEnabled("TRD_MANIFOLD",
+										"MANI_NOTREQD_FOR_MIN",
+										&int_cond_exists,
+										l_debug_info_ptr)==APL_FAILURE)
+				APL_GOBACK_FAIL
+			if((int_cond_exists >0)&& (!strcmp(chr_l_clscode_a,"MIN"))) 
+				strcpy(l_ca_deal_struct_h.h_delrecdate,APL_NULL_STRING);
+			else
+				strcpy(l_ca_deal_struct_h.h_delrecdate,chr_g_sys_date);
+			strcpy(l_ca_deal_struct_h.h_delrecdate,APL_NULL_STRING);
+		}
+	}	
+	else
+		strcpy(l_ca_deal_struct_h.h_delrecdate,APL_NULL_STRING);
+	
+
+	strcpy(chr_timeless_dt,g_ca_caevent_struct_h.h_decl_date);
+	strcpy(chr_timeless_dt,strtok_r(chr_timeless_dt," ",&int_pos) );
+
+	if ( !strcmp(diff_deal_flg,"Y") )
+	{
+		sprintf(	l_ca_deal_struct_h.h_info1,
+			 		"Redenomination Rounding Trade for %s at location %s",
+					g_ca_caevent_struct_h.h_instr_code,
+					p_diffdeal_locncode
+		 			);
+	
+	}
+	else
+	{
+
+		sprintf( l_ca_deal_struct_h.h_info1,
+               "CORPORATE ACTIONS TRADE FOR %s FOR %s DECLARED ON %s",
+               g_ca_caevent_struct_h.h_instr_code,
+               g_ca_caevent_struct_h.h_evt_class,
+               chr_timeless_dt);
+   	
+	}
+
+
+	if(CA_SbiRptPopulate(  EVT_REDOM,
+				APL_NULL_STRING,
+				l_mt_instrument_struct_h.h_reg_br_ind,
+				chr_g_sys_date,
+				&l_ca_deal_struct_h,
+				l_debug_info_ptr) == APL_FAILURE)
+	{
+		Alert("Failed in CA_SbiRptPopulate");
+		APL_GOBACK_FAIL
+	}
+
+	APL_GOBACK_SUCCESS
+	RETURN_SUCCESS:
+	{	
+
+   CO_ProcMonitor(g_logfile,"Leaving processtion  CA_Proc_PopulateTradeForRedonm() successfully",NULL,NULL);
+		return (APL_SUCCESS);
+	}
+	RETURN_FAILURE:
+	{
+   CO_ProcMonitor(g_logfile,"Leaving processtion  CA_Proc_PopulateTradeForRedonm() with failure",NULL,NULL);
+		return (APL_FAILURE);
+	}
+}
+
+static int CA_Proc_PopulateTrade(DEBUG_INFO_STRUCT_H	**l_debug_info_ptr , char *delrec_flg) 
+{		  
+	struct sqlca sqlca;
+	short	int_cond_exists 	= 0;
+	char	chr_l_manifldflg[APL_FLAG_LENGTH] 	= 	APL_NULL_STRING;
+	char	chr_l_clscode_a	[CLSCD_LEN]	=	APL_NULL_STRING;
+	char	chr_timeless_dt[APL_DATE_LEN] = APL_NULL_STRING;
+	char	*int_pos;
+	double l_round_quantity = 0.0;
+
+	
+	short  l_mccy_cacc_exists = 0;
+	char   chr_l_h_sundry_account[APL_CLIENT_LENGTH] = APL_NULL_STRING;
+   char    chr_h_cashacc_glacc[APL_CLIENT_LENGTH]=APL_NULL_STRING;
+   short   i_cashacc_ibbsacc =  0;
+
+
+	memset(&l_ca_deal_struct_h,NULL,sizeof(CA_DEAL_STRUCT_H));
+	
+	printf("\n Inside CA_Proc_PopulateTrade ..... ");
+	strcpy(l_ca_deal_struct_h.h_dl_client,		g_ca_cacheque_struct_h.h_dl_client);
+	strcpy(l_ca_deal_struct_h.h_dlt,			g_ca_cacheque_struct_h.h_pymt_dt);
+	printf("\n Copied g_ca_cacheque_struct_h.h_pymt_dt = :%s: to l_ca_deal_struct_h.h_dlt :%s: ",g_ca_cacheque_struct_h.h_pymt_dt,l_ca_deal_struct_h.h_dlt);
+	if(!strcmp(l_mt_core_sys_params_struct_h.loc_proc_ind, APL_YES_IND))
+		strcpy(l_ca_deal_struct_h.h_loccode,	g_ca_cacheque_struct_h.h_loccode);
+	strcpy(l_ca_deal_struct_h.h_classofdl,	DEALTYPE_CORP_A	);
+
+	strcpy(l_ca_deal_struct_h.h_currencycode,l_mt_instrument_struct_h.h_currency_cd);
+	strcpy(l_ca_deal_struct_h.h_ex_arena,	l_mt_instrument_struct_h.h_ex_arena);
+
+	if(!strcmp(l_mt_instrument_struct_h.h_reg_br_ind,APL_INSTRU_REGD))
+		strcpy(l_ca_deal_struct_h.h_reginstr_ind,APL_YES_IND);
+	else
+		strcpy(l_ca_deal_struct_h.h_reginstr_ind,APL_NO_IND);
+	
+	if(!strcmp(l_mt_core_sys_params_struct_h.proc_reg_ind, APL_YES_IND) &&
+		!strcmp(l_mt_instrument_struct_h.h_reg_br_ind,APL_INSTRU_BEAR))
+		strcpy(l_ca_deal_struct_h.h_pos_stat, STATUS_POS_000);
+	else if(!strcmp(l_mt_core_sys_params_struct_h.proc_reg_ind, APL_YES_IND) &&
+				!strcmp(l_mt_instrument_struct_h.h_reg_br_ind,APL_INSTRU_REGD))
+		strcpy(l_ca_deal_struct_h.h_pos_stat, STATUS_POS_001);
+	/**
+
+	if(CO_Chk_CntryEnabled("TRD_LRTRDTYP",
+								"LRTRDTYP_NOT_NULL",
+								&int_cond_exists,
+								l_debug_info_ptr)==APL_FAILURE)
+		APL_GOBACK_FAIL
+	else
+	{
+		 
+		if (!strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_RHTS))
+		{
+			
+      	if(CO_Chk_CntryEnabled("TRD_LRTRDTYP",
+                        "LRTRDTYP_MOROCCO",
+                        &int_cond_exists,
+                        l_debug_info_ptr)==APL_FAILURE)
+         	APL_GOBACK_FAIL
+      	else
+			{
+         	if(int_cond_exists>0)
+         	{
+						strcpy(l_ca_deal_struct_h.h_lrdltype, S_MOLRDEALTYP_RT);
+            		strcpy(l_ca_deal_struct_h.h_ndsbldate, chr_g_sys_date);
+				}
+				else	 
+				{
+               
+               if(CO_Chk_CntryEnabled("TRD_LRTRDTYP", "LRTRDTYP_POLAND", &int_cond_exists, l_debug_info_ptr)==APL_FAILURE)
+                  APL_GOBACK_FAIL
+               if(int_cond_exists)
+                  strcpy(l_ca_deal_struct_h.h_lrdltype, S_MOLRDEALTYP_RT);
+               else  
+						strcpy(l_ca_deal_struct_h.h_lrdltype,S_LRDEAL_TYP);
+				}
+			}
+		}
+		else
+		{
+      	if(CO_Chk_CntryEnabled("TRD_LRTRDTYP",
+                        "LRTRDTYP_MOROCCO",
+                        &int_cond_exists,
+                        l_debug_info_ptr)==APL_FAILURE)
+         	APL_GOBACK_FAIL
+      	else if(int_cond_exists>0)
+       		{
+          		if(!strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_BOND_REDMP))
+               		strcpy(l_ca_deal_struct_h.h_lrdltype,S_MOLRDEALTYP_RD);
+           		else if(!strcmp(g_ca_caevent_struct_h.h_evt_class, EVT_STOK_DIV))
+           		{
+              		if (!strcmp(l_mt_instrument_struct_h.h_reg_br_ind, APL_INSTRU_BEAR))
+						{
+                 		 strcpy(l_ca_deal_struct_h.h_lrdltype, S_MOLRDEALTYP_SDB);
+						}
+              		else if (!strcmp(l_mt_instrument_struct_h.h_reg_br_ind, APL_INSTRU_REGD))
+						{
+                  	strcpy(l_ca_deal_struct_h.h_lrdltype, S_MOLRDEALTYP_SDR);
+						}
+            	}
+              strcpy(l_ca_deal_struct_h.h_ndsbldate, chr_g_sys_date);
+            }
+			else 
+         {
+            if(CO_Chk_CntryEnabled("TRD_LRTRDTYP", "LRTRDTYP_POLAND", &int_cond_exists, l_debug_info_ptr)==APL_FAILURE)
+               APL_GOBACK_FAIL
+            if(int_cond_exists)
+            {
+               if(!strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_BOND_REDMP))
+                  strcpy(l_ca_deal_struct_h.h_lrdltype,S_MOLRDEALTYP_RD);
+            }
+         }
+		}
+	}
+**/
+	if(CA_Rtv_LrDealType(   g_ca_caevent_struct_h.h_evt_class,
+				delrec_flg,
+				g_ca_caevent_struct_h.h_op_evt_class,
+				l_mt_instrument_struct_h.h_reg_br_ind,
+				chr_g_sys_date,
+				l_ca_deal_struct_h.h_lrdltype,
+				l_ca_deal_struct_h.h_ndsbldate,
+				l_debug_info_ptr)	==	APL_FAILURE)
+	{
+		Alert("Failed In CA_Rtv_LrDealType");
+		APL_GOBACK_FAIL
+	}
+
+
+	if(	(!strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_STOK_DIV))	||
+			(!strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_BONUS))		||
+			(!strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_RHTS)) && (!strcmp(delrec_flg, APL_YES_IND))
+		) 
+	{
+		int_cond_exists=0;
+
+		
+
+		strcpy(l_ca_deal_struct_h.h_currencycode,l_mt_resinstrument_struct_h.h_currency_cd);
+		strcpy(l_ca_deal_struct_h.h_ex_arena,	l_mt_resinstrument_struct_h.h_ex_arena);
+
+		if(!strcmp(l_mt_resinstrument_struct_h.h_reg_br_ind,APL_INSTRU_REGD))
+			strcpy(l_ca_deal_struct_h.h_reginstr_ind,APL_YES_IND);
+		else
+			strcpy(l_ca_deal_struct_h.h_reginstr_ind,APL_NO_IND);
+	
+		if(!strcmp(l_mt_core_sys_params_struct_h.proc_reg_ind, APL_YES_IND) &&
+			!strcmp(l_mt_resinstrument_struct_h.h_reg_br_ind,APL_INSTRU_BEAR))
+			strcpy(l_ca_deal_struct_h.h_pos_stat, STATUS_POS_000);
+		else if(!strcmp(l_mt_core_sys_params_struct_h.proc_reg_ind, APL_YES_IND) &&
+					!strcmp(l_mt_resinstrument_struct_h.h_reg_br_ind,APL_INSTRU_REGD))
+			strcpy(l_ca_deal_struct_h.h_pos_stat, STATUS_POS_001);
+
+		
+	
+
+			strcpy(l_ca_deal_struct_h.h_dealcd,APL_DEAL_RF);
+
+		if (!strcmp(l_mt_core_sys_params_struct_h.proc_reg_ind, APL_YES_IND))
+		{
+				  if(CO_Chk_CntryEnabled("PAY_PROC",
+											  "REGSTAT_RETFRMTRF",
+											  &int_cond_exists,
+											  l_debug_info_ptr)==APL_FAILURE)
+					  APL_GOBACK_FAIL
+				  else
+				  if(int_cond_exists>0)
+					  l_ca_deal_struct_h.h_status_reg[0]=	S_REG_RETFRMTRANSFER;
+				  else
+				  {
+					  if( !strcmp(l_mt_client_struct_h.h_allow_regflag, APL_YES_IND)&&
+						  (!strcmp(l_mt_resinstrument_struct_h.h_reg_br_ind,APL_INSTRU_REGD)))
+						  l_ca_deal_struct_h.h_status_reg[0] = S_REG_OUTTOTRANSFER;
+					  else if ( !strcmp(l_mt_client_struct_h.h_allow_regflag, APL_NO_IND)&&
+								  (!strcmp(l_mt_resinstrument_struct_h.h_reg_br_ind,APL_INSTRU_REGD)))
+						  l_ca_deal_struct_h.h_status_reg[0] = S_REG_COMPLETED;
+
+					}
+		}
+		strcpy(l_ca_deal_struct_h.h_instr_code,		g_ca_caevent_struct_h.h_res_instr_code);
+		Alert(" deal code to create %s ", l_ca_deal_struct_h.h_dealcd );
+		/**strcpy(l_ca_deal_struct_h.h_deal_status,STATUS_SETL);**/
+		if(Rtv_CADeal_Status(l_ca_deal_struct_h.h_dealcd,
+									g_ca_caevent_struct_h.h_evt_class,
+									g_ca_caevent_struct_h.h_op_evt_class,
+									APL_NULL_STRING,
+									l_ca_deal_struct_h.h_deal_status,
+									l_debug_info_ptr) == APL_FAILURE)
+		{
+			Alert("Failed In Rtv_CADeal_Status");
+			APL_GOBACK_FAIL
+		}
+		Alert("Deal status to create %s ", l_ca_deal_struct_h.h_deal_status);							
+									
+		l_ca_deal_struct_h.h_qty	=	g_ca_cacheque_struct_h.h_quantity_recd;
+	}
+	
+	else if( !strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_BOND_REDMP) ||
+				( (!strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_OFFER) &&
+				(!strcmp(g_ca_caevent_struct_h.h_op_evt_class, OP_CONV_IND) ||
+				 !strcmp(g_ca_caevent_struct_h.h_op_evt_class, OP_MERG_IND) ||
+					!strcmp(g_ca_caevent_struct_h.h_op_evt_class, OP_WRNT_IND)) ) &&
+					!strcmp(delrec_flg, APL_NO_IND) )
+			)
+	{
+		 strcpy(l_ca_deal_struct_h.h_instr_code,g_ca_caevent_struct_h.h_instr_code);
+      if ( ( (!strcmp(l_mt_instrument_struct_h.h_instr_type,APL_INSTRU_BOND)) ||
+           (!strcmp(l_mt_instrument_struct_h.h_instr_type,APL_INSTRU_FMT)) ) && (!strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_BOND_REDMP)))
+      {
+         if (g_ca_caevent_struct_h.h_earnings>0)
+            l_ca_deal_struct_h.h_pr = g_ca_caevent_struct_h.h_earnings;
+         else if(g_ca_caevent_struct_h.h_earnings_rt > 0)
+            l_ca_deal_struct_h.h_pr = g_ca_caevent_struct_h.h_earnings_rt * l_mt_instrument_struct_h.h_nominal_value / 100;
+      }
+      else if ( ( (!strcmp(l_mt_instrument_struct_h.h_instr_type,APL_INSTRU_BOND)) ||
+            (!strcmp(l_mt_instrument_struct_h.h_instr_type,APL_INSTRU_FMT))) && (strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_BOND_REDMP)))
+      {
+         l_ca_deal_struct_h.h_pr = g_ca_caevent_struct_h.h_earnings;
+      } 
+
+
+		
+		
+
+      if(!strcmp(l_mt_instrument_struct_h.h_taxonmat_ind,APL_YES_IND)&&
+         (!strcmp(l_mt_instrument_struct_h.h_disct_ind,APL_YES_IND)))
+         l_ca_deal_struct_h.h_amt =( g_ca_cacheque_struct_h.h_curr_pymt - g_ca_cacheque_struct_h.h_tax_amount);
+      else if (!strcmp(l_mt_instrument_struct_h.h_taxonmat_ind,APL_YES_IND)&&
+               (!strcmp(l_mt_instrument_struct_h.h_disct_ind,APL_NO_IND)))
+         l_ca_deal_struct_h.h_amt =(g_ca_cacheque_struct_h.h_curr_pymt - (   g_ca_cacheque_struct_h.h_curr_pymt *(g_ca_cacheque_struct_h.h_tax_rate/100)));
+      else
+         l_ca_deal_struct_h.h_amt = g_ca_cacheque_struct_h.h_curr_pymt;
+
+		
+		
+		if(!strcmp(g_ca_caevent_struct_h.h_evt_class, EVT_OFFER))
+		{
+			
+
+				
+				EXEC SQL SELECT QUANTITY_RECEIVED
+				INTO :l_tmp_ent_quantity_received
+				FROM CAENTITLEMENT
+				WHERE CORP_ID = :g_ca_caentitlement_struct_h.h_corp_id AND
+						CLIENT = :g_ca_caentitlement_struct_h.h_dl_client AND
+						STATUS IN ('RP','PP');
+				IS_ANY_ORA_ERROR
+
+				if(g_ca_caentitlement_struct_h.h_quantity_due - l_tmp_ent_quantity_received == g_ca_cacheque_struct_h.h_quantity_recd)
+				{
+					
+					if(l_tmp_ent_quantity_received == 0)
+					{
+						CO_ProcMonitor(g_logfile,"\n First and final payment",NULL,NULL);
+			  			l_ca_deal_struct_h.h_qty 	=	g_ca_caentitlement_struct_h.h_entitl_pos;
+					}
+					else  
+					{
+						CO_ProcMonitor(g_logfile,"\n Final payment but not the int_first one",NULL,NULL);
+						CO_ProcMonitor(g_logfile,"\n 	hence assigning DELV_FREE trd quantity as (ENTPOS - Total of all chr_prev DELV_FREE trd qtys)",NULL,NULL);
+						EXEC SQL SELECT SUM(QUANTITY_PAID) INTO :l_tot_prev_df_quantity
+						FROM CACHEQUE
+						WHERE CORP_ID = :g_ca_caevent_struct_h.h_corp_id AND
+								CLIENT = :g_ca_cacheque_struct_h.h_dl_client AND
+								STAT_PYMT = 'CP';
+						IS_ANY_ORA_ERROR;
+
+				  		l_ca_deal_struct_h.h_qty 	=	g_ca_caentitlement_struct_h.h_entitl_pos - l_tot_prev_df_quantity;
+					}
+				}
+				else 
+				{
+					CO_ProcMonitor(g_logfile,"\n Part payment",NULL,NULL);
+					if (!strcmp(q_ca_casecevent_struct_h.h_ratio_perc_ind,PERCEN_IND))
+					{
+						l_ca_deal_struct_h.h_qty	=	g_ca_cacheque_struct_h.h_quantity_recd * (100 / g_ca_caevent_struct_h.h_new_safek_quantity_rt );
+					}
+					else
+					{	
+						l_ca_deal_struct_h.h_qty 	=	g_ca_cacheque_struct_h.h_quantity_recd *  g_ca_caevent_struct_h.h_old_safek_quantity / 
+													g_ca_caevent_struct_h.h_new_safek_quantity;
+					}
+				}
+
+				sprintf(chr_g_log_buff, "\n TOTAL ENTL POS %lf ",g_ca_caentitlement_struct_h.h_entitl_pos);
+				CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+
+				sprintf(chr_g_log_buff, "\n TOTAL ENTL QTY DUE %lf ",g_ca_caentitlement_struct_h.h_quantity_due);
+				CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+
+				sprintf(chr_g_log_buff, "\n TOTAL ENTL QTY RECD %lf ",l_tmp_ent_quantity_received);
+				CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+
+				sprintf(chr_g_log_buff, "\n CURRENT PYMT QTY RECD %lf ",g_ca_cacheque_struct_h.h_quantity_recd);
+				CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+
+				sprintf(chr_g_log_buff, "\n FINAL DELV_FREE TRD QTY BEFORE ROUNDING %lf \n",l_ca_deal_struct_h.h_qty);
+				CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+		}	  
+		else
+			l_ca_deal_struct_h.h_qty		=	(g_ca_cacheque_struct_h.h_curr_pymt)/
+									(l_ca_deal_struct_h.h_pr);
+		
+
+
+
+
+		if ((strcmp(l_mt_instrument_struct_h.h_instr_type,APL_INSTRU_FMT) == 0)&&(strcmp(g_ca_caevent_struct_h.h_evt_class, EVT_OFFER)!=0))
+			l_ca_deal_struct_h.h_qty		=	(l_ca_deal_struct_h.h_qty * 100);
+
+		
+
+	   
+
+		if (APL_FAILURE == CR_Proc_InstrQtyRound(	l_ca_deal_struct_h.h_qty,
+															l_ca_deal_struct_h.h_instr_code,
+															&l_round_quantity,
+															l_debug_info_ptr ))
+		{
+			APL_GOBACK_FAIL
+		}
+
+		l_ca_deal_struct_h.h_qty = l_round_quantity;
+
+		if (!strcmp(l_mt_instrument_struct_h.h_allow_dvp,APL_YES_IND) && 
+				!strcmp(g_ca_caevent_struct_h.h_evt_class, EVT_BOND_REDMP) ) 
+			strcpy(l_ca_deal_struct_h.h_dealcd,APL_DEAL_DVP);
+		else
+		{
+			
+
+			strcpy(l_ca_deal_struct_h.h_dealcd,APL_DEAL_DF);
+			l_ca_deal_struct_h.h_amt = 0;
+		}
+		
+		if (!strcmp(l_mt_core_sys_params_struct_h.proc_reg_ind, APL_YES_IND) &&
+			 !strcmp(l_mt_instrument_struct_h.h_reg_br_ind,APL_INSTRU_REGD) &&
+			 !strcmp(l_mt_client_struct_h.h_allow_regflag, APL_YES_IND)
+			 )
+			strcpy(l_ca_deal_struct_h.h_pos_stat, STATUS_POS_003);
+
+		if( CA_ChkPosition(	g_ca_caevent_struct_h.h_instr_code,
+						g_ca_cacheque_struct_h.h_dl_client,
+						g_ca_cacheque_struct_h.h_loccode,
+						l_ca_deal_struct_h.h_qty,
+						l_ca_deal_struct_h.h_pos_stat,
+						l_ca_deal_struct_h.h_deal_status,
+						&(l_ca_deal_struct_h.h_delta_000),
+						&(l_ca_deal_struct_h.h_delta_001),
+						&(l_ca_deal_struct_h.h_delta_002),"FREE",
+						g_ca_caevent_struct_h.h_evt_class, /**Added By Biju**/
+						g_ca_caevent_struct_h.h_op_evt_class, /**Added By Biju**/
+						l_debug_info_ptr
+					) == APL_FAILURE)
+			APL_GOBACK_FAIL
+
+		
+		if((strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_BOND_REDMP) ==0) && ((strcmp(g_ca_cacheque_struct_h.h_pymt_currency,"EUR")==0) || (strcmp(g_ca_cacheque_struct_h.h_pymt_currency,"USD")==0))) 
+		{
+         if ( CO_Chk_CntryEnabled( "MULTI_CCY",
+                               "GL_CLT",
+                               &l_mccy_cacc_exists,
+                               l_debug_info_ptr
+                            ) == APL_FAILURE
+          )
+         {
+          APL_GOBACK_FAIL
+         }
+			if (l_mccy_cacc_exists)
+			{
+      		EXEC SQL SELECT GL_ACCOUNT
+      		INTO :chr_h_cashacc_glacc:i_cashacc_ibbsacc
+      		FROM DL_CASHCLT
+      		WHERE CLIENT=:g_ca_cacheque_struct_h.h_dl_client
+      		AND CURRENCY_CD = :l_ca_deal_struct_h.h_currencycode
+      		AND DEFAULT_CCY IN ('A', 'X');
+				
+				IS_ANY_ORA_ERROR
+
+				if (sqlca.sqlcode == 1403)
+				{
+					memset(chr_l_h_sundry_account,APL_NULL_CHAR,APL_CLIENT_LENGTH);
+			      if(APL_FAILURE == CO_Rtv_FldVal("CASH_ACC_MAINT","SUNDRY_ACCOUNT",chr_l_h_sundry_account,l_debug_info_ptr))
+         		{
+            		APL_GOBACK_FAIL
+         		}
+            	EXEC SQL SELECT GL_ACCOUNT
+            	INTO :chr_h_cashacc_glacc:i_cashacc_ibbsacc
+            	FROM DL_CASHCLT
+            	WHERE CLIENT=:chr_l_h_sundry_account
+            	AND CURRENCY_CD = :l_ca_deal_struct_h.h_currencycode
+            	AND DEFAULT_CCY IN ('A', 'X');
+
+            	IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_ACCNOT_FND,
+                                         g_ca_cacheque_struct_h.h_dl_client,
+                                         "Cash Account",
+                                         APL_NULL_STRING
+                                          )
+				}
+
+				strcpy(l_ca_deal_struct_h.h_cash_client,chr_h_cashacc_glacc);
+			}
+		}
+	}	
+	else if(	( (!strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_SPLIT))	&&	
+			(!strcmp(g_ca_caevent_struct_h.h_op_evt_class ,"AM"))		||
+			(!strcmp(g_ca_caevent_struct_h.h_op_evt_class,"TO")) || (!strcmp(g_ca_caevent_struct_h.h_evt_class,OP_CONV_IND)) ) && (!strcmp(delrec_flg, APL_YES_IND))
+		) 
+	{
+		Alert("RF Trade create sub price=%lf", g_ca_caevent_struct_h.h_sub_pr);
+		int_cond_exists=0;
+
+		
+
+		strcpy(l_ca_deal_struct_h.h_currencycode,l_mt_resinstrument_struct_h.h_currency_cd);
+		strcpy(l_ca_deal_struct_h.h_ex_arena,	l_mt_resinstrument_struct_h.h_ex_arena);
+
+		if(!strcmp(l_mt_resinstrument_struct_h.h_reg_br_ind,APL_INSTRU_REGD))
+			strcpy(l_ca_deal_struct_h.h_reginstr_ind,APL_YES_IND);
+		else
+			strcpy(l_ca_deal_struct_h.h_reginstr_ind,APL_NO_IND);
+	
+		if(!strcmp(l_mt_core_sys_params_struct_h.proc_reg_ind, APL_YES_IND) &&
+			!strcmp(l_mt_resinstrument_struct_h.h_reg_br_ind,APL_INSTRU_BEAR))
+			strcpy(l_ca_deal_struct_h.h_pos_stat, STATUS_POS_000);
+		else if(!strcmp(l_mt_core_sys_params_struct_h.proc_reg_ind, APL_YES_IND) &&
+					!strcmp(l_mt_resinstrument_struct_h.h_reg_br_ind,APL_INSTRU_REGD))
+			strcpy(l_ca_deal_struct_h.h_pos_stat, STATUS_POS_001);
+
+			/* strcpy(l_ca_deal_struct_h.h_dealcd,APL_DEAL_RF); */
+		if(g_ca_caevent_struct_h.h_sub_pr > 0 && !strcmp(g_ca_caevent_struct_h.h_evt_class,OP_CONV_IND))
+		{
+			  strcpy(l_ca_deal_struct_h.h_dealcd,APL_DEAL_RVP);
+			    l_ca_deal_struct_h.h_pr =  g_ca_caevent_struct_h.h_sub_pr;
+				   l_ca_deal_struct_h.h_amt   =  g_ca_caevent_struct_h.h_sub_pr * g_ca_cacheque_struct_h.h_quantity_recd;
+		}
+		else
+			strcpy(l_ca_deal_struct_h.h_dealcd,APL_DEAL_RF);
+
+		if (!strcmp(l_mt_core_sys_params_struct_h.proc_reg_ind, APL_YES_IND))
+		{
+				  if(CO_Chk_CntryEnabled("PAY_PROC",
+											  "REGSTAT_RETFRMTRF",
+											  &int_cond_exists,
+											  l_debug_info_ptr)==APL_FAILURE)
+					  APL_GOBACK_FAIL
+				  else
+				  if(int_cond_exists>0)
+					  l_ca_deal_struct_h.h_status_reg[0]=	S_REG_RETFRMTRANSFER;
+				  else
+				  {
+					  if( !strcmp(l_mt_client_struct_h.h_allow_regflag, APL_YES_IND)&&
+						  (!strcmp(l_mt_resinstrument_struct_h.h_reg_br_ind,APL_INSTRU_REGD)))
+						  l_ca_deal_struct_h.h_status_reg[0] = S_REG_OUTTOTRANSFER;
+					  else if ( !strcmp(l_mt_client_struct_h.h_allow_regflag, APL_NO_IND)&&
+								  (!strcmp(l_mt_resinstrument_struct_h.h_reg_br_ind,APL_INSTRU_REGD)))
+						  l_ca_deal_struct_h.h_status_reg[0] = S_REG_COMPLETED;
+
+					}
+		}
+		strcpy(l_ca_deal_struct_h.h_instr_code,		g_ca_caevent_struct_h.h_res_instr_code);
+		Alert(" deal code to create %s ", l_ca_deal_struct_h.h_dealcd );
+		/**strcpy(l_ca_deal_struct_h.h_deal_status,STATUS_SETL);**/
+		if(Rtv_CADeal_Status(l_ca_deal_struct_h.h_dealcd,
+									g_ca_caevent_struct_h.h_evt_class,
+									g_ca_caevent_struct_h.h_op_evt_class,
+									APL_NULL_STRING,
+									l_ca_deal_struct_h.h_deal_status,
+									l_debug_info_ptr) == APL_FAILURE)
+		{
+			Alert("Failed In Rtv_CADeal_Status");
+			APL_GOBACK_FAIL
+		}
+		Alert("Deal status to create %s ", l_ca_deal_struct_h.h_deal_status);							
+			
+		l_ca_deal_struct_h.h_qty	=	g_ca_cacheque_struct_h.h_quantity_recd;
+		if(!strcmp(l_ca_deal_struct_h.h_deal_status,STATUS_CONF))
+		{
+			Alert("Update fail code with 95");	
+			strcpy(l_ca_deal_struct_h.h_fail_cd,"95");
+		}
+	}
+	else if( (!strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_SPLIT) 
+					&& (!strcmp(g_ca_caevent_struct_h.h_op_evt_class,"AM") ||
+							!strcmp(g_ca_caevent_struct_h.h_op_evt_class,"TO")
+						)
+					|| (!strcmp(g_ca_caevent_struct_h.h_evt_class,OP_CONV_IND))
+					) && strcmp(delrec_flg, APL_NO_IND) == 0 )
+	{	/* PJ */
+		Alert("DF Trade creation");
+		 strcpy(l_ca_deal_struct_h.h_instr_code,g_ca_caevent_struct_h.h_instr_code);
+      if ( ( (!strcmp(l_mt_instrument_struct_h.h_instr_type,APL_INSTRU_BOND)) ||
+           (!strcmp(l_mt_instrument_struct_h.h_instr_type,APL_INSTRU_FMT)) ) && (!strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_BOND_REDMP)))
+      {
+         if (g_ca_caevent_struct_h.h_earnings>0)
+            l_ca_deal_struct_h.h_pr = g_ca_caevent_struct_h.h_earnings;
+         else if(g_ca_caevent_struct_h.h_earnings_rt > 0)
+            l_ca_deal_struct_h.h_pr = g_ca_caevent_struct_h.h_earnings_rt;
+      }
+      else if ( ( (!strcmp(l_mt_instrument_struct_h.h_instr_type,APL_INSTRU_BOND)) ||
+            (!strcmp(l_mt_instrument_struct_h.h_instr_type,APL_INSTRU_FMT))) && (strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_BOND_REDMP)))
+      {
+         l_ca_deal_struct_h.h_pr = g_ca_caevent_struct_h.h_earnings;
+      } 
+
+
+      if(!strcmp(l_mt_instrument_struct_h.h_taxonmat_ind,APL_YES_IND)&&
+         (!strcmp(l_mt_instrument_struct_h.h_disct_ind,APL_YES_IND)))
+         l_ca_deal_struct_h.h_amt =( g_ca_cacheque_struct_h.h_curr_pymt - g_ca_cacheque_struct_h.h_tax_amount);
+      else if (!strcmp(l_mt_instrument_struct_h.h_taxonmat_ind,APL_YES_IND)&&
+               (!strcmp(l_mt_instrument_struct_h.h_disct_ind,APL_NO_IND)))
+         l_ca_deal_struct_h.h_amt =(g_ca_cacheque_struct_h.h_curr_pymt - (   g_ca_cacheque_struct_h.h_curr_pymt *(g_ca_cacheque_struct_h.h_tax_rate/100)));
+      else
+         l_ca_deal_struct_h.h_amt = g_ca_cacheque_struct_h.h_curr_pymt;
+
+				Alert("hre");	
+
+				
+				EXEC SQL SELECT QUANTITY_RECEIVED
+				INTO :l_tmp_ent_quantity_received
+				FROM CAENTITLEMENT
+				WHERE CORP_ID = :g_ca_caentitlement_struct_h.h_corp_id AND
+						CLIENT = :g_ca_caentitlement_struct_h.h_dl_client AND
+						STATUS IN ('RP','PP');
+				IS_ANY_ORA_ERROR
+				
+				Alert (" Prev received qty =%lf %lf ", l_tmp_ent_quantity_received,g_ca_cacheque_struct_h.h_quantity_recd );
+				
+				if(g_ca_caentitlement_struct_h.h_quantity_due - l_tmp_ent_quantity_received == g_ca_cacheque_struct_h.h_quantity_recd)
+				{
+					
+					if(l_tmp_ent_quantity_received == 0)
+					{
+						CO_ProcMonitor(g_logfile,"\n First and final payment",NULL,NULL);
+			  			l_ca_deal_struct_h.h_qty 	=	g_ca_caentitlement_struct_h.h_entitl_pos;
+					}
+					else  
+					{
+						CO_ProcMonitor(g_logfile,"\n Final payment but not the int_first one",NULL,NULL);
+						CO_ProcMonitor(g_logfile,"\n 	hence assigning DELV_FREE trd quantity as (ENTPOS - Total of all chr_prev DELV_FREE trd qtys)",NULL,NULL);
+						EXEC SQL SELECT SUM(QUANTITY_PAID) INTO :l_tot_prev_df_quantity
+						FROM CACHEQUE
+						WHERE CORP_ID = :g_ca_caevent_struct_h.h_corp_id AND
+								CLIENT = :g_ca_cacheque_struct_h.h_dl_client AND
+								STAT_PYMT = 'CP';
+						IS_ANY_ORA_ERROR;
+
+						Alert("Need to be here %lf %lf %lf", l_tmp_ent_quantity_received, g_ca_caentitlement_struct_h.h_entitl_pos,  l_tot_prev_df_quantity );
+				  		l_ca_deal_struct_h.h_qty 	=	g_ca_caentitlement_struct_h.h_entitl_pos - l_tot_prev_df_quantity;
+					}
+				}
+				else 
+				{
+					CO_ProcMonitor(g_logfile,"\n Part payment",NULL,NULL);
+					if (!strcmp(q_ca_casecevent_struct_h.h_ratio_perc_ind,PERCEN_IND))
+					{
+						l_ca_deal_struct_h.h_qty	=	g_ca_cacheque_struct_h.h_quantity_recd * (100 / g_ca_caevent_struct_h.h_new_safek_quantity_rt );
+					}
+					else
+					{	
+						l_ca_deal_struct_h.h_qty 	=	g_ca_cacheque_struct_h.h_quantity_recd *  g_ca_caevent_struct_h.h_old_safek_quantity / 
+													g_ca_caevent_struct_h.h_new_safek_quantity;
+					}
+				}
+
+				sprintf(chr_g_log_buff, "\n TOTAL ENTL POS %lf ",g_ca_caentitlement_struct_h.h_entitl_pos);
+				CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+
+				sprintf(chr_g_log_buff, "\n TOTAL ENTL QTY DUE %lf ",g_ca_caentitlement_struct_h.h_quantity_due);
+				CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+
+				sprintf(chr_g_log_buff, "\n TOTAL ENTL QTY RECD %lf ",l_tmp_ent_quantity_received);
+				CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+
+				sprintf(chr_g_log_buff, "\n CURRENT PYMT QTY RECD %lf ",g_ca_cacheque_struct_h.h_quantity_recd);
+				CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+
+				sprintf(chr_g_log_buff, "\n FINAL DELV_FREE TRD QTY BEFORE ROUNDING %lf \n",l_ca_deal_struct_h.h_qty);
+				CO_ProcMonitor(g_logfile,chr_g_log_buff,NULL,NULL);
+		/* }	  
+		else
+			l_ca_deal_struct_h.h_qty		=	(g_ca_cacheque_struct_h.h_curr_pymt)/
+									(l_ca_deal_struct_h.h_pr); */
+		
+
+
+
+
+		if ((strcmp(l_mt_instrument_struct_h.h_instr_type,APL_INSTRU_FMT) == 0)&&(strcmp(g_ca_caevent_struct_h.h_evt_class, EVT_OFFER)!=0))
+			l_ca_deal_struct_h.h_qty		=	(l_ca_deal_struct_h.h_qty * 100);
+
+		
+
+	   
+
+		if (APL_FAILURE == CR_Proc_InstrQtyRound(	l_ca_deal_struct_h.h_qty,
+															l_ca_deal_struct_h.h_instr_code,
+															&l_round_quantity,
+															l_debug_info_ptr ))
+		{
+			APL_GOBACK_FAIL
+		}
+
+		l_ca_deal_struct_h.h_qty = l_round_quantity;
+
+		if (!strcmp(l_mt_instrument_struct_h.h_allow_dvp,APL_YES_IND) && 
+				!strcmp(g_ca_caevent_struct_h.h_evt_class, EVT_BOND_REDMP) ) 
+			strcpy(l_ca_deal_struct_h.h_dealcd,APL_DEAL_DVP);
+		else
+		{
+			Alert("Create DF man ");	
+
+			strcpy(l_ca_deal_struct_h.h_dealcd,APL_DEAL_DF);
+			l_ca_deal_struct_h.h_amt = 0;
+		}
+		
+		if (!strcmp(l_mt_core_sys_params_struct_h.proc_reg_ind, APL_YES_IND) &&
+			 !strcmp(l_mt_instrument_struct_h.h_reg_br_ind,APL_INSTRU_REGD) &&
+			 !strcmp(l_mt_client_struct_h.h_allow_regflag, APL_YES_IND)
+			 )
+			strcpy(l_ca_deal_struct_h.h_pos_stat, STATUS_POS_003);
+
+		if( CA_ChkPosition(	g_ca_caevent_struct_h.h_instr_code,
+						g_ca_cacheque_struct_h.h_dl_client,
+						g_ca_cacheque_struct_h.h_loccode,
+						l_ca_deal_struct_h.h_qty,
+						l_ca_deal_struct_h.h_pos_stat,
+						l_ca_deal_struct_h.h_deal_status,
+						&(l_ca_deal_struct_h.h_delta_000),
+						&(l_ca_deal_struct_h.h_delta_001),
+						&(l_ca_deal_struct_h.h_delta_002),"FREE",
+						g_ca_caevent_struct_h.h_evt_class, /**Added By Biju**/
+						g_ca_caevent_struct_h.h_op_evt_class, /**Added By Biju**/
+						l_debug_info_ptr
+					) == APL_FAILURE)
+			APL_GOBACK_FAIL
+		Alert("stat for DF %s ", l_ca_deal_struct_h.h_deal_status);	
+		if(!strcmp(l_ca_deal_struct_h.h_deal_status,STATUS_CONF))
+		{
+			Alert("Update fail code with 95");	
+			strcpy(l_ca_deal_struct_h.h_fail_cd,"95");
+		}
+
+	}	
+	else if(	(!strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_OFFER)) && (g_ca_caevent_struct_i.i_res_instr_code != -1)
+				&& (strcmp(delrec_flg,APL_YES_IND) == 0))  
+	{
+		int_cond_exists=0;
+
+
+		strcpy(l_ca_deal_struct_h.h_currencycode,l_mt_resinstrument_struct_h.h_currency_cd);
+		strcpy(l_ca_deal_struct_h.h_ex_arena,	l_mt_resinstrument_struct_h.h_ex_arena);
+
+		if(!strcmp(l_mt_resinstrument_struct_h.h_reg_br_ind,APL_INSTRU_REGD))
+			strcpy(l_ca_deal_struct_h.h_reginstr_ind,APL_YES_IND);
+		else
+			strcpy(l_ca_deal_struct_h.h_reginstr_ind,APL_NO_IND);
+	
+		if(!strcmp(l_mt_core_sys_params_struct_h.proc_reg_ind, APL_YES_IND) &&
+			!strcmp(l_mt_resinstrument_struct_h.h_reg_br_ind,APL_INSTRU_BEAR))
+			strcpy(l_ca_deal_struct_h.h_pos_stat, STATUS_POS_000);
+		else if(!strcmp(l_mt_core_sys_params_struct_h.proc_reg_ind, APL_YES_IND) &&
+					!strcmp(l_mt_resinstrument_struct_h.h_reg_br_ind,APL_INSTRU_REGD))
+			strcpy(l_ca_deal_struct_h.h_pos_stat, STATUS_POS_001);
+
+
+		   
+			printf("*** **** subsprice = |%lf|\t taxrt = |%lf|\n",g_ca_caevent_struct_h.h_sub_pr,g_ca_cacheque_struct_h.h_tax_rate);
+			if(g_ca_caevent_struct_h.h_sub_pr != 0 && strcmp(g_ca_caevent_struct_h.h_op_evt_class,"TO") != 0 )
+			{
+					  strcpy(l_ca_deal_struct_h.h_dealcd,APL_DEAL_RVP);
+					  l_ca_deal_struct_h.h_pr = g_ca_caevent_struct_h.h_sub_pr;
+					  l_ca_deal_struct_h.h_amt = g_ca_cacheque_struct_h.h_quantity_recd * g_ca_caevent_struct_h.h_sub_pr;
+			}
+		else
+		strcpy(l_ca_deal_struct_h.h_dealcd,APL_DEAL_RF);
+		if (!strcmp(l_mt_core_sys_params_struct_h.proc_reg_ind, APL_YES_IND))
+		{
+				  if(CO_Chk_CntryEnabled("PAY_PROC",
+											  "REGSTAT_RETFRMTRF",
+											  &int_cond_exists,
+											  l_debug_info_ptr)==APL_FAILURE)
+					  APL_GOBACK_FAIL
+				  else
+				  if(int_cond_exists>0)
+					  l_ca_deal_struct_h.h_status_reg[0]=	S_REG_RETFRMTRANSFER;
+				  else
+				  {
+					  if( !strcmp(l_mt_client_struct_h.h_allow_regflag, APL_YES_IND)&&
+						  (!strcmp(l_mt_resinstrument_struct_h.h_reg_br_ind,APL_INSTRU_REGD)))
+						  l_ca_deal_struct_h.h_status_reg[0] = S_REG_OUTTOTRANSFER;
+					  else if ( !strcmp(l_mt_client_struct_h.h_allow_regflag, APL_NO_IND)&&
+								  (!strcmp(l_mt_resinstrument_struct_h.h_reg_br_ind,APL_INSTRU_REGD)))
+						  l_ca_deal_struct_h.h_status_reg[0] = S_REG_COMPLETED;
+
+					}
+		}
+		strcpy(l_ca_deal_struct_h.h_instr_code,		g_ca_caevent_struct_h.h_res_instr_code);
+	/**	strcpy(l_ca_deal_struct_h.h_deal_status,STATUS_SETL); **/
+		if(Rtv_CADeal_Status(l_ca_deal_struct_h.h_dealcd,
+									g_ca_caevent_struct_h.h_evt_class,
+									g_ca_caevent_struct_h.h_op_evt_class,
+									APL_NULL_STRING,
+									l_ca_deal_struct_h.h_deal_status,
+									l_debug_info_ptr) == APL_FAILURE)
+		{
+			Alert("Failed In Rtv_CADeal_Status");
+			APL_GOBACK_FAIL
+		}
+
+		l_ca_deal_struct_h.h_qty	=	g_ca_cacheque_struct_h.h_quantity_recd;
+	}
+	
+	if((strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_OFFER) == 0) && (strcmp(g_ca_caevent_struct_h.h_op_evt_class,"TO") == 0) 
+		&& (strcmp(delrec_flg,APL_NO_IND) == 0))
+	{
+		if (g_ca_cacheque_struct_h.h_curr_pymt != 0)
+		{
+			strcpy(l_ca_deal_struct_h.h_dealcd,APL_DEAL_DVP);
+			l_ca_deal_struct_h.h_amt = g_ca_cacheque_struct_h.h_curr_pymt;
+			
+			l_ca_deal_struct_h.h_pr = g_ca_caevent_struct_h.h_sub_pr;
+			l_ca_deal_struct_h.h_oth_comm = (l_ca_deal_struct_h.h_amt*g_ca_cacheque_struct_h.h_tax_rate/100); 
+         l_ca_deal_struct_h.h_brokercomm = l_ca_deal_struct_h.h_amt;
+			l_ca_deal_struct_h.h_amt = (l_ca_deal_struct_h.h_amt - l_ca_deal_struct_h.h_oth_comm);
+		}
+		else
+		{
+			strcpy(l_ca_deal_struct_h.h_dealcd,APL_DEAL_DF);
+			l_ca_deal_struct_h.h_amt = 0;
+		}
+		l_ca_deal_struct_h.h_qty = g_ca_cacheque_struct_h.h_quantity_paid;
+		strcpy(l_ca_deal_struct_h.h_instr_code,g_ca_caevent_struct_h.h_instr_code);
+		/**strcpy(l_ca_deal_struct_h.h_deal_status,STATUS_SETL); **/
+		/** Here Its Already Deliver, But No probs even we call the function , Actual Status will be from CA_ChkPosition**/
+		if(Rtv_CADeal_Status(l_ca_deal_struct_h.h_dealcd,
+									g_ca_caevent_struct_h.h_evt_class,
+									g_ca_caevent_struct_h.h_op_evt_class,
+									APL_NULL_STRING,
+									l_ca_deal_struct_h.h_deal_status,
+									l_debug_info_ptr) == APL_FAILURE)
+		{
+			Alert("Failed In Rtv_CADeal_Status");
+			APL_GOBACK_FAIL
+		}
+
+		if (!strcmp(l_mt_core_sys_params_struct_h.proc_reg_ind, APL_YES_IND) &&
+                         !strcmp(l_mt_instrument_struct_h.h_reg_br_ind,APL_INSTRU_REGD) &&
+                         !strcmp(l_mt_client_struct_h.h_allow_regflag, APL_YES_IND)
+                         )
+                        strcpy(l_ca_deal_struct_h.h_pos_stat, STATUS_POS_003);
+
+                if( CA_ChkPosition(  g_ca_caevent_struct_h.h_instr_code,
+                                                g_ca_cacheque_struct_h.h_dl_client,
+                                                g_ca_cacheque_struct_h.h_loccode,
+                                                l_ca_deal_struct_h.h_qty,
+                                                l_ca_deal_struct_h.h_pos_stat,
+                                                l_ca_deal_struct_h.h_deal_status,
+                                                &(l_ca_deal_struct_h.h_delta_000),
+                                                &(l_ca_deal_struct_h.h_delta_001),
+                                                &(l_ca_deal_struct_h.h_delta_002),"FREE",
+																g_ca_caevent_struct_h.h_evt_class,	/** Added By Biju **/
+																g_ca_caevent_struct_h.h_op_evt_class, /** Added By Biju **/
+                                                l_debug_info_ptr
+                                        ) == APL_FAILURE)
+                        APL_GOBACK_FAIL
+	}	
+
+	if(!strcmp(l_ca_deal_struct_h.h_deal_status,STATUS_SETL) &&
+		!strcmp(l_mt_core_sys_params_struct_h.manifld_print_ind, APL_YES_IND) ) 
+	{
+		if(!strcmp(l_mt_core_sys_params_struct_h.loc_proc_ind, APL_YES_IND))
+		{
+			if ( 	CO_Rtv_FldValChar(	"manifld_ind",
+												"mt_location", 
+												"location_cd",
+												g_ca_cacheque_struct_h.h_loccode,	
+												chr_l_manifldflg,
+												l_debug_info_ptr )==APL_FAILURE)
+				APL_GOBACK_FAIL
+			
+			if(chr_l_manifldflg[0]==APL_YES_FLAG)
+			{	int_cond_exists=0;
+				if ( CR_Rtv_InstrChrVal(	l_ca_deal_struct_h.h_instr_code, 
+											"clscode", 
+											chr_l_clscode_a, 
+											l_debug_info_ptr ) ==APL_FAILURE)
+					APL_GOBACK_FAIL
+				if(CO_Chk_CntryEnabled("TRD_MANIFOLD",
+											"MANI_NOTREQD_FOR_MIN",
+											&int_cond_exists,
+											l_debug_info_ptr)==APL_FAILURE)
+					APL_GOBACK_FAIL
+				if((int_cond_exists >0)&& (!strcmp(chr_l_clscode_a,"MIN"))) 
+					strcpy(l_ca_deal_struct_h.h_delrecdate,APL_NULL_STRING);
+				else
+					strcpy(l_ca_deal_struct_h.h_delrecdate,chr_g_sys_date);
+			}
+			else
+				strcpy(l_ca_deal_struct_h.h_delrecdate,APL_NULL_STRING);
+
+		}	
+		else		
+		{	int_cond_exists=0;
+			if ( CR_Rtv_InstrChrVal(	l_ca_deal_struct_h.h_instr_code, 
+										"clscode", 
+										chr_l_clscode_a, 
+										l_debug_info_ptr ) ==APL_FAILURE)
+				APL_GOBACK_FAIL
+			if(CO_Chk_CntryEnabled("TRD_MANIFOLD",
+										"MANI_NOTREQD_FOR_MIN",
+										&int_cond_exists,
+										l_debug_info_ptr)==APL_FAILURE)
+				APL_GOBACK_FAIL
+			if((int_cond_exists >0)&& (!strcmp(chr_l_clscode_a,"MIN"))) 
+				strcpy(l_ca_deal_struct_h.h_delrecdate,APL_NULL_STRING);
+			else
+				strcpy(l_ca_deal_struct_h.h_delrecdate,chr_g_sys_date);
+			strcpy(l_ca_deal_struct_h.h_delrecdate,APL_NULL_STRING);
+		}
+	}	
+	else
+		strcpy(l_ca_deal_struct_h.h_delrecdate,APL_NULL_STRING);
+
+strcpy(l_ca_deal_struct_h.h_misinfo,g_ca_caentitlement_struct_h.h_corp_id);
+	
+	strcpy(chr_timeless_dt,g_ca_caevent_struct_h.h_decl_date);
+	strcpy(chr_timeless_dt,strtok_r(chr_timeless_dt," ",&int_pos) );
+
+
+   sprintf( l_ca_deal_struct_h.h_info1,
+            "CORPORATE ACTIONS TRADE FOR %s FOR %s DECLARED ON %s",
+            g_ca_caevent_struct_h.h_instr_code,
+            g_ca_caevent_struct_h.h_evt_class,
+            chr_timeless_dt);
+  
+	printf("\n Leaving CA_Proc_PopulateTrade with l_ca_deal_struct_h.h_dlt as :%s:",l_ca_deal_struct_h.h_dlt);
+	
+	/* Retro done By Darrel Viegas for ISKB_455 (Temporary ISIN processing enh KOTAK) on 10/06/2014 - Start 
+	Details: to change r_trans_code value in SEBI Report */	
+	
+	if(!strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_CV))
+	{
+		if(CA_SbiRptPopulate(  g_ca_caevent_struct_h.h_evt_class,
+				g_ca_caevent_struct_h.h_cmp_code,
+				l_mt_instrument_struct_h.h_reg_br_ind,
+				chr_g_sys_date,
+				&l_ca_deal_struct_h,
+				l_debug_info_ptr) == APL_FAILURE)
+		{
+		Alert("Failed in CA_SbiRptPopulate");
+		APL_GOBACK_FAIL
+		}
+	}
+	
+	else
+	{
+	if(CA_SbiRptPopulate(  g_ca_caevent_struct_h.h_evt_class,
+				g_ca_caevent_struct_h.h_op_evt_class,
+				l_mt_instrument_struct_h.h_reg_br_ind,
+				chr_g_sys_date,
+				&l_ca_deal_struct_h,
+				l_debug_info_ptr) == APL_FAILURE)
+	{
+		Alert("Failed in CA_SbiRptPopulate");
+		APL_GOBACK_FAIL
+	}
+	}
+	
+/* Retro done By Darrel Viegas for ISKB_455 (Temporary ISIN processing enh KOTAK) on 10/06/2014 - End 
+Details: to change r_trans_code value in SEBI Report */	
+  Alert("\nafter CA_SbiRptPopulate trans code val is=%s",l_ca_deal_struct_h.h_r_trans_code);
+
+	APL_GOBACK_SUCCESS
+	RETURN_SUCCESS:
+	{	
+		return (APL_SUCCESS);
+	}
+	RETURN_FAILURE:
+	{
+		return (APL_FAILURE);
+	}
+}
+
+static	int	CA_Mod_EventEntitlement(int p_level, DEBUG_INFO_STRUCT_H	**l_debug_info_ptr)
+{
+	struct sqlca sqlca;	
+	int		count=0;
+	double	h_amount_recd, h_quantity_recd,
+				h_amount_due,h_instr_inc_bal, h_quantity_due;
+	char		status_ind[APL_STATUS_LEN];
+
+	switch ( p_level)
+	{
+		case (S_LEVEL_EVENT) :
+		{
+			
+			
+
+			EXEC SQL SELECT NVL(COUNT(*),0) INTO :count
+			FROM CAENTITLEMENT
+			WHERE corp_id = :g_ca_caevent_struct_h.h_corp_id 
+			AND 	status NOT IN ('CP','RV','DL','NP'); 
+			IS_ANY_ORA_ERROR
+	
+			EXEC SQL SELECT NVL(RECEIVED_AMT,0),NVL(quantity_received,0),
+								NVL(amount_bal,0), NVL(quantity_bal,0)
+			INTO :h_amount_recd,:h_quantity_recd,:h_amount_due,:h_quantity_due
+			FROM CAEVENT WHERE corp_id	=	:g_ca_caevent_struct_h.h_corp_id;
+			IS_ANY_ORA_ERROR
+
+			if (	(h_amount_due <= h_amount_recd) &&
+					(h_quantity_due <= h_quantity_recd) &&
+					(count == 0)
+				)
+			{
+				
+				strcpy(status_ind,STATUS_MSG_PAID_CLSD);
+
+				EXEC SQL UPDATE CAEVENT 
+				SET	status	= :status_ind, /*Smita - HDFCCA_BaseVer - Changed Col Name*/
+						PROCESSED_DATE		=:chr_g_sys_date,
+						access_stamp=:chr_g_sys_date_time	
+				WHERE	corp_id = :g_ca_caevent_struct_h.h_corp_id;
+				IS_ANY_ORA_ERROR
+			}
+
+			break;
+		}
+		case (S_LEVEL_ENTITL) :
+		{
+			
+
+			EXEC SQL SELECT NVL(COUNT(*),0) INTO :count
+			FROM CACHEQUE
+			WHERE corp_id		= :g_ca_caentitlement_struct_h.h_corp_id 
+			AND	client	= :g_ca_caentitlement_struct_h.h_dl_client
+			AND 	stat_pymt not in ('CP','RV','DL');
+			IS_ANY_ORA_ERROR
+
+			EXEC SQL SELECT NVL(RECEIVED_AMT,0),NVL(quantity_received,0),
+								NVL(INSTR_INC_BAL,0), NVL(quantity_bal,0)
+			INTO :h_amount_recd,:h_quantity_recd,:h_instr_inc_bal,:h_quantity_due
+			FROM CAENTITLEMENT
+			WHERE corp_id 	= :g_ca_caentitlement_struct_h.h_corp_id 
+			AND	client	= :g_ca_caentitlement_struct_h.h_dl_client;
+			IS_ANY_ORA_ERROR
+
+			if (	(h_instr_inc_bal <= h_amount_recd) &&
+					(h_quantity_due <= h_quantity_recd) &&
+					(count == 0)
+				)
+			{
+				
+				strcpy(status_ind,STATUS_MSG_PAID_CLSD);
+
+				EXEC SQL UPDATE CAENTITLEMENT 
+				SET	status 	= 	:status_ind,
+						PROCESSED_DATE		=	:chr_g_sys_date,
+						access_stamp=	:chr_g_sys_date_time
+				WHERE corp_id		= :g_ca_caentitlement_struct_h.h_corp_id 
+				AND	client	= :g_ca_caentitlement_struct_h.h_dl_client
+				AND CORP_ID IN( SELECT  CORP_ID FROM CAEVENT WHERE  ((CA_EVENT = 'SP' AND OP_EVT_CLASS IN ('SP','SR')) OR CA_EVENT = 'CR') and CAEVENT.CORP_ID=CAENTITLEMENT.CORP_ID)
+				AND         not exists
+        ( select 1 from dl_deal where deal_stat <> 'CS' and informaton = :g_ca_caentitlement_struct_h.h_corp_id);
+				IS_ANY_ORA_ERROR
+
+				EXEC SQL UPDATE CAENTITLEMENT 
+				SET	status 	= 	:status_ind,
+						PROCESSED_DATE		=	:chr_g_sys_date,
+						access_stamp=	:chr_g_sys_date_time
+				WHERE corp_id		= :g_ca_caentitlement_struct_h.h_corp_id 
+				AND	client	= :g_ca_caentitlement_struct_h.h_dl_client
+				AND CORP_ID IN( SELECT  CORP_ID FROM CAEVENT WHERE  (((CA_EVENT = 'SP' AND OP_EVT_CLASS IN ('TO','AM')) OR CA_EVENT NOT IN('SP','CR')) and CAEVENT.CORP_ID=CAENTITLEMENT.CORP_ID));
+				IS_ANY_ORA_ERROR
+			}
+
+			break;
+		}
+		case (S_PYMT_LEVEL) :
+		{
+			int	int_noacspd_count=0;
+
+			
+			strcpy(status_ind,STATUS_PART_PAID);
+			if (g_ca_cacheque_struct_h.h_pymt_srl_nbr == 1)
+				int_noacspd_count=1;
+			
+			if((strcmp(g_ca_caevent_struct_h.h_evt_class,"OP") == 0) && (strcmp(g_ca_caevent_struct_h.h_op_evt_class,"TO") == 0))
+			{
+				EXEC SQL UPDATE CAEVENT
+                       		SET     RECEIVED_AMT        = RECEIVED_AMT + :g_ca_cacheque_struct_h.h_curr_pymt,
+                                        quantity_received        = quantity_received + :g_ca_cacheque_struct_h.h_quantity_recd,
+					amount_bal		= amount_bal  + :g_ca_cacheque_struct_h.h_curr_pymt,
+					quantity_bal		= quantity_bal  + :g_ca_cacheque_struct_h.h_quantity_recd,	 
+                                        COUNT_ACS_PEND                 = COUNT_ACS_PEND  + :int_noacspd_count,
+                                        status       =       :status_ind,
+                                        PROCESSED_DATE         =       :chr_g_sys_date,
+                                        access_stamp=   :chr_g_sys_date_time
+                       		WHERE   corp_id = :g_ca_cacheque_struct_h.h_corp_id;
+                       		IS_ANY_ORA_ERROR
+			}
+			else	
+			{
+			EXEC SQL UPDATE CAENTITLEMENT 
+			SET	RECEIVED_AMT 	= RECEIVED_AMT + :g_ca_cacheque_struct_h.h_curr_pymt,
+					quantity_received 	= quantity_received + :g_ca_cacheque_struct_h.h_quantity_recd,
+					status 	= 	:status_ind,
+					PROCESSED_DATE		=	:chr_g_sys_date,
+					access_stamp=	:chr_g_sys_date_time
+			WHERE corp_id		= :g_ca_cacheque_struct_h.h_corp_id 
+			AND	client	= :g_ca_cacheque_struct_h.h_dl_client;
+			IS_ANY_ORA_ERROR
+
+			EXEC SQL UPDATE CAEVENT 
+			SET	RECEIVED_AMT 	= RECEIVED_AMT + :g_ca_cacheque_struct_h.h_curr_pymt,
+					quantity_received 	= quantity_received + :g_ca_cacheque_struct_h.h_quantity_recd,
+					COUNT_ACS_PEND 		= COUNT_ACS_PEND  + :int_noacspd_count,
+					status	= 	:status_ind,
+					PROCESSED_DATE		=	:chr_g_sys_date,
+					access_stamp=	:chr_g_sys_date_time
+			WHERE	corp_id = :g_ca_cacheque_struct_h.h_corp_id;
+			IS_ANY_ORA_ERROR
+			}
+			break;
+		}
+	}
+	APL_GOBACK_SUCCESS
+	RETURN_SUCCESS:
+	{
+		return (APL_SUCCESS);
+	}
+	RETURN_FAILURE:
+	{
+		return (APL_FAILURE);
+	}
+}
+
+static int	CA_Proc_SendMsg(char				*chr_p_ca_id,
+							char				*p_ce_typ,
+							char				*chr_p_client,
+							int				 p_srl_nbr,
+							DEBUG_INFO_STRUCT_H	**l_debug_info_ptr)
+	
+{	
+	struct sqlca sqlca;
+	char		chr_str_pay_srl_nbr[LOCAL_LEN_EVNT_NBR];
+	char		chr_msg_param_struct[LOCAL_LEN_EVNT_NBR + 1];
+
+	if(!strcmp(g_ca_caevent_struct_h.h_pymt_send_msg_ind,APL_YES_IND))
+	{
+		
+		strcpy(chr_str_pay_srl_nbr,ltoa(p_srl_nbr) );
+		
+		
+		strcpy(chr_msg_param_struct,chr_str_pay_srl_nbr);
+		strcat(chr_msg_param_struct,MSG_PARAM_STRUCT_SEP);
+
+		if((!strcmp(p_ce_typ,EVT_CASH_DIV))
+			||(!strcmp(p_ce_typ,EVT_BOND))
+			||(!strcmp(p_ce_typ,EVT_DECR_VAL))) 
+		{
+			if	(GBDbInsIMSGENT(		"554N01",
+											chr_p_ca_id,
+											chr_p_client,
+											'Y',
+											chr_msg_param_struct,
+											l_debug_info_ptr) == APL_FAILURE) 
+				APL_GOBACK_FAIL
+		}
+		if((!strcmp(p_ce_typ,EVT_STOK_DIV))
+			||(!strcmp(p_ce_typ,EVT_BONUS)))
+		{
+			if	(GBDbInsIMSGENT(		"555N01",
+											chr_p_ca_id,
+											chr_p_client,
+											'Y',
+											chr_msg_param_struct,
+											l_debug_info_ptr) == APL_FAILURE)
+				APL_GOBACK_FAIL
+		}
+		if(!strcmp(p_ce_typ,EVT_RHTS))
+		{
+			strcat(chr_msg_param_struct,MSG_PARAM_STRUCT_SEP);
+			strcat(chr_msg_param_struct,p_ce_typ);
+			strcat(chr_msg_param_struct,MSG_PARAM_STRUCT_SEP);
+				
+			if	(GBDbInsIMSGENT(		"563N03",
+											chr_p_ca_id,
+											chr_p_client,
+											'Y',
+											chr_msg_param_struct,
+											l_debug_info_ptr) == APL_FAILURE)
+				APL_GOBACK_FAIL
+		}
+		if(!strcmp(p_ce_typ,EVT_OFFER))
+		{
+			strcat(chr_msg_param_struct,MSG_PARAM_STRUCT_SEP);
+			strcat(chr_msg_param_struct,p_ce_typ);
+			strcat(chr_msg_param_struct,MSG_PARAM_STRUCT_SEP);
+				
+			if	(GBDbInsIMSGENT(		"563N03",
+											chr_p_ca_id,
+											chr_p_client,
+											'Y',
+											chr_msg_param_struct,
+											l_debug_info_ptr) == APL_FAILURE)
+				APL_GOBACK_FAIL
+		}
+		if(!strcmp(p_ce_typ,EVT_BOND_REDMP))
+		{
+			if	(GBDbInsIMSGENT(		"556N02",
+											chr_p_ca_id,
+											chr_p_client,
+											'Y',
+											chr_msg_param_struct,
+											l_debug_info_ptr) == APL_FAILURE)
+				APL_GOBACK_FAIL
+		}
+		if(!strcmp(p_ce_typ,EVT_REDOM))
+		{
+			if	(GBDbInsIMSGENT(		"563N01",
+											chr_p_ca_id,
+											chr_p_client,
+											'Y',
+											chr_msg_param_struct,
+											l_debug_info_ptr) == APL_FAILURE)
+				APL_GOBACK_FAIL
+		}
+	 }
+	
+	
+	APL_GOBACK_SUCCESS
+	RETURN_SUCCESS:
+	{
+		return (APL_SUCCESS);
+	}
+	RETURN_FAILURE:
+	{
+		return (APL_FAILURE);
+	}
+}
+
+static int CA_Commit ( int				p_commit_status,
+					int				p_commit_level,
+					DEBUG_INFO_STRUCT_H	**l_debug_info_ptr)
+{
+	struct sqlca sqlca;
+	if (p_commit_status == APL_FAILURE)
+	{
+		EXEC SQL ROLLBACK;
+		IS_ANY_ORA_ERROR
+      CO_ProcMonitor(g_logfile,"ROLLING BACK \n",NULL,NULL);
+
+	}
+	strcpy(chr_g_restart_ca_id,		g_ca_caevent_struct_h.h_corp_id);
+	strcpy(chr_g_restart_client,	g_ca_caentitlement_struct_h.h_dl_client);
+	int_g_restart_srno = g_ca_cacheque_struct_h.h_pymt_srl_nbr;
+
+  	sprintf(chr_g_restart_data_h,"%s%s%s%s%s%s",
+				chr_g_restart_ca_id,
+				S_RESTART_SEP_TOKEN,
+				chr_g_restart_client,
+				S_RESTART_SEP_TOKEN,
+				ltoa(int_g_restart_srno),
+				S_RESTART_SEP_TOKEN);
+
+	EXEC SQL UPDATE SYS_BATCHPROC
+  	SET processing_status = :chr_g_restart_data_h
+  	WHERE PROCESS_NAME	=:chr_g_progname
+  	AND	PROC_INIT		=:chr_g_key
+  	AND	STARTDATE=:chr_g_start_date
+  	AND STATUS		='started';
+	IS_ANY_ORA_ERROR
+
+	EXEC SQL COMMIT;
+	IS_ANY_ORA_ERROR
+	
+   
+
+	switch ( p_commit_level)
+	{
+		case (S_LEVEL_EVENT) :
+		{
+			
+			int_g_restart_srno = 0;
+			strcpy(chr_g_restart_client, " ");
+			EXEC SQL OPEN AevntCur_gt; 
+			IS_ANY_ORA_ERROR
+			break;
+		}
+		case (S_LEVEL_ENTITL) :
+		{
+			int_g_restart_srno = 0;
+			EXEC SQL OPEN AentitlCur_gt;  
+			IS_ANY_ORA_ERROR
+			break;
+		}
+		case (S_PYMT_LEVEL) :
+		{
+			EXEC SQL OPEN Apaymentcur; 
+			IS_ANY_ORA_ERROR
+			break;
+		}
+	}
+
+	APL_GOBACK_SUCCESS
+	RETURN_SUCCESS:
+	{
+		return (APL_SUCCESS);
+	}
+	RETURN_FAILURE:
+	{
+		return (APL_FAILURE);
+	}
+}
+
+static int CA_Proc_RedenomDiffTrdNew(DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	struct sqlca sqlca;
+	char	txn_indentity_no[APL_TXNREFNO_LEN];
+	char chr_event_type[EVT_CLASS_] = APL_NULL_STRING;
+	char deal_cd[DEALTYPE_LEN_A]			= APL_NULL_STRING;
+	char chr_eventtype[8]						= APL_NULL_STRING;
+	INTL_ENV_DATA_STRUCT_H	l_intlenv_data_struct_h;	
+	double diff_quantity=0.0;
+	int	int_result=0;
+	char	location_cd[APL_LOCNCODE_LENGTH] = APL_NULL_STRING;
+	char	chr_log_buff[200]=APL_NULL_STRING;
+	static	double	grd_eur_exchg_rt =0.0;
+   
+   short l_i_locncode = 0; 
+
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+
+      
+      EXEC SQL VAR location_cd IS STRING;
+      EXEC SQL VAR chr_g_splacc IS STRING;
+      
+
+		memset(&l_intlenv_data_struct_h,NULL,sizeof(INTL_ENV_DATA_STRUCT_H) );
+		strcpy(chr_eventtype,"REDNOM");
+		strcpy(l_intlenv_data_struct_h.usr, chr_g_userid);
+
+       if ( grd_eur_exchg_rt == 0 )
+         {
+
+			if ( !strcmp(l_mt_core_sys_params_struct_h.dir_indir_fxqt_ind,"I") )
+			{	
+         EXEC SQL SELECT a.EXCHGRT
+         INTO :grd_eur_exchg_rt
+         FROM  MT_EXCHRATE a
+         WHERE a.DENOM_CCY=:chr_g_eur_ccycode
+         AND   a.currency_cd= :chr_g_grd_ccycode
+   		AND a.RATE_DATE = ( SELECT MAX(b.RATE_DATE)
+                     FROM MT_EXCHRATE b
+                     WHERE b.DENOM_CCY = :chr_g_eur_ccycode
+                     AND b.currency_cd = :chr_g_grd_ccycode
+                  );
+
+
+         IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"GRD-EUR","Indirect","Exchange rate")
+			}
+			else
+			{
+         EXEC SQL SELECT a.EXCHGRT
+         INTO :grd_eur_exchg_rt
+         FROM  MT_EXCHRATE a
+         WHERE a.DENOM_CCY=:chr_g_grd_ccycode
+         AND   a.currency_cd= :chr_g_eur_ccycode
+   		AND a.RATE_DATE = ( SELECT MAX(b.RATE_DATE)
+                     FROM MT_EXCHRATE b
+                     WHERE b.DENOM_CCY = :chr_g_grd_ccycode
+                     AND b.currency_cd = :chr_g_eur_ccycode
+                  );
+
+         IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"EUR-GRD","Direct","Exchange rate")
+			}
+
+
+
+         }
+
+		if ( !strcmp(chr_g_splacc,APL_NULL_STRING) )
+		{
+			EXEC SQL SELECT FIELD_VAL
+			INTO	:chr_g_splacc
+			FROM PRO_GSSPLVAL
+			WHERE MAIN_FUN='EMUCONV'
+			AND	SUB_PROCESS='SPLACC'
+			AND NATION=:g_mt_commonsys_params_struct_h.nation_code;
+
+         IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"SPECIAL A/C","FOR DIFF TRADE",APL_NULL_STRING)
+		}
+
+
+
+	EXEC SQL DECLARE diff_trd_cur
+	CURSOR FOR 
+	SELECT 
+	location_cd,round(( sum(EUR_AFTER_RND)- (sum(grd_pos)/:grd_eur_exchg_rt  ) ),2) 
+	FROM PRO_EURO_TEMP
+	WHERE	instr_code=:g_ca_caevent_struct_h.h_instr_code AND
+			PROC_AREA=:chr_g_func_area_redenom 
+	GROUP BY LOCATION_CD;	
+
+	EXEC SQL OPEN diff_trd_cur;
+	IS_ANY_ORA_ERROR
+
+	for (;;)
+	{
+		EXEC SQL FETCH diff_trd_cur
+		INTO	:location_cd:l_i_locncode,:diff_quantity;
+	
+		IS_ANY_ORA_ERROR_CURSOR
+
+		if ( diff_quantity >= 0.01 || diff_quantity <= -0.01)
+		{
+
+			if ( diff_quantity >= 0.01 )
+			{
+				if  ( CA_Proc_PopulateTradeForRedonm(APL_DEAL_DF,
+												  "Y",
+													location_cd,
+													diff_quantity,	
+													&int_result,
+												  l_debug_info_ptr
+												) == APL_FAILURE )
+					APL_GOBACK_FAIL	
+			}
+			else
+			{
+				if		( CA_Proc_PopulateTradeForRedonm(APL_DEAL_RF,
+												  "Y",
+													location_cd,
+													-diff_quantity,	
+													&int_result,
+												  l_debug_info_ptr
+											) == APL_FAILURE )
+							APL_GOBACK_FAIL
+			}	
+		
+			memset(txn_indentity_no,APL_NULL_CHAR,APL_TXNREFNO_LEN);
+			if(APL_FAILURE == CO_GenRefno(chr_eventtype,
+													g_ca_caevent_struct_h.h_op_evt_class,
+													l_ca_deal_struct_h.h_dealcd,
+													txn_indentity_no,
+													l_debug_info_ptr))
+			{
+				APL_GOBACK_FAIL
+			}
+			strcpy(l_ca_deal_struct_h.h_indentity_no,txn_indentity_no);
+
+			//sleep(1); Ekta :: Retro from HDFC for ISHB_8740 Changes done w.r.t ref no gen so that sleep time can be remove on 07/08/2019
+			if ( CA_Mod_NewTrade(	&l_ca_deal_struct_h,
+										&l_intlenv_data_struct_h,
+										txn_indentity_no,
+										l_debug_info_ptr) == APL_FAILURE)
+			{	
+				sprintf(chr_log_buff,"E:Failed in Creating Difference Trade for Instrument:[%s] at Location[%s] \n"
+							,g_ca_caevent_struct_h.h_instr_code,
+							location_cd
+							);
+				CO_ProcMonitor(g_logfile,chr_log_buff,l_debug_info_ptr,NULL);
+				APL_GOBACK_FAIL
+			}
+			sprintf(chr_log_buff,"CREATED DIFFERENCE TRADE for Instrument:[%s] at Location[%s] With Reference Number[%s]",g_ca_caevent_struct_h.h_instr_code,location_cd,l_ca_deal_struct_h.h_indentity_no);	
+			CO_ProcMonitor(g_logfile,chr_log_buff,l_debug_info_ptr,NULL);	
+				if(CA_MovePos(	&l_ca_deal_struct_h ,
+							g_ca_caevent_struct_h.h_evt_class,
+							g_ca_caevent_struct_h.h_op_evt_class,
+							l_debug_info_ptr) == APL_FAILURE)
+				{
+					APL_GOBACK_FAIL
+				}
+
+		}
+	}	
+
+	APL_GOBACK_SUCCESS
+	RETURN_SUCCESS:
+	{
+		CO_ProcMonitor(g_logfile,"Exiting from  CA_Proc_RedenomDiffTrdNew() successfully",l_debug_info_ptr,NULL);	
+		return (APL_SUCCESS);
+	}
+	RETURN_FAILURE:
+	{
+		CO_ProcMonitor(g_logfile,"Exiting from  CA_Proc_RedenomDiffTrdNew() with failure",l_debug_info_ptr,NULL);	
+		return (APL_FAILURE);
+	}
+}
+
+/* Added By Sana for Closure of BuyBack and IPO events [kotak][start] */
+int CA_MarkEvtClose_NS_BB (DEBUG_INFO_STRUCT_H **l_debug_info_ptr, INTL_ENV_DATA_STRUCT_H	*p_intlenv_data_struct_h)
+{
+	char chr_l_corp_id[CORP_ID_LEN] = APL_NULL_STRING;
+	short i_l_corp_id = 0;
+
+	char chr_l_ca_evt_type[3] = APL_NULL_STRING;
+	short i_l_ca_evt_type = 0;
+
+	char chr_l_bk_build_ind[2] = APL_NULL_STRING;
+	short i_bk_build_ind = 0;
+
+	int l_appln_bid_count = 0;
+	short i_appln_bid_count =0;
+
+	int l_allot_count = 0;
+	short i_allot_count = 0;
+
+	char chr_l_appl_client[APL_CLIENT_LENGTH] = APL_NULL_STRING;
+	short i_l_appl_client = 0;
+
+	int l_row_count = 0;
+	short i_row_count = 0;
+
+	int l_closure_no_of_days =0;
+	short i_closure_no_of_days = 0;
+
+	char l_buff[500] = APL_NULL_STRING;
+	/*(ISKB_9561) - Changes for Marking NS/BB Event as Paid and Closed only if Allotment 
+	authorized count is same as application/bidding count. Changes by Mrinal - Starts*/
+	int l_allot_count_aa = 0;
+	short i_allot_count_aa	=	0;
+	/*(ISKB_9561) - Changes for Marking NS/BB Event as Paid and Closed only if Allotment 
+	authorized count is same as application/bidding count. Changes by Mrinal - Ends*/
+	memset(chr_l_corp_id,APL_NULL_CHAR,CORP_ID_LEN);
+	memset(chr_l_ca_evt_type,APL_NULL_CHAR,3);
+	memset(chr_l_bk_build_ind,APL_NULL_CHAR,2);
+	memset(chr_l_appl_client,APL_NULL_CHAR,APL_CLIENT_LENGTH);
+	memset(l_buff,APL_NULL_CHAR,500);
+
+	CO_ProcMonitor(g_logfile,"Entering CA_MarkEvtClose_NS_BB()",l_debug_info_ptr,NULL);	
+
+	EXEC SQL SELECT FIELD_VAL into :l_closure_no_of_days:i_closure_no_of_days 
+			FROM PRO_GSSPLVAL
+			WHERE MAIN_FUN = 'CAEVENT'
+				AND SUB_PROCESS = 'NS_BB_CLOSE_DT_DAYS';
+	if (sqlca.sqlcode == 1403)
+	{
+		printf("\n\nNo Cut-Over Date maintained. Hence the event will remain in RA status\n\n");
+		l_closure_no_of_days = 0;
+	}
+	else if (sqlca.sqlcode <0)
+	{
+		printf("\n\nDB Error Occured. SQLCA.SQLCODE is |%d|\n",sqlca.sqlcode);
+		APL_GOBACK_FAIL
+	}
+	printf("\nClosure no of days maintained is : |%d|\n",l_closure_no_of_days);
+	fflush(stdout);
+
+	if(l_closure_no_of_days > 0)
+	{
+		EXEC SQL DECLARE curr_issue_det CURSOR FOR
+			select a.corp_id,a.ca_event,a.bk_build_ind, 
+			decode(a.CA_EVENT,'NS',decode(a.bk_build_ind,'Y',count(distinct b.cln_code),'N',count(distinct d.cln_code)),
+										  'BB',count(distinct e.cln_code)), 
+			decode(a.ca_event,'NS',count(distinct c.cln_code),'BB',count(distinct f.cln_code))
+			from caevent a, ca_nis_bid b, ca_nis_allotment c, ca_nis_application d, ca_application e, ca_rtbb_allotment f
+			where a.ca_event in ('BB','NS')
+			and a.status = 'RA' 
+			and a.corp_id = b.corp_id(+)
+			and a.corp_id = d.corp_id(+)
+			and a.corp_id = c.corp_id(+)
+			and a.corp_id = e.corp_id(+)
+			and a.corp_id = f.corp_id(+)
+			and decode(a.ca_event,'NS',trunc(a.bc_to_date),'BB',trunc(a.deal_to_date)) + :l_closure_no_of_days <= (select trunc(sys_date) from pro_sys_date)
+		group by a.corp_id, a.ca_event, a.bk_build_ind;
+
+		IS_ANY_ORA_ERROR
+
+		EXEC SQL OPEN curr_issue_det;
+		IS_ANY_ORA_ERROR
+
+		for(;;)
+		{
+			EXEC SQL FETCH curr_issue_det into :chr_l_corp_id:i_l_corp_id,
+							  	:chr_l_ca_evt_type:i_l_ca_evt_type,
+								:chr_l_bk_build_ind:i_bk_build_ind,
+								:l_appln_bid_count:i_appln_bid_count,
+								:l_allot_count:i_allot_count;
+
+			if(sqlca.sqlcode == 1403)
+							break;	
+
+			printf("\nStarted Processing Of Open BB and NS events\n\n");
+			printf("\nEvent Id		: |%s|",chr_l_corp_id);
+			printf("\nEvent Type		: |%s|",chr_l_ca_evt_type);
+			printf("\nBidding(Y/N)		: |%s|",chr_l_bk_build_ind);
+			printf("\nApplicant count	: |%d|",l_appln_bid_count);
+			printf("\nAllotment count	: |%d|",l_allot_count);
+
+			sprintf(l_buff,"\n\nProcessing Event : |%s|",chr_l_corp_id);
+			CO_ProcMonitor(g_logfile,l_buff,l_debug_info_ptr,NULL);
+			
+			if(l_appln_bid_count > l_allot_count)
+			{
+				l_row_count =0;
+				i_row_count=0;
+				i_l_appl_client = 0;
+				memset(chr_l_appl_client,APL_NULL_CHAR,APL_CLIENT_LENGTH);
+				CO_ProcMonitor(g_logfile," Allotment Pending For Below Clients",l_debug_info_ptr,NULL);
+				if(strcmp(chr_l_ca_evt_type,EVT_NS) == 0 && strcmp(chr_l_bk_build_ind,"Y") == 0)
+				{
+					printf("\nInside Bidding Module Check....");
+					EXEC SQL DECLARE curr_bid_no_allot_cln CURSOR FOR
+						select ROWNUM,cln_code from ca_nis_bid 
+						where corp_id = :chr_l_corp_id
+						and cln_code not in (select cln_code from ca_nis_allotment where corp_id = :chr_l_corp_id);
+
+					EXEC SQL OPEN curr_bid_no_allot_cln;
+					IS_ANY_ORA_ERROR
+
+					for(;;)
+					{
+						EXEC SQL FETCH curr_bid_no_allot_cln into :l_row_count:i_row_count,:chr_l_appl_client:i_l_appl_client;
+					 	if(sqlca.sqlcode == 1403)
+							break;	
+						sprintf(l_buff," |%d| : |%s|",l_row_count,chr_l_appl_client);
+						CO_ProcMonitor(g_logfile,l_buff,l_debug_info_ptr,NULL);
+					}
+				}
+				else if(strcmp(chr_l_ca_evt_type,EVT_NS) == 0 && strcmp(chr_l_bk_build_ind,"N") == 0)
+				{
+					printf("\nInside IPO Application Module Check....");
+					EXEC SQL DECLARE curr_app_no_allot_cln CURSOR FOR
+						select ROWNUM,cln_code from ca_nis_application 
+						where corp_id = :chr_l_corp_id
+						and cln_code not in (select cln_code from ca_nis_allotment where corp_id = :chr_l_corp_id);
+
+					EXEC SQL OPEN curr_app_no_allot_cln;
+					IS_ANY_ORA_ERROR
+
+					for(;;)
+					{
+						EXEC SQL FETCH curr_app_no_allot_cln into :l_row_count:i_row_count,:chr_l_appl_client:i_l_appl_client;
+					 	if(sqlca.sqlcode == 1403)
+							break;	
+						sprintf(l_buff," |%d| : |%s|",l_row_count,chr_l_appl_client);
+						CO_ProcMonitor(g_logfile,l_buff,l_debug_info_ptr,NULL);
+					}
+				}
+				else if(strcmp(chr_l_ca_evt_type,EVT_BUY_BACK) == 0)
+				{
+					printf("\nInside BB Application Module Check....");
+					EXEC SQL DECLARE curr_bb_no_allot_cln CURSOR FOR
+						select ROWNUM,cln_code from ca_application 
+						where corp_id = :chr_l_corp_id
+						and cln_code not in (select cln_code from ca_rtbb_allotment where corp_id = :chr_l_corp_id);
+
+					EXEC SQL OPEN curr_bb_no_allot_cln;
+					IS_ANY_ORA_ERROR
+
+					for(;;)
+					{
+						EXEC SQL FETCH curr_bb_no_allot_cln into :l_row_count:i_row_count,:chr_l_appl_client:i_l_appl_client;
+					 	if(sqlca.sqlcode == 1403)
+							break;	
+						sprintf(l_buff," |%d| : |%s|",l_row_count,chr_l_appl_client);
+						CO_ProcMonitor(g_logfile,l_buff,l_debug_info_ptr,NULL);
+					}
+				}
+				if(strcmp(chr_l_ca_evt_type,EVT_NS) == 0 && strcmp(chr_l_bk_build_ind,"Y") == 0)
+				{
+					printf("\nClosing cursor curr_bid_no_allot_cln....");
+					EXEC SQL CLOSE curr_bid_no_allot_cln;
+					IS_ANY_ORA_ERROR
+				}
+				else if(strcmp(chr_l_ca_evt_type,EVT_NS) == 0 && strcmp(chr_l_bk_build_ind,"N") == 0)
+				{
+					printf("\nClosing cursor curr_app_no_allot_cln....");
+					EXEC SQL CLOSE curr_app_no_allot_cln;
+					IS_ANY_ORA_ERROR
+				}
+				else if(strcmp(chr_l_ca_evt_type,EVT_BUY_BACK) == 0)
+				{
+					printf("\nClosing cursor curr_bb_no_allot_cln....");
+					EXEC SQL CLOSE curr_bb_no_allot_cln;
+					IS_ANY_ORA_ERROR
+				}
+			}
+			else if(l_appln_bid_count == l_allot_count)
+			{
+			/*(ISKB_9561) - Changes for Marking NS/BB Event as Paid and Closed only if Allotment 
+				authorized count is same as application/bidding count. Changes by Mrinal - Starts*/
+				if(strcmp(chr_l_ca_evt_type,EVT_NS) == 0)
+				{
+					EXEC SQL SELECT COUNT(CLN_CODE) into :l_allot_count_aa:i_allot_count_aa FROM ca_nis_allotment WHERE STATUS = 'AA' AND CORP_ID = :chr_l_corp_id;
+					IS_ANY_ORA_ERROR
+					
+					if(l_allot_count_aa == l_allot_count)
+					{
+						CO_ProcMonitor(g_logfile," No Allotments Pending. Marking Event as Paid & Closed.\n",l_debug_info_ptr,NULL);
+						EXEC SQL UPDATE CAEVENT set STATUS = 'CP' where CORP_ID = : chr_l_corp_id;
+						IS_ANY_ORA_ERROR
+					}
+					
+				}
+				else
+				{
+					EXEC SQL SELECT COUNT(CLN_CODE) into :l_allot_count_aa:i_allot_count_aa FROM ca_rtbb_allotment WHERE STATUS = 'AA' AND CORP_ID = :chr_l_corp_id;
+					IS_ANY_ORA_ERROR
+					
+					if(l_allot_count_aa == l_allot_count)
+					{
+				CO_ProcMonitor(g_logfile," No Allotments Pending. Marking Event as Paid & Closed.\n",l_debug_info_ptr,NULL);
+				EXEC SQL UPDATE CAEVENT set STATUS = 'CP' where CORP_ID = :chr_l_corp_id;
+				IS_ANY_ORA_ERROR
+			}
+					
+				}
+//				CO_ProcMonitor(g_logfile," No Allotments Pending. Marking Event as Paid & Closed.\n",l_debug_info_ptr,NULL);
+//				EXEC SQL UPDATE CAEVENT set STATUS = 'CP' where CORP_ID = :chr_l_corp_id;
+//				IS_ANY_ORA_ERROR
+	/*(ISKB_9561) - Changes for Marking NS/BB Event as Paid and Closed only if Allotment 
+	authorized count is same as application/bidding count. Changes by Mrinal - Ends*/
+			}
+		}
+		printf("\nClosing cursor curr_issue_det....");
+		EXEC SQL CLOSE curr_issue_det;
+		IS_ANY_ORA_ERROR
+	}
+	APL_GOBACK_SUCCESS
+	RETURN_SUCCESS:
+	{
+		CO_ProcMonitor(g_logfile,"Exiting from CA_MarkEvtClose_NS_BB() successfully",l_debug_info_ptr,NULL);	
+		return (APL_SUCCESS);
+	}
+	RETURN_FAILURE:
+	{
+		CO_ProcMonitor(g_logfile,"Exiting from CA_MarkEvtClose_NS_BB() with failure",l_debug_info_ptr,NULL);	
+		return (APL_FAILURE);
+	}
+}
+
+
+/* Added By Sana for Closure of BuyBack and IPO events [kotak][start] */
+static	int	CA_Mod_Nominalvalue(INTL_ENV_DATA_STRUCT_H	*p_intlenv_data_struct_h,DEBUG_INFO_STRUCT_H	**l_debug_info_ptr)
+{
+	struct sqlca sqlca;	
+	int		count=0;
+	char	chr_g_sys_date2[APL_DATE_LEN] = APL_NULL_STRING;
+	int l_count = 0;
+    int l_nom_count = 0; 
+    double l_closing_pr=0.0; 
+
+
+Alert("Entering CA_Mod_Nominalvalue() " );
+	//shailesh 290807
+	if ( CO_RtvSysDt(chr_g_sys_date2,l_debug_info_ptr) == APL_FAILURE )
+			APL_GOBACK_FAIL
+		Alert("System Date is |%s| ", chr_g_sys_date2 );
+		
+		 EXEC SQL SELECT NVL(COUNT(*),0) INTO :count 
+                                          FROM CAEVENT 
+                                          WHERE CORP_ID = :g_ca_caevent_struct_h.h_corp_id 
+                                          AND STATUS ='CP';
+										  
+										  
+										  Alert("\n Redemption rate = |%lf| nomval = |%lf|\n",g_ca_caevent_struct_h.h_redem_rt,l_mt_instrument_struct_h.h_nominal_value);
+		
+		if ((strcmp(g_ca_caevent_struct_h.h_op_evt_class,"TO") != 0) ||
+			((strcmp(g_ca_caevent_struct_h.h_op_evt_class,"TO") == 0) && (g_ca_caevent_struct_i.i_res_instr_code != -1)))	
+		{			 
+		
+			  if(!strcmp(g_ca_caevent_struct_h.h_evt_class,EVT_BOND_REDMP) && strcmp(g_ca_caevent_struct_h.h_op_evt_class,"PO") && (count >0) && (!strcmp(q_ca_casecevent_struct_h.h_new_dl_ind,APL_YES_IND))) 
+				  { 
+					
+							 EXEC SQL UPDATE MT_INSTRUMENT
+										SET
+										NOMINAL_VALUE = NOMINAL_VALUE - :g_ca_caevent_struct_h.h_redem_rt
+										WHERE INSTR_CODE = :g_ca_caevent_struct_h.h_instr_code;
+
+							 IS_ANY_ORA_ERROR
+
+					EXEC SQL SELECT NOMINAL_VALUE INTO :l_closing_pr
+						FROM MT_INSTRUMENT 
+						 WHERE INSTR_CODE=:g_ca_caevent_struct_h.h_instr_code;
+
+					IS_ANY_ORA_ERROR
+
+					EXEC SQL SELECT COUNT(*) INTO :l_count
+								 FROM MT_DLYMKTPRC
+								 WHERE INSTR_CODE=:g_ca_caevent_struct_h.h_instr_code
+									AND PRICE_DATE= :chr_g_sys_date2;
+
+					IS_ANY_ORA_ERROR
+
+					if(l_count == 0)
+					{
+						Alert("------------------ Inserting Market price ----------------------");
+						Alert("\nClosing Price :|%lf| g_ca_caevent_struct_h.h_instr_code:|%s|chr_g_sys_date2:|%s|",l_closing_pr,g_ca_caevent_struct_h.h_instr_code,chr_g_sys_date2);
+						EXEC SQL INSERT INTO MT_DLYMKTPRC VALUES (:chr_g_sys_date2,:g_ca_caevent_struct_h.h_instr_code,
+							:l_closing_pr,'H',:chr_g_sys_date2,:p_intlenv_data_struct_h->usr,
+							:chr_g_sys_date2,'AA','SYSTEM',:chr_g_sys_date2);
+
+					}
+					else
+					{
+						Alert("------------------ Updating Market price ----------------------");
+						Alert("\nClosing Price :|%lf| chr_g_sys_date1 |%s|",l_closing_pr,chr_g_sys_date2);
+						EXEC SQL UPDATE MT_DLYMKTPRC SET CLOSING_PR=:l_closing_pr 			
+									WHERE INSTR_CODE=:g_ca_caevent_struct_h.h_instr_code
+									AND PRICE_DATE = : chr_g_sys_date2;
+					}
+
+					IS_ANY_ORA_ERROR
+
+					Alert("for mktprice sqlca.sqlcode is |%d| \n",sqlca.sqlcode);
+					Alert("Face Value for Instrument |%s| changed to |%lf|\n",g_ca_caevent_struct_h.h_instr_code,l_mt_instrument_struct_h.h_nominal_value-g_ca_caevent_struct_h.h_redem_rt);
+		
+				  }
+		}
+	APL_GOBACK_SUCCESS
+	RETURN_SUCCESS:
+	{
+		return (APL_SUCCESS);
+	}
+	RETURN_FAILURE:
+	{
+		return (APL_FAILURE);
+	}
+}

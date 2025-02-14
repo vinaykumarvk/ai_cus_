@@ -1,0 +1,1968 @@
+/*
+ *    COPYRIGHT NOTICE
+ *
+ *   Copyright 2005 Polaris Software Lab Limited. All rights reserved.
+ *
+ *   These materials are confidential and proprietary to
+ *    Polaris Software Lab Limited and no part of these materials should
+ *    be reproduced, published, transmitted or distributed in any form or
+ *    by any means, electronic, mechanical, photocopying, recording or
+ *    otherwise, or stored in any information storage or retrieval system
+ *    of any nature nor should the materials be disclosed to third parties
+ *    or used in any other manner for which this is not authorized, without
+ *    the prior express written authorization of Polaris Software Lab Limited.
+*/
+/*********************************************************************
+ *
+ * Module Name         :   	Master Maintenance
+ *
+ * File Name           : 		CO_ChkMastChldDet.pc
+ *
+ * Description         :   	This file contains functions for Identifying 
+ *										Child Details And Updating Master Details.
+ *
+ *
+ *            Version Control Block
+ *
+ * Date        Version     Author         Description				RFS No.
+ * ---------   --------  ------------ 		-------------			---------
+ * 10/10/2005   1.0       Smita Bhat     	New file 				HDFCMT_003
+ * 22/12/2005   1.1       Dnyanesh     	Added new function	HDFCMT_012
+ * 30/01/2006   1.4       Smita Bhat      Added fn to check    HDFCCA_009
+ *														Status only
+ *********************************************************************/
+
+ 
+#include "CO_HostStructdef.h"
+ 
+EXEC SQL INCLUDE SQLCA.H;
+
+/***************************************************************************
+ *                                                                        	*
+ * Function Name         : CO_Chk_ChldValid                             	*
+ *                                                                        	*
+ * Description           : This Function Accepts Key Codes (Primary Keys),	* 
+ *									its Values, conditional flags for different     *
+ *								   modes,child table name to be validated and      *
+ *									returns Success/Failure depending upon validn.	*
+ *			   																					*
+ *			   																					*
+ * Parameter            Type          		Mode       Description    			*
+ * ------------         --------         	----- 	  --------------- 		*
+ * p_key_codes				char *				  I			Array accepting Key  *
+ *																	   Codes.					*
+ * p_key_values			char *				  I			Array accepting Key  *
+ *																		Values.					*
+ * p_exist					char					  I         Char accepting Exist *
+ *																		Flag.						*
+ * p_auth					char 					  I			Char accepting Auth  *
+ *																		Flag.                *
+ * p_del						char                I         Char accepting Del   *
+ *                                                    Flag.                *
+ * p_frozen             char                I         Char accepting Frozen*
+ *                                                    Flag.                *
+ * p_mothchld           char                I         Char accepting Moth  *
+ *                                                    Child Flag.          *
+ * p_converted          char                I         Char accepting Conv  *
+ *                                                    Flag.                *
+ * p_chld_table_name    char *              I         Char Ptr accepting   *
+ *                                                    Child Table Name.    *
+ *																									*
+ * Return Values        :                                                 	*
+ *                                                                         *
+ *  APL_SUCCESS  - SUCCESS                                                 *
+ *  APL_FAILURE  - FAILURE                                                 *
+ *                                                                         *
+ ***************************************************************************/ 
+int CR_Chk_Flags(char p_exist,
+                 char p_auth,
+                 char p_del,
+                 DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+ 
+int CO_Chk_ChldValid(	char *p_key_codes[], 
+								char *p_key_values[],
+								char p_exist,
+								char p_auth,
+								char p_del,
+								char p_frozen,
+								char p_mothchld,
+								char p_converted,
+								char *p_chld_table_name,
+								DEBUG_INFO_STRUCT_H **l_debug_info_ptr) 
+{
+	struct 					sqlca sqlca;	
+	short 					success_flg = APL_SUCCESS;
+ 	char 						chr_l_buf[BUFFER_LEN] = APL_NULL_STRING;
+	int						int_l_no_of_keys = 0;
+	int 						l_key_code_cnt  = 0;
+	int						l_key_value_cnt = 0;
+	int 						l_field_cnt = 0;
+   int                 	int_l_num_rows = 0;
+	char						l_checker_dt[APL_DATE_LEN] = APL_NULL_STRING;
+	char						l_rec_status[APL_STATUS_LEN] = APL_NULL_STRING;
+	short						i_checker_dt = 0;
+	short						i_rec_status = 0;
+	int						int_retval = 0;
+	char                 *sqlstmt;
+   char                 *sqlstmt_append;
+
+ 	#ifdef APL_THREADS 
+ 		APL_SET_CONTEXT
+ 		EXEC SQL CONTEXT USE :my_ctx_local;
+ 	#endif
+ 	
+ 	sqlca.sqlcode=0;
+
+	EXEC SQL BEGIN DECLARE SECTION;
+		EXEC SQL VAR l_checker_dt IS STRING;
+		EXEC SQL VAR l_rec_status IS STRING;
+	EXEC SQL END DECLARE SECTION;
+
+ 	APL_IF_DEBUG
+ 	{
+     	CO_ProcMonitor(	APL_OUT_FILE, 
+ 								"Entered Function CO_Chk_ChldValid\n",
+ 								NULL,
+ 								NULL);
+ 
+ 		memset( chr_l_buf, NULL, BUFFER_LEN );
+ 
+     	sprintf(				chr_l_buf, 
+ 								"The Exist Flag is : %c\n", 
+ 								p_exist);
+       
+ 		CO_ProcMonitor(	APL_OUT_FILE, 
+ 								chr_l_buf,	
+ 								NULL,
+ 								NULL);
+ 		
+ 		memset( chr_l_buf, NULL, BUFFER_LEN );
+       		
+ 		sprintf(				chr_l_buf, 
+ 								"The Authorisation Flag is : %c\n", 
+ 								p_auth);
+       
+ 		CO_ProcMonitor(	APL_OUT_FILE, 
+ 								chr_l_buf,	
+ 								NULL,
+ 								NULL);
+ 
+ 		memset( chr_l_buf, NULL, BUFFER_LEN );
+       
+ 		sprintf(				chr_l_buf, 
+ 								"The Delete Flag is : %c\n", 
+ 								p_del);
+       
+ 		CO_ProcMonitor(	APL_OUT_FILE, 
+ 								chr_l_buf,	
+ 								NULL,
+ 								NULL);
+ 		
+ 		memset( chr_l_buf, NULL, BUFFER_LEN );
+       
+ 		sprintf(				chr_l_buf, 
+ 								"The Frozen Flag is : %c\n", 
+ 								p_frozen);
+ 
+     	CO_ProcMonitor(	APL_OUT_FILE, 
+ 								chr_l_buf,	
+ 								NULL,
+ 								NULL);
+ 		
+ 		memset( chr_l_buf, NULL, BUFFER_LEN );
+       
+ 		sprintf(				chr_l_buf, 
+ 								"The Mother/Child Flag is : %c\n", 
+ 								p_mothchld);
+ 	
+   	CO_ProcMonitor(	APL_OUT_FILE, 
+ 								chr_l_buf,	
+ 								NULL,
+ 								NULL);
+ 
+ 		memset( chr_l_buf, NULL, BUFFER_LEN );
+       		
+ 		sprintf(				chr_l_buf, 
+ 								"The Converted Flag is : %c\n", 
+ 								p_converted);
+ 
+     	CO_ProcMonitor(	APL_OUT_FILE, 
+ 								chr_l_buf,	
+ 								NULL,
+ 								NULL);
+
+		memset( chr_l_buf, NULL, BUFFER_LEN);
+
+		sprintf(				chr_l_buf,
+								"Table Name is : |%s|\n",
+								p_chld_table_name);
+
+		CO_ProcMonitor(	APL_OUT_FILE,
+								chr_l_buf,
+								NULL,
+								NULL);	
+ 	}
+   sqlstmt = (char *)calloc(15000,sizeof(char));
+   sqlstmt_append = (char *)calloc(15000,sizeof(char));
+
+   memset(sqlstmt,APL_NULL_CHAR,15000);
+   memset(sqlstmt_append,APL_NULL_CHAR,15000);
+
+	int_retval = CR_Chk_Flags	(p_exist,
+										 p_auth,
+										 p_del,
+										 l_debug_info_ptr);
+
+	if (int_retval != APL_SUCCESS)
+		APL_GOBACK_FAIL
+
+	int_retval = CR_Chk_MandData(	p_key_codes,
+											p_key_values,
+											&l_key_code_cnt,
+											&l_key_value_cnt,
+											l_debug_info_ptr); 
+
+	if (int_retval !=APL_SUCCESS)
+		APL_GOBACK_FAIL
+
+	APL_IF_DEBUG
+	{
+		printf("Returned Key Code Cnt = |%d|\n",l_key_code_cnt);
+		printf("Returned Key Val Cnt  = |%d|\n",l_key_value_cnt);
+	}
+	
+	if (!strlen(p_chld_table_name))
+	{
+		APL_DATA_MISSING("Child Table Name", APL_NULL_STRING, APL_NULL_STRING);
+		APL_GOBACK_FAIL
+	}
+	sprintf(sqlstmt,"SELECT CHECKER_DT,STATUS FROM %s WHERE %s = '%s'",p_chld_table_name,p_key_codes[0],p_key_values[0]);
+	for (l_field_cnt=1;l_field_cnt<l_key_code_cnt;l_field_cnt++)
+	{
+		sprintf(sqlstmt_append," AND %s = '%s'",p_key_codes[l_field_cnt],p_key_values[l_field_cnt]);
+		strcat(sqlstmt,sqlstmt_append);
+	}
+
+	APL_IF_DEBUG
+	{
+		printf("Query = |%s|\n",sqlstmt);
+	}
+
+   EXEC SQL PREPARE s FROM :sqlstmt;
+   IS_ANY_ORA_ERROR   
+
+   EXEC SQL DECLARE cur_chld CURSOR FOR s;
+   IS_ANY_ORA_ERROR   
+
+   EXEC SQL OPEN cur_chld;
+   IS_ANY_ORA_ERROR   
+
+   EXEC SQL FETCH cur_chld INTO :l_checker_dt:i_checker_dt,:l_rec_status:i_rec_status;
+   IS_ANY_ORA_ERROR   
+
+ 	if ((sqlca.sqlcode == 1403) && (p_exist == 'Y'))
+ 	{
+		EXEC SQL CLOSE cur_chld;
+		IS_ANY_ORA_ERROR
+
+ 		CO_InsertErr(	l_debug_info_ptr, 
+							MAP_DET_NOTFND, 
+							p_chld_table_name, 
+							APL_NULL_STRING, 
+							APL_NULL_STRING, 
+							__LINE__, 
+							__FILE__);    
+ 		APL_GOBACK_FAIL
+ 	}
+
+ 	if ((sqlca.sqlcode == 0) && (p_exist == 'N'))
+ 	{
+		EXEC SQL CLOSE cur_chld;
+		IS_ANY_ORA_ERROR
+
+		if ( APL_FAILURE == CO_InsertErr(   l_debug_info_ptr,
+                                          MAP_DET_EXIST,
+                                          p_chld_table_name,
+                                          APL_NULL_STRING,
+                                          APL_NULL_STRING,
+                                          __LINE__,
+                                          __FILE__) )
+ 		{
+ 			APL_GOBACK_FAIL;
+ 		}
+			success_flg = APL_FAILURE;
+ 	}
+
+ 	if ( ( i_checker_dt == -1 ) && (p_auth=='Y'))
+ 	{
+		EXEC SQL CLOSE cur_chld;
+		IS_ANY_ORA_ERROR
+
+ 		if ( APL_FAILURE == CO_InsertErr(	l_debug_info_ptr, 
+														MAP_DET_UNAUTH, 
+														p_chld_table_name, 
+														APL_NULL_STRING, 
+														APL_NULL_STRING, 
+														__LINE__, 	
+														__FILE__) )
+ 		{
+ 			APL_GOBACK_FAIL;
+ 		}
+ 		success_flg = APL_FAILURE;
+ 	}
+ 	
+ 	if ( ( i_checker_dt != -1 ) && (p_auth=='N'))
+ 	{
+		EXEC SQL CLOSE cur_chld;
+		IS_ANY_ORA_ERROR
+
+ 		if ( APL_FAILURE == CO_InsertErr(	l_debug_info_ptr, 
+														MAP_DET_AUTHORIZED, 
+														p_chld_table_name, 
+														APL_NULL_STRING, 
+														APL_NULL_STRING, 
+														__LINE__, 
+														__FILE__) )
+ 		{
+ 			APL_GOBACK_FAIL;
+ 		}
+ 		success_flg = APL_FAILURE;
+ 	}
+ 
+ 	if ((strcmp(l_rec_status, "DU")) && (p_del=='Y'))
+ 	{
+		EXEC SQL CLOSE cur_chld;
+		IS_ANY_ORA_ERROR
+
+ 		if ( APL_FAILURE == CO_InsertErr(	l_debug_info_ptr, 
+														MAP_DET_NOTMARKEDDEL, 
+														p_chld_table_name, 
+														APL_NULL_STRING, 
+														APL_NULL_STRING, 
+														__LINE__, 
+														__FILE__) )
+ 		{
+ 			APL_GOBACK_FAIL;
+ 		}
+ 		success_flg = APL_FAILURE;
+ 	}
+ 	
+ 	if ((!strcmp(l_rec_status, "DU")) && (p_del=='N'))
+ 	{
+		EXEC SQL CLOSE cur_chld;
+		IS_ANY_ORA_ERROR
+
+ 		if ( APL_FAILURE == CO_InsertErr(	l_debug_info_ptr, 
+														MAP_DET_MARKEDDEL, 
+														p_chld_table_name, 
+														APL_NULL_STRING, 
+														APL_NULL_STRING, 
+														__LINE__, 
+														__FILE__) )
+ 		{
+ 			APL_GOBACK_FAIL;
+ 		}
+ 		success_flg = APL_FAILURE;
+ 	}
+ 
+	EXEC SQL CLOSE cur_chld;
+	IS_ANY_ORA_ERROR
+
+   if (APL_FAILURE == success_flg )
+   {
+       APL_GOBACK_FAIL
+   }
+   else
+   {
+      APL_GOBACK_SUCCESS
+   }
+
+
+   RETURN_SUCCESS :
+ 		APL_IF_DEBUG
+ 		{
+          		CO_ProcMonitor(	APL_OUT_FILE,
+ 											"Leaving Function CO_Chk_ChldValid with success\n",
+ 											NULL,
+ 											NULL);
+ 		}
+   	return(APL_SUCCESS);
+   
+   RETURN_FAILURE :
+ 		APL_IF_DEBUG
+ 		{
+          		CO_ProcMonitor(	APL_OUT_FILE,
+ 											"Leaving Function CO_Chk_ChldValid with Errors\n",
+ 											NULL,
+ 											NULL);
+ 		}
+   	return(APL_FAILURE);
+}
+
+/******************************************************************************************
+ *                                                                         					*
+ * Function Name         : CR_Chk_CodeInChld                               					*
+ *                                                                         					*
+ * Description           : This Function Accepts Key Codes (Primary Keys), 					*
+ *                         its Values, Child table Names, Env String,      					*
+ *									and debug pointer.															*
+ *                         returns Success/Failure depending upon validn.  					*
+ *                                                                         					*
+ *                                                                         					*
+ * Parameter            		Type              			Mode     Description           	*
+ * ------------         		--------          			-----    ---------------       	*
+ * p_key_codes          		char *              			I        Array accepting Key  	*
+ *                                                    				Codes.               	*
+ * p_key_values         		char *              			I        Array accepting Key  	*
+ *                                                    				Values.              	*
+ * p_table_name         		char *              			I        Array accepting Child	*
+ *                                                    				Table Names.         	*
+ * p_intl_env_data_struct_h_d INTL_ENV_DATA_STRUCT_H *  I         Environemt String    	*
+ *																						Structure					*	
+ * l_debug_info_ptr		DEBUG_INFO_STRUCT_H ** I						Debug Info Structure 	*
+ *																														*
+ * Return Values        :                                                  					*
+ *                                                                         					*
+ *  APL_SUCCESS  - SUCCESS                                                 					*
+ *  APL_FAILURE  - FAILURE                                                 					*
+ *                                                                         					*
+ ******************************************************************************************/
+int CR_Chk_CodeInChld(	char *p_key_codes[],
+								char *p_key_values[],
+								char *p_table_name[],
+								INTL_ENV_DATA_STRUCT_H *p_intl_env_data_struct_h_d,
+								DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+  	struct sqlca         sqlca;
+  	char                 chr_l_buf[BUFFER_LEN] = APL_NULL_STRING;
+  	int                  int_l_num_rows = 0;
+	int						int_l_arr_len=0;
+	int 						l_key_code_cnt  = 0;
+	int						l_key_value_cnt = 0;
+	int 						l_table_name_cnt = 0;
+	int 						l_field_cnt = 0;
+	int						int_retval = 0;
+	char	               *sqlstmt;
+   char                 *sqlstmt_append;
+
+  	#ifdef APL_THREADS
+     	APL_SET_CONTEXT
+     	EXEC SQL CONTEXT USE :my_ctx_local;
+  	#endif
+
+  	sqlca.sqlcode = 0;
+
+  	APL_IF_DEBUG
+ 	{
+     	CO_ProcMonitor(APL_OUT_FILE,"Entered function CR_Chk_CodeInChld \n",NULL,NULL);
+  	}
+
+	sqlstmt = (char *)calloc(15000,sizeof(char));
+   sqlstmt_append = (char *)calloc(15000,sizeof(char));
+
+   memset(sqlstmt,APL_NULL_CHAR,15000);
+   memset(sqlstmt_append,APL_NULL_CHAR,15000);
+
+   int_retval = CR_Chk_MandData( p_key_codes,
+                                 p_key_values,
+                                 &l_key_code_cnt,
+                                 &l_key_value_cnt,
+                                 l_debug_info_ptr);
+
+   if (int_retval !=APL_SUCCESS)
+      APL_GOBACK_FAIL
+
+   APL_IF_DEBUG
+   {
+      printf("Returned Key Code Cnt = |%d|\n",l_key_code_cnt);
+      printf("Returned Key Val Cnt  = |%d|\n",l_key_value_cnt);
+   }
+
+	while (strlen(*(p_table_name + l_table_name_cnt)))
+	{
+		APL_IF_DEBUG
+		{
+			printf("Table Names Count = |%d|\n",l_table_name_cnt);
+			printf("Table Name = |%s|\n",*(p_table_name + l_table_name_cnt));
+		}
+		l_table_name_cnt++;
+	}
+
+	if (l_table_name_cnt == 0)
+	{
+		APL_DATA_MISSING("Table Names Missing",APL_NULL_STRING, APL_NULL_STRING);
+		APL_GOBACK_FAIL
+	}
+
+	for (int_l_arr_len=0;int_l_arr_len<l_table_name_cnt;int_l_arr_len++)
+	{
+	
+		sprintf(sqlstmt,"SELECT NVL(COUNT(*),0) FROM %s WHERE %s = '%s'",p_table_name[int_l_arr_len],p_key_codes[0],p_key_values[0]);
+		for (l_field_cnt=1;l_field_cnt<l_key_code_cnt;l_field_cnt++)
+		{
+			sprintf(sqlstmt_append," AND %s = '%s'",p_key_codes[l_field_cnt],p_key_values[l_field_cnt]);
+			strcat(sqlstmt,sqlstmt_append);
+		}
+		APL_IF_DEBUG
+		{
+			printf("Query = |%s|\n",sqlstmt);
+		}
+
+  		EXEC SQL PREPARE stmt FROM :sqlstmt;
+		IS_ANY_ORA_ERROR
+
+  		EXEC SQL DECLARE cur_code CURSOR FOR stmt;
+		IS_ANY_ORA_ERROR
+
+  		EXEC SQL OPEN cur_code;
+		IS_ANY_ORA_ERROR
+
+  		EXEC SQL FETCH cur_code INTO :int_l_num_rows;
+  		IS_ANY_ORA_ERROR   
+	
+		EXEC SQL CLOSE cur_code;
+		IS_ANY_ORA_ERROR
+
+		if (int_l_num_rows > 0)
+		{
+			break;
+		}
+
+	}/*End of For Loop*/
+
+	if (int_l_num_rows > 0)
+	{
+		APL_GOBACK_FAIL
+	}
+	else
+	{	
+		APL_GOBACK_SUCCESS
+	}
+
+   RETURN_SUCCESS :
+   {
+      APL_IF_DEBUG
+         CO_ProcMonitor(APL_OUT_FILE,"Leaving function CR_Chk_CodeInChld SUCCESS\n",NULL,NULL);
+      return(APL_SUCCESS);
+   }
+
+   RETURN_FAILURE :
+   {
+      APL_IF_DEBUG
+         CO_ProcMonitor(APL_OUT_FILE,"Leaving function CR_Chk_CodeInChld FAILURE \n",NULL,NULL);
+
+         return(APL_FAILURE);
+   }
+}
+
+/******************************************************************************************
+ *                                                                                        *
+ * Function Name         : CR_Chk_MasterField                                             *
+ *                                                                                        *
+ * Description           : This Function Accepts Key Codes (Primary Keys), its Values, 	*
+ *									Master table Name, Field Ind, Field Name, Env String and       *
+ *                         and debug pointer.                                             *
+ *                         returns Success/Failure depending upon validn.                 *
+ *                                                                                        *
+ *                                                                                        *
+ * Parameter                  Type                       Mode     Description             *
+ * ------------               --------                   -----    ---------------         *
+ * p_field_ind						char *							I			Ind of Field in Table   * 
+ *																														*	
+ * p_field_name					char *							I			Field Name in the table *
+ *																														*
+ * p_key_codes                char *                     I        Array accepting Key     *
+ *                                                                Codes.                  *
+ * p_key_values               char *                     I        Array accepting Key     *
+ *                                                                Values.                 *
+ * p_mst_table_name           char *                     I        Master Table Name       *
+ *                                                                				            *
+ * p_intl_env_data_struct_h_d INTL_ENV_DATA_STRUCT_H *   I        Environemt String       *
+ *                                                                Structure               *
+ * l_debug_info_ptr     DEBUG_INFO_STRUCT_H ** 				I        Debug Info Structure    *
+ *                                                                                        *
+ * Return Values        :                                                                 *
+ *                                                                                        *
+ *  APL_SUCCESS  - SUCCESS                                                                *
+ *  APL_FAILURE  - FAILURE                                                                *
+ *	 Field Indicator Value - p_field_ind
+ *                                                                                        *
+ ******************************************************************************************/
+int CR_Chk_MasterField(	char *p_field_ind,
+								char *p_field_name,
+								char *p_key_codes[],
+								char *p_key_values[],
+								char *p_mst_table_name,
+								INTL_ENV_DATA_STRUCT_H *p_intl_env_data_struct_h_d,
+								DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	int 							l_key_code_cnt  = 0;
+	int							l_key_value_cnt = 0;
+	int 							l_field_cnt = 0;
+   int                  	int_l_num_rows = 0;
+	char							l_field_ind[5] = APL_NULL_STRING;
+	short							i_field_ind = 0;
+	int							int_retval = 0;
+	char							*sqlstmt;
+	char							*sqlstmt_append;
+	
+	CO_ProcMonitor(APL_OUT_FILE,"Entered Function CR_Chk_MasterField\n",NULL,p_intl_env_data_struct_h_d);
+
+	APL_IF_DEBUG
+	{
+		printf("Field Name = |%s|\n",p_field_name);
+	}
+
+	EXEC SQL BEGIN DECLARE SECTION;
+		EXEC SQL VAR l_field_ind IS STRING;
+	EXEC SQL END DECLARE SECTION;
+
+   int_retval = CR_Chk_MandData( p_key_codes,
+                                 p_key_values,
+                                 &l_key_code_cnt,
+                                 &l_key_value_cnt,
+                                 l_debug_info_ptr);
+
+   if (int_retval !=APL_SUCCESS)
+      APL_GOBACK_FAIL
+
+   APL_IF_DEBUG
+   {
+      printf("Returned Key Code Cnt = |%d|\n",l_key_code_cnt);
+      printf("Returned Key Val Cnt  = |%d|\n",l_key_value_cnt);
+   }
+
+	if (!strlen(p_mst_table_name))
+	{
+		APL_DATA_MISSING("Master Table Name", APL_NULL_STRING, APL_NULL_STRING);
+		APL_GOBACK_FAIL
+	}
+
+	sqlstmt = (char *)calloc(15000,sizeof(char));
+   sqlstmt_append = (char *)calloc(15000,sizeof(char));
+
+   memset(sqlstmt,APL_NULL_CHAR,15000);
+   memset(sqlstmt_append,APL_NULL_CHAR,15000);
+
+	sprintf(sqlstmt,"SELECT NVL(%s,'N') FROM %s WHERE %s = '%s'",p_field_name,p_mst_table_name,p_key_codes[0],p_key_values[0]);
+	for (l_field_cnt=1;l_field_cnt<l_key_code_cnt;l_field_cnt++)	
+	{
+		sprintf(sqlstmt_append," AND %s = '%s'",p_key_codes[l_field_cnt],p_key_values[l_field_cnt]);
+		strcat(sqlstmt,sqlstmt_append);
+	}
+
+	APL_IF_DEBUG
+	{
+		printf("Query = |%s|\n",sqlstmt);
+	}
+
+   EXEC SQL PREPARE s FROM :sqlstmt;
+   IS_ANY_ORA_ERROR   
+
+   EXEC SQL DECLARE cur_mast CURSOR FOR s;
+   IS_ANY_ORA_ERROR   
+
+   EXEC SQL OPEN cur_mast;
+   IS_ANY_ORA_ERROR   
+
+   EXEC SQL FETCH cur_mast INTO :l_field_ind:i_field_ind;
+   IS_ANY_ORA_ERROR  
+ 
+	APL_IF_DEBUG
+	{
+		printf("Field Indicator = |%s|\n",l_field_ind);
+	}
+
+	if (strcmp(l_field_ind,APL_NULL_STRING) !=0)
+	{
+		strcpy(p_field_ind,l_field_ind);
+	}
+
+	EXEC SQL CLOSE cur_mast;
+	IS_ANY_ORA_ERROR	
+
+	APL_GOBACK_SUCCESS
+
+   RETURN_SUCCESS :
+   {
+     APL_IF_DEBUG
+        CO_ProcMonitor(APL_OUT_FILE,"Leaving function CR_Chk_MasterField with Success\n",NULL,p_intl_env_data_struct_h_d);
+      return(APL_SUCCESS);
+   }
+
+   RETURN_FAILURE :
+   {
+      APL_IF_DEBUG
+         CO_ProcMonitor(APL_OUT_FILE,"Leaving function CR_Chk_MasterField with Failure\n",NULL,p_intl_env_data_struct_h_d);
+			return(APL_FAILURE);
+   }	
+}	
+
+/******************************************************************************************
+ *                                                                                        *
+ * Function Name         : CR_Mod_UpdMastStatus                                           *
+ *                                                                                        *
+ * Description           : This Function Accepts Key Codes (Primary Keys), its Values,    *
+ *                         Master table Name, Child Table Names, and Access Stamp         *
+ *                         and debug pointer.                                             *
+ *                         returns Success/Failure depending upon validn.                 *
+ *                                                                                        *
+ *                                                                                        *
+ * Parameter                  Type                       Mode     Description             *
+ * ------------               --------                   -----    ---------------         *
+ * p_key_codes                char *                     I        Array accepting Key     *
+ *                                                                Codes.                  *
+ * p_key_values               char *                     I        Array accepting Key     *
+ *                                                                Values.                 *
+ * p_mst_table_name           char *                     I        Master Table Name       *
+ *                                                                                        *
+ * p_chld_table_names			char *							I			Array for Child Table   *
+ *																						Names							*
+ *	p_status							char *							I			Status Value				*
+ *																														*
+ *	p_access_stamp					char *							I			Access Stamp				*
+ *																														*
+ * p_intl_env_data_struct_h_d INTL_ENV_DATA_STRUCT_H *   I        Environemt String       *
+ *                                                                Structure               *
+ * l_debug_info_ptr     DEBUG_INFO_STRUCT_H **           I        Debug Info Structure    *
+ *                                                                                        *
+ * Return Values        :                                                                 *
+ *                                                                                        *
+ *  APL_SUCCESS  - SUCCESS                                                                *
+ *  APL_FAILURE  - FAILURE                                                                *
+ *	 Status - p_status																							*
+ *                                                                                        *
+ ******************************************************************************************/
+int CR_Mod_UpdMastStatus (	char *p_key_codes[],
+									char *p_key_values[],
+									char *p_mst_table_name,
+									char *p_chld_table_names[],
+									char *p_mst_chld_ind,
+									char *p_status,
+									char *p_access_stamp,
+									INTL_ENV_DATA_STRUCT_H *p_intl_env_data_struct_h_d,
+									DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	struct 						sqlca sqlca;	
+	short 						success_flg = APL_SUCCESS;
+ 	char 							chr_l_buf[BUFFER_LEN] = APL_NULL_STRING;
+	int							int_l_no_of_keys = 0;
+	int 							l_key_code_cnt  = 0;
+	int 							l_key_value_cnt  = 0;
+	int 							l_field_cnt = 0;
+   int                  	int_l_num_rows = 0;
+	int							l_key_code_cnt_tables = 0;
+	int							l_int_cnt = 0;
+	int							l_unauth_rec_count = 0;
+	char							l_rec_status[APL_STATUS_LEN] = APL_NULL_STRING;
+	int							int_retval = 0;
+	char							l_chld_rec_fnd;
+	char							*sqlstmt;
+	char							*sqlstmt_append;
+	char							l_user[APL_USERID_LEN];
+	char							l_access_stamp[APL_DATE_LEN];
+
+ 	#ifdef APL_THREADS 
+ 		APL_SET_CONTEXT
+ 		EXEC SQL CONTEXT USE :my_ctx_local;
+ 	#endif
+ 	
+ 	sqlca.sqlcode=0;
+
+ 	APL_IF_DEBUG
+ 	{
+     	CO_ProcMonitor(	APL_OUT_FILE, 
+ 								"Entered Function CR_Mod_UpdMastStatus\n",
+ 								NULL,
+ 								NULL);
+
+		memset(chr_l_buf,APL_NULL_CHAR,BUFFER_LEN);
+     	sprintf(chr_l_buf,"Mode is |%s| \n",p_intl_env_data_struct_h_d->h_mode);
+      CO_ProcMonitor(APL_OUT_FILE,chr_l_buf,NULL,NULL);
+
+		memset(chr_l_buf,APL_NULL_CHAR,BUFFER_LEN);
+     	sprintf(chr_l_buf,"Master Table Name is |%s| \n",p_mst_table_name);
+      CO_ProcMonitor(APL_OUT_FILE,chr_l_buf,NULL,NULL);
+		
+		memset(chr_l_buf,APL_NULL_CHAR,BUFFER_LEN);
+     	sprintf(chr_l_buf,"Access Stamp is |%s| \n",p_access_stamp);
+      CO_ProcMonitor(APL_OUT_FILE,chr_l_buf,NULL,NULL);
+
+		memset(chr_l_buf,APL_NULL_CHAR,BUFFER_LEN);
+     	sprintf(chr_l_buf,"Master Child Indicator is |%s| \n",p_mst_chld_ind);
+      CO_ProcMonitor(APL_OUT_FILE,chr_l_buf,NULL,NULL);
+		
+	}
+
+	sqlstmt = (char *)calloc(15000,sizeof(char));
+   sqlstmt_append = (char *)calloc(15000,sizeof(char));
+
+   memset(sqlstmt,APL_NULL_CHAR,15000);
+   memset(sqlstmt_append,APL_NULL_CHAR,15000);
+
+   int_retval = CR_Chk_MandData( p_key_codes,
+                                 p_key_values,
+                                 &l_key_code_cnt,
+                                 &l_key_value_cnt,
+                                 l_debug_info_ptr);
+
+   if (int_retval !=APL_SUCCESS)
+      APL_GOBACK_FAIL
+
+   APL_IF_DEBUG
+   {
+      printf("Returned Key Code Cnt = |%d|\n",l_key_code_cnt);
+      printf("Returned Key Val Cnt  = |%d|\n",l_key_value_cnt);
+   }
+
+  if (APL_FAILURE == CO_RtvSysDtTime(l_access_stamp,l_debug_info_ptr))
+   {
+      APL_GOBACK_FAIL
+   }
+
+	strcpy(l_user,p_intl_env_data_struct_h_d->usr);
+	while(strlen(*(p_chld_table_names + l_key_code_cnt_tables)))
+	{
+		APL_IF_DEBUG
+		{
+			printf("Child Table Names = |%s|\n",*(p_chld_table_names + l_key_code_cnt_tables));
+		}
+		l_key_code_cnt_tables++;
+	}
+
+	if (l_key_code_cnt_tables == 0)
+	{
+		APL_DATA_MISSING("Table Names Missing",APL_NULL_STRING, APL_NULL_STRING);
+		APL_GOBACK_FAIL
+	}
+
+
+  
+	l_chld_rec_fnd = 'N';
+
+	sprintf(sqlstmt,"SELECT STATUS FROM %s WHERE %s = '%s'",p_mst_table_name,p_key_codes[0],p_key_values[0]);
+
+  /*  Added by Manik Trivedi - HDFCMT_010 */ 
+  for (l_field_cnt=1;l_field_cnt<l_key_code_cnt;l_field_cnt++)
+  {
+      sprintf(sqlstmt_append," AND %s = '%s'",p_key_codes[l_field_cnt],p_key_values[l_field_cnt]);
+      strcat(sqlstmt,sqlstmt_append);
+  }
+
+	APL_IF_DEBUG
+	{
+		printf("Master Table Query = |%s|\n",sqlstmt);
+	}
+
+   EXEC SQL PREPARE s FROM :sqlstmt;
+   IS_ANY_ORA_ERROR   
+
+   EXEC SQL DECLARE cur_mst_stat CURSOR FOR s;
+   IS_ANY_ORA_ERROR   
+
+   EXEC SQL OPEN cur_mst_stat ;
+   IS_ANY_ORA_ERROR   
+
+   EXEC SQL FETCH cur_mst_stat INTO :l_rec_status;
+   IS_ANY_ORA_ERROR   
+
+	APL_IF_DEBUG
+	{
+		printf("Status of Record in Master Table |%s| = |%s|\n",p_mst_table_name,l_rec_status);
+	}
+	EXEC SQL CLOSE cur_mst_stat;
+   IS_ANY_ORA_ERROR
+	
+	for (l_int_cnt=0;l_int_cnt<l_key_code_cnt_tables;l_int_cnt++)
+	{		
+		sprintf(sqlstmt,"SELECT NVL(COUNT(*),0) FROM %s WHERE %s = '%s'",p_chld_table_names[l_int_cnt],p_key_codes[0],p_key_values[0]);
+     
+    /*  Added by Manik Trivedi - HDFCMT_010 */
+    for (l_field_cnt=1;l_field_cnt<l_key_code_cnt;l_field_cnt++)
+    {
+        sprintf(sqlstmt_append," AND %s = '%s'",p_key_codes[l_field_cnt],p_key_values[l_field_cnt]);
+        strcat(sqlstmt,sqlstmt_append);
+    }
+
+		APL_IF_DEBUG
+		{
+			printf("Query = |%s|\n",sqlstmt);
+		}
+   	
+		EXEC SQL PREPARE s FROM :sqlstmt;
+   	IS_ANY_ORA_ERROR   
+
+   	EXEC SQL DECLARE cur_chld_rec CURSOR FOR s;
+   	IS_ANY_ORA_ERROR   
+
+   	EXEC SQL OPEN cur_chld_rec;
+   	IS_ANY_ORA_ERROR   
+
+   	EXEC SQL FETCH cur_chld_rec INTO :int_l_num_rows;
+   	IS_ANY_ORA_ERROR   
+
+		APL_IF_DEBUG
+		{
+			printf("No of Child records in table |%s| = |%d|\n",p_chld_table_names[l_int_cnt],int_l_num_rows);
+		}
+
+		if (int_l_num_rows > 0)
+		{
+			strcat(sqlstmt," AND STATUS NOT IN ('AA')");
+			l_chld_rec_fnd = 'Y';
+
+			APL_IF_DEBUG
+			{
+				printf("Query = |%s|\n",sqlstmt);
+			}
+
+			EXEC SQL PREPARE s FROM :sqlstmt;
+			IS_ANY_ORA_ERROR
+		
+			EXEC SQL DECLARE cur_chld_stat CURSOR FOR s;
+			IS_ANY_ORA_ERROR
+			
+			EXEC SQL OPEN cur_chld_stat;
+			IS_ANY_ORA_ERROR
+
+			EXEC SQL FETCH cur_chld_rec INTO :l_unauth_rec_count;
+			IS_ANY_ORA_ERROR
+		
+			if (l_unauth_rec_count > 0)
+			{
+				EXEC SQL CLOSE cur_chld_rec;
+				IS_ANY_ORA_ERROR
+			
+				APL_IF_DEBUG
+				{
+					printf("Unauthorised Records Found in Child Table |%s| \n",p_chld_table_names[l_int_cnt]);
+				}
+
+				break;
+			}
+		}
+	}
+	EXEC SQL CLOSE cur_chld_stat;
+   IS_ANY_ORA_ERROR
+
+	APL_IF_DEBUG
+	{
+		printf("No of Records in Child Tables = |%d|\n",int_l_num_rows);
+		printf("No of Records in Unauthorised Status = |%d|\n",l_unauth_rec_count);
+		printf("Child Records Exist Indicator = |%c|\n",l_chld_rec_fnd);
+	}
+
+	if (strcmp(p_mst_chld_ind,APL_MASTER_IND) == 0)
+	{
+		if (strcmp(p_intl_env_data_struct_h_d->h_mode,APL_FUNC_INPUT) == 0)
+		{
+			strcpy(p_status,STATUS_UAUTH);
+		}
+		
+		if (strcmp(p_intl_env_data_struct_h_d->h_mode,APL_FUNC_MODIFY) == 0)
+		{
+			if (	(strcmp(l_rec_status,STATUS_UAUTH) == 0)	||
+					(strcmp(l_rec_status,STATUS_AUTHMAST_CHLD) == 0) ||
+					(strcmp(l_rec_status,STATUS_AUTH) == 0)||
+					(strcmp(l_rec_status,STATUS_MAST_AUTHCHLD) == 0) )
+			{
+				if (l_unauth_rec_count > 0)
+				{
+					strcpy(p_status,STATUS_UAUTH);
+				}
+				else if (	(l_unauth_rec_count == 0) && (l_chld_rec_fnd == 'Y') )
+				{
+					strcpy(p_status,STATUS_MAST_AUTHCHLD);
+				}
+				else if (	(l_unauth_rec_count == 0) && (l_chld_rec_fnd == 'N')	)
+				{
+					strcpy(p_status,STATUS_UAUTH);
+				}
+			}
+			else if (strcmp(l_rec_status,STATUS_MAST_AUTHCHLD) == 0)
+			{
+				strcpy(l_rec_status,STATUS_MAST_AUTHCHLD);
+			}
+		}
+
+		if (strcmp(p_intl_env_data_struct_h_d->h_mode,APL_FUNC_DELETE) == 0)
+		{
+			if (int_l_num_rows == 0)
+			{
+				strcpy(p_status,STATUS_DEL_UAUTH);
+			}
+		}
+
+		if (strcmp(p_intl_env_data_struct_h_d->h_mode,APL_FUNC_AUTHORISE) == 0)
+		{
+			if (	(strcmp(l_rec_status,STATUS_UAUTH) == 0) ||
+					(strcmp(l_rec_status,STATUS_MAST_AUTHCHLD) == 0)	)
+			{
+				if (l_unauth_rec_count == 0)
+				{
+					strcpy(p_status,STATUS_AUTH);
+				}
+				else 
+				{
+					strcpy(p_status,STATUS_AUTHMAST_CHLD);
+				}
+			}
+		}
+		
+		if (strcmp(p_intl_env_data_struct_h_d->h_mode,APL_FUNC_RESET) == 0)
+		{
+			if (strcmp(l_rec_status,STATUS_DEL_UAUTH) == 0)
+			{
+				strcpy(p_status,STATUS_AUTH);
+			}
+		}
+	}
+	else if (strcmp(p_mst_chld_ind,APL_CHILD_IND) == 0)
+	{
+		if (strcmp(p_intl_env_data_struct_h_d->h_mode,APL_FUNC_INPUT) == 0)
+		{
+			if (	(strcmp(l_rec_status,STATUS_UAUTH) == 0) ||
+					(strcmp(l_rec_status,STATUS_MAST_AUTHCHLD) == 0)	)
+			{
+				strcpy(p_status,STATUS_UAUTH);
+			}
+		
+			else if (	(strcmp(l_rec_status,STATUS_AUTH) == 0) ||
+							(strcmp(l_rec_status,STATUS_AUTHMAST_CHLD) == 0)	)
+			{
+				strcpy(p_status,STATUS_AUTHMAST_CHLD);
+			}
+		}
+		if (	(strcmp(p_intl_env_data_struct_h_d->h_mode,APL_FUNC_MODIFY) == 0) ||
+				(strcmp(p_intl_env_data_struct_h_d->h_mode,APL_FUNC_DELETE) == 0)	)
+		{
+			if (	(strcmp(l_rec_status,STATUS_UAUTH) == 0) ||
+					(strcmp(l_rec_status,STATUS_MAST_AUTHCHLD) == 0) )
+			{
+				strcpy(p_status,STATUS_UAUTH);
+			}
+			else if (	(strcmp(l_rec_status,STATUS_AUTH) == 0) ||
+							(strcmp(l_rec_status,STATUS_AUTHMAST_CHLD) == 0) )
+			{
+				strcpy(p_status,STATUS_AUTHMAST_CHLD);
+			}
+		}
+
+		if (	(strcmp(p_intl_env_data_struct_h_d->h_mode,APL_FUNC_AUTHORISE) == 0) ||
+				(strcmp(p_intl_env_data_struct_h_d->h_mode,APL_FUNC_RESET)	 == 0)	)
+		{
+			if (l_unauth_rec_count > 0)
+			{
+				if (	(strcmp(l_rec_status,STATUS_UAUTH) == 0) ||
+						(strcmp(l_rec_status,STATUS_MAST_AUTHCHLD) == 0)	)
+				{
+					strcpy(p_status,STATUS_UAUTH);
+				}
+				else if (strcmp(l_rec_status,STATUS_AUTHMAST_CHLD) == 0)
+				{
+					strcpy(p_status,STATUS_AUTHMAST_CHLD);
+				}
+			}
+			else
+			{
+				if (strcmp(l_rec_status,STATUS_UAUTH) == 0)
+				{
+					strcpy(p_status,STATUS_MAST_AUTHCHLD);
+				}
+				if (strcmp(l_rec_status,STATUS_AUTHMAST_CHLD) == 0)
+				{
+					strcpy(p_status,STATUS_AUTH);
+				}
+			}
+		}
+	}
+	
+if((strcmp(p_status,STATUS_AUTH)==0) || (strcmp(p_status,STATUS_AUTHMAST_CHLD)==0))
+{
+	sprintf(sqlstmt,"UPDATE %s SET STATUS = '%s' ,checker ='%s',checker_dt ='%s' WHERE %s = '%s'",p_mst_table_name,p_status,l_user,l_access_stamp,p_key_codes[0],p_key_values[0]);
+}
+else
+	sprintf(sqlstmt,"UPDATE %s SET STATUS = '%s' WHERE %s = '%s'",p_mst_table_name,p_status,p_key_codes[0],p_key_values[0]);
+   /*  Added by Manik Trivedi - HDFCMT_010 */
+ 
+   for (l_field_cnt=1;l_field_cnt<l_key_code_cnt;l_field_cnt++)
+   {
+      sprintf(sqlstmt_append," AND %s = '%s'",p_key_codes[l_field_cnt],p_key_values[l_field_cnt]);
+      strcat(sqlstmt,sqlstmt_append);
+   }
+   APL_IF_DEBUG
+   {
+      printf("Update Query = |%s|\n",sqlstmt);
+   }
+
+   EXEC SQL PREPARE s FROM :sqlstmt;
+   IS_ANY_ORA_ERROR
+	
+	EXEC SQL EXECUTE s;
+	IS_ANY_ORA_ERROR
+
+/* Bageshri for updating Instrument ALL group for Billing -- START */
+/*
+if(!strcmp(p_mst_table_name,"MT_INSTRUMENT"))
+{
+	if((strcmp(p_intl_env_data_struct_h_d->h_mode,APL_FUNC_INPUT)) || (!strcmp(p_mst_chld_ind,APL_CHILD_IND)))
+	{
+   		APL_IF_DEBUG
+   		{
+      			printf("\n-------------Now processing Instrument for grouping entry-------------\n");
+   		}
+
+		if ( APL_FAILURE == IV_Upd_DataGrp(p_key_values[0], p_status, p_intl_env_data_struct_h_d, l_debug_info_ptr))
+		{
+			CO_InsertErr(   l_debug_info_ptr,
+                                          "Error in Updating IV_DATA_GRP",
+                                          p_key_values[0],
+                                          APL_NULL_STRING,
+                                          APL_NULL_STRING,
+                                          __LINE__,
+                                          __FILE__);
+ 			APL_GOBACK_FAIL;
+ 		}
+
+	}
+}
+*/
+/* Bageshri for updating Instrument ALL group for Billing -- END */
+
+	APL_GOBACK_SUCCESS
+
+   RETURN_SUCCESS :
+ 		APL_IF_DEBUG
+ 		{
+          		CO_ProcMonitor(	APL_OUT_FILE,
+ 											"Leaving Function CR_Mod_UpdMastStatus with Success\n",
+ 											NULL,
+ 											NULL);
+ 		}
+   	return(APL_SUCCESS);
+   
+	RETURN_FAILURE :
+ 		APL_IF_DEBUG
+ 		{
+          		CO_ProcMonitor(	APL_OUT_FILE,
+ 											"Leaving Function CR_Mod_UpdMastStatus with Failure\n",
+ 											NULL,
+ 											NULL);
+ 		}
+   	return(APL_FAILURE);
+}
+
+/******************************************************************************************
+ *                                                                                        *
+ * Function Name         : CR_Rtv_MastChldChrVal                                          *
+ *                                                                                        *
+ * Description           : This Function Accepts Key Codes (Primary Keys), its Values,    *
+ *                         table Name, Field Ident, Field Value and debug pointer. 			*
+ *                         returns Success/Failure depending upon validn.                 *
+ *                                                                                        *
+ *                                                                                        *
+ * Parameter                  Type                       Mode     Description             *
+ * ------------               --------                   -----    ---------------         *
+ * p_key_codes                char *                     I        Array accepting Key     *
+ *                                                                Codes.                  *
+ * p_key_values               char *                     I        Array accepting Key     *
+ *                                                                Values.                 *
+ * p_table_name          		char *                     I        Table Name        		*
+ *																													   *
+ * p_link_val                 char *                     I        Link Value              *
+ *                                                                                        *
+ * p_field_val                char *                     I        Field Value             *
+ *                                                                                        *
+ * l_debug_info_ptr     DEBUG_INFO_STRUCT_H **           I        Debug Info Structure    *
+ *                                                                                        *
+ * Return Values        :                                                                 *
+ *                                                                                        *
+ *  APL_SUCCESS  - SUCCESS                                                                *
+ *  APL_FAILURE  - FAILURE                                                                *
+ *  Field Value  - p_field_val																				*
+ *                                                                                        *
+ ******************************************************************************************/
+int CR_Rtv_MastChldChrVal(	char *p_key_codes[], 
+									char *p_key_values[], 
+									char *p_table_name,
+									char *p_link_val,
+									char *p_field_val,
+									DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+   EXEC SQL BEGIN DECLARE SECTION;
+
+   struct sqlca      		sqlca;
+   char              		chr_h_field_val[APL_FIELD_VAL] = APL_NULL_STRING;
+   short             		i_field_val;
+   char              		chr_l_buf[BUFFER_LEN] = APL_NULL_STRING;
+	int                     l_key_code_cnt  = 0;
+	int							l_key_value_cnt = 0;
+   int                     l_field_cnt = 0;
+   int                     int_l_num_rows = 0;
+	int							int_retval = 0;
+	char							*sqlstmt;
+	char							*sqlstmt_append;
+
+   EXEC SQL VAR chr_h_field_val IS STRING;
+
+   EXEC SQL END DECLARE SECTION;
+
+   #ifdef APL_THREADS
+      APL_SET_CONTEXT
+      EXEC SQL CONTEXT USE :my_ctx_local;
+   #endif
+
+   APL_IF_DEBUG
+   {
+      CO_ProcMonitor(APL_OUT_FILE,"Entered function CR_Rtv_MastChldChrVal \n",NULL,NULL);
+   
+      memset(chr_l_buf,APL_NULL_CHAR,BUFFER_LEN);
+      sprintf(chr_l_buf,"Field name is |%s| \n",p_link_val);
+      CO_ProcMonitor(APL_OUT_FILE,chr_l_buf,NULL,NULL);
+
+      memset(chr_l_buf,APL_NULL_CHAR,BUFFER_LEN);
+      sprintf(chr_l_buf,"Table name is |%s| \n",p_table_name);
+      CO_ProcMonitor(APL_OUT_FILE,chr_l_buf,NULL,NULL);
+      
+   }
+
+   memset(chr_h_field_val,APL_NULL_CHAR,sizeof(chr_h_field_val));
+	sqlstmt = (char *)calloc(15000,sizeof(char));
+   sqlstmt_append = (char *)calloc(15000,sizeof(char));
+
+   memset(sqlstmt,APL_NULL_CHAR,15000);
+   memset(sqlstmt_append,APL_NULL_CHAR,15000);
+
+
+   int_retval = CR_Chk_MandData( p_key_codes,
+                                 p_key_values,
+                                 &l_key_code_cnt,
+                                 &l_key_value_cnt,
+                                 l_debug_info_ptr);
+
+   if (int_retval !=APL_SUCCESS)
+      APL_GOBACK_FAIL
+
+   APL_IF_DEBUG
+   {
+      printf("Returned Key Code Cnt = |%d|\n",l_key_code_cnt);
+	fflush(stdout);
+      printf("Returned Key Val Cnt  = |%d|\n",l_key_value_cnt);
+	fflush(stdout);
+   }
+
+   if (!strlen(p_table_name))
+   {
+      APL_DATA_MISSING("Table Name", APL_NULL_STRING, APL_NULL_STRING);
+      APL_GOBACK_FAIL
+   }
+
+	sprintf(sqlstmt,"SELECT %s FROM %s WHERE %s = '%s'",p_link_val,p_table_name,p_key_codes[0],p_key_values[0]);
+	for (l_field_cnt=1;l_field_cnt<l_key_code_cnt;l_field_cnt++)
+	{
+		sprintf(sqlstmt_append," AND %s = '%s'",p_key_codes[l_field_cnt],p_key_values[l_field_cnt]);
+		strcat(sqlstmt,sqlstmt_append);
+	}
+
+   APL_IF_DEBUG
+   {
+      printf("Query = |%s|\n",sqlstmt);
+	fflush(stdout);
+   }
+   EXEC SQL PREPARE s FROM :sqlstmt;
+   IS_ANY_ORA_ERROR
+
+	EXEC SQL DECLARE cur_chld_val CURSOR FOR s;
+   IS_ANY_ORA_ERROR
+
+   EXEC SQL OPEN cur_chld_val;
+   IS_ANY_ORA_ERROR
+
+   EXEC SQL FETCH cur_chld_val INTO :chr_h_field_val:i_field_val;
+   IS_ANY_ORA_ERROR
+
+   if (i_field_val == -1)
+      strcpy((char *)p_field_val, APL_NULL_STRING);
+   else
+      strcpy((char *)p_field_val, chr_h_field_val);
+		
+	EXEC SQL CLOSE cur_chld_val;
+	IS_ANY_ORA_ERROR
+
+   APL_GOBACK_SUCCESS
+
+   RETURN_SUCCESS :
+   {
+      APL_IF_DEBUG
+         CO_ProcMonitor(APL_OUT_FILE,"Leaving function CR_Rtv_MastChldChrVal With Success\n",NULL,NULL);
+      return(APL_SUCCESS);
+   }
+
+   RETURN_FAILURE :
+   {
+      APL_IF_DEBUG
+         CO_ProcMonitor(APL_OUT_FILE,"Leaving function CR_Rtv_MastChldChrVal With Errors\n",NULL,NULL);
+      return(APL_FAILURE);
+   }		
+}
+
+/******************************************************************************************
+ *                                                                                        *
+ * Function Name         : CR_Chk_ChldMkrChkr                                             *
+ *                                                                                        *
+ * Description           : This Function Accepts Key Codes (Primary Keys), its Values,    *
+ *                         Child table Name, User Name, debug pointer.  						*
+ *                         returns Success/Failure depending upon validn.                 *
+ *                                                                                        *
+ *                                                                                        *
+ * Parameter                  Type                       Mode     Description             *
+ * ------------               --------                   -----    ---------------         *
+ * p_key_codes                char *                     I        Array accepting Key     *
+ *                                                                Codes.                  *
+ * p_key_values               char *                     I        Array accepting Key     *
+ *                                                                Values.                 *
+ * p_chld_table_name          char *                     I        Child Table Name        *
+ *                                                                                        *
+ * p_user	                  char *                     I        User Name               *
+ *                                                                                        *
+ * l_debug_info_ptr     DEBUG_INFO_STRUCT_H **           I        Debug Info Structure    *
+ *                                                                                        *
+ * Return Values        :                                                                 *
+ *                                                                                        *
+ *  APL_SUCCESS  - SUCCESS                                                                *
+ *  APL_FAILURE  - FAILURE                                                                *
+ *                                                                                        *
+ ******************************************************************************************/
+int CR_Chk_ChldMkrChkr(	char *p_key_codes[],
+								char *p_key_values[],
+								char *p_chld_table_name,
+								char *p_user,
+								DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	char						h_maker[APL_USERID_LEN] = APL_NULL_STRING;
+	short						i_maker = 0;
+	struct sqlca			sqlca;
+	char						chr_l_buf[BUFFER_LEN] = APL_NULL_STRING;
+	int						l_field_cnt = 0;	
+	int						l_key_code_cnt = 0;
+	int						l_key_value_cnt = 0;
+	int 						int_retval = 0;
+	char						*sqlstmt;
+	char						*sqlstmt_append;
+
+	#ifdef APL_THREADS
+		APL_SET_CONTEXT
+		EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	sqlca.sqlcode = 0;
+	
+	EXEC SQL BEGIN DECLARE SECTION;
+	EXEC SQL VAR h_maker IS STRING;
+	EXEC SQL END DECLARE SECTION;
+
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Entered function CR_Chk_ChldMkrChkr \n",NULL,NULL);
+		memset(chr_l_buf,APL_NULL_CHAR,BUFFER_LEN);
+		sprintf(chr_l_buf,"Child Table Name is |%s| \n",p_chld_table_name);
+		CO_ProcMonitor(APL_OUT_FILE,chr_l_buf,NULL,NULL);
+		
+		memset(chr_l_buf,APL_NULL_CHAR,BUFFER_LEN);
+		sprintf(chr_l_buf,"User is |%s| \n",p_user);
+		CO_ProcMonitor(APL_OUT_FILE,chr_l_buf,NULL,NULL);
+	}
+
+   sqlstmt = (char *)calloc(15000,sizeof(char));
+   sqlstmt_append = (char *)calloc(15000,sizeof(char));
+
+   memset(sqlstmt,APL_NULL_CHAR,15000);
+   memset(sqlstmt_append,APL_NULL_CHAR,15000);
+
+   int_retval = CR_Chk_MandData( p_key_codes,
+                                 p_key_values,
+                                 &l_key_code_cnt,
+                                 &l_key_value_cnt,
+                                 l_debug_info_ptr);
+
+   if (int_retval !=APL_SUCCESS)
+      APL_GOBACK_FAIL
+
+   APL_IF_DEBUG
+   {
+      printf("Returned Key Code Cnt = |%d|\n",l_key_code_cnt);
+      printf("Returned Key Val Cnt  = |%d|\n",l_key_value_cnt);
+   }
+
+	if (!strlen(p_chld_table_name))
+	{
+		APL_DATA_MISSING("Child Table Name", APL_NULL_STRING, APL_NULL_STRING);
+		APL_GOBACK_FAIL
+	}
+
+	sprintf(sqlstmt,"SELECT MAKER FROM %s WHERE %s = '%s'",p_chld_table_name,p_key_codes[0],p_key_values[0]);
+	for (l_field_cnt=1;l_field_cnt<l_key_code_cnt;l_field_cnt++)
+	{
+		sprintf(sqlstmt_append," AND %s = '%s'",p_key_codes[l_field_cnt],p_key_values[l_field_cnt]);
+		strcat(sqlstmt,sqlstmt_append);
+	}
+	APL_IF_DEBUG
+	{
+		printf("Query = |%s|\n",sqlstmt);
+	}
+
+   EXEC SQL PREPARE s FROM :sqlstmt;
+   IS_ANY_ORA_ERROR   
+
+   EXEC SQL DECLARE cur_mkr_chkr CURSOR FOR s;
+   IS_ANY_ORA_ERROR   
+
+   EXEC SQL OPEN cur_mkr_chkr ;
+   IS_ANY_ORA_ERROR   
+
+   EXEC SQL FETCH cur_mkr_chkr INTO :h_maker:i_maker;
+   IS_ANY_ORA_ERROR   
+
+	APL_IF_DEBUG
+	{
+		printf("Maker From the table |%s| = |%s|\n",p_chld_table_name,h_maker);
+	}
+
+	if (strcmp(p_user,h_maker) == 0)
+	{
+		CO_InsertErr(	l_debug_info_ptr,
+							ERR_MAKER_CHECKER_SAME,
+							APL_NULL_STRING,
+							APL_NULL_STRING,
+							APL_NULL_STRING,
+							__LINE__,
+							__FILE__);
+
+		APL_GOBACK_FAIL
+	}
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS :
+	{
+		APL_IF_DEBUG
+			CO_ProcMonitor(APL_OUT_FILE,"Leaving function CR_Chk_ChldMkrChkr \n",NULL,NULL);
+		return(APL_SUCCESS);
+	}
+
+	RETURN_FAILURE :
+	{
+		APL_IF_DEBUG
+			CO_ProcMonitor(APL_OUT_FILE,"Leaving function CR_Chk_ChldMkrChkr \n",NULL,NULL);
+		return(APL_FAILURE);
+	}
+}
+
+/******************************************************************************************
+ *                                                                                        *
+ * Function Name         : CR_Chk_MandData                                                *
+ *                                                                                        *
+ * Description           : This Function Accepts Key Codes (Primary Keys), its Values,    *
+ *                         Count for Key Code, Count for Key Values, and debug pointer.   *
+ *                         returns Success/Failure depending upon validn.                 *
+ *                                                                                        *
+ *                                                                                        *
+ * Parameter                  Type                       Mode     Description             *
+ * ------------               --------                   -----    ---------------         *
+ * p_key_codes                char *                     I        Array accepting Key     *
+ *                                                                Codes.                  *
+ * p_key_values               char *                     I        Array accepting Key     *
+ *                                                                Values.                 *
+ * p_key_code_cnt             int *                      I        Key Code Count          *
+ *                                                                                        *
+ * p_key_value_cnt            int *                      I        Key Value Count         *
+ *                                                                                        *
+ * l_debug_info_ptr     DEBUG_INFO_STRUCT_H **           I        Debug Info Structure    *
+ *                                                                                        *
+ * Return Values        :                                                                 *
+ *                                                                                        *
+ *  APL_SUCCESS  - SUCCESS                                                                *
+ *  APL_FAILURE  - FAILURE                                                                *
+ *  Key Code Cnt - p_key_code_cnt																			*
+ *	 Key Val  Cnt - p_key_value_cnt																			*
+ *                                                                                        *
+ ******************************************************************************************/
+int CR_Chk_MandData	(	char *p_key_codes[],
+								char *p_key_values[],
+								int  *p_key_code_cnt,
+								int  *p_key_value_cnt,
+								DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	int						l_key_code_cnt = 0;
+	int						l_key_value_cnt = 0;
+
+	APL_IF_DEBUG
+		CO_ProcMonitor(APL_OUT_FILE,"Entered Function CR_Chk_MandData \n",NULL,NULL);
+
+   while(strlen(*(p_key_codes + l_key_code_cnt)))
+   {
+      APL_IF_DEBUG
+      {
+         printf("Key Code Count  = |%d|\n",l_key_code_cnt);
+         printf("Key Codes = |%s|\n",*(p_key_codes + l_key_code_cnt));
+      }
+      l_key_code_cnt++;
+   }
+
+   while(strlen(*(p_key_values + l_key_value_cnt)))
+   {
+      APL_IF_DEBUG
+      {
+         printf("Key Value Count  = |%d|\n",l_key_value_cnt);
+         printf("Key Values = |%s|\n",*(p_key_values + l_key_value_cnt));
+      }
+   l_key_value_cnt++;
+   }
+
+   if (l_key_code_cnt == 0)
+   {
+      APL_DATA_MISSING("Key Codes of Table",APL_NULL_STRING, APL_NULL_STRING);
+      APL_GOBACK_FAIL
+   }
+   if (l_key_value_cnt == 0)
+   {
+      APL_DATA_MISSING("Key Values of Table",APL_NULL_STRING, APL_NULL_STRING);
+      APL_GOBACK_FAIL
+   }
+
+   if (l_key_code_cnt != l_key_value_cnt)
+   {
+      CO_InsertErr   (  l_debug_info_ptr,
+                        ERR_CODE_VAL_MISMATCH,
+                        APL_NULL_STRING,
+                        APL_NULL_STRING,
+                        APL_NULL_STRING,
+                        __LINE__,
+                        __FILE__);
+      APL_GOBACK_FAIL
+   }
+
+	*p_key_code_cnt = l_key_code_cnt;
+	*p_key_value_cnt = l_key_value_cnt;
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS :
+	{
+		APL_IF_DEBUG
+			CO_ProcMonitor(APL_OUT_FILE,"Leaving function CR_Chk_MandData \n",NULL,NULL);
+		return(APL_SUCCESS);
+	}
+
+	RETURN_FAILURE :
+	{
+		APL_IF_DEBUG
+			CO_ProcMonitor(APL_OUT_FILE,"Leaving function CR_Chk_MandData \n",NULL,NULL);
+		return(APL_FAILURE);
+	}
+}
+
+/******************************************************************************************
+ *                                                                                        *
+ * Function Name         : CR_Chk_Flags	                                                *
+ *                                                                                        *
+ * Description           : This Function Accepts Flags for Existence of Record, its Auth  *
+ *                         Status, its Deleted Status and Debug Pointer.					   *
+ *                         returns Success/Failure depending upon validn.                 *
+ *                                                                                        *
+ *                                                                                        *
+ * Parameter                  Type                       Mode     Description             *
+ * ------------               --------                   -----    ---------------         *
+ * p_exist							char *							I			Char accepting Existence*
+ *																						of Record					*
+ * p_auth							char *							I			Char accepting Auth		*
+ *																						Status of Rec				*
+ *	p_del								char *							I			Char accepting Del 		*
+ *																						Status of Rec				*
+ * l_debug_info_ptr     DEBUG_INFO_STRUCT_H **           I        Debug Info Structure    *
+ *                                                                                        *
+ * Return Values        :                                                                 *
+ *                                                                                        *
+ *  APL_SUCCESS  - SUCCESS                                                                *
+ *  APL_FAILURE  - FAILURE                                                                *
+ *                                                                                        *
+ ******************************************************************************************/
+int CR_Chk_Flags	(	char p_exist,
+							char p_auth,
+							char p_del,
+							DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+ 	char 						chr_l_buf[BUFFER_LEN] = APL_NULL_STRING;
+	char						chr_i_exist;
+	char						chr_i_auth;
+	char						chr_i_del;
+
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Entered Function CR_Chk_Flags \n",NULL,NULL);
+		
+		memset( chr_l_buf, NULL, BUFFER_LEN );
+		sprintf(          chr_l_buf,
+								"The Exist Flag is : %c\n",
+								p_exist);
+
+      CO_ProcMonitor(   APL_OUT_FILE,
+                        chr_l_buf,
+                        NULL,
+                        NULL);
+
+      memset( chr_l_buf, NULL, BUFFER_LEN );
+
+      sprintf(          chr_l_buf,
+                        "The Authorisation Flag is : %c\n",
+                        p_auth);
+
+      CO_ProcMonitor(   APL_OUT_FILE,
+                        chr_l_buf,
+                        NULL,
+                        NULL);
+
+      memset( chr_l_buf, NULL, BUFFER_LEN );
+
+      sprintf(          chr_l_buf,
+                        "The Delete Flag is : %c\n",
+								p_del);
+
+      CO_ProcMonitor(   APL_OUT_FILE,
+                        chr_l_buf,
+                        NULL,
+                        NULL);
+	}
+	chr_i_exist = p_exist;
+	chr_i_auth = p_auth;
+	chr_i_del = p_del;
+
+	APL_IF_DEBUG
+	{
+		printf("Exists = |%c|\n",chr_i_exist);
+		printf("Authorised = |%c|\n",chr_i_auth);
+		printf("Deleted = |%c|\n",chr_i_del);
+	}
+
+	if (	(chr_i_exist != APL_YES_FLAG) 	&& 
+			(chr_i_exist != APL_NO_FLAG)	&&	
+			(chr_i_exist != APL_NULL_CHAR)	)
+	{
+		CO_InsertErr	(	l_debug_info_ptr,
+							 	ERR_CHAR_VALUE_NOT_PROPER,
+								APL_NULL_STRING,
+								APL_NULL_STRING,
+								APL_NULL_STRING,
+								__LINE__,
+								__FILE__);
+		APL_GOBACK_FAIL
+	}
+
+	if (	(chr_i_auth != APL_YES_FLAG) 	&&	
+			(chr_i_auth != APL_NO_FLAG)  	&&	
+			(chr_i_auth != APL_NULL_CHAR)  )
+	{
+		CO_InsertErr   (	l_debug_info_ptr,
+								ERR_CHAR_VALUE_NOT_PROPER,
+								APL_NULL_STRING,
+								APL_NULL_STRING,
+								APL_NULL_STRING,
+								__LINE__,
+								 __FILE__);
+		APL_GOBACK_FAIL
+	}
+
+	if	(  (chr_i_del != APL_YES_FLAG) 	&& 
+			(chr_i_del != APL_NO_FLAG) 		&& 
+			(chr_i_del != APL_NULL_CHAR) )
+	{
+		CO_InsertErr   (	l_debug_info_ptr,
+								ERR_CHAR_VALUE_NOT_PROPER,
+								APL_NULL_STRING,
+								APL_NULL_STRING,
+								APL_NULL_STRING,
+								__LINE__,
+								__FILE__);
+		APL_GOBACK_FAIL
+	}
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+	{
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE,"Leaving processtion CR_Chk_Flags Success\n",NULL,NULL);
+		}
+		return(APL_SUCCESS);	
+	}
+	
+	RETURN_FAILURE:
+	{
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE,"Leaving processtion CR_Chk_Flags Failure\n",NULL,NULL);
+		}
+		return (APL_FAILURE);
+	}
+}
+/******************************************************************************************
+ *                                                                                        *
+ * Function Name         : CR_Chk_AllMandData                                             *
+ *                                                                                        *
+ * Description           : This Function Accepts Key Codes (Primary Keys), its Values,    *
+ *                         Count for Key Code, Count for Key Values, and debug pointer.   *
+ *                         returns Success/Failure depending upon validn.                 *
+ *                                                                                        *
+ *                                                                                        *
+ * Parameter                  Type                       Mode     Description             *
+ * ------------               --------                   -----    ---------------         *
+ * p_key_codes                char *                     I        Array accepting Key     *
+ *                                                                Codes.                  *
+ * p_key_values               char *                     I        Array accepting Key     *
+ *                                                                Values.                 *
+ * p_key_code_cnt             int *                      I        Key Code Count          *
+ *                                                                                        *
+ * p_key_value_cnt            int *                      I        Key Value Count         *
+ *                                                                                        *
+ * l_debug_info_ptr     DEBUG_INFO_STRUCT_H **           I        Debug Info Structure    *
+ *                                                                                        *
+ * Return Values        :                                                                 *
+ *                                                                                        *
+ *  APL_SUCCESS  - SUCCESS                                                                *
+ *  APL_FAILURE  - FAILURE                                                                *
+ *  Key Code Cnt - p_key_code_cnt																			*
+ *	 Key Val  Cnt - p_key_value_cnt																			*
+ *                                                                                        *
+ ******************************************************************************************/
+int CR_Chk_AllMandData	(	char *p_key_codes[],
+								char *p_key_values[],
+								int  p_max_count,
+								DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	int						l_key_code_cnt = 0;
+	int						l_key_value_cnt = 0;
+ int						l_max_count = 0;
+ int						l_running_count = 0;
+	int						int_retval = 0;
+ char						l_missing_data[100]=APL_NULL_STRING; /* This should be changed to pointer*/
+	int						l_int_got_missingdata = 0;
+
+
+	 APL_FUNCTION_ENTER(APL_OUT_FILE)	
+
+	l_max_count = p_max_count;
+	Alert("Max count is = |%d|",l_max_count);
+	fflush(stdout);
+
+	strcpy(l_missing_data,APL_NULL_STRING);
+ while(l_running_count < l_max_count)
+ {
+	Alert("Inside while loop");
+		if (strlen(*(p_key_values + l_running_count)) == 0   )
+		{
+			Alert("Missing mandatory data");
+			strcpy(l_missing_data,APL_NULL_STRING);
+			l_int_got_missingdata = 1;
+			strcpy(l_missing_data,*(p_key_codes + l_running_count));
+    			APL_DATA_MISSING(l_missing_data,APL_NULL_STRING, APL_NULL_STRING);
+		}
+    APL_IF_DEBUG
+    {
+       printf("Key Code Count  = |%d|\n",l_running_count);
+       printf("Key Codes = |%s|\n",*(p_key_values + l_running_count));
+       fflush(stdout);
+    }
+    l_running_count++;
+ }
+Alert("Outside while loop");
+fflush(stdout);
+
+ if (l_int_got_missingdata != 0)
+ {
+    APL_GOBACK_FAIL
+ }
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS :
+	{
+		APL_FUNCTION_RET_SUCCESS(APL_OUT_FILE)
+		Alert("Success");
+		fflush(stdout);
+		return(APL_SUCCESS);
+	}
+
+	RETURN_FAILURE :
+	{
+		APL_FUNCTION_RET_FAILURE(APL_OUT_FILE)
+		Alert("Failure");
+		fflush(stdout);
+		return(APL_FAILURE);
+	}
+}
+
+/*Smita - HDFCCA_009 - Fn to check Status*/
+/***************************************************************************
+ *                                                                        	*
+ * Function Name         : CO_Chk_MasterStatus                           	*
+ *                                                                        	*
+ * Description           : This Function Accepts Key Codes (Primary Keys),	* 
+ *									its Values,table name to be validated and      *
+ *									returns Success/Failure depending upon validn.	*
+ *			   																					*
+ *			   																					*
+ * Parameter            Type          		Mode       Description    			*
+ * ------------         --------         	----- 	  --------------- 		*
+ * p_key_codes				char *				  I			Array accepting Key  *
+ *																	   Codes.					*
+ * p_key_values			char *				  I			Array accepting Key  *
+ *																		Values.					*
+ * p_table_name    		char *              I         Char Ptr accepting   *
+ *                                                    Table Name.          *
+ * int_p_result			int  *				  O			Return Value			*
+ *																									*
+ * Return Values        :                                                 	*
+ *                                                                         *
+ *  APL_SUCCESS  - SUCCESS                                                 *
+ *  APL_FAILURE  - FAILURE                                                 *
+ *                                                                         *
+ ***************************************************************************/ 
+int CO_Chk_MasterStatus(	char *p_key_codes[], 
+								char *p_key_values[],
+								char *p_table_name,
+								int  *int_p_result,
+								DEBUG_INFO_STRUCT_H **l_debug_info_ptr) 
+{
+	struct 					sqlca sqlca;	
+ 	char 						chr_l_buf[BUFFER_LEN] = APL_NULL_STRING;
+	int						int_l_no_of_keys = 0;
+	int 						l_key_code_cnt  = 0;
+	int						l_key_value_cnt = 0;
+	int 						l_field_cnt = 0;
+   int                 	int_l_num_rows = 0;
+	char						l_rec_status[APL_STATUS_LEN] = APL_NULL_STRING;
+	short						i_rec_status = 0;
+	int						int_retval = 0;
+	char                 *sqlstmt;
+   char                 *sqlstmt_append;
+
+ 	#ifdef APL_THREADS 
+ 		APL_SET_CONTEXT
+ 		EXEC SQL CONTEXT USE :my_ctx_local;
+ 	#endif
+ 	
+ 	sqlca.sqlcode=0;
+
+	EXEC SQL BEGIN DECLARE SECTION;
+		EXEC SQL VAR l_rec_status IS STRING;
+	EXEC SQL END DECLARE SECTION;
+
+ 	APL_IF_DEBUG
+ 	{
+     	CO_ProcMonitor(	APL_OUT_FILE, 
+ 								"Entered Function CO_Chk_MasterStatus",
+ 								NULL,
+ 								NULL);
+ 
+		memset( chr_l_buf, NULL, BUFFER_LEN);
+
+		sprintf(				chr_l_buf,
+								"Table Name is : |%s|\n",
+								p_table_name);
+
+		CO_ProcMonitor(	APL_OUT_FILE,
+								chr_l_buf,
+								NULL,
+								NULL);	
+ 	}
+   sqlstmt = (char *)calloc(15000,sizeof(char));
+   sqlstmt_append = (char *)calloc(15000,sizeof(char));
+
+   memset(sqlstmt,APL_NULL_CHAR,15000);
+   memset(sqlstmt_append,APL_NULL_CHAR,15000);
+
+	int_retval = CR_Chk_MandData(	p_key_codes,
+											p_key_values,
+											&l_key_code_cnt,
+											&l_key_value_cnt,
+											l_debug_info_ptr); 
+
+	if (int_retval !=APL_SUCCESS)
+		APL_GOBACK_FAIL
+
+	APL_IF_DEBUG
+	{
+		printf("Returned Key Code Cnt = |%d|\n",l_key_code_cnt);
+		printf("Returned Key Val Cnt  = |%d|\n",l_key_value_cnt);
+	}
+	
+	if (!strlen(p_table_name))
+	{
+		APL_DATA_MISSING("Table Name", APL_NULL_STRING, APL_NULL_STRING);
+		APL_GOBACK_FAIL
+	}
+	sprintf(sqlstmt,"SELECT STATUS FROM %s WHERE %s = '%s'",p_table_name,p_key_codes[0],p_key_values[0]);
+	for (l_field_cnt=1;l_field_cnt<l_key_code_cnt;l_field_cnt++)
+	{
+		sprintf(sqlstmt_append," AND %s = '%s'",p_key_codes[l_field_cnt],p_key_values[l_field_cnt]);
+		strcat(sqlstmt,sqlstmt_append);
+	}
+
+	APL_IF_DEBUG
+	{
+		printf("Query = |%s|\n",sqlstmt);
+	}
+
+   EXEC SQL PREPARE s FROM :sqlstmt;
+   IS_ANY_ORA_ERROR   
+
+   EXEC SQL DECLARE cur_status CURSOR FOR s;
+   IS_ANY_ORA_ERROR   
+
+   EXEC SQL OPEN cur_status;
+   IS_ANY_ORA_ERROR   
+
+   EXEC SQL FETCH cur_status INTO :l_rec_status:i_rec_status;
+   IS_ANY_ORA_ERROR   
+
+   if (APL_ZERO_RESULT_SET)
+   {
+		*int_p_result = MAP_DET_NOTFND;
+   }
+   else if (strcmp(l_rec_status,APL_STS_AUTH))
+   {
+		*int_p_result = MAP_DET_UNAUTH;
+   }
+
+   APL_IF_DEBUG
+	{	
+   	printf("Status = |%s|\n",l_rec_status);
+	}
+
+   EXEC SQL CLOSE cur_status;
+   IS_ANY_ORA_ERROR
+
+   APL_GOBACK_SUCCESS
+
+   RETURN_SUCCESS :
+ 		APL_IF_DEBUG
+ 		{
+          		CO_ProcMonitor(	APL_OUT_FILE,
+ 											"Leaving Function CO_Chk_MasterStatus with success\n",
+ 											NULL,
+ 											NULL);
+ 		}
+   	return(APL_SUCCESS);
+   
+   RETURN_FAILURE :
+ 		APL_IF_DEBUG
+ 		{
+          		CO_ProcMonitor(	APL_OUT_FILE,
+ 											"Leaving Function CO_Chk_MasterStatus with Errors\n",
+ 											NULL,
+ 											NULL);
+ 		}
+   	return(APL_FAILURE);
+}
+/*Smita - HDFCCA_009 - Fn to check Status*/

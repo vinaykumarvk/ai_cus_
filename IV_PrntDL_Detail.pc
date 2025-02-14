@@ -1,0 +1,1075 @@
+
+
+
+#include "IV_Control_A.h"
+#include<string.h>
+EXEC SQL INCLUDE SQLCA.H;
+
+
+int IV_Proc_PrnTranDETINV(	FILE *bill,
+				  	FILE *fl_userlog,	
+					char *chr_p_billdt,
+					char *chr_p_client,
+					IV_CLIENTSETUP_STRUCT l_iv_clt_setup_struct,
+					char p_mastsub,
+					double *p_tottran,
+					int *int_currpos,
+					DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+
+struct sqlca sqlca;
+
+int   int_l_pagelength = 0;
+short int_l_condexists = 0;
+int int_headerlen = 8;
+int int_counter=0;
+int int_retval=0;
+int int_l_count=0;
+
+double dbl_h_txnfee = TXNFEE;
+double dbl_h_bogfee = BOG_MSG_FEE;
+double dbl_h_manualtrdfee= MANUALDEALFEE;
+double dbl_h_deltxnfee = DELV_TXN_FEE ;
+double dbl_h_latetxnfee = LATETXNFEE ;
+double dbl_h_repairfee = REPAIRFEE ;
+char h_entry =BILLABLE_DEAL_IND;
+char chr_h_bl_upto_dt[APL_DATE_LEN];
+char h_newdt[20];
+char chr_h_uniquerefnum[15];
+char *int_pos = NULL;
+EXEC SQL BEGIN DECLARE SECTION;
+
+	
+ 
+	char h_dl_client[11];
+	char h_indentity_no[17];
+	char h_instr_isin[13];
+	char chr_h_bill_basis[APL_CCYCODE_LEN]=APL_NULL_STRING;
+	char chr_h_bl_prv_dt[APL_DATE_LEN]=APL_NULL_STRING;
+
+
+	
+	short i_dl_client;
+	short i_indentity_no;
+	short i_instr_isin;
+   short int_i_count;
+	short i_b_basis;
+	short i_bl_prv_date;
+   short i_newdt;
+   short i_uniquerefnum;
+
+	
+EXEC SQL VAR l_iv_clt_setup_struct.b_ccycd IS STRING;
+EXEC SQL VAR h_dl_client IS STRING;
+EXEC SQL VAR h_indentity_no IS STRING;
+EXEC SQL VAR h_instr_isin IS STRING;
+EXEC SQL VAR g_mt_commonsys_params_struct_h.nation_code IS STRING;
+EXEC SQL VAR chr_h_bl_upto_dt  IS STRING;
+EXEC SQL VAR h_newdt  IS STRING;
+EXEC SQL VAR chr_h_uniquerefnum  IS STRING;
+EXEC SQL END DECLARE SECTION;
+sqlca.sqlcode=0;
+
+
+   
+   if ( APL_FAILURE == CO_Chk_CntryEnabled( "BILL_PRINTING",
+                                          "PAGE_LENGTH",
+                                          &int_l_condexists,
+                                          l_debug_info_ptr) )
+   {
+      APL_GOBACK_FAIL
+   }
+
+   if (int_l_condexists)
+      int_l_pagelength = 70;
+   else  int_l_pagelength = 58;
+
+
+if ((*int_currpos) + int_headerlen > int_l_pagelength )
+{
+	fprintf(bill,"^pg\n");
+	(*int_currpos) =1;
+	if (APL_FAILURE == IV_Proc_PrnTranHdrDETINV(bill,int_currpos,l_iv_clt_setup_struct,&int_retval,l_debug_info_ptr))
+	{
+		fprintf(fl_userlog,"Could not print chr_header fo rtransaction charges\n");
+		APL_GOBACK_FAIL;
+	}
+}
+
+else
+{
+	if (APL_FAILURE == IV_Proc_PrnTranHdrDETINV(bill,int_currpos,l_iv_clt_setup_struct,&int_retval,l_debug_info_ptr))
+	{
+		fprintf(fl_userlog,"Could not print chr_header fo rtransaction charges\n");
+		APL_GOBACK_FAIL;
+
+	}
+}
+
+
+
+printf("CURSOR NORMAL INSTRUCTION \n");
+fflush(stdout);
+EXEC SQL DECLARE normaltran CURSOR FOR
+SELECT A.CLIENT, A.IDENTIY_NO, B.INSTR_ISIN
+FROM DL_DEAL A, MT_INSTRUMENT B
+WHERE A.CLIENT = :chr_p_client
+AND A.DATEOFBILLING = :chr_p_billdt
+AND A.DEAL_STAT !='DD'
+AND A.INSTR_CODE = B.INSTR_CODE
+AND A.DL_CLASS NOT IN ('17', '19' , '27')
+AND A.DL_CLASS NOT in (SELECT DL_CLASS FROM IV_DEAL_TYPE WHERE (NATION_CD = :g_mt_commonsys_params_struct_h.nation_code OR NATION_CD ='XX'))
+AND EXISTS ( SELECT 1 FROM IV_SERVICE_CHRG C
+				  WHERE C.CLIENT = :chr_p_client 
+					 AND C.DATEOF_BILLING =:chr_p_billdt
+					 AND C.SERVICE_CD = :dbl_h_txnfee
+					 AND C.CONS_FLAG = 'I' )
+UNION
+SELECT A.CLIENT, A.IDENTIY_NO, B.INSTR_ISIN
+FROM DL_HISDEAL A, MT_INSTRUMENT B
+WHERE A.CLIENT = :chr_p_client
+AND A.DATEOFBILLING = :chr_p_billdt
+AND A.DEAL_STAT !='DD'
+AND A.INSTR_CODE = B.INSTR_CODE
+AND A.DL_CLASS NOT IN ('17','19','27')
+AND A.DL_CLASS NOT in (SELECT DL_CLASS FROM IV_DEAL_TYPE WHERE (NATION_CD = :g_mt_commonsys_params_struct_h.nation_code OR NATION_CD ='XX'))
+AND EXISTS ( SELECT 1 FROM IV_SERVICE_CHRG C
+				  WHERE C.CLIENT = :chr_p_client 
+					 AND C.DATEOF_BILLING =:chr_p_billdt
+					 AND C.SERVICE_CD = :dbl_h_txnfee
+					 AND C.CONS_FLAG = 'I' )
+ORDER BY 1,2;
+
+IS_ANY_ORA_ERROR
+EXEC SQL OPEN normaltran;
+IS_ANY_ORA_ERROR
+
+if (sqlca.sqlcode <0)
+{
+	fprintf(fl_userlog,"Db Error(BTRANSAC)\n");
+	APL_GOBACK_FAIL
+}
+
+fprintf(bill, "NORMAL INSTRUCTIONS \n\n");
+(*int_currpos)++;
+(*int_currpos)++;
+
+if ((*int_currpos) + 1 > int_l_pagelength )
+{
+	fprintf(bill,"^pg\n");
+	(*int_currpos) =1;
+	if (APL_FAILURE == IV_Proc_PrnTranHdrDETINV(bill,int_currpos,l_iv_clt_setup_struct,&int_retval,l_debug_info_ptr))
+	{
+		fprintf(fl_userlog,"Could not print chr_header fo rtransaction charges\n");
+		APL_GOBACK_FAIL;
+	}
+}
+
+for(;;)
+{
+
+	strcpy(h_dl_client,APL_NULL_STRING);
+	strcpy(h_indentity_no, APL_NULL_STRING);
+   strcpy(h_instr_isin, APL_NULL_STRING);
+
+	EXEC SQL FETCH normaltran INTO
+   :h_dl_client:i_dl_client, :h_indentity_no:i_indentity_no, :h_instr_isin:i_instr_isin;
+	
+	if (sqlca.sqlcode == 1403) break;
+
+	int_counter++;	
+
+   fprintf(bill,"%s\t%s\n",h_indentity_no, h_instr_isin);
+	(*int_currpos)++;
+	if ((*int_currpos) + 1 > int_l_pagelength )
+      {
+			fprintf(bill,"^pg\n");
+			(*int_currpos) =1;
+
+			if (APL_FAILURE == IV_Proc_PrnTranHdrDETINV(bill,int_currpos,l_iv_clt_setup_struct,&int_retval,l_debug_info_ptr))
+			{
+				fprintf(fl_userlog,"Could not print chr_header fo rtransaction charges\n");
+				APL_GOBACK_FAIL;
+
+			}
+			fprintf(bill, "NORMAL INSTRUCTIONS \n");
+			(*int_currpos)++;
+		}
+}
+
+EXEC SQL CLOSE normaltran; 
+
+if (int_counter == 0) 
+{
+	fprintf(bill,"\n\tNO TRANSACTIONS FOR ACCOUNT %s\n\n",chr_p_client);
+	(*int_currpos)++;
+	(*int_currpos)++;
+	(*int_currpos)++;
+}
+else
+{
+   fprintf(bill,"\n\n");
+	(*int_currpos)++;
+	(*int_currpos)++;
+}
+
+if ((*int_currpos) + 1 > int_l_pagelength )
+   {
+		fprintf(bill,"^pg\n");
+		(*int_currpos) =1;
+
+		if (APL_FAILURE == IV_Proc_PrnTranHdrDETINV(bill,int_currpos,l_iv_clt_setup_struct,&int_retval,l_debug_info_ptr))
+		{
+			fprintf(fl_userlog,"Could not print chr_header fo rtransaction charges\n");
+			APL_GOBACK_FAIL;
+
+		}
+	}
+
+	
+int_counter = 0;
+
+EXEC SQL DECLARE intrafirmtran CURSOR FOR
+SELECT A.CLIENT, A.IDENTIY_NO, B.INSTR_ISIN
+FROM DL_DEAL A, MT_INSTRUMENT B
+WHERE A.CLIENT = :chr_p_client
+AND A.DATEOFBILLING = :chr_p_billdt
+AND A.DEAL_STAT !='DD'
+AND A.INSTR_CODE = B.INSTR_CODE
+AND A.DL_CLASS ='27'
+AND EXISTS ( SELECT 1 FROM IV_SERVICE_CHRG C
+                                  WHERE C.CLIENT = :chr_p_client
+                                         AND C.DATEOF_BILLING =:chr_p_billdt
+                                         AND C.SERVICE_CD = :dbl_h_txnfee
+                                         AND C.CONS_FLAG = 'I' )
+
+UNION
+
+
+SELECT A.CLIENT, A.IDENTIY_NO, B.INSTR_ISIN
+FROM DL_HISDEAL A, MT_INSTRUMENT B
+WHERE A.CLIENT = :chr_p_client
+AND A.DATEOFBILLING = :chr_p_billdt
+AND A.DEAL_STAT !='DD'
+AND A.INSTR_CODE = B.INSTR_CODE
+AND A.DL_CLASS ='27'
+AND EXISTS ( SELECT 1 FROM IV_SERVICE_CHRG C
+                                  WHERE C.CLIENT = :chr_p_client
+                                         AND C.DATEOF_BILLING =:chr_p_billdt
+                                         AND C.SERVICE_CD = :dbl_h_txnfee
+                                         AND C.CONS_FLAG = 'I' )
+
+ORDER BY 1,2;
+
+EXEC SQL OPEN intrafirmtran;
+IS_ANY_ORA_ERROR
+
+if (sqlca.sqlcode <0)
+{
+        fprintf(fl_userlog,"Db Error(BTRANSAC)\n");
+        APL_GOBACK_FAIL
+}
+
+fprintf(bill, "INTRA FIRM INSTRUCTIONS \n");
+(*int_currpos)++;
+
+if ((*int_currpos) + 1 > int_l_pagelength )
+{
+        fprintf(bill,"^pg\n");
+        (*int_currpos) =1;
+        if (APL_FAILURE == IV_Proc_PrnTranHdrDETINV(bill,int_currpos,l_iv_clt_setup_struct,&int_retval,l_debug_info_ptr))
+	{
+                fprintf(fl_userlog,"Could not print chr_header fo rtransaction charges\n");
+                APL_GOBACK_FAIL;
+        }
+}
+
+for(;;)
+{
+
+        strcpy(h_dl_client,APL_NULL_STRING);
+        strcpy(h_indentity_no, APL_NULL_STRING);
+   strcpy(h_instr_isin, APL_NULL_STRING);
+
+        EXEC SQL FETCH intrafirmtran INTO
+   :h_dl_client:i_dl_client, :h_indentity_no:i_indentity_no, :h_instr_isin:i_instr_isin;
+
+        if (sqlca.sqlcode == 1403) break;
+
+        int_counter++;
+
+   fprintf(bill,"%s\t%s\n",h_indentity_no, h_instr_isin);
+        (*int_currpos)++;
+        if ((*int_currpos) + 1 > int_l_pagelength )
+      	{
+                        fprintf(bill,"^pg\n");
+                        (*int_currpos) =1;
+
+                        if (APL_FAILURE == IV_Proc_PrnTranHdrDETINV(bill,int_currpos,l_iv_clt_setup_struct,&int_retval,l_debug_info_ptr))
+                        {
+                                fprintf(fl_userlog,"Could not print chr_header fo rtransaction charges\n");
+                                APL_GOBACK_FAIL;
+
+                        }
+                        fprintf(bill, "INTRA FIRM INSTRUCTIONS \n");
+                        (*int_currpos)++;
+        }
+}
+
+EXEC SQL CLOSE intrafirmtran;
+
+if (int_counter == 0)
+{
+        fprintf(bill,"\n\tNO INTRA FIRM TRANSACTIONS FOR ACCOUNT %s\n\n",chr_p_client);
+        (*int_currpos)++;
+        (*int_currpos)++;
+        (*int_currpos)++;
+}
+else
+{
+   fprintf(bill,"\n\n");
+        (*int_currpos)++;
+        (*int_currpos)++;
+}
+if ((*int_currpos) + 1 > int_l_pagelength )
+   {
+                fprintf(bill,"^pg\n");
+                (*int_currpos) =1;
+
+                if (APL_FAILURE == IV_Proc_PrnTranHdrDETINV(bill,int_currpos,l_iv_clt_setup_struct,&int_retval,l_debug_info_ptr))
+                {
+                        fprintf(fl_userlog,"Could not print chr_header fo rtransaction charges\n");
+                        APL_GOBACK_FAIL;
+
+                }
+   }
+
+
+
+int_counter=0;
+printf("CURSOR REPAIR INSTRUCTION \n");
+fflush(stdout);
+EXEC SQL DECLARE repairtran CURSOR FOR
+SELECT A.CLIENT, A.IDENTIY_NO, B.INSTR_ISIN,A.DATEOF_INPUT,A.UNIQ_IDENT_NO
+FROM DL_DEAL A, MT_INSTRUMENT B
+WHERE A.CLIENT = :chr_p_client
+AND A.DATEOFBILLING = :chr_p_billdt
+AND A.DEAL_STAT !='DD'
+AND A.INSTR_CODE = B.INSTR_CODE
+AND A.DL_CLASS NOT in (SELECT DL_CLASS FROM IV_DEAL_TYPE WHERE (NATION_CD = :g_mt_commonsys_params_struct_h.nation_code OR NATION_CD ='XX'))
+AND EXISTS ( SELECT 1 FROM IV_SERVICE_CHRG C
+				  WHERE C.CLIENT = :chr_p_client 
+					 AND C.DATEOF_BILLING =:chr_p_billdt
+					 AND C.SERVICE_CD = :dbl_h_repairfee
+					 AND C.CONS_FLAG = 'I' )
+UNION
+SELECT A.CLIENT, A.IDENTIY_NO, B.INSTR_ISIN,A.DATEOF_INPUT,A.UNIQ_IDENT_NO
+FROM DL_HISDEAL A, MT_INSTRUMENT B
+WHERE A.CLIENT = :chr_p_client
+AND A.DATEOFBILLING = :chr_p_billdt
+AND A.DEAL_STAT !='DD'
+AND A.INSTR_CODE = B.INSTR_CODE
+AND A.DL_CLASS NOT in (SELECT DL_CLASS FROM IV_DEAL_TYPE WHERE (NATION_CD = :g_mt_commonsys_params_struct_h.nation_code OR NATION_CD ='XX'))
+AND EXISTS ( SELECT 1 FROM IV_SERVICE_CHRG C
+				  WHERE C.CLIENT = :chr_p_client 
+					 AND C.DATEOF_BILLING =:chr_p_billdt
+					 AND C.SERVICE_CD = :dbl_h_repairfee
+					 AND C.CONS_FLAG = 'I' )
+ORDER BY 1,2;
+
+EXEC SQL OPEN repairtran;
+IS_ANY_ORA_ERROR
+
+if (sqlca.sqlcode <0)
+{
+	fprintf(fl_userlog,"Db Error(BTRANSAC)\n");
+	APL_GOBACK_FAIL
+}
+
+fprintf(bill, "REPAIR INSTRUCTIONS \n");
+(*int_currpos)++;
+
+if ((*int_currpos) + 1 > int_l_pagelength )
+{
+	fprintf(bill,"^pg\n");
+	(*int_currpos) =1;
+	if (APL_FAILURE == IV_Proc_PrnTranHdrDETINV(bill,int_currpos,l_iv_clt_setup_struct,&int_retval,l_debug_info_ptr))
+	{
+		fprintf(fl_userlog,"Could not print chr_header fo rtransaction charges\n");
+		APL_GOBACK_FAIL;
+	}
+}
+
+for(;;)
+{
+
+	strcpy(h_dl_client,APL_NULL_STRING);
+	strcpy(h_indentity_no, APL_NULL_STRING);
+   strcpy(h_instr_isin, APL_NULL_STRING);
+   strcpy(h_newdt,APL_NULL_STRING);
+   strcpy(chr_h_uniquerefnum,APL_NULL_STRING);
+
+	EXEC SQL FETCH repairtran INTO
+   :h_dl_client:i_dl_client, :h_indentity_no:i_indentity_no, :h_instr_isin:i_instr_isin,:h_newdt:i_newdt,:chr_h_uniquerefnum:i_uniquerefnum;
+	
+	if (sqlca.sqlcode == 1403) break;
+
+   EXEC SQL SELECT NVL(COUNT(*),0)  INTO :int_l_count
+   FROM DL_SFEREJ
+   WHERE UNIQ_IDENT_NO = :chr_h_uniquerefnum
+   AND CLIENT = :h_dl_client
+   AND IDENTIY_NO = :h_indentity_no ;
+
+   if (sqlca.sqlcode !=0 && sqlca.sqlcode !=1403)
+      IS_ANY_ORA_ERROR
+
+   if (int_l_count > 0)
+   {
+	int_counter++;	
+
+   fprintf(bill,"%s\t%s\n",h_indentity_no, h_instr_isin);
+	(*int_currpos)++;
+	if ((*int_currpos) + 1 > int_l_pagelength )
+      {
+			fprintf(bill,"^pg\n");
+			(*int_currpos) =1;
+
+			if (APL_FAILURE == IV_Proc_PrnTranHdrDETINV(bill,int_currpos,l_iv_clt_setup_struct,&int_retval,l_debug_info_ptr))
+			{
+				fprintf(fl_userlog,"Could not print chr_header fo rtransaction charges\n");
+				APL_GOBACK_FAIL;
+
+			}
+			fprintf(bill, "REPAIR INSTRUCTIONS \n");
+			(*int_currpos)++;
+		}
+   }
+}
+
+EXEC SQL CLOSE repairtran; 
+
+if (int_counter == 0) 
+{
+	fprintf(bill,"\n\tNO REPAIR TRANSACTIONS FOR ACCOUNT %s\n\n",chr_p_client);
+	(*int_currpos)++;
+	(*int_currpos)++;
+	(*int_currpos)++;
+}
+else
+{
+   fprintf(bill,"\n\n");
+	(*int_currpos)++;
+	(*int_currpos)++;
+}
+
+if ((*int_currpos) + 1 > int_l_pagelength )
+   {
+		fprintf(bill,"^pg\n");
+		(*int_currpos) =1;
+
+		if (APL_FAILURE == IV_Proc_PrnTranHdrDETINV(bill,int_currpos,l_iv_clt_setup_struct,&int_retval,l_debug_info_ptr))
+		{
+			fprintf(fl_userlog,"Could not print chr_header fo rtransaction charges\n");
+			APL_GOBACK_FAIL;
+
+		}
+	}
+
+
+int_counter=0;
+printf("CURSOR MANUAL INSTRUCTION \n");
+fflush(stdout);
+EXEC SQL DECLARE manualtran CURSOR FOR
+SELECT A.CLIENT, A.IDENTIY_NO, B.INSTR_ISIN
+FROM DL_DEAL A, MT_INSTRUMENT B
+WHERE A.CLIENT = :chr_p_client
+AND A.DATEOFBILLING = :chr_p_billdt
+AND A.ENTRY=:h_entry
+AND A.DEAL_STAT !='DD'
+AND A.INSTR_CODE = B.INSTR_CODE
+AND A.DL_CLASS NOT in (SELECT DL_CLASS FROM IV_DEAL_TYPE WHERE (NATION_CD = :g_mt_commonsys_params_struct_h.nation_code OR NATION_CD ='XX'))
+AND A.DL_CLASS NOT IN ('17','19')
+AND EXISTS ( SELECT 1 FROM IV_SERVICE_CHRG C
+				  WHERE C.CLIENT = :chr_p_client 
+					 AND C.DATEOF_BILLING =:chr_p_billdt
+					 AND C.SERVICE_CD = :dbl_h_manualtrdfee 
+					 AND C.CONS_FLAG = 'I' )
+UNION
+SELECT A.CLIENT, A.IDENTIY_NO, B.INSTR_ISIN
+FROM DL_HISDEAL A, MT_INSTRUMENT B
+WHERE A.CLIENT = :chr_p_client
+AND A.DATEOFBILLING = :chr_p_billdt
+AND A.ENTRY= :h_entry
+AND A.DEAL_STAT !='DD'
+AND A.INSTR_CODE = B.INSTR_CODE
+AND A.DL_CLASS NOT in (SELECT DL_CLASS FROM IV_DEAL_TYPE WHERE (NATION_CD = :g_mt_commonsys_params_struct_h.nation_code OR NATION_CD ='XX'))
+AND A.DL_CLASS NOT IN ('17','19')
+AND EXISTS ( SELECT 1 FROM IV_SERVICE_CHRG C
+				  WHERE C.CLIENT = :chr_p_client 
+					 AND C.DATEOF_BILLING =:chr_p_billdt
+					 AND C.SERVICE_CD = :dbl_h_manualtrdfee
+					 AND C.CONS_FLAG = 'I' )
+ORDER BY 1,2;
+
+EXEC SQL OPEN manualtran;
+IS_ANY_ORA_ERROR
+
+if (sqlca.sqlcode <0)
+{
+	fprintf(fl_userlog,"Db Error(BTRANSAC)\n");
+	APL_GOBACK_FAIL
+}
+
+fprintf(bill, "MANUAL INSTRUCTIONS \n");
+(*int_currpos)++;
+
+if ((*int_currpos) + 1 > int_l_pagelength )
+{
+	fprintf(bill,"^pg\n");
+	(*int_currpos) =1;
+	if (APL_FAILURE == IV_Proc_PrnTranHdrDETINV(bill,int_currpos,l_iv_clt_setup_struct,&int_retval,l_debug_info_ptr))
+	{
+		fprintf(fl_userlog,"Could not print chr_header fo rtransaction charges\n");
+		APL_GOBACK_FAIL;
+	}
+}
+
+for(;;)
+{
+
+	strcpy(h_dl_client,APL_NULL_STRING);
+	strcpy(h_indentity_no, APL_NULL_STRING);
+   strcpy(h_instr_isin, APL_NULL_STRING);
+
+	EXEC SQL FETCH manualtran INTO
+   :h_dl_client:i_dl_client, :h_indentity_no:i_indentity_no, :h_instr_isin:i_instr_isin;
+	
+	if (sqlca.sqlcode == 1403) break;
+
+	int_counter++;	
+
+   fprintf(bill,"%s\t%s\n",h_indentity_no, h_instr_isin);
+	(*int_currpos)++;
+	if ((*int_currpos) + 1 > int_l_pagelength )
+      {
+			fprintf(bill,"^pg\n");
+			(*int_currpos) =1;
+
+			if (APL_FAILURE == IV_Proc_PrnTranHdrDETINV(bill,int_currpos,l_iv_clt_setup_struct,&int_retval,l_debug_info_ptr))
+			{
+				fprintf(fl_userlog,"Could not print chr_header fo rtransaction charges\n");
+				APL_GOBACK_FAIL;
+
+			}
+			fprintf(bill, "MANUAL INSTRUCTIONS \n");
+			(*int_currpos)++;
+		}
+}
+
+EXEC SQL CLOSE manualtran; 
+
+if (int_counter == 0) 
+{
+	fprintf(bill,"\n\tNO MANUAL TRANSACTIONS FOR ACCOUNT %s\n\n",chr_p_client);
+	(*int_currpos)++;
+	(*int_currpos)++;
+	(*int_currpos)++;
+}
+else
+{
+   fprintf(bill,"\n\n");
+	(*int_currpos)++;
+	(*int_currpos)++;
+}
+
+if ((*int_currpos) + 1 > int_l_pagelength )
+   {
+		fprintf(bill,"^pg\n");
+		(*int_currpos) =1;
+
+		if (APL_FAILURE == IV_Proc_PrnTranHdrDETINV(bill,int_currpos,l_iv_clt_setup_struct,&int_retval,l_debug_info_ptr))
+		{
+			fprintf(fl_userlog,"Could not print chr_header fo rtransaction charges\n");
+			APL_GOBACK_FAIL;
+
+		}
+    }
+
+
+int_counter=0;
+EXEC SQL SELECT B_BASIS
+INTO :chr_h_bill_basis:i_b_basis
+FROM INVOICE_SYSTEMPARAM;
+
+
+IS_ANY_ORA_ERROR
+memset(chr_h_bl_upto_dt, APL_NULL_CHAR, APL_DATE_LEN);
+strcpy(chr_h_bl_upto_dt,chr_p_billdt);
+strcpy(chr_h_bl_upto_dt,strtok_r(chr_h_bl_upto_dt," ",&int_pos));
+strcat(chr_h_bl_upto_dt," 23:59:59");
+
+
+
+
+EXEC SQL SELECT MAX(DATEOF_BILLING) into :chr_h_bl_prv_dt :i_bl_prv_date
+FROM IV_SERVICE_CHRG WHERE DATEOF_BILLING < :chr_p_billdt;
+
+IS_ANY_ORA_ERROR
+
+printf("Before Deleted cursor \n");
+IS_ANY_ORA_ERROR
+if (strcmp(chr_h_bill_basis,"AUTO_SETL_DT")==0)
+{
+printf("CURSOR DELETED ASD INSTRUCTION \n");
+fflush(stdout);
+EXEC SQL DECLARE deltran CURSOR FOR
+SELECT A.CLIENT, A.IDENTIY_NO, B.INSTR_ISIN
+FROM DL_DEAL A, MT_INSTRUMENT B 
+WHERE A.CLIENT = :chr_p_client
+AND A.INSTR_CODE = B.INSTR_CODE
+AND A.CLT_REQDEL_IND ='Y'
+AND A.CHECKER_DT  IS NOT NULL
+AND A.CHECKER_DT > :chr_h_bl_prv_dt
+AND A.CHECKER_DT <= :chr_h_bl_upto_dt
+AND EXISTS ( SELECT 1 FROM IV_SERVICE_CHRG C
+				  WHERE C.CLIENT = :chr_p_client 
+					 AND C.DATEOF_BILLING =:chr_p_billdt
+					 AND C.SERVICE_CD = :dbl_h_deltxnfee
+					 AND C.CONS_FLAG = 'I' )
+UNION
+SELECT A.CLIENT, A.IDENTIY_NO, B.INSTR_ISIN
+FROM DL_HISDEAL A, MT_INSTRUMENT B
+WHERE A.CLIENT = :chr_p_client
+AND A.INSTR_CODE = B.INSTR_CODE
+AND A.DEAL_STAT ='DD'
+AND A.CLT_REQDEL_IND ='Y'
+AND A.CHECKER_DT  IS NOT NULL
+AND A.CHECKER_DT > :chr_h_bl_prv_dt
+AND A.CHECKER_DT <= :chr_h_bl_upto_dt
+AND EXISTS ( SELECT 1 FROM IV_SERVICE_CHRG C
+				  WHERE C.CLIENT = :chr_p_client 
+					 AND C.DATEOF_BILLING =:chr_p_billdt
+					 AND C.SERVICE_CD = :dbl_h_deltxnfee
+					 AND C.CONS_FLAG = 'I' )
+ORDER BY 1,2;
+}
+else
+{
+printf("CURSOR DELETED NONASD INSTRUCTION \n");
+fflush(stdout);
+EXEC SQL DECLARE deltran1 CURSOR FOR
+SELECT A.CLIENT, A.IDENTIY_NO, B.INSTR_ISIN
+FROM DL_DEAL A, MT_INSTRUMENT B 
+WHERE A.CLIENT = :chr_p_client
+AND A.INSTR_CODE = B.INSTR_CODE
+AND A.DEAL_STAT ='DD'
+AND A.CLT_REQDEL_IND ='Y'
+AND A.CHECKER_DT  IS NOT NULL
+AND A.DATEOF_INPUT <=:chr_h_bl_upto_dt
+AND A.DATEOF_INPUT > :chr_h_bl_prv_dt
+AND EXISTS ( SELECT 1 FROM IV_SERVICE_CHRG C
+				  WHERE C.CLIENT = :chr_p_client 
+					 AND C.DATEOF_BILLING =:chr_p_billdt
+					 AND C.SERVICE_CD = :dbl_h_deltxnfee
+					 AND C.CONS_FLAG = 'I' )
+UNION
+SELECT A.CLIENT, A.IDENTIY_NO, B.INSTR_ISIN
+FROM DL_HISDEAL A, MT_INSTRUMENT B
+WHERE A.CLIENT = :chr_p_client
+AND A.INSTR_CODE = B.INSTR_CODE
+AND A.DEAL_STAT ='DD'
+AND A.CLT_REQDEL_IND ='Y'
+AND A.CHECKER_DT  IS NOT NULL
+AND A.DATEOF_INPUT <=:chr_h_bl_upto_dt
+AND A.DATEOF_INPUT > :chr_h_bl_prv_dt
+AND EXISTS ( SELECT 1 FROM IV_SERVICE_CHRG C
+				  WHERE C.CLIENT = :chr_p_client 
+					 AND C.DATEOF_BILLING =:chr_p_billdt
+					 AND C.SERVICE_CD = :dbl_h_deltxnfee
+					 AND C.CONS_FLAG = 'I' )
+ORDER BY 1,2;
+}
+
+
+if (strcmp(chr_h_bill_basis,"AUTO_SETL_DT")==0)
+{
+	EXEC SQL OPEN deltran;
+}
+else
+{
+	EXEC SQL OPEN deltran1;
+}
+
+printf("Inside Deleted cursor \n");
+printf("The chr_value of sqlcoe is %d \n",sqlca.sqlcode);
+IS_ANY_ORA_ERROR
+
+
+if (sqlca.sqlcode <0)
+{
+	fprintf(fl_userlog,"Db Error(BTRANSAC)\n");
+	APL_GOBACK_FAIL
+}
+
+fprintf(bill, "DELETED INSTRUCTIONS \n");
+(*int_currpos)++;
+
+if ((*int_currpos) + 1 > int_l_pagelength )
+{
+	fprintf(bill,"^pg\n");
+	(*int_currpos) =1;
+	if (APL_FAILURE == IV_Proc_PrnTranHdrDETINV(bill,int_currpos,l_iv_clt_setup_struct,&int_retval,l_debug_info_ptr))
+	{
+		fprintf(fl_userlog,"Could not print chr_header fo rtransaction charges\n");
+		APL_GOBACK_FAIL;
+	}
+}
+
+for(;;)
+{
+
+	strcpy(h_dl_client,APL_NULL_STRING);
+	strcpy(h_indentity_no, APL_NULL_STRING);
+   strcpy(h_instr_isin, APL_NULL_STRING);
+
+	if (strcmp(chr_h_bill_basis,"AUTO_SETL_DT")==0)
+	{
+		EXEC SQL FETCH deltran INTO
+   	:h_dl_client:i_dl_client, :h_indentity_no:i_indentity_no, :h_instr_isin:i_instr_isin;
+	}
+	else
+	{
+		EXEC SQL FETCH deltran1 INTO
+		:h_dl_client:i_dl_client, :h_indentity_no:i_indentity_no, :h_instr_isin:i_instr_isin;
+	}
+	
+	if (sqlca.sqlcode == 1403) break;
+
+	int_counter++;	
+
+   fprintf(bill,"%s\t%s\n",h_indentity_no, h_instr_isin);
+	(*int_currpos)++;
+	if ((*int_currpos) + 1 > int_l_pagelength )
+      {
+			fprintf(bill,"^pg\n");
+			(*int_currpos) =1;
+
+			if (APL_FAILURE == IV_Proc_PrnTranHdrDETINV(bill,int_currpos,l_iv_clt_setup_struct,&int_retval,l_debug_info_ptr))
+			{
+				fprintf(fl_userlog,"Could not print chr_header fo rtransaction charges\n");
+				APL_GOBACK_FAIL;
+
+			}
+			fprintf(bill, "DELETED INSTRUCTIONS \n");
+			(*int_currpos)++;
+		}
+}
+if (strcmp(chr_h_bill_basis,"AUTO_SETL_DT")==0)
+{
+	EXEC SQL CLOSE deltran; 
+}
+else
+{
+	EXEC SQL CLOSE deltran1;
+}
+
+if (int_counter == 0) 
+{
+	fprintf(bill,"\n\tNO DELETED TRANSACTIONS FOR ACCOUNT %s\n\n",chr_p_client);
+	(*int_currpos)++;
+	(*int_currpos)++;
+	(*int_currpos)++;
+}
+else
+{
+   fprintf(bill,"\n\n");
+	(*int_currpos)++;
+	(*int_currpos)++;
+}
+
+
+
+memset(chr_h_bl_upto_dt, APL_NULL_CHAR, APL_DATE_LEN);
+int_counter=0;
+
+strcpy(chr_h_bl_upto_dt,chr_p_billdt);
+strcpy(chr_h_bl_upto_dt,strtok_r(chr_h_bl_upto_dt," ",&int_pos));
+strcat(chr_h_bl_upto_dt," 23:59:59");
+
+printf("The chr_date is %s \n",chr_p_billdt);
+printf("CURSOR LATE INSTRUCTION \n");
+fflush(stdout);
+EXEC SQL DECLARE latetran CURSOR FOR
+SELECT A.CLIENT, A.IDENTIY_NO, B.INSTR_ISIN
+FROM DL_DEAL A, MT_INSTRUMENT B,INVOICE_SYSTEMPARAM C, MT_CORE_SYS_PARAMS D
+WHERE A.CLIENT = :chr_p_client
+AND A.INSTR_CODE = B.INSTR_CODE
+AND A.CHECKER IS NOT NULL
+AND A.DL_CLASS  NOT IN ('17','19')
+AND A.DL_CLASS NOT in (SELECT DL_CLASS FROM IV_DEAL_TYPE WHERE (NATION_CD = :g_mt_commonsys_params_struct_h.nation_code OR NATION_CD ='XX'))
+AND A.DATEOFBILLING = :chr_p_billdt 
+AND A.DEAL_STAT !='DD'
+AND (  (C.b_basis ='INP' and  A.DATEOF_INPUT <= :chr_h_bl_upto_dt ) or
+          (C.b_basis ='ASD' and (A.INSTRUMENT_DT is not null and A.INSTRUMENT_DT <= :chr_h_bl_upto_dt) ) )
+AND (  ( A.DATEOF_INPUT  > A.setl_date )  OR
+          ( A.domestic_cpclt = D.custody_clt_cd and
+            ( ( concat(to_char(setl_date-C.late_dl_days_b,'dd/mm/yyyy'),concat(C.latetime_b,':00')) < A.DATEOF_INPUT
+                and B.PROD_CLASS=1 ) OR
+            ( concat(to_char(setl_date-C.late_dl_days_d,'dd/mm/yyyy'),concat(C.latetime_d,':00')) < A.DATEOF_INPUT
+                and B.PROD_CLASS =2 ) ) ) OR
+          ( A.domestic_cpclt != d.custody_clt_cd and
+            ( ( concat(to_char(setl_date-C.late_dl_days_a,'dd/mm/yyyy'),concat(C.latetime_a,':00')) < A.DATEOF_INPUT
+                and B.PROD_CLASS=1 ) or
+            ( concat(to_char(setl_date-c.late_dl_days_c,'dd/mm/yyyy'),concat(C.latetime_c,':00')) < A.DATEOF_INPUT
+                and B.PROD_CLASS =2 ) ) ) )
+AND EXISTS ( SELECT 1 FROM IV_SERVICE_CHRG C
+				  WHERE C.CLIENT = :chr_p_client 
+					 AND C.DATEOF_BILLING =:chr_p_billdt
+					 AND C.SERVICE_CD = :dbl_h_latetxnfee
+					 AND C.CONS_FLAG = 'I' )
+UNION
+SELECT A.CLIENT, A.IDENTIY_NO, B.INSTR_ISIN
+FROM DL_HISDEAL A, MT_INSTRUMENT B,INVOICE_SYSTEMPARAM C, MT_CORE_SYS_PARAMS D
+WHERE A.CLIENT = :chr_p_client
+AND A.INSTR_CODE = B.INSTR_CODE
+AND A.CHECKER IS NOT NULL
+AND A.DL_CLASS NOT IN ('17','19') 
+AND A.DL_CLASS NOT in (SELECT DL_CLASS FROM IV_DEAL_TYPE WHERE (NATION_CD = :g_mt_commonsys_params_struct_h.nation_code OR NATION_CD ='XX'))
+AND A.DATEOFBILLING = :chr_p_billdt 
+AND A.DEAL_STAT !='DD'
+AND (  (C.b_basis ='INP' and  A.DATEOF_INPUT <=:chr_h_bl_upto_dt ) or
+          (C.b_basis ='ASD' and (A.INSTRUMENT_DT is not null and A.INSTRUMENT_DT <= :chr_h_bl_upto_dt) ) )
+AND (  ( A.DATEOF_INPUT  > A.setl_date )  OR
+          ( A.domestic_cpclt = D.custody_clt_cd and
+            ( ( concat(to_char(setl_date-C.late_dl_days_b,'dd/mm/yyyy'),concat(C.latetime_b,':00')) < A.DATEOF_INPUT
+                and B.PROD_CLASS=1 ) OR
+            ( concat(to_char(setl_date-C.late_dl_days_d,'dd/mm/yyyy'),concat(C.latetime_d,':00')) < A.DATEOF_INPUT
+                and B.PROD_CLASS =2 ) ) ) OR
+          ( A.domestic_cpclt != d.custody_clt_cd and
+            ( ( concat(to_char(setl_date-C.late_dl_days_a,'dd/mm/yyyy'),concat(C.latetime_a,':00')) < A.DATEOF_INPUT
+                and B.PROD_CLASS=1 ) or
+            ( concat(to_char(setl_date-c.late_dl_days_c,'dd/mm/yyyy'),concat(C.latetime_c,':00')) < A.DATEOF_INPUT
+                and B.PROD_CLASS =2 ) ) ) )
+AND EXISTS ( SELECT 1 FROM IV_SERVICE_CHRG C
+				  WHERE C.CLIENT = :chr_p_client 
+					 AND C.DATEOF_BILLING =:chr_p_billdt
+					 AND C.SERVICE_CD = :dbl_h_latetxnfee
+					 AND C.CONS_FLAG = 'I' )
+ORDER BY 1,2;
+
+EXEC SQL OPEN latetran;
+printf("Inside late cursor \n");
+printf("The chr_value of sqlcoe is %d \n",sqlca.sqlcode);
+IS_ANY_ORA_ERROR
+
+if (sqlca.sqlcode <0)
+{
+	fprintf(fl_userlog,"Db Error(BTRANSAC)\n");
+	APL_GOBACK_FAIL
+}
+
+fprintf(bill, "LATE INSTRUCTIONS \n");
+(*int_currpos)++;
+
+if ((*int_currpos) + 1 > int_l_pagelength )
+{
+	fprintf(bill,"^pg\n");
+	(*int_currpos) =1;
+	if (APL_FAILURE == IV_Proc_PrnTranHdrDETINV(bill,int_currpos,l_iv_clt_setup_struct,&int_retval,l_debug_info_ptr))
+	{
+		fprintf(fl_userlog,"Could not print chr_header fo rtransaction charges\n");
+		APL_GOBACK_FAIL;
+	}
+}
+
+for(;;)
+{
+
+	strcpy(h_dl_client,APL_NULL_STRING);
+	strcpy(h_indentity_no, APL_NULL_STRING);
+   strcpy(h_instr_isin, APL_NULL_STRING);
+
+	EXEC SQL FETCH latetran INTO
+   :h_dl_client:i_dl_client, :h_indentity_no:i_indentity_no, :h_instr_isin:i_instr_isin;
+	
+	if (sqlca.sqlcode == 1403) break;
+
+	int_counter++;	
+
+   fprintf(bill,"%s\t%s\n",h_indentity_no, h_instr_isin);
+	(*int_currpos)++;
+	if ((*int_currpos) + 1 > int_l_pagelength )
+      {
+			fprintf(bill,"^pg\n");
+			(*int_currpos) =1;
+
+			if (APL_FAILURE == IV_Proc_PrnTranHdrDETINV(bill,int_currpos,l_iv_clt_setup_struct,&int_retval,l_debug_info_ptr))
+			{
+				fprintf(fl_userlog,"Could not print chr_header fo rtransaction charges\n");
+				APL_GOBACK_FAIL;
+
+			}
+			fprintf(bill, "LATE INSTRUCTIONS \n");
+			(*int_currpos)++;
+		}
+}
+
+EXEC SQL CLOSE latetran; 
+
+if (int_counter == 0) 
+{
+	fprintf(bill,"\n\tNO LATE TRANSACTIONS FOR ACCOUNT %s\n\n",chr_p_client);
+	(*int_currpos)++;
+	(*int_currpos)++;
+	(*int_currpos)++;
+}
+
+ 
+if (strcmp(g_mt_commonsys_params_struct_h.nation_code,"GR") == 0)
+{
+memset(chr_h_bl_upto_dt, APL_NULL_CHAR, APL_DATE_LEN);
+memset(chr_h_bl_prv_dt, APL_NULL_CHAR, APL_DATE_LEN);
+int_counter=0;
+strcpy(chr_h_bl_upto_dt,chr_p_billdt);
+strcpy(chr_h_bl_upto_dt,strtok_r(chr_h_bl_upto_dt," ",&int_pos));
+strcat(chr_h_bl_upto_dt," 23:59:59");
+
+EXEC SQL SELECT MAX(DATEOF_BILLING) into :chr_h_bl_prv_dt :i_bl_prv_date
+FROM IV_SERVICE_CHRG WHERE DATEOF_BILLING < :chr_p_billdt;
+IS_ANY_ORA_ERROR
+
+printf("The chr_date is %s \n",chr_p_billdt);
+printf("CURSOR BOG INSTRUCTION \n");
+fflush(stdout);
+EXEC SQL DECLARE curBOGMSG CURSOR FOR
+SELECT A.IDENTIY_NO, B.INSTR_ISIN
+FROM   DL_MSGLINK A, MT_INSTRUMENT B, DL_DEAL C
+WHERE	 A.CLIENT   =  :chr_p_client
+AND    A.CLIENT   =  C.CLIENT
+AND	 A.IDENTIY_NO     =  C.IDENTIY_NO
+AND	 C.INSTR_CODE	 =  B.INSTR_CODE
+AND    C.DEAL_STAT = 'CS'
+AND	 A.SWIFT_MSG_NO	 =  '54B'
+AND 	 A.MSG_IN_OUT_IND	 =  'O'
+AND A.DATE_OF_INPUT <=:chr_h_bl_upto_dt
+AND A.DATE_OF_INPUT > :chr_h_bl_prv_dt
+AND EXISTS ( SELECT 1 FROM IV_SERVICE_CHRG C
+              WHERE C.CLIENT = :chr_p_client
+                AND C.DATEOF_BILLING =:chr_p_billdt
+                AND C.SERVICE_CD = :dbl_h_bogfee
+                AND C.CONS_FLAG = 'I' )
+UNION ALL
+SELECT A.IDENTIY_NO, B.INSTR_ISIN
+FROM DL_HISMSGLINK A, MT_INSTRUMENT B, DL_HISDEAL C
+WHERE  A.CLIENT   =  :chr_p_client
+AND    A.CLIENT   =  C.CLIENT
+AND    A.IDENTIY_NO     =  C.IDENTIY_NO
+AND    C.INSTR_CODE    =  B.INSTR_CODE
+AND    C.DEAL_STAT = 'CS'
+AND    A.SWIFT_MSG_NO    =  '54B'
+AND    A.MSG_IN_OUT_IND    =  'O'
+AND A.DATE_OF_INPUT <=:chr_h_bl_upto_dt
+AND A.DATE_OF_INPUT > :chr_h_bl_prv_dt
+AND EXISTS ( SELECT 1 FROM IV_SERVICE_CHRG C
+              WHERE C.CLIENT = :chr_p_client
+                AND C.DATEOF_BILLING =:chr_p_billdt
+                AND C.SERVICE_CD = :dbl_h_bogfee
+                AND C.CONS_FLAG = 'I' )
+GROUP BY A.IDENTIY_NO, B.INSTR_ISIN;
+
+EXEC SQL OPEN curBOGMSG;
+printf("Inside BOG MESSAGE cursor \n");
+printf("The chr_value of sqlcoe is %d \n",sqlca.sqlcode);
+IS_ANY_ORA_ERROR
+
+if (sqlca.sqlcode <0)
+{
+	fprintf(fl_userlog,"Db Error(BTRANSAC)\n");
+	APL_GOBACK_FAIL
+}
+
+(*int_currpos)++;
+fprintf(bill, "\nTRANSACTIONS FOR WHICH BOG MESSAGES WERE SENT \n");
+fprintf(bill,"TXN REF NO\tISIN\n");
+(*int_currpos)++;
+(*int_currpos)++;
+
+if ((*int_currpos) + 1 > int_l_pagelength )
+{
+	fprintf(bill,"^pg\n");
+	(*int_currpos) =1;
+	if (APL_FAILURE == IV_Proc_PrnTranHdrDETINV(bill,int_currpos,l_iv_clt_setup_struct,&int_retval,l_debug_info_ptr))
+	{
+		fprintf(fl_userlog,"Could not print chr_header fo rtransaction charges\n");
+		APL_GOBACK_FAIL;
+	}
+}
+
+for(;;)
+{
+
+	strcpy(h_indentity_no, APL_NULL_STRING);
+   strcpy(h_instr_isin, APL_NULL_STRING);
+
+	EXEC SQL FETCH curBOGMSG INTO
+   :h_indentity_no:i_indentity_no, :h_instr_isin:i_instr_isin;
+	
+	if (sqlca.sqlcode == 1403) break;
+
+	int_counter++;	
+
+   fprintf(bill,"%s\t%s\n",h_indentity_no, h_instr_isin);
+	(*int_currpos)++;
+	if ((*int_currpos) + 1 > int_l_pagelength )
+      {
+			fprintf(bill,"^pg\n");
+			(*int_currpos) =1;
+
+			if (APL_FAILURE == IV_Proc_PrnTranHdrDETINV(bill,int_currpos,l_iv_clt_setup_struct,&int_retval,l_debug_info_ptr))
+			{
+				fprintf(fl_userlog,"Could not print chr_header fo rtransaction charges\n");
+				APL_GOBACK_FAIL;
+
+			}
+			fprintf(bill, "\nINSTRUCTIONS FOR WHICH BOG MESSAGES WERE SENT. \n");
+			fprintf(bill,"TXN REF NO\tISIN\n");
+			(*int_currpos)++;
+			(*int_currpos)++;
+		}
+}
+
+EXEC SQL CLOSE curBOGMSG; 
+
+if (int_counter == 0) 
+{
+	fprintf(bill,"\n\tNO BOG MESSAGE SENT FOR INSTRUCTIONS FOR ACCOUNT %s\n\n",chr_p_client);
+	(*int_currpos)++;
+	(*int_currpos)++;
+	(*int_currpos)++;
+}
+
+}
+
+APL_GOBACK_SUCCESS
+
+
+
+        {
+
+        RETURN_SUCCESS:
+                APL_IF_DEBUG
+					 {
+						CO_ProcMonitor(APL_OUT_FILE,"Exiting successfully out of IV_Proc_PrnTranDETINV\n",NULL,NULL);	
+					 }	
+                return(APL_SUCCESS);
+
+        RETURN_FAILURE:
+                APL_IF_DEBUG
+					 {
+						CO_ProcMonitor(APL_OUT_FILE,"Exiting unsuccessfully out of IV_Proc_PrnTranDETINV\n",NULL,NULL);	
+					 }
+                return (APL_FAILURE);
+        }
+
+}

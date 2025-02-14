@@ -1,0 +1,701 @@
+/*
+ *    COPYRIGHT NOTICE
+ *
+ *   Copyright 2005 Polaris Software Lab Limited. All rights reserved.
+ *
+ *   These materials are confidential and proprietary to
+ *    Polaris Software Lab Limited and no part of these materials should
+ *    be reproduced, published, transmitted or distributed in any form or
+ *    by any means, electronic, mechanical, photocopying, recording or
+ *    otherwise, or stored in any information storage or retrieval system
+ *    of any nature nor should the materials be disclosed to third parties
+ *    or used in any other manner for which this is not authorized, without
+ *    the prior express written authorization of Polaris Software Lab Limited.
+*/
+/*********************************************************************
+ *
+ * Module Name         :      Master Maintenance
+ *
+ * File Name           :      CA_RTBB_ALLOTMENT.pc
+ *
+ * Description         :      This file contains db functions for updating
+ *                            Master Details.
+ *
+ *
+ *            Version Control Block
+ *
+ * Date        Version     Author         Description       RFS No.
+ * ---------   --------  ------------     -------------     ---------
+ * 16/03/2006   1.0       CHIRAG        New file       CA_RTBB_ALLOTMENT
+ *
+ *********************************************************************/
+
+
+#include "CO_HostStructdef.h"
+#include "CA_InterFace.h"
+#include "CA_Common.h"
+#include "Intellect_Common.h"
+#define APL_DEPO_NSDL "NSDL"
+
+EXEC SQL INCLUDE SQLCA.H;
+int  Process_Allotment(	CA_RTBB_ALLOTMENT_STRUCT_H *p_ca_rtbb_allotment_struct_h,
+								INTL_ENV_DATA_STRUCT_H *p_intl_envdatastruct_h,
+								DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	double l_tot_appl_qty = 0.0;
+	double l_qty_i = 0.0;
+	double l_qty_d = 0.0;
+	char l_refno[APL_TXNREFNO_LEN] = APL_NULL_STRING;
+	char l_resinstr_cd[MT_INSTR_CODE_LEN] = APL_NULL_STRING;
+	char l_evt_ind[10] = APL_NULL_STRING;
+	CA_CAEVENT_STRUCT_H     l_caevent_struct_h;
+	CA_CAEVENT_STRUCT_I     l_caevent_struct_i;
+	CA_DEAL_STRUCT_H        l_ca_deal_struct_h;
+	SYS_DL_DEAL_STRUCT_H p_sys_dl_deal_struct_h_a;
+	CA_RTBB_ALLOTMENT_STRUCT_H l_ca_rtbb_allotment_struct_h;
+	CA_RTBB_ALLOTMENT_STRUCT_I l_ca_rtbb_allotment_struct_i;
+	char     chr_msg_param_struct[17] = APL_NULL_STRING;
+
+	memset(&l_caevent_struct_h,NULL,sizeof(l_caevent_struct_h));
+	memset(&l_ca_deal_struct_h,NULL,sizeof(l_ca_deal_struct_h));
+
+	/* PJ ENH: Open Offer
+	 * Commenting below code As per Open offer Requirement 
+	 * We need to reverse back quantities from CABL to FREE block not by considering CA_APPLICATION 
+	 * qty but considering CA_APPLICATION_CABL table to find exactly how much we transfered to CABL block
+	 * because of Application */ 
+ /** Getting total applied quantuity **
+ 	EXEC SQL SELECT NVL(SUM(APPLIED_QTY),0)
+	 		INTO :l_tot_appl_qty
+			FROM CA_APPLICATION
+			WHERE CORP_ID = :p_ca_rtbb_allotment_struct_h->h_corp_id
+			AND 	CLN_CODE = :p_ca_rtbb_allotment_struct_h->h_cln_code
+			AND STATUS = 'AA'
+			AND DEPO_CODE = :p_ca_rtbb_allotment_struct_h->h_depo_cd;
+ 	IS_ANY_ORA_ERROR */
+
+	Alert("%s %s %s ", p_ca_rtbb_allotment_struct_h->h_corp_id, p_ca_rtbb_allotment_struct_h->h_cln_code, p_ca_rtbb_allotment_struct_h->h_depo_cd);
+
+	EXEC SQL	SELECT NVL(SUM(MOVED_QTY),0)
+			INTO :l_tot_appl_qty
+			FROM CA_APPLICATION_CABL
+			WHERE CORP_ID 	= :p_ca_rtbb_allotment_struct_h->h_corp_id
+			AND	CLN_CODE = :p_ca_rtbb_allotment_struct_h->h_cln_code
+			AND	DEPO_CODE = :p_ca_rtbb_allotment_struct_h->h_depo_cd;
+
+	IS_ANY_ORA_ERROR
+
+	Alert(" %lf ", l_tot_appl_qty);
+
+	
+
+	/** Get the corresponding Event Type **/
+		 EXEC SQL SELECT CAEVENT.*
+			      INTO :l_caevent_struct_h:l_caevent_struct_i
+					FROM CAEVENT
+					WHERE CORP_ID = :p_ca_rtbb_allotment_struct_h -> h_corp_id;
+	   IS_ANY_ORA_ERROR
+		if(sqlca.sqlcode == 1403)
+			APL_GOBACK_FAIL
+
+	/**Selecting Allotment Data **/
+	EXEC SQL SELECT *
+				INTO :l_ca_rtbb_allotment_struct_h:l_ca_rtbb_allotment_struct_i
+				FROM CA_RTBB_ALLOTMENT
+				WHERE CORP_ID = :p_ca_rtbb_allotment_struct_h -> h_corp_id
+				AND	CLN_CODE = :p_ca_rtbb_allotment_struct_h -> h_cln_code
+				AND 	CA_EVENT	=	:p_ca_rtbb_allotment_struct_h -> h_ca_event
+				AND ORIG_DEPO_CD = :p_ca_rtbb_allotment_struct_h -> h_orig_depo_cd;
+	   IS_ANY_ORA_ERROR
+		if(sqlca.sqlcode == 1403)
+			APL_GOBACK_FAIL
+
+
+   if(strlen(l_caevent_struct_h.h_res_instr_code))
+   	strcpy(l_resinstr_cd,l_caevent_struct_h.h_res_instr_code);
+	else
+		strcpy(l_resinstr_cd,l_caevent_struct_h.h_res_instr_code_2);
+		
+
+	if(!strcmp(l_caevent_struct_h.h_evt_class ,EVT_BUY_BACK))
+	{
+			/**Reverse the positions in application **/
+		l_qty_d = l_tot_appl_qty;
+		strcpy(l_evt_ind,CA_BB_ALLOT_IND);
+		if(DL_Mod_Posn(p_ca_rtbb_allotment_struct_h->h_cln_code,
+							l_caevent_struct_h.h_instr_code,
+							p_ca_rtbb_allotment_struct_h->h_depo_cd,
+							"",
+							'S',
+							'1',
+							&(l_qty_d),
+							'D',
+							"CABL",
+							l_debug_info_ptr)== APL_FAILURE)
+			APL_GOBACK_FAIL
+
+		l_qty_i = l_tot_appl_qty;
+		if(DL_Mod_Posn(	p_ca_rtbb_allotment_struct_h->h_cln_code,
+								l_caevent_struct_h.h_instr_code,
+								p_ca_rtbb_allotment_struct_h->h_depo_cd,
+								"",
+								'S',
+								'2',
+								&(l_qty_i),
+								'I',
+								"FREE",
+								l_debug_info_ptr)== APL_FAILURE)
+			APL_GOBACK_FAIL
+		printf("Move position completed.....\n");
+		/** we moved blocked positions to free **/
+		/** Proceeding for Deal creation**/
+		/** Buy Back its a DVP **/
+		printf("Alloted Quantity |%lf| \n ",p_ca_rtbb_allotment_struct_h->h_alloted_qty);
+		if(p_ca_rtbb_allotment_struct_h->h_alloted_qty > 0)
+		{
+			if(CA_Rtv_AllotDeal(	CA_BB_ALLOT_IND,
+						APL_DEAL_DVP,
+						&l_ca_rtbb_allotment_struct_h,
+						&l_ca_deal_struct_h,
+						l_debug_info_ptr)	==	APL_FAILURE)
+				APL_GOBACK_FAIL
+					/** Ref No **/
+			if(APL_FAILURE == CO_GenRefno(CA_BB_ALLOT_IND,
+						APL_NULL_STRING,
+						l_ca_deal_struct_h.h_dealcd,
+						l_ca_deal_struct_h.h_indentity_no,
+						l_debug_info_ptr))
+						APL_GOBACK_FAIL
+						
+				/*FPI Company Level Limit Monitoring Start*/		
+						
+			if ( FPI_CA_Deal(  &l_ca_deal_struct_h,
+						p_intl_envdatastruct_h,
+						l_debug_info_ptr) == APL_FAILURE)
+				        APL_GOBACK_FAIL		
+/*FPI Company Level Limit Monitoring End*/								
+
+			if ( CA_Mod_NewTrade(  &l_ca_deal_struct_h,
+						p_intl_envdatastruct_h,
+						l_refno,
+						l_debug_info_ptr) == APL_FAILURE)
+				APL_GOBACK_FAIL
+
+			if(CA_MovePos( &l_ca_deal_struct_h,
+								l_evt_ind,
+								APL_NULL_STRING,
+								l_debug_info_ptr) == APL_FAILURE)
+			{
+				Alert("Failure From Move Postions");
+				APL_GOBACK_FAIL
+			}			
+			strcpy(chr_msg_param_struct,l_ca_deal_struct_h.h_indentity_no);
+			strcat(chr_msg_param_struct,";");
+
+			if (GBDbInsIMSGENT(     "566N29",
+											p_ca_rtbb_allotment_struct_h->h_corp_id,
+											p_ca_rtbb_allotment_struct_h->h_cln_code,
+											'Y',
+											chr_msg_param_struct,
+											l_debug_info_ptr) == APL_FAILURE)
+				APL_GOBACK_FAIL
+		}
+	}
+	else if(!strcmp(l_caevent_struct_h.h_evt_class ,EVT_RHTS))
+	{
+		/** for Rights Deal creation, is the only process, RVP **/
+		strcpy(l_evt_ind,CA_RT_ALLOT_IND);
+		if(CA_Rtv_AllotDeal(	CA_RT_ALLOT_IND,
+									APL_DEAL_RVP,
+									&l_ca_rtbb_allotment_struct_h,
+									&l_ca_deal_struct_h,
+									l_debug_info_ptr)	==	APL_FAILURE)
+			APL_GOBACK_FAIL
+		/** Ref No **/
+		if(APL_FAILURE == CO_GenRefno(CA_RT_ALLOT_IND,
+												APL_NULL_STRING,
+												l_ca_deal_struct_h.h_dealcd,
+												l_ca_deal_struct_h.h_indentity_no,
+												l_debug_info_ptr))
+			APL_GOBACK_FAIL
+
+		
+
+	}
+/**	
+	else if(!strcmp(l_caevent_struct_h.h_evt_class ,EVT_NS))
+	{
+
+		 for Rights Deal creation, is the only process, RVP 
+		strcpy(l_evt_ind,CA_IPO_ALLOT_IND);
+		if(CA_Rtv_AllotDeal(	CA_IPO_ALLOT_IND,
+									APL_DEAL_RF,
+									&l_ca_rtbb_allotment_struct_h,
+									&l_ca_deal_struct_h,
+									l_debug_info_ptr)	==	APL_FAILURE)
+			APL_GOBACK_FAIL
+		 Ref No 
+		if(APL_FAILURE == CO_GenRefno(CA_IPO_ALLOT_IND,
+												APL_NULL_STRING,
+												l_ca_deal_struct_h.h_dealcd,
+												l_ca_deal_struct_h.h_indentity_no,
+												l_debug_info_ptr))
+			APL_GOBACK_FAIL
+
+	}**/
+	if(!strcmp(l_caevent_struct_h.h_evt_class ,EVT_RHTS))
+	{
+		
+/*COMPANY LEVEL LIMIT MONITORING START*/		
+		if ( FPI_CA_Deal(  &l_ca_deal_struct_h,
+						p_intl_envdatastruct_h,
+						l_debug_info_ptr) == APL_FAILURE)
+				APL_GOBACK_FAIL				
+		
+/*COMPANY LEVEL LIMIT MONITORING END*/		
+		
+		if ( CA_Mod_NewTrade(  &l_ca_deal_struct_h,
+										p_intl_envdatastruct_h,
+										l_refno,
+										l_debug_info_ptr) == APL_FAILURE)
+			APL_GOBACK_FAIL
+
+
+
+		if(CA_MovePos(	&l_ca_deal_struct_h,
+							l_evt_ind,
+							APL_NULL_STRING,
+							l_debug_info_ptr) == APL_FAILURE)
+		{
+			Alert("Failure From Move Postions");
+			APL_GOBACK_FAIL
+		}
+		
+		strcpy(chr_msg_param_struct,l_ca_deal_struct_h.h_indentity_no);
+		strcat(chr_msg_param_struct,";");
+
+		if (GBDbInsIMSGENT(     "566N19",
+										p_ca_rtbb_allotment_struct_h->h_corp_id,
+										p_ca_rtbb_allotment_struct_h->h_cln_code,
+										'Y',
+										chr_msg_param_struct,
+										l_debug_info_ptr) == APL_FAILURE)
+			APL_GOBACK_FAIL
+	}
+
+APL_GOBACK_SUCCESS  // AIX -Warnings Removal	
+ RETURN_SUCCESS :
+		APL_FUNCTION_RET_SUCCESS(APL_OUT_FILE)
+  RETURN_FAILURE :
+ 		APL_FUNCTION_RET_FAILURE(APL_OUT_FILE)
+}
+
+int CA_ModDbCA_RTBB_ALLOTMENT(CA_RTBB_ALLOTMENT_STRUCT_H *p_ca_rtbb_allotment_struct_h,
+		INTL_ENV_DATA_STRUCT_H *p_intl_envdatastruct_h,DEBUG_INFO_STRUCT_H **l_debug_info_ptr) 
+{
+	/* Variable Declarations */
+  CA_RTBB_ALLOTMENT_STRUCT_I *l_ca_rtbb_allotment_struct_i;
+
+  struct sqlca sqlca;
+
+  char chr_acc_stamp_compare[APL_DATE_LEN] = APL_NULL_STRING;
+  char chr_status_compare[APL_STATUS_LEN] = APL_NULL_STRING;
+  char chr_sys_access_stamp[APL_DATE_LEN] = APL_NULL_STRING;
+  short p_i_maker, p_i_makerdt, p_i_checker, p_i_checkerdt, p_i_access_stamp;
+  short p_i_access_stamp_compare;
+  short p_i_status = 0;
+  int int_error_flag = APL_SUCCESS;
+  int int_l_rowexists = 0;
+  char  *l_key_codes[4];
+  char  *l_key_values[4];
+  char  chr_l_table_name[50] = APL_NULL_STRING;
+  char  chr_l_field_val[40] = APL_NULL_STRING;
+	int	int_retval = APL_SUCCESS;
+
+#ifdef APL_THREADS
+    APL_SET_CONTEXT
+    EXEC SQL CONTEXT USE :my_ctx_local;
+#endif
+
+	 APL_FUNCTION_ENTER(APL_OUT_FILE)
+
+  l_ca_rtbb_allotment_struct_i=(CA_RTBB_ALLOTMENT_STRUCT_I*)calloc(1,sizeof(CA_RTBB_ALLOTMENT_STRUCT_I));
+
+  APL_MALLOC_FAIL(l_ca_rtbb_allotment_struct_i)
+
+  p_i_maker =0;
+  p_i_makerdt =0;
+  p_i_checker =0;
+  p_i_checkerdt =0;
+  p_i_access_stamp =0;
+  p_i_access_stamp_compare =0;
+
+ if (!strlen(p_ca_rtbb_allotment_struct_h->h_corp_id)) l_ca_rtbb_allotment_struct_i->i_corp_id =-1;
+     else l_ca_rtbb_allotment_struct_i->i_corp_id =0;
+ 
+if (!strlen(p_ca_rtbb_allotment_struct_h->h_cln_code)) l_ca_rtbb_allotment_struct_i->i_cln_code =-1;
+     else l_ca_rtbb_allotment_struct_i->i_cln_code =0;
+ 
+if (!strlen(p_ca_rtbb_allotment_struct_h->h_ca_event)) l_ca_rtbb_allotment_struct_i->i_ca_event =-1;
+     else l_ca_rtbb_allotment_struct_i->i_ca_event =0;
+ 
+if (!strlen(p_ca_rtbb_allotment_struct_h->h_typeof_info)) l_ca_rtbb_allotment_struct_i->i_typeof_info =-1;
+     else l_ca_rtbb_allotment_struct_i->i_typeof_info =0;
+ 
+if (!strlen(p_ca_rtbb_allotment_struct_h->h_maker)) l_ca_rtbb_allotment_struct_i->i_maker =-1;
+     else l_ca_rtbb_allotment_struct_i->i_maker =0;
+ 
+if (!strlen(p_ca_rtbb_allotment_struct_h->h_maker_dt)) l_ca_rtbb_allotment_struct_i->i_maker_dt =-1;
+     else l_ca_rtbb_allotment_struct_i->i_maker_dt =0;
+ 
+if (!strlen(p_ca_rtbb_allotment_struct_h->h_checker)) l_ca_rtbb_allotment_struct_i->i_checker =-1;
+     else l_ca_rtbb_allotment_struct_i->i_checker =0;
+
+if (!strlen(p_ca_rtbb_allotment_struct_h->h_checker_dt)) l_ca_rtbb_allotment_struct_i->i_checker_dt =-1;
+     else l_ca_rtbb_allotment_struct_i->i_checker_dt =0;
+
+if (!strlen(p_ca_rtbb_allotment_struct_h->h_access_stamp)) l_ca_rtbb_allotment_struct_i->i_access_stamp =-1;
+     else l_ca_rtbb_allotment_struct_i->i_access_stamp =0;
+
+if (!strlen(p_ca_rtbb_allotment_struct_h->h_depo_cd)) l_ca_rtbb_allotment_struct_i->i_depo_cd =-1;
+     else l_ca_rtbb_allotment_struct_i->i_depo_cd =0;
+
+if (!strlen(p_ca_rtbb_allotment_struct_h->h_dp_id)) l_ca_rtbb_allotment_struct_i->i_dp_id =-1;
+     else l_ca_rtbb_allotment_struct_i->i_dp_id =0;
+
+if (!strlen(p_ca_rtbb_allotment_struct_h->h_cln_id)) l_ca_rtbb_allotment_struct_i->i_cln_id =-1;
+     else l_ca_rtbb_allotment_struct_i->i_cln_id =0;
+/* Chirag 23-01-2007 RT */
+if (!strlen(p_ca_rtbb_allotment_struct_h->h_orig_depo_cd)) l_ca_rtbb_allotment_struct_i->i_orig_depo_cd =-1;
+     else l_ca_rtbb_allotment_struct_i->i_orig_depo_cd =0;
+/* Chirag 23-01-2007 RT */
+
+ if(CO_RtvSysDtTime(chr_sys_access_stamp,l_debug_info_ptr) !=APL_SUCCESS)
+	{
+		APL_GOBACK_FAIL
+	}
+
+	
+ if (!strcmp(p_intl_envdatastruct_h->h_mode,APL_FUNC_INPUT))
+	{
+
+		APL_IF_DEBUG
+ 	{
+  		CO_ProcMonitor(APL_OUT_FILE, "Entered Input of Function CA_ModDbCA_RTBB_ALLOTMENT\n",
+													NULL,p_intl_envdatastruct_h);
+ 	}
+
+		strcpy(p_ca_rtbb_allotment_struct_h->h_status,STATUS_UAUTH);
+    l_ca_rtbb_allotment_struct_i->i_status =0;
+   	strcpy(p_ca_rtbb_allotment_struct_h->h_maker,p_intl_envdatastruct_h->usr);
+		l_ca_rtbb_allotment_struct_i->i_maker=0;
+  	strcpy(p_ca_rtbb_allotment_struct_h->h_maker_dt,chr_sys_access_stamp);
+		l_ca_rtbb_allotment_struct_i->i_maker_dt=0;
+		strcpy(p_ca_rtbb_allotment_struct_h->h_access_stamp,chr_sys_access_stamp);
+		l_ca_rtbb_allotment_struct_i->i_access_stamp =0;
+
+			 printf("CORP ID = |%s|\n",p_ca_rtbb_allotment_struct_h->h_corp_id);
+			 printf("CLIENT = |%s|\n",p_ca_rtbb_allotment_struct_h->h_cln_code);
+			 printf("CA_EVENT = |%s|\n",p_ca_rtbb_allotment_struct_h->h_ca_event);
+			 printf("ALLOT_DT = |%s|\n",p_ca_rtbb_allotment_struct_h->h_allot_dt);
+			 printf("ALLOTED_QTY = |%lf|\n",p_ca_rtbb_allotment_struct_h->h_alloted_qty);
+			 printf("ADD_ALLOT_QTY = |%lf|\n",p_ca_rtbb_allotment_struct_h->h_add_allot_qty);
+			 printf("AMT_PAY = |%lf|\n",p_ca_rtbb_allotment_struct_h->h_amt_pay);
+			 printf("AMT_REC = |%lf|\n",p_ca_rtbb_allotment_struct_h->h_amt_rec);
+			 printf("TYPEOF_INFO = |%s|\n",p_ca_rtbb_allotment_struct_h->h_typeof_info);
+			 printf("STATUS = |%s|\n",p_ca_rtbb_allotment_struct_h->h_status);
+			 printf("MAKER = |%s|\n",p_ca_rtbb_allotment_struct_h->h_maker);
+			 printf("MAKER_DT = |%s|\n",p_ca_rtbb_allotment_struct_h->h_maker_dt);
+			 printf("CHECKER = |%s|\n",p_ca_rtbb_allotment_struct_h->h_checker);
+			 printf("CHECKER_DT = |%s|\n",p_ca_rtbb_allotment_struct_h->h_checker_dt);
+			 printf("ACCESS_STAMP = |%s|\n",p_ca_rtbb_allotment_struct_h->h_access_stamp);
+			 printf("DEPO_CD = |%s|\n",p_ca_rtbb_allotment_struct_h->h_depo_cd);
+			 printf("DEPO_ID = |%s|\n",p_ca_rtbb_allotment_struct_h->h_dp_id);
+			 printf("CLN_ID = |%s|\n",p_ca_rtbb_allotment_struct_h->h_cln_id);
+
+
+		EXEC SQL INSERT INTO CA_RTBB_ALLOTMENT VALUES (:p_ca_rtbb_allotment_struct_h:l_ca_rtbb_allotment_struct_i);
+
+		IS_ANY_ORA_ERROR_AND_DUPLICATE(MAP_DET_EXIST,APL_NULL_STRING,APL_NULL_STRING,APL_NULL_STRING)
+	}
+	else
+	{
+
+	l_key_codes[0]="CORP_ID";
+	l_key_codes[1]="CLN_CODE";
+	l_key_codes[2]="ORIG_DEPO_CD";
+	l_key_codes[3]=APL_NULL_STRING;
+	
+	l_key_values[0]=p_ca_rtbb_allotment_struct_h -> h_corp_id;
+	l_key_values[1]=p_ca_rtbb_allotment_struct_h -> h_cln_code;
+	l_key_values[2]=p_ca_rtbb_allotment_struct_h->h_orig_depo_cd; 
+	l_key_values[3]=APL_NULL_STRING;
+
+		
+   strcpy(chr_l_table_name,"CA_RTBB_ALLOTMENT");
+
+    int_retval = CR_Rtv_MastChldChrVal( l_key_codes,
+                                        l_key_values,
+                                        chr_l_table_name,
+                                        "ACCESS_STAMP",
+                                        chr_l_field_val,
+                                        l_debug_info_ptr);
+
+    if (int_retval != APL_SUCCESS)
+         APL_GOBACK_FAIL
+
+		strcpy(chr_acc_stamp_compare,chr_l_field_val);
+    
+		int_retval = CR_Rtv_MastChldChrVal( l_key_codes,
+                                        l_key_values,
+                                        chr_l_table_name,
+                                        "STATUS",
+                                        chr_l_field_val,
+                                        l_debug_info_ptr);
+
+    if (int_retval != APL_SUCCESS)
+         APL_GOBACK_FAIL
+
+		strcpy(chr_status_compare,chr_l_field_val);
+	}
+
+ if (!strcmp(p_intl_envdatastruct_h->h_mode,APL_FUNC_MODIFY))
+	{
+  	p_i_checker =-1;
+  	p_i_checkerdt =-1;
+		strcpy(p_ca_rtbb_allotment_struct_h->h_checker,APL_NULL_STRING);
+		strcpy(p_ca_rtbb_allotment_struct_h->h_checker_dt,APL_NULL_STRING);
+
+		APL_IF_DEBUG
+ 	{
+  		CO_ProcMonitor(APL_OUT_FILE, "Entered modify of Function MT_ModDBNoDlvDet\n",
+													NULL,p_intl_envdatastruct_h);
+ 	}
+
+	   if (!strcmp(p_ca_rtbb_allotment_struct_h->h_access_stamp,chr_acc_stamp_compare))
+	   {
+			strcpy(p_ca_rtbb_allotment_struct_h->h_access_stamp,chr_sys_access_stamp);
+			l_ca_rtbb_allotment_struct_i->i_access_stamp =0;
+       strcpy(p_ca_rtbb_allotment_struct_h->h_status,STATUS_UAUTH);
+			l_ca_rtbb_allotment_struct_i->i_status =0;
+
+			EXEC SQL UPDATE CA_RTBB_ALLOTMENT  SET 
+            	MAKER =:p_intl_envdatastruct_h->usr:p_i_maker,
+					MAKER_DT =:chr_sys_access_stamp:p_i_makerdt,
+					CHECKER =:p_ca_rtbb_allotment_struct_h->h_checker:p_i_checker,
+					CHECKER_DT =:p_ca_rtbb_allotment_struct_h->h_checker:p_i_checkerdt,
+            		STATUS =:p_ca_rtbb_allotment_struct_h->h_status:l_ca_rtbb_allotment_struct_i->i_status,
+					CA_EVENT =:p_ca_rtbb_allotment_struct_h->h_ca_event:l_ca_rtbb_allotment_struct_i->i_ca_event,
+					ALLOT_DT =:p_ca_rtbb_allotment_struct_h->h_allot_dt:l_ca_rtbb_allotment_struct_i->i_allot_dt,
+					ALLOTED_QTY =:p_ca_rtbb_allotment_struct_h->h_alloted_qty:l_ca_rtbb_allotment_struct_i->i_alloted_qty,
+					ADD_ALLOT_QTY =:p_ca_rtbb_allotment_struct_h->h_add_allot_qty:l_ca_rtbb_allotment_struct_i->i_add_allot_qty,
+					AMT_PAY =:p_ca_rtbb_allotment_struct_h->h_amt_pay:l_ca_rtbb_allotment_struct_i->i_amt_pay,
+               DEPO_CD =:p_ca_rtbb_allotment_struct_h->h_depo_cd:l_ca_rtbb_allotment_struct_i->i_depo_cd,
+					AMT_REC =:p_ca_rtbb_allotment_struct_h->h_amt_rec:l_ca_rtbb_allotment_struct_i->i_amt_rec,
+					TYPEOF_INFO =:p_ca_rtbb_allotment_struct_h->h_typeof_info:l_ca_rtbb_allotment_struct_i->i_typeof_info,
+				ACCESS_STAMP =:p_ca_rtbb_allotment_struct_h->h_access_stamp:l_ca_rtbb_allotment_struct_i->i_access_stamp
+				WHERE 
+					CORP_ID =:p_ca_rtbb_allotment_struct_h->h_corp_id AND 
+					CLN_CODE =:p_ca_rtbb_allotment_struct_h->h_cln_code AND
+               ORIG_DEPO_CD =:p_ca_rtbb_allotment_struct_h->h_orig_depo_cd;
+              
+					IS_ANY_ORA_ERROR;	
+	   }
+		else 
+	   {
+			if (CO_InsertErr
+			(l_debug_info_ptr,
+			 ERR_ACCESSSTAMP_CHGD, 
+			 APL_NULL_STRING,
+			 APL_NULL_STRING,
+			 APL_NULL_STRING,
+			 __LINE__,
+			 __FILE__
+			) != APL_SUCCESS)
+			APL_GOBACK_FAIL
+			APL_GOBACK_FAIL
+	   } 
+	}
+
+ if (!strcmp(p_intl_envdatastruct_h->h_mode,APL_FUNC_AUTHORISE))
+	{
+
+		APL_IF_DEBUG
+ 	{
+  		CO_ProcMonitor(APL_OUT_FILE, "Entered authorize of Function MT_ModDBNoDlvDet\n",
+													NULL,p_intl_envdatastruct_h);
+ 	}
+
+		if (!strcmp(p_ca_rtbb_allotment_struct_h->h_access_stamp,chr_acc_stamp_compare))
+	   {
+   		if(strcmp(p_ca_rtbb_allotment_struct_h->h_status,STATUS_DEL_UAUTH))
+	    	{
+	    		strcpy(p_ca_rtbb_allotment_struct_h->h_access_stamp,chr_sys_access_stamp);
+	    			l_ca_rtbb_allotment_struct_i->i_access_stamp =0;
+   	    	strcpy(p_ca_rtbb_allotment_struct_h->h_checker,p_intl_envdatastruct_h->usr);
+	    			l_ca_rtbb_allotment_struct_i->i_checker=0;
+  	    		strcpy(p_ca_rtbb_allotment_struct_h->h_checker_dt,chr_sys_access_stamp);
+	    			l_ca_rtbb_allotment_struct_i->i_checker_dt=0;
+          	strcpy(p_ca_rtbb_allotment_struct_h->h_status,STATUS_AUTH);
+	    			l_ca_rtbb_allotment_struct_i->i_status =0;
+					
+
+				if(Process_Allotment(p_ca_rtbb_allotment_struct_h,
+										p_intl_envdatastruct_h,
+										l_debug_info_ptr) == APL_FAILURE)
+					APL_GOBACK_FAIL
+
+	    		EXEC SQL UPDATE CA_RTBB_ALLOTMENT SET 
+           	CHECKER =:p_intl_envdatastruct_h->usr:p_i_checker,
+            	CHECKER_DT =:chr_sys_access_stamp:p_i_access_stamp,
+					ACCESS_STAMP =:chr_sys_access_stamp:p_i_access_stamp,
+            	STATUS =:p_ca_rtbb_allotment_struct_h->h_status:l_ca_rtbb_allotment_struct_i->i_status
+				WHERE 
+					CORP_ID =:p_ca_rtbb_allotment_struct_h->h_corp_id AND 
+					CLN_CODE =:p_ca_rtbb_allotment_struct_h->h_cln_code AND
+					ORIG_DEPO_CD =:p_ca_rtbb_allotment_struct_h->h_orig_depo_cd;
+				IS_ANY_ORA_ERROR;	
+			}
+   	   else  
+	    	{
+	    		EXEC SQL DELETE CA_RTBB_ALLOTMENT 
+				WHERE 
+					CORP_ID =:p_ca_rtbb_allotment_struct_h->h_corp_id AND 
+					CLN_CODE =:p_ca_rtbb_allotment_struct_h->h_cln_code AND
+          		ORIG_DEPO_CD =:p_ca_rtbb_allotment_struct_h->h_orig_depo_cd;
+			   IS_ANY_ORA_ERROR
+	    	}
+	   }
+		else 
+	   {
+			if (CO_InsertErr
+			(l_debug_info_ptr,
+			 ERR_ACCESSSTAMP_CHGD, 
+			 APL_NULL_STRING,
+			 APL_NULL_STRING,
+			 APL_NULL_STRING,
+			 __LINE__,
+			 __FILE__
+			) != APL_SUCCESS)
+			APL_GOBACK_FAIL
+			APL_GOBACK_FAIL
+	   } 
+	}
+
+ if (!strcmp(p_intl_envdatastruct_h->h_mode,APL_FUNC_RESET))
+	{
+
+		APL_IF_DEBUG
+ 	{
+  		CO_ProcMonitor(APL_OUT_FILE, "Entered reset of Function MT_ModDBNoDlvDet\n",
+													NULL,p_intl_envdatastruct_h);
+ 	}
+
+		if (!strcmp(p_ca_rtbb_allotment_struct_h->h_access_stamp,chr_acc_stamp_compare))
+	   {
+   		if(!strcmp(p_ca_rtbb_allotment_struct_h->h_status,STATUS_DEL_UAUTH))
+	    	{
+	    		strcpy(p_ca_rtbb_allotment_struct_h->h_access_stamp,chr_sys_access_stamp);
+	    		l_ca_rtbb_allotment_struct_i->i_access_stamp =0;
+   	    	strcpy(p_ca_rtbb_allotment_struct_h->h_checker,p_intl_envdatastruct_h->usr);
+	    		l_ca_rtbb_allotment_struct_i->i_checker=0;
+  	    	strcpy(p_ca_rtbb_allotment_struct_h->h_checker_dt,chr_sys_access_stamp);
+	    		l_ca_rtbb_allotment_struct_i->i_checker_dt=0;
+          strcpy(p_ca_rtbb_allotment_struct_h->h_status,STATUS_AUTH);
+	    		l_ca_rtbb_allotment_struct_i->i_status =0;
+
+	    		EXEC SQL UPDATE CA_RTBB_ALLOTMENT SET 
+           	CHECKER =:p_intl_envdatastruct_h->usr:p_i_checker,
+            	CHECKER_DT =:chr_sys_access_stamp:p_i_access_stamp,
+					ACCESS_STAMP =:chr_sys_access_stamp:p_i_access_stamp,
+            	STATUS =:p_ca_rtbb_allotment_struct_h->h_status:l_ca_rtbb_allotment_struct_i->i_status
+				WHERE 
+					CORP_ID =:p_ca_rtbb_allotment_struct_h->h_corp_id AND 
+					CLN_CODE =:p_ca_rtbb_allotment_struct_h->h_cln_code AND 
+					ORIG_DEPO_CD =:p_ca_rtbb_allotment_struct_h->h_orig_depo_cd;
+
+				IS_ANY_ORA_ERROR;	
+			}
+	   }
+		else 
+	   {
+			if (CO_InsertErr
+			(l_debug_info_ptr,
+			 ERR_ACCESSSTAMP_CHGD, 
+			 APL_NULL_STRING,
+			 APL_NULL_STRING,
+			 APL_NULL_STRING,
+			 __LINE__,
+			 __FILE__
+			) != APL_SUCCESS)
+			APL_GOBACK_FAIL
+			APL_GOBACK_FAIL
+	   } 
+	}
+
+ if (!strcmp(p_intl_envdatastruct_h->h_mode,APL_FUNC_DELETE))
+	{
+  	p_i_checker =-1;
+  	p_i_checkerdt =-1;
+		strcpy(p_ca_rtbb_allotment_struct_h->h_checker,APL_NULL_STRING);
+		strcpy(p_ca_rtbb_allotment_struct_h->h_checker_dt,APL_NULL_STRING);
+
+		APL_IF_DEBUG
+ 	{
+  		CO_ProcMonitor(APL_OUT_FILE, "Entered delete of Function MT_ModDBNoDlvDet\n",
+													NULL,p_intl_envdatastruct_h);
+ 	}
+
+	   if (!strcmp(p_ca_rtbb_allotment_struct_h->h_access_stamp,chr_acc_stamp_compare))
+	   {
+			strcpy(p_ca_rtbb_allotment_struct_h->h_access_stamp,chr_sys_access_stamp);
+			l_ca_rtbb_allotment_struct_i->i_access_stamp =0;
+       strcpy(p_ca_rtbb_allotment_struct_h->h_status,STATUS_DEL_UAUTH);
+			l_ca_rtbb_allotment_struct_i->i_status =0;
+
+			EXEC SQL UPDATE CA_RTBB_ALLOTMENT SET 
+            	MAKER =:p_intl_envdatastruct_h->usr:p_i_maker,
+					MAKER_DT =:chr_sys_access_stamp:p_i_makerdt,
+					CHECKER =:p_ca_rtbb_allotment_struct_h->h_checker:p_i_checker,
+					CHECKER_DT =:p_ca_rtbb_allotment_struct_h->h_checker:p_i_checkerdt,
+            	STATUS =:p_ca_rtbb_allotment_struct_h->h_status:l_ca_rtbb_allotment_struct_i->i_status,
+					ACCESS_STAMP =:chr_sys_access_stamp:p_i_access_stamp
+				WHERE 
+					CORP_ID =:p_ca_rtbb_allotment_struct_h->h_corp_id AND 
+					CLN_CODE =:p_ca_rtbb_allotment_struct_h->h_cln_code 
+					AND ORIG_DEPO_CD =:p_ca_rtbb_allotment_struct_h->h_orig_depo_cd;
+ 
+              
+					IS_ANY_ORA_ERROR;	
+	   }
+		else 
+	   {
+			if (CO_InsertErr
+			(l_debug_info_ptr,
+			 ERR_ACCESSSTAMP_CHGD, 
+			 APL_NULL_STRING,
+			 APL_NULL_STRING,
+			 APL_NULL_STRING,
+			 __LINE__,
+			 __FILE__
+			) != APL_SUCCESS)
+			APL_GOBACK_FAIL
+			APL_GOBACK_FAIL
+	   } 
+	}
+
+
+ if (int_error_flag == APL_FAILURE)
+	{
+		APL_GOBACK_FAIL
+	}
+ APL_GOBACK_SUCCESS
+
+ RETURN_SUCCESS :
+		APL_FREE(l_ca_rtbb_allotment_struct_i);
+		APL_FUNCTION_RET_SUCCESS(APL_OUT_FILE)
+  RETURN_FAILURE :
+		APL_FREE(l_ca_rtbb_allotment_struct_i);
+ 		APL_FUNCTION_RET_FAILURE(APL_OUT_FILE)
+}
+

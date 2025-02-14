@@ -1,0 +1,544 @@
+
+/************************************************************************************
+ *    COPYRIGHT NOTICE                                                              *
+ *                                                                                  *
+ *   Copyright 2016 Intellect Design Arena Limited. All rights reserved.              *
+ *                                                                                  *
+ *   These materials are confidential and proprietary to                            *
+ *    Intellect Design Arena Limited and no part of these materials should            *
+ *    be reproduced, published, transmitted or distributed in any form or           *
+ *    by any means, electronic, mechanical, photocopying, recording or              *
+ *    otherwise, or stored in any information storage or retrieval system           *
+ *    of any nature nor should the materials be disclosed to third parties          *
+ *    or used in any other manner for which this is not authorized, without         *
+ *    the prior express written authorization of Intellect Design Arena Limited.      *
+ ************************************************************************************/
+/************************************************************************************
+ *
+ * Module Name         :        Email Transmitter
+ *
+ * File Name           :        MS_MoveMessage.pc
+ *
+ *                      Version Control Block
+ *
+ * Date        Version     Author               Description
+ * ---------   --------  ---------------  ---------------------------------------------
+ * 22-Jun-2006	  1.0       TUX       		Message Mover
+ * 16-May-2016	  1.1     Prateek Singh		AIX Changes - dos2unix
+ ************************************************************************************/
+#include <unistd.h>
+#include <string.h>
+#include <strings.h>
+#include <dirent.h>
+#include "CR_Common.h"
+#include "CO_Commdef.h"
+#include "Intellect_Interface.h"
+#include "Intellect_Common.h"
+#include "Intellect_Error.h"
+#define S_PROGNAME "MessageMover"
+#define SLEEP_TIME 5
+#define S_KEY "SplitFiles"
+#define S_USERID "SYSTEM"
+#define S_MODE "A"
+#define S_AUTH_REQ "A"
+#define S_SUBFUN "S"
+#define S_ACTION "A"
+#define S_FUNCPARAMS " "
+#define REC_LOCK_ORA_ERR -54
+#define APL_MAXLINE_SIZE 7001  /*** this can be in common.h **/
+#define ERR_DATA_LEN	4001
+
+
+EXEC SQL INCLUDE SQLCA.H;
+//AIX - Warnings Removal - Static variables intilized
+static char chr_g_progname[41]=APL_NULL_STRING;
+static char chr_g_key[41]=APL_NULL_STRING;
+static char chr_g_rowid[APL_ROWID_LEN]=APL_NULL_STRING;
+static char chr_g_startdate[APL_DATE_LEN]=APL_NULL_STRING;
+static char chr_h_restart_data[50]=APL_NULL_STRING,chr_h_eod_flg=APL_NULL_CHAR;
+static int int_lineno=0;
+static char h_ora_rowid[APL_ROWID_LEN]=APL_NULL_STRING;
+static short   i_ora_rowid=0,i_restart=0,i_eod_flg=0;
+
+char chr_g_templatename[APL_MAXLINE_SIZE]= APL_NULL_STRING;
+
+int MS_MoveMessage(char **argv,
+							DEBUG_INFO_STRUCT_H **l_debug_info_ptr,
+							INTL_ENV_DATA_STRUCT_H *p_intlenv_data_struct_h) 
+{
+	FILE *chr_finifile=NULL;
+	FILE *fl_lstfiles = NULL;
+	static FILE *chr_logfile=NULL;
+	char  l_fl_name[PATH_LENGTH] = APL_NULL_STRING;
+	char  fl_name[PATH_LENGTH]   = APL_NULL_STRING;
+	char *chr_tempchar=NULL;
+	char l_buf[1000] 							=	APL_NULL_STRING;
+	char chr_l_tmpFile[500]					= APL_NULL_STRING; /* Amit.N */
+	char chr_h_trans_dt[APL_DATE_LEN]	=	APL_NULL_STRING;
+	char chr_l_status[2] 					= 	APL_NULL_STRING; 
+	int l_command_status						=  0;
+	char chr_inifile[PATH_LENGTH]			=	APL_NULL_STRING;
+	char chr_movefile[PATH_LENGTH]		= APL_NULL_STRING;
+	char chr_l_uploadpath[PATH_LENGTH] = APL_NULL_STRING;
+	char l_lstfile[PATH_LENGTH]			= APL_NULL_STRING;
+	char chr_temp[PATH_LENGTH]				= APL_NULL_STRING;
+	short i_temp = 0;
+	char l_error[ERR_DATA_LEN] = APL_NULL_STRING;
+	int l_count				= 0;
+	char *last ;
+	char  **temp  =  NULL;
+	int int_num	=0;
+	DIR   *dirp=  NULL;
+	struct dirent *dp;
+	struct dirent kachra;
+	struct dirent *l_pdp       =NULL; 
+	char  l_mv_file ;
+	int retval = 0;
+	INTL_ENV_DATA_STRUCT_H l_intl_envdatastruct_h;
+	char p_env_data[500] = APL_NULL_STRING;
+	char l_func[50]= APL_NULL_STRING;
+	char l_wrapper[50] =APL_NULL_STRING;
+	char l_paramstr[500] = APL_NULL_STRING;
+	char l_user[50] =APL_NULL_STRING;
+	char chr_h_rowid_a[APL_ROWID_LEN]	=	APL_NULL_STRING;
+	char l_linebuf[APL_MAXLINE_SIZE] 	= APL_NULL_STRING;
+	int int_countofrec=0;
+
+	EXEC SQL BEGIN DECLARE SECTION;
+		EXEC SQL VAR chr_h_rowid_a 					IS STRING;
+		EXEC SQL VAR chr_temp		IS STRING;
+	EXEC SQL END DECLARE SECTION;
+
+	memset(l_buf, APL_NULL_CHAR,1000);
+	memset(l_wrapper,APL_NULL_CHAR,50);
+	memset(l_paramstr,APL_NULL_CHAR,500);
+	memset(l_user,APL_NULL_CHAR,50);
+	memset(l_func,APL_NULL_CHAR,50);
+	
+
+	if(!(chr_tempchar=getenv("INTL_ROOT_PATH")))
+		APL_GOBACK_FAIL;
+	sprintf(chr_inifile,"%s/intl_sun.cfg",chr_tempchar);
+
+
+	if(!(chr_finifile=fopen(chr_inifile,"r")))
+		APL_GOBACK_FAIL;
+	if(!chr_logfile)
+	{
+		if(CO_Rtv_RptFileName("MVF",
+					APL_LOGFILE_DESC,
+					100,
+					argv[5],
+					argv,
+					&chr_logfile,
+					l_debug_info_ptr)==APL_FAILURE)
+		{
+			return(APL_FAILURE);
+		}
+	}
+
+	if (CO_ReadToken(chr_finifile,"INTL_MOVE_PATH",chr_movefile,l_debug_info_ptr) != APL_SUCCESS)
+		APL_GOBACK_FAIL;
+	if ( CO_ReadToken(chr_finifile,"INTL_UPL_PATH",chr_l_uploadpath,l_debug_info_ptr) == APL_FAILURE)
+	{
+		fprintf(chr_logfile, "\nFailure From Retrieve Dir Path Of UPLOAD");
+		APL_GOBACK_FAIL;
+	}
+
+	/*** Creating env string for upload ***/
+	memset(chr_temp,APL_NULL_CHAR,PATH_LENGTH);
+	memset(p_env_data,APL_NULL_CHAR,500);
+	memset(&l_intl_envdatastruct_h,NULL,sizeof(INTL_ENV_DATA_STRUCT_H));
+
+	strcpy(l_intl_envdatastruct_h.usr,"SYSTEM");  /** USER ***/
+	sprintf(chr_temp,"%c%s%c%s",DATA_FIELD_SEPRTR,"USER",DATA_VALUE_SEPRTR,l_intl_envdatastruct_h.usr);
+	strcpy(p_env_data,chr_temp);	
+
+	strcpy(l_intl_envdatastruct_h.h_mode,"UPL");	/** MODE ***/
+	sprintf(chr_temp,"%c%s%c%s",DATA_FIELD_SEPRTR,"MODE",DATA_VALUE_SEPRTR,l_intl_envdatastruct_h.h_mode);
+	strcat(p_env_data,chr_temp);	
+
+	strcpy(l_intl_envdatastruct_h.processtion,"SplitFiles"); /** FUNCTIONNAME ***/
+	sprintf(chr_temp,"%c%s%c%s",DATA_FIELD_SEPRTR,"FUNCTIONNAME",DATA_VALUE_SEPRTR,l_intl_envdatastruct_h.processtion);
+	strcat(p_env_data,chr_temp);	
+
+	strcpy(l_intl_envdatastruct_h.auth_req,"Y"); /** AUTHREQ **/
+	sprintf(chr_temp,"%c%s%c%s",DATA_FIELD_SEPRTR,"AUTHREQ",DATA_VALUE_SEPRTR,l_intl_envdatastruct_h.auth_req);
+	strcat(p_env_data,chr_temp);	
+
+	strcpy(l_intl_envdatastruct_h.subprocess,APL_NULL_STRING); /** SUBFUNC **/
+	sprintf(chr_temp,"%c%s%c%s",DATA_FIELD_SEPRTR,"SUBFUNC",DATA_VALUE_SEPRTR,l_intl_envdatastruct_h.subprocess);
+	strcat(p_env_data,chr_temp);	
+
+	strcpy(l_intl_envdatastruct_h.h_process,APL_NULL_STRING); /** ACTION **/
+	sprintf(chr_temp,"%c%s%c%s",DATA_FIELD_SEPRTR,"ACTION",DATA_VALUE_SEPRTR,l_intl_envdatastruct_h.h_process);
+	strcat(p_env_data,chr_temp);	
+
+	strcpy(l_wrapper,"SplitFiles"); /** wrapper **/
+	strcpy(l_func,"SplitFiles"); /** wrapper **/
+
+	strcpy(l_user,"SYSTEM");
+
+
+	memset(l_lstfile,APL_NULL_CHAR,PATH_LENGTH);
+	strcpy(l_lstfile,chr_movefile);
+	strcat(l_lstfile,"snap"); /** Hard coded to snap **/
+	if(  (fl_lstfiles  = fopen(l_lstfile, "w+" ) ) == (FILE *)NULL )
+	{
+		fprintf(chr_logfile,"\nFailed To Open File Containing Names of Files\n");
+		memset(l_buf, APL_NULL_CHAR , 1000);
+		sprintf(l_buf, "rm -f %s ", l_lstfile);
+		system(l_buf);
+		APL_GOBACK_SUCCESS;
+	}
+	dirp = opendir(chr_movefile);
+	if (dirp == NULL )
+	{
+		fprintf(chr_logfile,"\nFailed To Open directory\n");
+		Alert("Directory not present ");
+	}
+
+	l_pdp=calloc(1,sizeof(struct dirent));
+	l_mv_file = 'F';
+	while(1)
+	{
+		readdir_r(dirp, &kachra, &l_pdp);
+		if (!l_pdp) break;
+		if((l_pdp->d_name[0] != '.') && (strcmp(l_pdp->d_name, "snap")))
+		{
+			memset(l_fl_name,APL_NULL_CHAR,PATH_LENGTH);
+			strcpy(l_fl_name, chr_movefile);
+			strcat(l_fl_name, l_pdp->d_name);
+			fprintf(fl_lstfiles, "%s\n", l_fl_name); /*** creating snapshot for first pickup **/
+			/*strcpy(l_fl_name, APL_NULL_STRING);*/
+			l_mv_file  = 'T';  /**** just to check if any file exist or not ****/
+		}
+	}
+	closedir(dirp);
+	free(l_pdp);
+	fflush(fl_lstfiles);
+	rewind(fl_lstfiles); /**** Pointer to original line ***/
+	fflush(fl_lstfiles);
+	/** Snapshot created now process each file ***/
+	if ( l_mv_file =='F' )
+	{
+		//printf("\n Voila No files to process... still waiting yaar...");
+		printf("\n No files to process... still waiting ...");
+		memset(l_buf, APL_NULL_CHAR , 1000);
+		sprintf(l_buf, "rm -f %s ", l_lstfile);
+		system(l_buf);
+		APL_GOBACK_SUCCESS;
+	}
+	while(1)
+	{
+		if(feof(fl_lstfiles))
+			break;
+		fscanf(fl_lstfiles, "%[^\n]\n",fl_name);
+
+		if (!strcmp(fl_name, APL_NULL_STRING )|| strlen(fl_name)== 0)
+		{
+			fprintf(chr_logfile,"\n NO Entries in File Containing Names of  Message Files\n");
+			memset(l_buf, APL_NULL_CHAR , 1000);
+			sprintf(l_buf, "rm -f %s ", l_lstfile);
+			system(l_buf);
+			APL_GOBACK_SUCCESS;
+		}
+		/* Amit.N */
+		strcpy(chr_l_tmpFile,fl_name);
+		strcat(chr_l_tmpFile,"_1");
+		printf("\n Temporary File name is |%s|",chr_l_tmpFile);
+
+		/*** Converting DOS File To Unix ****/
+		/*Commented and Rewritten by Prateek on 16052016 for AIX Changes - dos2unix - START
+		sprintf(l_buf,"sed 's/^M//g' %s > %s",fl_name,chr_l_tmpFile); */
+		sprintf(l_buf,"dos2unix %s %s",fl_name,chr_l_tmpFile);	
+		/*Commented and Rewritten by Prateek on 16052016 for AIX Changes - dos2unix - END*/
+		printf("\nCommand = |%s| ",l_buf);
+		retval = system(l_buf);
+		printf("\n File Converted to Unix,Command executed with status = |%d|\n ",retval);
+		memset(l_buf, APL_NULL_CHAR , 1000);
+		
+		/*** Removing DOS file ***/
+		sprintf(l_buf,"rm -f %s",fl_name);	
+		printf("\nCommand = |%s| ",l_buf);
+		retval = system(l_buf);
+		printf("\n File Removed,Command executed with status = |%d|\n ",retval);
+		memset(l_buf, APL_NULL_CHAR , 1000);
+		
+		/*** Moving Temporary File to Original File ***/
+		sprintf(l_buf,"mv %s %s",chr_l_tmpFile,fl_name);	
+		printf("\nCommand = |%s| ",l_buf);
+		retval = system(l_buf);
+		printf("\n File Removed,Command executed with status = |%d|\n ",retval);
+		memset(l_buf, APL_NULL_CHAR , 1000);
+		/*********/
+		sprintf(l_buf,"mv %s %s",fl_name, chr_l_uploadpath);
+		printf("\nCommand = |%s| ",l_buf);
+		retval = system(l_buf);
+		printf("\nCommand executed with status = |%d|\n ",retval);
+
+		if(retval == 0)
+		{
+			fprintf(chr_logfile,"\nFile Moved... |%s|",fl_name);
+			strcpy(l_paramstr,"SWIFT|Consolidated|"); /** Param string **/
+			EXEC SQL SELECT SUBSTR(:fl_name,INSTR(:fl_name,'/',-1)+1) INTO :chr_temp:i_temp
+					FROM DUAL;
+			if (sqlca.sqlcode !=0)
+				Alert("Error while taking last parameter");
+			IS_ANY_ORA_ERROR;
+			strcat(l_paramstr,chr_temp); 
+			strcat(l_paramstr,"|"); 
+			/*** Calling Procedure ***/
+			Alert("Calling Procedure PARAMSTR = |%s| ",l_paramstr );
+						
+			EXEC SQL CALL SP_INTL_BATCH(:l_wrapper, :l_func, :p_env_data, :l_paramstr, :l_user,:l_error);
+			Alert("After Procedure sqlcode is |%d|",sqlca.sqlcode);
+			if (sqlca.sqlcode !=0 )
+			{
+				/*** If procedure some how is not executed then again move file back again ....*/
+				fprintf(chr_logfile,"\n Error in executing Procedure ... rolling back...");
+				memset(l_buf, APL_NULL_CHAR , 1000);
+				sprintf(l_buf, "mv %s%s %s", chr_l_uploadpath,fl_name,chr_movefile);
+				system(l_buf);
+				printf("\n Transaction rolled back for file |%s|",fl_name);
+			}
+                         //AIX - Warnings Removal 
+			fprintf(chr_logfile,"\nProcedure sucessfully executed with parameters |%s||%s| |%s| |%s| |%s|",l_wrapper, l_func,p_env_data,l_paramstr,l_user);
+       
+			
+		}
+
+	}
+
+
+	APL_GOBACK_SUCCESS;
+RETURN_SUCCESS:
+	{
+		EXEC SQL COMMIT;
+		fflush(chr_logfile);
+		fclose(chr_finifile);
+		fclose(fl_lstfiles);
+		return APL_SUCCESS;
+	}
+RETURN_FAILURE:
+	{
+		EXEC SQL ROLLBACK;
+		fflush(chr_logfile);
+		fclose(fl_lstfiles);
+		fclose(chr_finifile);
+		return APL_FAILURE;
+	}
+}
+
+int main(int argc, char **argv) 
+{
+
+	FILE *chr_finifile;
+	char chr_inifile[PATH_LENGTH] =APL_NULL_STRING;
+	char chr_l_uname[APL_USERID_LEN] =APL_NULL_STRING ;
+	char chr_l_passwd[100]= APL_NULL_STRING;
+	char chr_buffer[KEY_LENGTH] = APL_NULL_STRING;
+	char chr_custody_id_b[APL_USERID_LEN];
+	int int_p_funcreturnstate = 0;
+	char chr_date[APL_DATE_LEN]	=	APL_NULL_STRING;
+	char chr_l_sys_date_time[APL_DATE_LEN]	=	APL_NULL_STRING;
+	char chr_l_statinfo[61]	= APL_NULL_STRING;
+
+	INTL_ENV_DATA_STRUCT_H p_intl_envdatastruct_h;
+	DEBUG_INFO_STRUCT_H *l_debuglist;
+	INTL_ENV_DATA_STRUCT_H l_intl_environ_data_h;
+	DEBUG_INFO_STRUCT_H *l_debuginfo = NULL;
+	DEBUG_INFO_STRUCT_H **l_debug_info_ptr;
+
+	l_debug_info_ptr=&l_debuginfo;
+
+	strcpy(p_intl_envdatastruct_h.usr,"SYSTEM");
+	strcpy(p_intl_envdatastruct_h.h_mode,APL_NULL_STRING);
+
+	if(argc == 1)
+	{
+		strcpy(p_intl_envdatastruct_h.processtion,"Message Mover Daemon");
+	}
+	else
+	{
+		strcpy(p_intl_envdatastruct_h.processtion, argv[5]);
+	}
+	strcpy(p_intl_envdatastruct_h.auth_req,APL_NULL_STRING);
+	strcpy(p_intl_envdatastruct_h.subprocess,APL_NULL_STRING);
+	strcpy(p_intl_envdatastruct_h.h_process,APL_NULL_STRING);
+
+	memset(chr_inifile,APL_NULL_CHAR,PATH_LENGTH);
+	memset(chr_buffer,APL_NULL_CHAR,KEY_LENGTH);
+	memset(chr_l_uname,APL_NULL_CHAR,40);
+	memset(chr_l_passwd,APL_NULL_CHAR,40);
+	chr_finifile=NULL;
+	EXEC SQL BEGIN DECLARE SECTION;
+			EXEC SQL VAR chr_h_restart_data  IS STRING;
+			EXEC SQL VAR h_ora_rowid 			IS STRING;
+			EXEC SQL VAR chr_l_uname 			IS STRING;
+			EXEC SQL VAR chr_l_passwd 			IS STRING;
+			EXEC SQL VAR chr_date 				IS STRING;
+			EXEC SQL VAR chr_g_templatename	IS STRING;
+	EXEC SQL END DECLARE SECTION;
+
+	strcpy(chr_inifile,getenv("INTL_ROOT_PATH"));
+	strcat(chr_inifile,"/intl_sun.cfg");
+	if ( (chr_finifile = fopen(chr_inifile,"r") ) == NULL)
+		APL_GOBACK_FAIL;
+
+	APL_FETCH_DB_LOGIN_DETAILS(chr_finifile,chr_custody_id_b,chr_l_uname,chr_l_passwd,APL_OUT_FILE,l_debug_info_ptr);
+	EXEC SQL CONNECT :chr_l_uname IDENTIFIED BY :chr_l_passwd;
+	IS_ANY_ORA_ERROR
+		strcpy(chr_g_progname,argv[0]);
+	if(argc > 1) strcpy(chr_g_key,argv[1]);
+	if(argc > 2) strcpy(chr_g_startdate,argv[2]);
+
+	EXEC SQL VAR chr_g_progname IS STRING;
+	EXEC SQL VAR chr_g_key IS STRING;
+	EXEC SQL VAR chr_g_startdate IS STRING;
+	fclose(chr_finifile);
+	chr_finifile=NULL;
+	if(CO_RtvSysDt(chr_date,l_debug_info_ptr)==APL_FAILURE)
+	{
+		APL_GOBACK_FAIL
+	}
+	if(argc == 1)
+	{
+		argv[1]=S_KEY;
+		argv[2]=chr_date;
+		argv[3]=S_USERID;
+		argv[4]=S_MODE;
+		argv[5]="Message Mover Daemon";
+		argv[6]=S_AUTH_REQ;
+		argv[7]=S_SUBFUN;
+		argv[8]=S_ACTION;
+		argv[9]=S_FUNCPARAMS;
+	}
+	printf("\n Get sys params ********* ");	
+	if ( CO_RtvSysParams(l_debug_info_ptr) == APL_FAILURE)
+		APL_GOBACK_FAIL
+	if(argc != 1)
+	{
+		EXEC SQL SELECT PROCESSING_STATUS , ROWID
+			INTO :chr_h_restart_data:i_restart, :h_ora_rowid:i_ora_rowid
+			FROM SYS_BATCHPROC
+			WHERE ( PROCESS_NAME = :argv[0]
+					AND PROC_INIT = :argv[1]
+					AND STARTDATE = :argv[2]
+					AND STATUS = 'started' )
+			FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+
+		if (sqlca.sqlcode <0)
+		{
+			APL_GOBACK_FAIL
+		}
+	}
+	else
+	{
+		if(APL_SUCCESS ==  EI_Proc_BatchRestart(argv[0],
+					argv[0],
+					APL_NULL_STRING,
+					&int_p_funcreturnstate,
+					&l_debuginfo,
+                        		&p_intl_envdatastruct_h)) //AIX - Added &
+		{
+			if(int_p_funcreturnstate == 11 || int_p_funcreturnstate == 10)
+			{
+				EXEC SQL SELECT PROCESSING_STATUS , ROWID
+					INTO :chr_h_restart_data:i_restart, :h_ora_rowid:i_ora_rowid
+					FROM SYS_BATCHPROC
+					WHERE ( PROCESS_NAME = :argv[0]
+							AND STATUS = 'started' )
+					FOR UPDATE OF PROCESSING_STATUS,STATUS,STAT_DET;
+
+
+				if (sqlca.sqlcode <0)
+				{
+					APL_GOBACK_FAIL
+				}
+			}
+			else
+			{
+				APL_GOBACK_FAIL
+			}
+
+		}
+		else
+		{
+			APL_GOBACK_FAIL
+		}
+	}
+
+	strcpy(chr_g_rowid,h_ora_rowid);
+
+	while(1) {
+		/*printf("\n in while loop 1001\n"); */
+		EXEC SQL UPDATE SYS_BATCHPROC set STAT_DET = 'Moving' where
+			rowid = :h_ora_rowid;
+		if (sqlca.sqlcode <0)
+		{
+			APL_GOBACK_FAIL
+		}
+		/** This func gonna mv all files from  Move folder to Upload dir **/
+		if(MS_MoveMessage(argv, l_debug_info_ptr,&l_intl_environ_data_h)==APL_SUCCESS)
+			EXEC SQL COMMIT;
+		else
+			EXEC SQL ROLLBACK;
+		EXEC SQL SELECT PROCESSING_STATUS 
+			INTO :chr_h_restart_data:i_restart
+			FROM SYS_BATCHPROC where rowid = :h_ora_rowid
+			FOR UPDATE OF STAT_DET;
+		if (sqlca.sqlcode <0)
+		{
+			APL_GOBACK_FAIL
+		}
+		if (argc != 1)
+			break;
+
+
+
+		if( APL_FAILURE == CO_RtvSysDtTime(chr_l_sys_date_time, l_debug_info_ptr))
+			APL_GOBACK_FAIL;
+		memset(chr_l_statinfo,APL_NULL_CHAR,61);
+		strcpy(chr_l_statinfo, "wait : ");
+		strcat(chr_l_statinfo, chr_l_sys_date_time);
+
+		EXEC SQL UPDATE SYS_BATCHPROC set STAT_DET = :chr_l_statinfo 
+			where rowid = :h_ora_rowid;
+		if (sqlca.sqlcode <0)
+		{
+			APL_GOBACK_FAIL
+		}
+
+		EXEC SQL COMMIT;
+		EXEC SQL SELECT PROCESSING_STATUS 
+			INTO :chr_h_restart_data:i_restart
+			FROM SYS_BATCHPROC where rowid = :h_ora_rowid
+			FOR UPDATE OF STAT_DET;
+		if (sqlca.sqlcode <0)
+		{
+			APL_GOBACK_FAIL
+		}
+		sleep(SLEEP_TIME);
+	}
+	EXEC SQL UPDATE SYS_BATCHPROC
+		SET STATUS              ='completed'
+		WHERE   ROWID           = :h_ora_rowid;
+
+	IS_ANY_ORA_ERROR
+
+		if (sqlca.sqlcode == 1403)
+		{
+			APL_GOBACK_FAIL
+		}
+
+RETURN_SUCCESS:
+	EXEC SQL COMMIT;
+	fclose(chr_finifile);
+	exit(0);
+RETURN_FAILURE:
+	fclose(chr_finifile);
+	exit(-1);
+}
+

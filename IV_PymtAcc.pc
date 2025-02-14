@@ -1,0 +1,1571 @@
+/*
+ *   COPYRIGHT NOTICE
+ *   Copyright 2005 Polaris Software Lab Limited. All rights reserved.
+ *   These materials are confidential and proprietary to
+ *   Polaris Software Lab Limited and no part of these materials should
+ *   be reproduced, published, transmitted or distributed in any form or
+ *   by any means, electronic, mechanical, photocopying, recording or
+ *   otherwise, or stored in any information storage or retrieval system
+ *   of any nature nor should the materials be disclosed to third parties
+ *   or used in any other manner for which this is not authorized, without
+ *   the prior express written authorization of Polaris Software Lab Limited.
+ */
+/*******************************************************************************
+ *    Module Name         :         Billing Module 
+ *    File Name           :         IV_PymtAcc.pc
+ *                Version Control Block
+ *    Date        Version     Author              Description     RFS No.
+ *   ---------   --------  ---------------  ----------------------------------
+ *   18-10-2011            Sana B           Retro done for AIX mig for ISKB4802
+ *******************************************************************************/
+ 
+#include "stdio_64.h"
+#include "IV_Control_A.h"
+#include "Intellect_Common.h"
+
+#define  APL_ACCTENT_GEN_IND    'G'	
+#define  APL_ACCTENT_BPYMNT_IND 'P' 	
+#define	APL_ACCTENT_NORMENT	  '2'
+
+EXEC SQL INCLUDE SQLCA;
+
+
+
+
+
+int IV_Proc_PayAccgenfn(char						**argv,
+						FILE						*fl_techlog,
+						FILE						*fl_userlog,	
+						INTL_ENV_DATA_STRUCT_H	*p_intlenv_data_struct_h,
+						DEBUG_INFO_STRUCT_H			**l_debug_info_ptr
+						)
+{
+
+struct					sqlca sqlca;
+char						chr_l_buf[BUFFER_LEN] = APL_NULL_STRING;
+int						int_retstat =0;	
+int						int_run_seq = 1;
+int						int_l_commit_count = 0;
+
+int						int_l_fetch_ctr   = 0;
+
+char						h_module_ind		  = APL_NULL_CHAR;	 			
+char						h_proc_num[6]    = APL_NULL_STRING;
+
+char						chr_l_stat_info[71]	= APL_NULL_STRING;
+IV_CHEQUE_STRUCT		l_iv_cheque_structa_a;
+IV_CLIENT_STRUCT			l_ivclientstruct;
+I_IV_CHEQUE_STRUCT		l_i_iv_cheque_struct;
+
+/****************** For Payment Accounting Entries : vinay kalaskar ********************/
+IV_CLIENT_SERV_BASIS_STRUCT l_iv_client_serv_basis_structa;
+IV_CLIENTGL_STRUCT_H l_ivclientgl_struct;
+
+double 					dcredit_ind =0.0;
+double					ccredit_ind =0.0;
+long int						dacredit_ind=0;
+long int						cacredit_ind=0;
+
+
+EXEC SQL BEGIN DECLARE SECTION;
+
+char						int_l_batch_no[5]    = APL_NULL_STRING;
+char						h_sequence_num[5]	  = APL_NULL_STRING;
+
+
+char						chr_h_batch_in_proc_rowid[APL_ROWID_LEN] = APL_NULL_STRING;
+char						chr_h_batch_in_proc_status[15] = APL_NULL_STRING;
+
+int						int_l_genbatchno = 0;
+char						chr_h_batch_in_proc_progname[40] = APL_NULL_STRING;
+char						chr_h_batch_in_proc_startdate[APL_DATE_LEN] = APL_NULL_STRING;
+
+short						int_i_batch_in_proc_rowid = 0;
+short						i_sequence_no =0;
+short						i_restart_info =0;
+short						i_ora_rowid = 0;
+
+EXEC SQL VAR chr_h_batch_in_proc_rowid IS STRING;
+EXEC SQL VAR chr_h_batch_in_proc_status IS STRING;
+EXEC SQL VAR chr_h_batch_in_proc_progname IS STRING;
+EXEC SQL VAR chr_h_batch_in_proc_startdate IS STRING;
+EXEC SQL VAR l_iv_cheque_structa_a.client IS STRING;
+EXEC SQL VAR l_iv_cheque_structa_a.dateof_payment IS STRING;
+EXEC SQL VAR l_iv_cheque_structa_a.bill_date IS STRING;//shailesh ISKB-430-07
+EXEC SQL VAR l_iv_cheque_structa_a.b_ccycd IS STRING;
+EXEC SQL VAR l_iv_cheque_structa_a.maker IS STRING;
+EXEC SQL VAR l_iv_cheque_structa_a.maker_dt IS STRING;
+EXEC SQL VAR l_iv_cheque_structa_a.access_stamp IS STRING;
+EXEC SQL VAR l_iv_cheque_structa_a.checker IS STRING;
+EXEC SQL VAR l_iv_cheque_structa_a.checker_dt IS STRING;
+EXEC SQL VAR l_iv_cheque_structa_a.pymt_clt IS STRING;
+EXEC SQL VAR l_iv_cheque_structa_a.ae_dt IS STRING;
+
+
+EXEC SQL END DECLARE SECTION;
+
+APL_IF_DEBUG
+{
+	CO_ProcMonitor(APL_OUT_FILE,"\nInside IV_Proc_PayAccgenfn processtion\n",NULL,NULL);
+	memset(chr_l_buf,NULL,BUFFER_LEN);
+	sprintf(chr_l_buf,"The Accounting Entries Gen Flag is %s\n",argv[9]);
+	CO_ProcMonitor(APL_OUT_FILE,chr_l_buf,NULL,NULL);
+}
+
+	strcpy(chr_h_batch_in_proc_progname,argv[0]);
+	strcpy(chr_h_batch_in_proc_startdate,argv[2]);
+
+	EXEC SQL SELECT ROWID 
+	INTO :chr_h_batch_in_proc_rowid :int_i_batch_in_proc_rowid
+	FROM SYS_BATCHPROC
+	WHERE PROCESS_NAME   =  :chr_h_batch_in_proc_progname 
+	AND STARTDATE		=  :chr_h_batch_in_proc_startdate 
+	AND STATUS			=  'started' 
+	FOR UPDATE OF STATUS;
+
+
+	if (sqlca.sqlcode <0)
+	{
+		fprintf(fl_userlog,"Batch_in_proc table cannot be locked.PLease run acouting entries again\n");
+		CO_InsertErr(l_debug_info_ptr,3,ltoa(sqlca.sqlcode),
+							APL_NULL_STRING,APL_NULL_STRING,__LINE__,__FILE__);
+		APL_GOBACK_FAIL
+	}
+	
+	if (sqlca.sqlcode == 1403)
+	{
+		fprintf(fl_userlog,"Record with process_name %s ,start_date %s and status_ind as started not int_found in the batch table \n",argv[0],argv[2] );
+		APL_GOBACK_FAIL
+	}
+
+	if ( !strcmp(argv[9],APL_NULL_STRING))
+		APL_DATA_MISSING("AccountEntriesGenFlg",APL_NULL_STRING,APL_NULL_STRING);	
+
+	memset(&l_ivclientstruct,NULL,sizeof(l_ivclientstruct));
+
+
+	/****************** For Payment Accounting Entries : vinay kalaskar ********************/
+	memset(&l_ivclientgl_struct, NULL, sizeof(IV_CLIENTGL_STRUCT_H));
+	memset(&l_iv_client_serv_basis_structa,NULL,sizeof(IV_CLIENT_SERV_BASIS_STRUCT));
+	
+	IF_COND_EXISTS("IV_ACC_CLIENT","FUND_ACC")
+	{
+	   if (APL_FAILURE == MT_UpdIV_CLIENTGL(&l_ivclientgl_struct,&int_retstat,l_debug_info_ptr) )
+		{
+			if (int_retstat == IV_CRITCAL_ERROR_IND)
+			{
+				fprintf(fl_userlog,"DB ERROR IN BLACC\n");
+				CO_InsertErr(l_debug_info_ptr,
+								 DB_ERR_NO,
+								 "BLACC",
+		                    APL_NULL_STRING,
+				              APL_NULL_STRING,
+	                       __LINE__,
+		                    __FILE__);
+				APL_GOBACK_FAIL
+			}
+	      if (int_retstat == IV_NO_DATA_FOUND_ERR )
+			{
+				fprintf(fl_userlog,"Billing Accounts have not been input\n");
+				CO_InsertErr(l_debug_info_ptr,
+								383,
+   				         APL_NULL_STRING,
+						      APL_NULL_STRING,
+								APL_NULL_STRING,
+							   __LINE__,
+							   __FILE__);
+				APL_GOBACK_FAIL
+			}
+			if (int_retstat == IV_COLUMN_NULL_ERR)
+			{
+				if (!strcmp(l_ivclientgl_struct.h_checker," ") )
+				{
+					CO_InsertErr(l_debug_info_ptr,
+									 ERR_BILLACC_NOTAUTHORIZED,
+		                      APL_NULL_STRING,
+		                      APL_NULL_STRING,
+									 APL_NULL_STRING,
+								    __LINE__,
+									 __FILE__);
+					
+					fprintf(fl_userlog,"Billing Accounts not authorised \n");
+					APL_GOBACK_FAIL
+				}
+					
+			}
+		}
+	}
+	else
+	{
+		if	(APL_FAILURE == IV_Rtv_IVACC(&l_ivclientstruct,&int_retstat,l_debug_info_ptr) )
+		{
+			printf("the int_retstat is %d\n",int_retstat);
+
+			if (int_retstat == IV_CRITCAL_ERROR_IND)
+			{
+				fprintf(fl_userlog,"DB ERROR IN BLACC\n");
+				CO_InsertErr(l_debug_info_ptr,DB_ERR_NO,"BLACC",APL_NULL_STRING,APL_NULL_STRING,
+								__LINE__,__FILE__);
+				APL_GOBACK_FAIL
+			}
+			if (int_retstat == IV_NO_DATA_FOUND_ERR )
+			{
+				fprintf(fl_userlog,"Billing Accounts have not been input\n");	
+				CO_InsertErr(l_debug_info_ptr,383,APL_NULL_STRING,
+								APL_NULL_STRING,APL_NULL_STRING,
+								__LINE__,__FILE__);
+				APL_GOBACK_FAIL
+			}
+			if (int_retstat == IV_COLUMN_NULL_ERR)
+			{
+				if (!strcmp(l_ivclientstruct.checker," ") )
+				{
+					CO_InsertErr(l_debug_info_ptr,364,APL_NULL_STRING,
+									APL_NULL_STRING,APL_NULL_STRING,
+									__LINE__,__FILE__);
+					fprintf(fl_userlog,"Billing Accounts not authorised \n");
+					APL_GOBACK_FAIL
+				}	
+			}
+		}
+	}
+	
+
+	h_module_ind = APL_ACCTENT_BPYMNT_IND;
+
+	Alert("Entering CO_Rtv_NxtBatchSeq:|%c|",h_module_ind);
+	if (APL_FAILURE == CO_Rtv_NxtBatchSeq( h_module_ind,
+													h_proc_num,
+													h_sequence_num,
+													l_debug_info_ptr) )
+	{
+		fprintf(fl_userlog,"Failed to select the maximum batchnumber\n");
+		APL_GOBACK_FAIL
+
+	}
+
+	if (!strcmp(h_proc_num, APL_NULL_STRING))
+	{
+		int_l_genbatchno = 1;
+	}
+	else
+	{
+		sscanf(h_sequence_num,"%d",&int_run_seq);
+		int_run_seq = int_run_seq + 1; 
+		int_l_genbatchno = 0;
+	}
+
+//shailesh 03-12-2007 - ISKB-430-07
+//changed for  service-wise payment AE generation
+
+	EXEC SQL DECLARE paycursor CURSOR FOR
+	SELECT * FROM IV_CHEQUE
+	WHERE CHECKER IS NOT NULL
+			AND AE_DT IS NULL 
+			AND (PROC_NUM IS NULL OR PROC_NUM IN (0))
+			AND (ADJUST_ENTRY IS NULL OR ADJUST_ENTRY != 'Y')
+			AND SERVICE_CD NOT IN (0)
+	ORDER BY CLIENT,DATEOF_PAYMENT,INDEN_NUM;
+
+	EXEC SQL OPEN paycursor;
+
+	Alert("sqlca.sqlcode:|%d|",sqlca.sqlcode);
+	if (sqlca.sqlcode <0)
+	{
+		fprintf(fl_userlog,"DB ERROR. ERROR IN ACCESSING TABLE BPAYMENT\n");
+		APL_GOBACK_FAIL
+	}
+
+   fflush(stdout);
+	for(;;)
+	{
+		Alert("Inside For Loop");
+      fflush(stdout);
+		memset (&l_iv_cheque_structa_a,NULL,sizeof(IV_CHEQUE_STRUCT));
+		memset (&l_i_iv_cheque_struct,NULL,sizeof(I_IV_CHEQUE_STRUCT));
+      fflush(stdout);
+
+		EXEC SQL FETCH paycursor INTO
+		:l_iv_cheque_structa_a:l_i_iv_cheque_struct;
+               
+      Alert("After fetcht sqlca.sqlcode :%d",sqlca.sqlcode);
+
+	  Alert("\n shailesh 161007 l_iv_cheque_structa_a.client = [%s]",l_iv_cheque_structa_a.client);
+	  Alert("\n shailesh 161007 l_iv_cheque_structa_a.inden_num = [%d]",l_iv_cheque_structa_a.inden_num);
+
+      fflush(stdout);
+
+      IS_ANY_ORA_ERROR
+
+		if (sqlca.sqlcode == 1403)
+		{
+			if (int_l_fetch_ctr == 0)
+			{
+				fprintf(fl_userlog,"No Authorised Payments To Generate Accounting Entries\n");
+			}
+			break;		
+		}
+	
+		int_l_fetch_ctr++;	
+
+			
+		strcpy(l_iv_cheque_structa_a.ae_dt,APL_NULL_STRING);
+		
+		Alert("\n _shailesh h_proc_num = |%s|",h_proc_num);
+			if (APL_FAILURE == IV_Proc_PassPayEnt(&l_iv_cheque_structa_a,h_proc_num,&dcredit_ind,
+										&ccredit_ind,&l_ivclientstruct,&dacredit_ind,&cacredit_ind,
+										&int_run_seq,fl_userlog,fl_techlog,&int_l_genbatchno,&int_retstat,
+										l_debug_info_ptr))
+			{
+            l_iv_cheque_structa_a.dateof_payment[11]=APL_NULL_CHAR;
+
+			l_iv_cheque_structa_a.bill_date[11]=APL_NULL_CHAR;//shailesh ISKB-430-07
+
+            if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+				{
+               CO_ProcMonitor(fl_userlog,NULL,l_debug_info_ptr,NULL);
+               CO_FreeErrLst(l_debug_info_ptr);
+				}
+		fprintf(fl_userlog,"Accounting entries not generated for Payment : Account %s \
+ Pay_dt %s Sequence Number %d\n", l_iv_cheque_structa_a.client,l_iv_cheque_structa_a.dateof_payment,l_iv_cheque_structa_a.inden_num);
+            
+				memset(l_iv_cheque_structa_a.dateof_payment,APL_NULL_CHAR,APL_DATE_LEN);
+
+				memset(l_iv_cheque_structa_a.bill_date,APL_NULL_CHAR,APL_DATE_LEN);
+            if(int_retstat == IV_CRITCAL_ERROR_IND)
+				APL_GOBACK_FAIL
+            else
+				continue;
+			}
+		printf("\n  IV_PymtAcc.pc :IV_Proc_PayAccgenfn();h_proc_num = |%s|",h_proc_num);
+		
+
+		
+		int_l_genbatchno = 0;
+
+		
+
+		if (APL_FAILURE == IV_Mod_IVPymt_Btch_No(&l_iv_cheque_structa_a, h_proc_num ,&int_retstat,
+																l_debug_info_ptr))
+		{
+			if (int_retstat == IV_NO_DATA_FOUND_ERR)
+			{
+
+				fprintf(fl_userlog,"Payment for client %s ,dateof_payment %s and inden_num %d does not exist. \n",l_iv_cheque_structa_a.client, l_iv_cheque_structa_a.dateof_payment,l_iv_cheque_structa_a.inden_num);
+				CO_InsertErr(l_debug_info_ptr,ERR_PAYMNT_NOTFND,APL_NULL_STRING,
+									APL_NULL_STRING,APL_NULL_STRING,
+										__LINE__,__FILE__);
+			}	
+			fprintf(fl_userlog,"Failed to update the batch number in the bpayment table.Please regenerate accounting entries again\n");
+			APL_GOBACK_FAIL
+		}
+		
+		//Alert("\n shailesh l_iv_cheque_structa_a.proc_num in next LINE");
+		//Alert("\n shailesh 04102007  l_iv_cheque_structa_a.proc_num = |%s|",l_iv_cheque_structa_a.proc_num);
+
+		int_l_commit_count++;
+		
+		if (int_l_commit_count%IV_REC_COMMIT_CNT == 0)
+		{
+			sprintf(chr_l_stat_info,"Record %d Committed",int_l_commit_count);
+			
+			EXEC SQL UPDATE SYS_BATCHPROC 
+				  SET	STATUS  = 'started',
+						STAT_DET = :chr_l_stat_info
+				  		WHERE ROWID = :chr_h_batch_in_proc_rowid;
+			
+
+			if (sqlca.sqlcode <0)
+			{
+				CO_InsertErr(l_debug_info_ptr,DB_ERR_NO,ltoa(sqlca.sqlcode),
+            	            APL_NULL_STRING,APL_NULL_STRING,
+               	         __LINE__,__FILE__);
+         	APL_GOBACK_FAIL
+
+ 	      }
+
+ 	      EXEC SQL COMMIT WORK;
+			IS_ANY_ORA_ERROR
+
+			EXEC SQL SELECT ROWID
+   		INTO :chr_h_batch_in_proc_rowid :int_i_batch_in_proc_rowid
+   		FROM SYS_BATCHPROC
+   		WHERE PROCESS_NAME   =  :argv[0]
+   		AND STARTDATE    =  :argv[2]
+   		AND STATUS       =  'started'
+   		FOR UPDATE OF STATUS;
+
+                        if(sqlca.sqlcode < 0)
+				fprintf(fl_userlog,"Failure in starting generation of accounting entries\n");
+	
+			IS_ANY_ORA_ERROR;
+
+			EXEC SQL OPEN paycursor;
+
+                        if(sqlca.sqlcode < 0)
+				fprintf(fl_userlog,"Failure in starting generation of accounting entries\n");
+
+			IS_ANY_ORA_ERROR;
+			
+		} 
+
+	} 
+
+	
+	
+	sprintf(chr_l_stat_info, "Record %d Processed",int_l_commit_count);
+	strcpy(chr_h_batch_in_proc_status,"completed");
+	i_restart_info = -1;
+
+	EXEC SQL UPDATE SYS_BATCHPROC  
+		  SET STATUS 		= :chr_h_batch_in_proc_status,
+				STAT_DET 	= :chr_l_stat_info
+		  WHERE ROWID = :chr_h_batch_in_proc_rowid;	
+
+	IS_ANY_ORA_ERROR;
+
+	if (sqlca.sqlcode == 1403)
+	{
+		fprintf(fl_userlog,"Failure in updation of batch table \n");
+		APL_GOBACK_FAIL
+
+	}
+
+	APL_GOBACK_SUCCESS
+
+	
+
+	RETURN_FAILURE:
+   APL_IF_DEBUG
+   {
+    	CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of\
+IV_Proc_PayAccgenfn().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+   }
+
+   return (APL_FAILURE);
+
+	RETURN_SUCCESS:
+   APL_IF_DEBUG
+   {
+   	CO_ProcMonitor(APL_OUT_FILE,"Exiting succesfully out of \
+IV_Proc_PayAccgenfn().\n",(DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+   }
+
+   return (APL_SUCCESS);
+}
+
+
+
+
+int 	IV_Proc_PassPayEnt( IV_CHEQUE_STRUCT	*p_iv_cheque_struct,
+									char					*p_batch_no,
+									double 				*dcredit_ind,
+									double				*ccredit_ind,
+									IV_CLIENT_STRUCT		*p_iv_client_struct_a,
+									long int					*dacredit_ind,
+									long int					*cacredit_ind,
+									int					*p_runseq,	
+									FILE					*fl_userlog,
+									FILE					*fl_techlog,
+									int					*p_genbatchno,
+        							int 					*int_p_retstat,
+									DEBUG_INFO_STRUCT_H		**l_debug_info_ptr)
+								
+{
+
+int 		i				=0;
+int		int_retstat 		=0;
+int		int_ret 			=0;
+int		int_l_runseq 	=0;
+int		int_l_new_seq 	=0;
+int     	int_l_pay_decimallen = 0;
+int     	int_l_rec_decimallen = 0;
+int     	int_l_dom_decimallen = 0;
+int     	int_l_sys_bill_decimallen = 0;
+short    l_taxCondExists = 0;
+int      int_h_count =0;
+short		l_tr_apa_code = 0;
+char		chr_l_default_glaccount[11] = APL_NULL_STRING;
+short		i_default_ibbsaccount=0;
+
+char		h_proc_num[5] 						  = APL_NULL_STRING;
+
+long int	int_dr_account	=0;
+long int	int_cr_account  =0;
+
+double          l_dcredit_ind=0;
+double          l_ccredit_ind=0;
+
+long int 		l_dacredit_ind=0;
+long int 		l_cacredit_ind=0;
+
+char		h_value_date[APL_DATE_LEN]      = APL_NULL_STRING;
+char		chr_h_pay_ac[APL_CLIENT_LENGTH]       = APL_NULL_STRING;
+char		h_mstclt[APL_CLIENT_LENGTH]		  = APL_NULL_STRING;
+char		chr_fcyinrec[2]							  = APL_NULL_STRING;
+char	   chr_fcyinpay[2]							  = APL_NULL_STRING;	
+char		chr_l_rec_glcode[APL_CCYCODE_LEN] = APL_NULL_STRING;
+char		chr_l_dom_glcode[APL_CCYCODE_LEN] = APL_NULL_STRING;
+char		chr_l_pay_glcode[APL_CCYCODE_LEN] = APL_NULL_STRING;
+char		chr_l_sys_bill_glcode[APL_CCYCODE_LEN] = APL_NULL_STRING;
+char	 	chr_h_system_date[APL_DATE_LEN]	  = APL_NULL_STRING;
+char            chr_l_cod_cmamt[20]             = APL_NULL_STRING;
+double 	h_ae_rate1 = 0.0, h_ae_rate2 = 0.0 ,h_ae_rate3 = 0.0;
+double 	h_ae_rate4 = 0.0, h_ae_rate5 = 0.0 ,h_ae_rate6 = 0.0;
+
+double   l_exae_rate1 =0.0, l_exae_rate2 =0.0 ,l_exae_rate3 = 0.0;
+double   l_exae_rate4 =0.0, l_exae_rate5 =0.0, l_exae_rate6 =0.0;
+double	dbl_famountpay = 0.0; 
+double	lamountpay =0.0;
+double	dbl_famountrec =0.0;
+double	lamountrec =0.0;
+double	repamount  =0.0;
+double	replamount	= 0.0;
+double  f_repamount=0.0;
+double  f_replamount=0.0;
+
+double f_famountpay = 0.0;
+double f_lamountrec = 0.0;
+double f_lamountpay = 0.0;
+double f_famountrec = 0.0;
+double f_exae_rate1 = 0.0;
+double f_exae_rate6 = 0.0;
+double dbl_l_cal_tax = 0.0;
+double dbl_l_cal_taxamount = 0.0;
+double l_cr_amount = 0.0;
+double dbl_famttax = 0.0;
+double dbl_fcramount = 0.0;
+double f_laccamount = 0.0;
+double laccamount = 0.0;
+double LamtTax = 0.0;
+double dbl_f_lamttax = 0.0;
+int	int_l_retcmamt = 0;
+
+char		chr_h_date[9]				  				= APL_NULL_STRING;
+char		chr_l_pay_dt[APL_DATE_LEN] 				= APL_NULL_STRING;
+char		int_l_temp[APL_DATE_LEN]	  				= APL_NULL_STRING;
+char		chr_l_yyyy[5]				  				= APL_NULL_STRING;
+char		chr_l_mm[3]					  				= APL_NULL_STRING;
+char		chr_l_dd[3]					  				= APL_NULL_STRING;
+char		*a;
+
+/********* vinay kalaskar ********************/
+/* Retro done for AIX migration */
+/*Changes done for ISKB_4802 -- started*/
+char h_payacc[29]=APL_NULL_STRING; 
+char h_payacc1[29]=APL_NULL_STRING;
+char h_tds_pay[29]=APL_NULL_STRING;
+/*Changes done for ISKB_4802 -- Ended*/
+
+/********************************************/
+
+char	 h_sequence_num[5] = APL_NULL_STRING;
+char	 int_l_seq_num[5] = APL_NULL_STRING;
+
+char	rep_exg_rt[31]  = APL_NULL_STRING;
+
+double l_dbl_service_cd =0.0; //shailesh 161007 - ISKB-430-07
+
+char l_str_serv_desc[50]= APL_NULL_STRING;
+char nar_acc_date[20] = APL_NULL_STRING;
+
+
+EXEC SQL BEGIN DECLARE SECTION;
+IV_CLIENTSETUP_STRUCT 	l_iv_clt_setup_struct;
+IV_CLIENTSETUP_STRUCT 	l_iv_clientsetup_struct;
+
+PRO_ACCTENT_STRUCT_H	l_pro_cracctent_struct_h;
+PRO_ACCTENT_STRUCT_H	l_pro_dracctent_struct_h;
+PRO_ACCTENT_STRUCT_H	l_pro_txacctent_struct_h;
+
+
+EXEC SQL VAR l_pro_dracctent_struct_h.brnch_cd IS STRING;
+EXEC SQL VAR l_pro_dracctent_struct_h.inden_num IS STRING;
+EXEC SQL VAR l_pro_dracctent_struct_h.client IS STRING;
+EXEC SQL VAR l_pro_dracctent_struct_h.curr_cd IS STRING;
+EXEC SQL VAR l_pro_dracctent_struct_h.val_date IS STRING;
+EXEC SQL VAR l_pro_dracctent_struct_h.proc_dt IS STRING;
+EXEC SQL VAR l_pro_dracctent_struct_h.deal_cd IS STRING;
+EXEC SQL VAR l_pro_dracctent_struct_h.spl_clt_cd IS STRING;
+EXEC SQL VAR l_pro_dracctent_struct_h.description IS STRING;
+EXEC SQL VAR l_pro_dracctent_struct_h.proc_num IS STRING;
+EXEC SQL VAR l_pro_dracctent_struct_h.deal_ident IS STRING;
+/* Bageshri HB_IV_005 START */
+EXEC SQL VAR l_pro_dracctent_struct_h.leg_ind IS STRING;
+EXEC SQL VAR l_pro_dracctent_struct_h.acc_type IS STRING;
+/* Bageshri HB_IV_005 END */
+
+EXEC SQL VAR l_pro_cracctent_struct_h.brnch_cd IS STRING;
+EXEC SQL VAR l_pro_cracctent_struct_h.inden_num IS STRING;
+EXEC SQL VAR l_pro_cracctent_struct_h.client IS STRING;
+EXEC SQL VAR l_pro_cracctent_struct_h.curr_cd IS STRING;
+EXEC SQL VAR l_pro_cracctent_struct_h.val_date IS STRING;
+EXEC SQL VAR l_pro_cracctent_struct_h.proc_dt IS STRING;
+EXEC SQL VAR l_pro_cracctent_struct_h.deal_cd IS STRING;
+EXEC SQL VAR l_pro_cracctent_struct_h.spl_clt_cd IS STRING;
+EXEC SQL VAR l_pro_cracctent_struct_h.description IS STRING;
+EXEC SQL VAR l_pro_cracctent_struct_h.proc_num IS STRING;
+EXEC SQL VAR l_pro_cracctent_struct_h.rep_exg_rt IS STRING;
+EXEC SQL VAR l_pro_cracctent_struct_h.deal_ident IS STRING;
+EXEC SQL VAR l_pro_dracctent_struct_h.leg_ind IS STRING;
+EXEC SQL VAR l_pro_dracctent_struct_h.acc_type IS STRING;
+/* Bageshri HB_IV_005 START */
+EXEC SQL VAR l_pro_dracctent_struct_h.leg_ind IS STRING;
+EXEC SQL VAR l_pro_dracctent_struct_h.acc_type IS STRING;
+/* Bageshri HB_IV_005 END */
+
+EXEC SQL VAR l_pro_txacctent_struct_h.brnch_cd IS STRING;
+EXEC SQL VAR l_pro_txacctent_struct_h.inden_num IS STRING;
+EXEC SQL VAR l_pro_txacctent_struct_h.client IS STRING;
+EXEC SQL VAR l_pro_txacctent_struct_h.curr_cd IS STRING;
+EXEC SQL VAR l_pro_txacctent_struct_h.val_date IS STRING;
+EXEC SQL VAR l_pro_txacctent_struct_h.proc_dt IS STRING;
+EXEC SQL VAR l_pro_txacctent_struct_h.deal_cd IS STRING;
+EXEC SQL VAR l_pro_txacctent_struct_h.spl_clt_cd IS STRING;
+EXEC SQL VAR l_pro_txacctent_struct_h.description IS STRING;
+EXEC SQL VAR l_pro_txacctent_struct_h.proc_num IS STRING;
+EXEC SQL VAR l_pro_txacctent_struct_h.rep_exg_rt IS STRING;
+EXEC SQL VAR l_pro_txacctent_struct_h.deal_ident IS STRING;
+
+EXEC SQL VAR h_mstclt IS STRING;
+EXEC SQL VAR chr_h_pay_ac IS STRING;
+EXEC SQL VAR chr_h_system_date IS STRING;
+EXEC SQL VAR chr_l_default_glaccount IS STRING;
+EXEC SQL END DECLARE SECTION;
+
+l_pro_dracctent_struct_h.fccy_amt=0;
+l_pro_cracctent_struct_h.fccy_amt=0;
+l_pro_txacctent_struct_h.fccy_amt=0;
+
+l_pro_dracctent_struct_h.lcl_amount=0;
+l_pro_cracctent_struct_h.lcl_amount=0;
+l_pro_txacctent_struct_h.lcl_amount=0;
+
+l_pro_dracctent_struct_h.exchg_rt=0;
+l_pro_cracctent_struct_h.exchg_rt=0;
+l_pro_txacctent_struct_h.exchg_rt=0;
+
+l_pro_dracctent_struct_h.report_clt=0;
+l_pro_cracctent_struct_h.report_clt=0;
+l_pro_txacctent_struct_h.report_clt=0;
+
+l_pro_dracctent_struct_h.report_amt=0;
+l_pro_cracctent_struct_h.report_amt=0;
+l_pro_txacctent_struct_h.report_amt=0;
+
+l_pro_dracctent_struct_h.report_ser=0;
+l_pro_cracctent_struct_h.report_ser=0;
+l_pro_txacctent_struct_h.report_ser=0;
+
+l_pro_dracctent_struct_h.report_tax=0;
+l_pro_cracctent_struct_h.report_tax=0;
+l_pro_txacctent_struct_h.report_tax=0;
+
+l_pro_dracctent_struct_h.rep_exg_rt=0;
+l_pro_cracctent_struct_h.rep_exg_rt=0;
+l_pro_txacctent_struct_h.rep_exg_rt=0;
+
+	
+	
+	a = (char *)calloc(10,sizeof(char));
+
+
+	memset(&l_pro_dracctent_struct_h,NULL,sizeof(PRO_ACCTENT_STRUCT_H));
+	memset(&l_pro_cracctent_struct_h,NULL,sizeof(PRO_ACCTENT_STRUCT_H));
+	memset(&l_pro_txacctent_struct_h,NULL,sizeof(PRO_ACCTENT_STRUCT_H));
+	memset(&l_iv_clt_setup_struct,NULL,sizeof(IV_CLIENTSETUP_STRUCT));
+	
+	l_pro_dracctent_struct_h.module_ind = APL_ACCTENT_BPYMNT_IND;
+	l_pro_cracctent_struct_h.module_ind = APL_ACCTENT_BPYMNT_IND;
+	
+	l_pro_dracctent_struct_h.db_cr_ind   = DR_CR_IND;
+	l_pro_cracctent_struct_h.db_cr_ind   = CREDIT_IND_A;
+
+	strcpy(l_pro_dracctent_struct_h.brnch_cd,g_mt_commonsys_params_struct_h.brnch_cd);
+	strcpy(l_pro_cracctent_struct_h.brnch_cd,g_mt_commonsys_params_struct_h.brnch_cd);
+
+	int_l_runseq = *p_runseq;
+
+        l_dcredit_ind = *dcredit_ind;
+        l_ccredit_ind = *ccredit_ind;
+        l_dacredit_ind = *dacredit_ind;
+        l_cacredit_ind = *cacredit_ind;
+
+	sprintf(h_sequence_num,"%d",int_l_runseq);
+	strcpy(l_pro_dracctent_struct_h.inden_num,h_sequence_num);
+
+   int_l_new_seq = int_l_runseq + 1;	
+	sprintf(int_l_seq_num,"%d",(int_l_new_seq));
+	strcpy(l_pro_cracctent_struct_h.inden_num,int_l_seq_num);
+
+	
+	Alert("Entering IV_Rtv_IVCUSTSETUP:|%s|",p_iv_cheque_struct->client);
+	if (APL_FAILURE == IV_Rtv_IVCUSTSETUP(p_iv_cheque_struct->client,
+													&l_iv_clt_setup_struct,
+													&int_retstat,	
+													l_debug_info_ptr) )
+	{
+		if (int_retstat == IV_NO_DATA_FOUND_ERR)
+		{
+		  CO_InsertErr(l_debug_info_ptr,ERR_BILLPARAM_NOTFND, p_iv_cheque_struct->client,APL_NULL_STRING, APL_NULL_STRING,__LINE__,__FILE__);
+		  APL_GOBACK_FAIL
+		}
+
+		if (int_retstat == IV_COLUMN_NULL_ERR)
+		{
+			l_iv_clientsetup_struct = l_iv_clt_setup_struct;
+
+			if (!strcmp(l_iv_clt_setup_struct.rec_clt ," "))
+			{
+				
+				Alert("Entering IV_Rtv_GetMasterAcc:|%s|",p_iv_cheque_struct->client);
+				if (APL_FAILURE == IV_Rtv_GetMasterAcc( p_iv_cheque_struct->client,
+															h_mstclt,
+															l_debug_info_ptr)) 
+				{
+		  			CO_InsertErr(l_debug_info_ptr,ERR_ACCNOT_FND, h_mstclt,APL_NULL_STRING, APL_NULL_STRING,__LINE__,__FILE__);
+					APL_GOBACK_FAIL
+				}
+
+				
+
+			
+				memset(&l_iv_clt_setup_struct,NULL,sizeof(IV_CLIENTSETUP_STRUCT));
+
+				if (APL_FAILURE == IV_Rtv_IVCUSTSETUP(h_mstclt,
+																 &l_iv_clt_setup_struct,
+																 &int_retstat,
+																 l_debug_info_ptr) )
+				{
+					if (int_retstat == IV_NO_DATA_FOUND_ERR)
+					{
+						memset(&l_iv_clt_setup_struct,NULL,sizeof(IV_CLIENTSETUP_STRUCT));
+						strcpy(l_iv_clt_setup_struct.rec_clt," ");
+					}
+					if (int_retstat == IV_CRITCAL_ERROR_IND)
+					{
+						fprintf(fl_userlog,"Fatal l_debuglist encountered in IV_CLIENTSETUP\n");		
+ 						*int_p_retstat = IV_CRITCAL_ERROR_IND;
+						APL_GOBACK_FAIL
+
+					}
+					if ((int_retstat == IV_COLUMN_NULL_ERR) ||
+						(int_retstat == IV_NO_DATA_FOUND_ERR))
+					{
+						
+
+						if (!strcmp(l_iv_clt_setup_struct.rec_clt," "))
+						{
+							memset(&l_iv_clt_setup_struct,NULL,sizeof(IV_CLIENTSETUP_STRUCT));
+							if (APL_FAILURE == IV_Rtv_IVCUSTSETUP(l_mt_core_sys_params_struct_h.custody_clt_cd,
+																			 &l_iv_clt_setup_struct,
+																			 &int_retstat ,
+																			 l_debug_info_ptr) )
+							{
+								if (int_retstat == IV_NO_DATA_FOUND_ERR)
+								{ /* OPT:AIX */
+									CO_InsertErr(l_debug_info_ptr,ERR_BILLPARAM_NOTFND,
+														(char *)l_mt_core_sys_params_struct_h.custody_clt_cd,APL_NULL_STRING,
+														APL_NULL_STRING,__LINE__,__FILE__);
+									APL_GOBACK_FAIL
+								}
+								if (int_retstat == IV_CRITCAL_ERROR_IND)
+								{
+ 									*int_p_retstat = IV_CRITCAL_ERROR_IND;
+									APL_GOBACK_FAIL
+								}
+								if (int_retstat == IV_COLUMN_NULL_ERR)
+								{
+									if (!strcmp(l_iv_clt_setup_struct.rec_clt," "))
+									{ /* OPT:AIX */
+										CO_InsertErr(l_debug_info_ptr,ERR_INVALID_RECEABLEACC,
+															(char *)l_mt_core_sys_params_struct_h.custody_clt_cd,APL_NULL_STRING,
+															APL_NULL_STRING,__LINE__,__FILE__);
+										fprintf(fl_userlog,"Receivable Account Cannot be null for %s \n",l_mt_core_sys_params_struct_h.custody_clt_cd);
+										APL_GOBACK_FAIL
+									}
+								}
+							}
+						}
+					}	
+				} 
+			} 
+		} 	
+	} 
+	else
+	{
+		l_iv_clientsetup_struct = l_iv_clt_setup_struct;
+	}
+
+	strcpy(l_pro_cracctent_struct_h.client, l_iv_clt_setup_struct.rec_clt);
+
+	strcpy(l_pro_cracctent_struct_h.acc_type,"C");	/* Bageshri HB_IV_005 : ac rec_clt is Clients acc */
+
+	Alert("l_iv_clt_setup_struct.rec_clt:|%s|",l_iv_clt_setup_struct.rec_clt);
+
+	/************************* Bageshri HB_IV_005 : *****************************/
+
+	IF_COND_EXISTS("IV_CLIENT","PYMT_ACC")
+	{
+		strcpy(l_pro_dracctent_struct_h.client, l_iv_clt_setup_struct.pymt_acc);
+	}
+	else
+	{
+		/************************* Bageshri HB_IV_005 END *****************************/
+		/*************** Payment Accounting Entries By : vinay kalaskar ***************************/
+		IF_COND_EXISTS("IV_ACC_CLIENT","FUND_ACC")
+		{
+			EXEC SQL SELECT PAYACC,PAY1ACC,TDS_PAY 
+				INTO :h_payacc,:h_payacc1,:h_tds_pay 
+				FROM IV_CLIENTGL;
+
+			Alert("sqlca.sqlcode:|%d|",sqlca.sqlcode);
+
+			if (!strcmp(p_iv_cheque_struct->pymt_clt,h_payacc))
+			{
+				strcpy(l_pro_dracctent_struct_h.client,h_payacc);
+			}
+			else if (!strcmp(p_iv_cheque_struct->pymt_clt,h_payacc1))
+			{
+				strcpy(l_pro_dracctent_struct_h.client,h_payacc1);
+			}
+			else
+			{
+				printf("\n Payment Account maintained in IV_CLIENTSETUP for client [%s] doesn't match with payment accounts maintained in IV_CLIENTGL(Accounts)",p_iv_cheque_struct->client);
+				fprintf(fl_techlog,"Payment Account maintained in IV_CLIENTSETUP for client [%s] doesn't match with payment accounts maintained in IV_CLIENTGL(Accounts)",p_iv_cheque_struct->client);
+				fprintf(fl_userlog,"Payment Account maintained in IV_CLIENTSETUP for client [%s] doesn't match with payment accounts maintained in IV_CLIENTGL(Accounts)",p_iv_cheque_struct->client);
+				APL_GOBACK_FAIL
+
+			}
+		}
+		else
+		{
+			if (!strcmp(p_iv_cheque_struct->pymt_clt,p_iv_client_struct_a->payacc_a))/* changed */
+			{
+				strcpy(l_pro_dracctent_struct_h.client,p_iv_client_struct_a->payacc_a);
+			}
+			else if (!strcmp(p_iv_cheque_struct->pymt_clt,p_iv_client_struct_a->payacc_b))/* changed */
+			{
+				strcpy(l_pro_dracctent_struct_h.client,p_iv_client_struct_a->payacc_b);
+			}
+
+		}
+	}
+			
+
+	strcpy(l_pro_dracctent_struct_h.acc_type,"G");	  /* Bageshri HB_IV_005 : ac pymt acc is Global acc */
+
+	Alert("l_pro_dracctent_struct_h.client:|%s|",l_pro_dracctent_struct_h.client);
+
+	/* Bageshri HB_IV_005 : for client field to be Account Code only */
+
+	if(APL_FAILURE == IV_Mod_ClientCode(&l_pro_cracctent_struct_h.client,fl_userlog,l_debug_info_ptr))
+	{
+		fprintf(fl_userlog,"\nCould not get the Account No. for credit entry");
+		APL_GOBACK_FAIL
+	}
+
+	if(APL_FAILURE == IV_Mod_ClientCode(&l_pro_dracctent_struct_h.client,fl_userlog,l_debug_info_ptr))
+	{
+		fprintf(fl_userlog,"\nCould not get the Account No. for debit entry");
+		APL_GOBACK_FAIL
+	}
+	
+	Alert("l_pro_cracctent_struct_h.client:|%s|",l_pro_cracctent_struct_h.client);
+	Alert("l_pro_dracctent_struct_h.client:|%s|",l_pro_dracctent_struct_h.client);
+		
+	strcpy(chr_l_pay_dt,p_iv_cheque_struct->dateof_payment);
+	strcpy(int_l_temp,strtok_r(chr_l_pay_dt,"/",&a));
+
+
+	Alert("l_iv_clientsetup_struct.dir_db_ind:|%c|",l_iv_clientsetup_struct.dir_db_ind);
+
+        /* Commented by Bageshri as Table is not used now */
+/*	
+	if (l_iv_clientsetup_struct.dir_db_ind == 'Y')
+	{
+      int_h_count =0;
+	   EXEC SQL SELECT COUNT(*)
+					  INTO :int_h_count
+                 FROM DL_CASHCLT
+                WHERE CLIENT = :p_iv_cheque_struct->client
+						AND CURRENCY_CD = :p_iv_cheque_struct->b_ccycd
+						AND DEFAULT_CCY ='Y';
+	   
+      if (int_h_count != 0)
+      {
+			EXEC SQL SELECT GL_ACCOUNT
+					  		INTO :l_pro_dracctent_struct_h.client
+                    FROM DL_CASHCLT
+                   WHERE CLIENT = :p_iv_cheque_struct->client
+					  	   AND CURRENCY_CD = :p_iv_cheque_struct->b_ccycd
+						   AND DEFAULT_CCY ='Y';
+      }
+      else
+      {
+			EXEC SQL SELECT GL_ACCOUNT
+					  		INTO :l_pro_dracctent_struct_h.client
+                    FROM DL_CASHCLT
+                   WHERE CLIENT = :p_iv_cheque_struct->client
+					  	   AND CURRENCY_CD = :p_iv_cheque_struct->b_ccycd
+						   AND DEFAULT_CCY ='N';
+      }
+
+		 IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_ACCNOT_FND,
+		 													p_iv_cheque_struct->client,
+		 													"Cash Account",
+		 													APL_NULL_STRING
+		 													)
+   }*/
+Alert(" Bagee --dr cln |%s|",l_pro_dracctent_struct_h.client);
+
+
+	 		EXEC SQL SELECT CLN_GL_ACCOUNT 
+						INTO :chr_l_default_glaccount:i_default_ibbsaccount
+						FROM MT_CLIENT 
+						WHERE CLN_CODE =:l_iv_clientsetup_struct.client;
+			IS_ANY_ORA_ERROR
+
+	printf("the int_l_temp is %s\n",int_l_temp);
+
+	/* shailesh 27-12-2007  for inserting  val date as  billing date in payment acc.entries.gen.
+	strcpy(chr_l_dd,int_l_temp);
+	chr_l_dd[2] ='\0';
+	printf("the chr_l_dd is %s\n",chr_l_dd);
+
+	strcpy(int_l_temp,strtok_r(NULL,"/",&a));
+	strcpy(chr_l_mm,int_l_temp);
+	chr_l_mm[2] ='\0';
+	printf("the chr_l_mm is %s\n",chr_l_mm);
+	
+	strcpy(int_l_temp,strtok_r(NULL," ",&a));
+	strcpy(chr_l_yyyy,int_l_temp);
+	chr_l_yyyy[4] ='\0';
+	printf("the chr_l_yyyy is %s\n",chr_l_yyyy);
+
+
+	strcpy(chr_h_date,chr_l_yyyy);
+	strcat(chr_h_date,chr_l_mm);
+	strcat(chr_h_date,chr_l_dd);
+
+	chr_h_date[8] ='\0';
+
+	Alert("The chr_h_date is %s\n",chr_h_date);
+         */
+//shailesh 27-12-2007  for inserting  val date as  billing date in payment acc.entries.gen.
+	EXEC SQL SELECT  TO_CHAR(TO_DATE(SUBSTR(:p_iv_cheque_struct->bill_date,0,10),'dd/mm/yyyy'),'YYYYMMDD')	INTO :chr_h_date FROM DUAL;
+
+	chr_h_date[8] ='\0';
+
+	Alert("The chr_h_date is %s\n",chr_h_date);
+	strcpy(l_pro_cracctent_struct_h.val_date,chr_h_date);
+	strcpy(l_pro_dracctent_struct_h.val_date ,l_pro_cracctent_struct_h.val_date);
+	
+	Alert("l_pro_dracctent_struct_h.val_date:|%s|",l_pro_dracctent_struct_h.val_date);
+
+
+	
+	if (APL_FAILURE == CO_RtvSysDt(chr_h_system_date,l_debug_info_ptr) )		
+	{
+                *int_p_retstat = IV_CRITCAL_ERROR_IND;
+		APL_GOBACK_FAIL
+	}
+
+
+	if (APL_FAILURE == IV_Proc_ConvToFxFn(p_iv_cheque_struct->b_ccycd,
+											g_mt_commonsys_params_struct_h.dom_ccy,
+											g_mt_commonsys_params_struct_h.dom_ccy,
+											chr_h_system_date,&h_ae_rate1,&int_retstat,l_debug_info_ptr) )								
+	{
+		if (int_retstat == IV_CRITCAL_ERROR_IND)
+		{
+			fprintf(fl_userlog,"Exchange Rate not int_found for %s to %s \n",p_iv_cheque_struct->b_ccycd,g_mt_commonsys_params_struct_h.dom_ccy);
+			APL_GOBACK_FAIL
+		}
+
+	}	
+		
+   l_exae_rate1 = h_ae_rate1;
+	 
+	
+
+	if (APL_FAILURE ==IV_Proc_ConvToFxFn(l_invoice_systemparam_struct_h.b_ccy,
+										  g_mt_commonsys_params_struct_h.dom_ccy,
+										  g_mt_commonsys_params_struct_h.dom_ccy,
+										  chr_h_system_date,
+										  &h_ae_rate2,&int_retstat,l_debug_info_ptr) )
+	{	
+		if (int_retstat == IV_CRITCAL_ERROR_IND)
+		{
+			fprintf(fl_userlog,"Exchange Rate not int_found for %s to %s\n",l_invoice_systemparam_struct_h.b_ccy,g_mt_commonsys_params_struct_h.dom_ccy);
+			APL_GOBACK_FAIL
+		}
+	}	
+	l_exae_rate2 = h_ae_rate2;
+
+
+	
+	if (APL_FAILURE ==IV_Proc_ConvToFxFn(p_iv_cheque_struct->b_ccycd, 
+		    							  l_invoice_systemparam_struct_h.b_ccy,
+										  g_mt_commonsys_params_struct_h.dom_ccy,
+										  chr_h_system_date,
+										  &h_ae_rate3,&int_retstat,l_debug_info_ptr) )	
+	{
+		if (int_retstat == IV_CRITCAL_ERROR_IND)
+		{
+			fprintf(fl_userlog,"Exchange Rate not int_found for %s to %s \n",p_iv_cheque_struct->b_ccycd,l_invoice_systemparam_struct_h.b_ccy);
+			APL_GOBACK_FAIL
+		}
+
+	}		
+	l_exae_rate3 = h_ae_rate3;
+
+	
+
+
+	
+
+	if (APL_FAILURE ==IV_Proc_ConvToFxFn(p_iv_cheque_struct->b_ccycd,
+										  l_iv_clt_setup_struct.b_ccycd,
+										  g_mt_commonsys_params_struct_h.dom_ccy,
+										  chr_h_system_date,&h_ae_rate5,&int_retstat,l_debug_info_ptr) )	
+	{
+		if (int_retstat == IV_CRITCAL_ERROR_IND)
+		{
+			fprintf(fl_userlog,"Exchange Rate not int_found for %s to %s \n",p_iv_cheque_struct->b_ccycd,l_iv_clt_setup_struct.b_ccycd);
+			APL_GOBACK_FAIL
+		}
+
+	}	
+	
+	l_exae_rate5 = h_ae_rate5;
+
+
+	
+		
+	if (APL_FAILURE ==IV_Proc_ConvToFxFn( l_iv_clt_setup_struct.b_ccycd,
+											g_mt_commonsys_params_struct_h.dom_ccy,
+											g_mt_commonsys_params_struct_h.dom_ccy,
+											chr_h_system_date,&h_ae_rate6,&int_retstat,l_debug_info_ptr) )	
+	{
+		if (int_retstat == IV_CRITCAL_ERROR_IND)
+		{
+			fprintf(fl_userlog,"Exchange Rate not int_found for %s to %s \n",l_iv_clt_setup_struct.b_ccycd,g_mt_commonsys_params_struct_h.dom_ccy);
+			APL_GOBACK_FAIL
+		}
+
+	}	
+
+	l_exae_rate6 = h_ae_rate6;
+		
+        if (APL_FAILURE == IV_Rtv_MTCurrency(l_invoice_systemparam_struct_h.b_ccy,chr_l_sys_bill_glcode,&int_l_sys_bill_decimallen,&int_retstat,l_debug_info_ptr))
+        {
+            if(int_retstat == IV_CRITCAL_ERROR_IND)
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+	    else
+	        CO_InsertErr(l_debug_info_ptr,ERR_CCY_NOTFND, (char *)l_invoice_systemparam_struct_h.b_ccy,APL_NULL_STRING, APL_NULL_STRING,__LINE__,__FILE__);//Changes done for AIX Migration
+            APL_GOBACK_FAIL
+
+        }
+
+        if (APL_FAILURE == IV_Rtv_MTCurrency(g_mt_commonsys_params_struct_h.dom_ccy,chr_l_dom_glcode,&int_l_dom_decimallen,&int_retstat,l_debug_info_ptr))
+        {
+            if(int_retstat == IV_CRITCAL_ERROR_IND)
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+	    else
+	        CO_InsertErr(l_debug_info_ptr,ERR_CCY_NOTFND, (char *)g_mt_commonsys_params_struct_h.dom_ccy,APL_NULL_STRING, APL_NULL_STRING,__LINE__,__FILE__);//Changes done for AIX Migration
+            APL_GOBACK_FAIL
+        }
+
+        if (APL_FAILURE == IV_Rtv_MTCurrency(p_iv_cheque_struct->b_ccycd,chr_l_pay_glcode,&int_l_pay_decimallen,&int_retstat,l_debug_info_ptr))
+        {
+	    if(int_retstat == IV_CRITCAL_ERROR_IND)
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+	    else
+	        CO_InsertErr(l_debug_info_ptr,ERR_CCY_NOTFND, p_iv_cheque_struct->b_ccycd,APL_NULL_STRING, APL_NULL_STRING,__LINE__,__FILE__);
+            APL_GOBACK_FAIL
+        }
+
+        if (APL_FAILURE == IV_Rtv_MTCurrency(l_iv_clt_setup_struct.b_ccycd,chr_l_rec_glcode,&int_l_rec_decimallen,&int_retstat,l_debug_info_ptr))
+        {
+            
+	    if(int_retstat == IV_CRITCAL_ERROR_IND)
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+	    else
+	        CO_InsertErr(l_debug_info_ptr,ERR_CCY_NOTFND, l_iv_clt_setup_struct.b_ccycd,APL_NULL_STRING, APL_NULL_STRING,__LINE__,__FILE__);
+            APL_GOBACK_FAIL
+        }
+
+
+	dbl_famountpay = p_iv_cheque_struct->conf_amt;
+	/*
+        CO_Round(dbl_famountpay,int_l_pay_decimallen,&f_famountpay);
+	*/	
+	memset(chr_l_cod_cmamt, APL_NULL_CHAR, 20);
+	int_l_retcmamt = IV_Proc_Round(&dbl_famountpay,	
+					p_iv_cheque_struct->b_ccycd,	
+					chr_l_cod_cmamt,
+					l_debug_info_ptr);
+
+	if (int_l_retcmamt == 1)
+	{
+		f_famountpay = 0.0;
+		sscanf(chr_l_cod_cmamt,
+		"%lf",
+		&f_famountpay);
+	}
+	else
+	{
+		APL_GOBACK_FAIL
+	}
+
+	printf("Round Before |%lf| After |%s| |%lf|\n",dbl_famountpay,chr_l_cod_cmamt,f_famountpay);	
+	lamountpay = f_famountpay * l_exae_rate1;
+	dbl_famountrec = f_famountpay * l_exae_rate5;
+	lamountrec = dbl_famountrec * l_exae_rate6;
+	/*	Report Amount Currency change to Client Currency	ISKB_1994	*/
+	/*
+	repamount  = p_iv_cheque_struct->conf_amt * l_exae_rate3;
+	replamount = repamount * l_exae_rate2;
+	*/
+	repamount  = f_famountpay;
+	replamount = repamount;
+	
+	
+
+     
+        CO_Round(repamount,int_l_sys_bill_decimallen,&f_repamount);
+        CO_Round(replamount,int_l_dom_decimallen,&f_replamount);
+
+
+	l_pro_cracctent_struct_h.report_amt = f_repamount;
+	l_pro_dracctent_struct_h.report_amt = f_repamount;
+
+	l_pro_cracctent_struct_h.report_clt = f_replamount;
+	l_pro_dracctent_struct_h.report_clt = f_replamount;
+
+
+
+        CO_Round(lamountpay,int_l_dom_decimallen,&f_lamountpay);
+        CO_Round(dbl_famountrec,int_l_rec_decimallen,&f_famountrec);
+        CO_Round(lamountrec,int_l_dom_decimallen,&f_lamountrec);
+
+	
+
+	
+	
+
+	if ( !strcmp(l_iv_clt_setup_struct.b_ccycd,g_mt_commonsys_params_struct_h.dom_ccy ) )
+		strcpy(chr_fcyinrec,"F");			
+	else
+		strcpy(chr_fcyinrec,"T");
+
+	
+	
+	if (!strcmp(p_iv_cheque_struct->b_ccycd, g_mt_commonsys_params_struct_h.dom_ccy) )
+		strcpy(chr_fcyinpay,"F");	
+	else
+		strcpy(chr_fcyinpay,"T");
+
+
+	
+	
+   
+   if(APL_FAILURE == CO_Chk_CntryEnabled("BILL_ACC_ENTRIES",
+                                        "TAXENTRY_IN_PAYMENT",
+                                        &l_taxCondExists,
+                                        l_debug_info_ptr))
+   {
+        APL_GOBACK_FAIL
+   }
+   l_tr_apa_code = 0 ;
+   if(APL_FAILURE == CO_Chk_CntryEnabled("ACC_ENTRIES",
+                                        "TR_APA_CODE",
+                                        &l_tr_apa_code,
+                                        l_debug_info_ptr))
+   {
+        APL_GOBACK_FAIL
+   }
+	
+
+		  if (!strcmp(l_iv_clt_setup_struct.spl_clt_cd ," "))
+		  {
+				if(l_taxCondExists) 
+				{
+						CO_InsertErr(l_debug_info_ptr,
+                                 ERR_INVALID_APACODE,
+                                 l_iv_clt_setup_struct.client,
+                                 APL_NULL_STRING,
+                                 APL_NULL_STRING,
+                                 __LINE__,
+                                 __FILE__);
+                   fprintf(fl_userlog,"APA_CODE cannot be null for %s\n",l_iv_clt_setup_struct.client);
+                   APL_GOBACK_FAIL	
+				}
+		  }
+
+		if(l_tr_apa_code>0)
+		{
+			strncpy(l_pro_dracctent_struct_h.spl_clt_cd,chr_l_default_glaccount,7);
+			strncpy(l_pro_cracctent_struct_h.spl_clt_cd,chr_l_default_glaccount,7);
+		}
+
+
+	if (!strcmp(chr_fcyinpay,"T"))
+	{
+		l_pro_dracctent_struct_h.fccy_amt = f_famountpay;
+		
+		CO_Round(l_exae_rate1, 8, &f_exae_rate1); 
+		
+		l_pro_dracctent_struct_h.exchg_rt = f_exae_rate1;
+		Alert("The h_dr_acc_struct.fccy_amt is |%lf|\n",l_pro_dracctent_struct_h.fccy_amt);	
+	}
+	else
+	{
+		l_pro_dracctent_struct_h.fccy_amt = 0.0;
+		l_pro_dracctent_struct_h.exchg_rt = 0.0;
+	}
+
+
+
+	if (!strcmp(chr_fcyinrec,"T"))
+	{
+		l_pro_cracctent_struct_h.fccy_amt = f_famountrec;
+
+		CO_Round(l_exae_rate6,8, &f_exae_rate6);
+
+		l_pro_cracctent_struct_h.exchg_rt = f_exae_rate6;
+	}
+	else
+	{
+		l_pro_cracctent_struct_h.fccy_amt = 0;
+		l_pro_cracctent_struct_h.exchg_rt = 0;
+	}
+
+
+	l_pro_dracctent_struct_h.lcl_amount = f_lamountpay;
+	l_pro_cracctent_struct_h.lcl_amount = f_lamountrec;
+	
+	l_pro_cracctent_struct_h.rep_exg_rt = l_exae_rate2;
+	l_pro_dracctent_struct_h.rep_exg_rt = l_exae_rate2;
+
+	strcpy(l_pro_cracctent_struct_h.curr_cd,chr_l_rec_glcode);
+	strcpy(l_pro_dracctent_struct_h.curr_cd,chr_l_pay_glcode);
+	
+	sscanf(l_pro_cracctent_struct_h.client,"%ld",&int_cr_account);
+	sscanf(l_pro_dracctent_struct_h.client,"%ld",&int_dr_account);
+
+	//strcpy(l_pro_dracctent_struct_h.description,"Custody Bill ");//shailesh ISKB-430-07
+	//strcat(l_pro_dracctent_struct_h.description,p_iv_cheque_struct->client);////shailesh ISKB-430-07
+
+	//strcpy(l_pro_cracctent_struct_h.description,"Custody Bill ");//shailesh ISKB-430-07
+//	strcat(l_pro_cracctent_struct_h.description,p_iv_cheque_struct->client);
+
+	sprintf(l_pro_dracctent_struct_h.deal_cd ,"%.3d", l_invoice_systemparam_struct_h.db_txnrcd) ;
+	sprintf(l_pro_cracctent_struct_h.deal_cd ,"%.3d", l_invoice_systemparam_struct_h.cred_txnrcd);
+
+	strcpy(l_pro_dracctent_struct_h.spl_clt_cd,APL_NULL_STRING);
+	strcpy(l_pro_cracctent_struct_h.spl_clt_cd,APL_NULL_STRING);
+
+	l_pro_dracctent_struct_h.status_ind = APL_ACCTENT_GEN_IND; 
+	l_pro_cracctent_struct_h.status_ind = APL_ACCTENT_GEN_IND; 
+
+	l_pro_dracctent_struct_h.rec_refer = APL_ACCTENT_NORMENT;
+	l_pro_cracctent_struct_h.rec_refer = APL_ACCTENT_NORMENT;
+
+	strcpy(l_pro_dracctent_struct_h.proc_dt,chr_h_system_date);
+	strcpy(l_pro_cracctent_struct_h.proc_dt,chr_h_system_date);
+
+	l_pro_dracctent_struct_h.report_tax = 0;
+	l_pro_cracctent_struct_h.report_tax = 0;
+
+
+	l_pro_dracctent_struct_h.report_ser = 0;
+	l_pro_cracctent_struct_h.report_ser = 0;
+
+	strcpy(l_pro_dracctent_struct_h.deal_ident,p_iv_cheque_struct->client);
+	strcpy(l_pro_cracctent_struct_h.deal_ident,p_iv_cheque_struct->client);
+
+	/* Bageshri HB_IV_005 START */
+	strcpy(l_pro_dracctent_struct_h.leg_ind,l_pro_cracctent_struct_h.inden_num);
+	strcpy(l_pro_cracctent_struct_h.leg_ind,l_pro_dracctent_struct_h.inden_num);
+	/* Bageshri HB_IV_005 END */
+
+
+	if (!APL_DOUBLE_EQUAL(l_ccredit_ind,l_dcredit_ind) )
+	{
+		fprintf(fl_userlog,"Debit controls are not equal to Credit controls for the acccount %s \n",p_iv_cheque_struct->client);
+		APL_GOBACK_FAIL
+	}
+
+	*dcredit_ind = *dcredit_ind + lamountpay;
+	*ccredit_ind = *ccredit_ind + lamountrec;
+        
+	*cacredit_ind = *cacredit_ind + int_cr_account;
+	*dacredit_ind = *dacredit_ind + int_dr_account;
+
+
+	if ((*p_genbatchno) == 1)
+	{
+		
+		if (APL_FAILURE == IV_Proc_GenBatchNoFn(h_proc_num,l_debug_info_ptr))
+		{
+			fprintf(fl_userlog,"Failed to generate batch number \n");
+			
+			CO_ProcMonitor(APL_OUT_FILE,"Generation of Batch Number failed\n",NULL,NULL);
+         
+			*int_p_retstat = IV_CRITCAL_ERROR_IND;
+			APL_GOBACK_FAIL
+		}
+
+		strcpy(p_batch_no,h_proc_num);
+		printf("the batch number returned is %s\n",p_batch_no);
+
+	}
+
+	Alert("The Batch number outside loop  returned is |%s|\n",p_batch_no);
+	strcpy(l_pro_dracctent_struct_h.proc_num,p_batch_no);
+	strcpy(l_pro_cracctent_struct_h.proc_num,p_batch_no);
+
+	if( l_taxCondExists )
+	{
+		//strcpy(l_pro_dracctent_struct_h.description,l_iv_clt_setup_struct.spl_clt_cd);//shailesh ISKB-430-07
+		strcpy(l_pro_dracctent_struct_h.deal_cd,"523"); 
+		strcpy(l_pro_dracctent_struct_h.curr_cd,chr_l_sys_bill_glcode);
+	
+		if( !strcmp(chr_fcyinpay,"F") )   
+		{
+			lamountpay = p_iv_cheque_struct->conf_amt;
+			dbl_famountpay = lamountpay / h_ae_rate2;
+		}
+		else
+		{
+			dbl_famountpay = p_iv_cheque_struct->conf_amt;
+			lamountpay = dbl_famountpay * h_ae_rate2;
+		}
+      CO_Round(dbl_famountpay,int_l_pay_decimallen,&f_famountpay);
+      CO_Round(lamountpay,int_l_pay_decimallen,&f_lamountpay);
+		l_pro_dracctent_struct_h.fccy_amt = f_famountpay;
+		l_pro_dracctent_struct_h.lcl_amount = f_lamountpay;
+		l_pro_dracctent_struct_h.exchg_rt = h_ae_rate2;
+		l_pro_dracctent_struct_h.report_amt = f_famountpay;
+		l_pro_dracctent_struct_h.report_clt = f_lamountpay;
+		
+	}
+	if(l_tr_apa_code>0)
+	{
+		strncpy(l_pro_dracctent_struct_h.spl_clt_cd,chr_l_default_glaccount,7);
+		strncpy(l_pro_cracctent_struct_h.spl_clt_cd,chr_l_default_glaccount,7);
+	}
+
+	
+//Narration text
+//shailesh ISKB-430-02-07
+//EXEC SQL SELECT MAP_DESC INTO :l_str_serv_desc FROM PRO_SGENSTAT WHERE MAP_TYPE = 'IV_SERVDET_RECAC' AND MAP_VAL =:p_iv_cheque_struct->service_cd;
+
+EXEC SQL SELECT  GET_NARRATION_CD(:p_iv_cheque_struct->service_cd,'RECEIVABLE')
+	             INTO  :l_str_serv_desc FROM DUAL;
+
+
+Alert("\n__sqlca.sqlcode = [%d]\n",sqlca.sqlcode);
+Alert("\n_shailesh 161007 l_str_serv_desc = [%s]_\n",l_str_serv_desc);  //AIX - Warnings Removal
+
+strcpy(l_pro_dracctent_struct_h.description,l_str_serv_desc);
+
+	    /*shailesh 02-06-2008 changes for date pattern*/
+	 	/*EXEC SQL SELECT 
+			    CASE WHEN LAST_DAY(B_PREV_DATE)-B_PREV_DATE > ABS(B_UPTO_DATE-LAST_DAY(B_PREV_DATE))
+				THEN   TO_CHAR(ADD_MONTHS(B_PREV_DATE,0),'MON - YYYY') 
+				ELSE   TO_CHAR(ADD_MONTHS(B_UPTO_DATE,0),'MON - YYYY') 
+				END  INTO :nar_acc_date        
+				FROM      SYS_IVCONTROLPARAM;*/
+EXEC SQL SELECT CASE WHEN 
+LAST_DAY(TO_DATE(SUBSTR(:p_iv_cheque_struct->bill_date,0,10),'DD/MM/YYYY'))
+- TO_DATE(SUBSTR(:p_iv_cheque_struct->bill_date,0,10),'DD/MM/YYYY')> 15
+THEN
+TO_CHAR(ADD_MONTHS(TO_DATE(SUBSTR(:p_iv_cheque_struct->bill_date,0,10),'DD/MM/YYYY'),-1),'MON - YYYY')
+ELSE TO_CHAR(ADD_MONTHS(TO_DATE(SUBSTR(:p_iv_cheque_struct->bill_date,0,10),'DD/MM/YYYY'),0),'MON - YYYY')
+ END  INTO :nar_acc_date FROM DUAL;
+		 Alert("n --nar_acc_date - = [%s]",nar_acc_date);
+
+strcat(l_pro_dracctent_struct_h.description," FOR ");	//ISKB-1975
+strcat(l_pro_dracctent_struct_h.description,nar_acc_date);
+/*shailesh 02-06-2008 */
+if(l_pro_dracctent_struct_h.lcl_amount < 0)
+	{
+			l_pro_dracctent_struct_h.lcl_amount = l_pro_dracctent_struct_h.lcl_amount*(-1);
+			l_pro_cracctent_struct_h.lcl_amount = l_pro_cracctent_struct_h.lcl_amount*(-1);
+			l_pro_dracctent_struct_h.fccy_amt = l_pro_dracctent_struct_h.fccy_amt*(-1);
+			l_pro_cracctent_struct_h.fccy_amt = l_pro_cracctent_struct_h.fccy_amt*(-1);
+			l_pro_dracctent_struct_h.report_amt = l_pro_dracctent_struct_h.report_amt*(-1);
+			l_pro_cracctent_struct_h.report_amt = l_pro_cracctent_struct_h.report_amt*(-1);
+			l_pro_dracctent_struct_h.report_clt = l_pro_dracctent_struct_h.report_clt*(-1);
+			l_pro_cracctent_struct_h.report_clt = l_pro_cracctent_struct_h.report_clt*(-1);
+			l_pro_dracctent_struct_h.db_cr_ind   = CREDIT_IND_A;
+			l_pro_cracctent_struct_h.db_cr_ind   = DR_CR_IND;
+
+	}
+
+	if (APL_FAILURE == IV_Mod_ActEntNew(&l_pro_dracctent_struct_h,l_debug_info_ptr) )
+	{
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+		APL_GOBACK_FAIL
+	}
+
+	
+
+	if ( l_taxCondExists )
+	{
+		
+	dbl_l_cal_tax = l_iv_clientsetup_struct.comm_tax_amt;
+	l_cr_amount = f_famountpay / ( 1 + (dbl_l_cal_tax)/100 );
+   CO_Round(l_cr_amount,int_l_pay_decimallen,&dbl_fcramount);
+
+	laccamount = dbl_fcramount * h_ae_rate2;
+   CO_Round(laccamount,int_l_pay_decimallen,&f_laccamount);
+
+	dbl_l_cal_taxamount = f_famountpay - dbl_fcramount;
+   CO_Round(dbl_l_cal_taxamount,int_l_pay_decimallen,&dbl_famttax);
+
+	LamtTax = dbl_famttax * h_ae_rate2;
+   CO_Round(LamtTax,int_l_pay_decimallen,&dbl_f_lamttax);
+
+	l_pro_cracctent_struct_h.fccy_amt = dbl_fcramount;
+	l_pro_cracctent_struct_h.exchg_rt = h_ae_rate2;
+	l_pro_cracctent_struct_h.lcl_amount = f_laccamount;
+
+	l_pro_cracctent_struct_h.report_amt = dbl_fcramount;
+	l_pro_cracctent_struct_h.report_clt = f_laccamount;
+
+//	strcpy(l_pro_cracctent_struct_h.description,l_iv_clt_setup_struct.spl_clt_cd);//shailesh ISKB-430-02-07
+	strcpy(l_pro_cracctent_struct_h.deal_cd,"523"); 
+	strcpy(l_pro_cracctent_struct_h.curr_cd,chr_l_sys_bill_glcode);
+
+	}
+//shailesh ISKB-430-02-07
+  strcpy(l_str_serv_desc,APL_NULL_STRING);
+//Narration text 
+//EXEC SQL SELECT MAP_DESC INTO :l_str_serv_desc FROM PRO_SGENSTAT WHERE MAP_TYPE = 'IV_SERVDET_SERVAC' AND MAP_VAL = :p_iv_cheque_struct->service_cd ;
+
+EXEC SQL SELECT GET_NARRATION_CD(:p_iv_cheque_struct->service_cd,'SERVICE')
+						INTO :l_str_serv_desc  FROM DUAL;
+
+
+printf("\n__sqlca.sqlcode = [%d]\n",sqlca.sqlcode);
+//Alert("\n_shailesh 161007 l_str_serv_desc = [%lf]_\n",l_str_serv_desc);Changes done for AIX Migration
+Alert("\n_shailesh 161007 l_str_serv_desc = [%s]_\n",l_str_serv_desc);
+
+strcpy(l_pro_cracctent_struct_h.description,l_str_serv_desc);
+strcat(l_pro_cracctent_struct_h.description," "); 
+strcat(l_pro_cracctent_struct_h.description,nar_acc_date); 
+strcat(l_pro_cracctent_struct_h.description," "); 
+strcat(l_pro_cracctent_struct_h.description,p_iv_cheque_struct->client);
+
+
+	if (APL_FAILURE == IV_Mod_ActEntNew(&l_pro_cracctent_struct_h,l_debug_info_ptr) )
+	{
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+		APL_GOBACK_FAIL
+	}
+
+
+  
+         
+	if ( l_taxCondExists )
+	{
+
+   int_l_new_seq = int_l_new_seq + 1;	
+	sprintf(int_l_seq_num,"%d",(int_l_new_seq));
+	strcpy(l_pro_txacctent_struct_h.inden_num,int_l_seq_num);
+	strcpy(l_pro_txacctent_struct_h.proc_num,p_batch_no);
+	l_pro_txacctent_struct_h.module_ind = APL_ACCTENT_BPYMNT_IND;
+
+	/***** For India Specific By: vinay kalaskar *****************/
+	
+	IF_COND_EXISTS("IV_ACC_CLIENT","FUND_ACC")
+	{
+		strcpy(l_pro_txacctent_struct_h.client,h_tds_pay);
+	}
+	else
+	{
+		strcpy(l_pro_txacctent_struct_h.client, p_iv_client_struct_a->tax_acc);
+	}
+	
+	l_pro_txacctent_struct_h.db_cr_ind   = CREDIT_IND_A;
+	strcpy(l_pro_txacctent_struct_h.brnch_cd,g_mt_commonsys_params_struct_h.brnch_cd);
+	strcpy(l_pro_txacctent_struct_h.val_date,chr_h_date);
+	strcpy(l_pro_txacctent_struct_h.curr_cd,chr_l_dom_glcode);
+
+	strcpy(l_pro_txacctent_struct_h.description,l_iv_clt_setup_struct.spl_clt_cd);
+
+	strcpy(l_pro_txacctent_struct_h.deal_cd,"523"); 
+	strcpy(l_pro_txacctent_struct_h.spl_clt_cd,APL_NULL_STRING);
+	l_pro_txacctent_struct_h.status_ind = APL_ACCTENT_GEN_IND; 
+	l_pro_txacctent_struct_h.rec_refer = APL_ACCTENT_NORMENT;
+	strcpy(l_pro_txacctent_struct_h.proc_dt,chr_h_system_date);
+	l_pro_txacctent_struct_h.report_tax = 0;
+	l_pro_txacctent_struct_h.report_ser = 0;
+	strcpy(l_pro_txacctent_struct_h.deal_ident,APL_NULL_STRING);
+
+	l_pro_txacctent_struct_h.fccy_amt = 0;
+	l_pro_txacctent_struct_h.exchg_rt  = 0;
+	l_pro_txacctent_struct_h.lcl_amount = dbl_f_lamttax;
+	
+	l_pro_txacctent_struct_h.report_amt = dbl_famttax;
+	l_pro_txacctent_struct_h.report_clt = dbl_f_lamttax;
+	l_pro_txacctent_struct_h.rep_exg_rt = l_exae_rate2;
+		
+	if(l_tr_apa_code>0)
+	{
+		strncpy(l_pro_txacctent_struct_h.spl_clt_cd,chr_l_default_glaccount,7);
+	}
+//shailesh ISKB-430-02-07
+strcpy(l_str_serv_desc,APL_NULL_STRING);
+//EXEC SQL SELECT MAP_DESC INTO :l_str_serv_desc FROM PRO_SGENSTAT WHERE MAP_TYPE = 'IV_SERVDET_RECAC'  AND MAP_VAL = :p_iv_cheque_struct->service_cd;
+EXEC SQL SELECT GET_NARRATION_CD(:p_iv_cheque_struct->service_cd,'RECEIVABLE')
+					INTO :l_str_serv_desc FROM DUAL;
+
+printf("\n__sqlca.sqlcode = [%d]\n",sqlca.sqlcode);
+Alert("\n_shailesh 161007 l_str_serv_desc = [%s]_\n",l_str_serv_desc); //AIX - Warnings Removal
+
+strcpy(l_pro_txacctent_struct_h.description,l_str_serv_desc);
+strcat(l_pro_txacctent_struct_h.description," FOR ");//ISKB-1975
+strcat(l_pro_txacctent_struct_h.description,nar_acc_date);//shailesh 161007 
+
+/*shailesh 02-06-2008 */
+if(l_pro_dracctent_struct_h.lcl_amount < 0)
+	{
+		l_pro_txacctent_struct_h.db_cr_ind   = DR_CR_IND;
+	}
+
+	if (APL_FAILURE == IV_Mod_ActEntNew(&l_pro_txacctent_struct_h,l_debug_info_ptr) )
+	{
+      *int_p_retstat = IV_CRITCAL_ERROR_IND;
+		APL_GOBACK_FAIL
+	}
+
+	}
+
+   *p_runseq = int_l_new_seq +1;
+
+	APL_GOBACK_SUCCESS;
+
+	
+
+	RETURN_SUCCESS:
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Exiting out of IV_Proc_PassPayEnt() successfully\n",
+					NULL, NULL);
+	}
+	return (APL_SUCCESS);
+	
+	RETURN_FAILURE:
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Exiting out of IV_Proc_PassPayEnt() unsuccessfully\n",
+					NULL, NULL);
+	}
+
+	return (APL_FAILURE);
+}

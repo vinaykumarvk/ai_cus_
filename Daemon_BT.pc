@@ -1,0 +1,375 @@
+
+#include "stdio_64.h"
+#include <unistd.h>
+/*** AIX Migration Changes -START*/
+/*#include <sys/iso/signal_iso.h>*/
+#if !defined(_AIXVERSION_430) || !defined(_AIXVERSION_431) || !defined(_AIXVERSION_434) || !defined(_AIXVERSION_510) || !defined(_AIXVERSION_520) || !defined(_AIXVERSION_530) || !defined(_AIXVERSION_610)
+   #if defined(OS_LINUX) || defined(OS_SUN)  /*Added by kotubabu for Linux Migration-Start*/
+      #include <bits/signum.h>
+   #elif defined(OS_AIX)
+      #include <sys/iso/signal_iso.h>
+   #endif                                    /*Added by kotubabu for Linux Migration-End*/
+//#include <sys/iso/signal_iso.h>
+#endif
+/*** AIX Migration Changes -END*/
+#include <sys/wait.h>
+#include <ctype.h>
+#include "BT_Common.h"
+EXEC SQL INCLUDE SQLCA;
+
+DEBUG_INFO_STRUCT_H **l_debug_info_ptr ;
+DEBUG_INFO_STRUCT_H         *l_debug_info_struct_h_tmp=NULL;
+
+// AIX -warnings Removal
+int Proc_MarkFail(	char *p_rowid,
+			char *p_error_desc);
+int Proc_MarkSuccess(	char *p_rowid,
+			char *p_return_value);
+
+
+int main(int argc,char **argv)
+{
+
+
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+	struct sqlca sqlca;
+	char	l_rowid[APL_ROWID_LEN];
+	char 	l_param_data[BT_REQ_PARAMDATA_LEN] = APL_NULL_STRING;
+	char 	l_error_desc[BT_REQ_ERRDESC_LEN] = APL_NULL_STRING;
+	char 	l_env_data[BT_REQ_ENVSTR_LEN] = APL_NULL_STRING;
+	char 	l_process_name[BT_PROCESS_NAME_LEN] = APL_NULL_STRING;
+	char 	l_process_key[BT_PROCESS_KEY_LEN] = APL_NULL_STRING;
+	char    l_data_fld_sep_str[BT_DATA_FLD_SEP_LEN] = {DATA_FIELD_SEPRTR,APL_NULL_CHAR};
+
+	short	i_process_name	=	0;
+	short   i_process_key	=	0;
+	short   i_param_data	=	0;
+	short   i_env_data	=	0;
+	short   i_rowid		=	0;
+	short   i_error_desc	=	0;
+	int 	l_status			=	0;
+
+	/*Smita - HDFCCA_027 - For NAme Change Event*/
+	char *chr_l_audit_data 	= APL_NULL_STRING;
+	char chr_l_data_key[100] = APL_NULL_STRING;
+	char chr_h_comments[100] = APL_NULL_STRING;
+	/*Smita - HDFCCA_027 - For NAme Change Event*/
+
+
+        /* Commented For AIX Migration to remove warning -- format '%d' expects type 'int *', but argument 3 has type 'long unsigned int */
+/*****	unsigned long l_sleep_microseconds = 0;
+	unsigned long l_sleep_seconds;*************/
+
+        int l_sleep_microseconds = 0;
+        int l_sleep_seconds = 0;
+
+	/** We can easily redirect the Out Statements **/
+  	FILE  *l_logfile = NULL;
+
+
+	DEBUG_INFO_STRUCT_H *l_debuginfo = (DEBUG_INFO_STRUCT_H *)NULL;
+
+	INTL_ENV_DATA_STRUCT_H *p_intlenv_data_struct_h;
+
+	EXEC SQL END DECLARE SECTION;
+
+
+	if ( ( l_debug_info_struct_h_tmp = (DEBUG_INFO_STRUCT_H *)calloc(1,sizeof(DEBUG_INFO_STRUCT_H)) ) == NULL )
+			 APL_GOBACK_FAIL ;
+
+	if ( ( (l_debug_info_ptr) = (DEBUG_INFO_STRUCT_H **)calloc(1,sizeof(DEBUG_INFO_STRUCT_H *)) ) == NULL )
+			 APL_GOBACK_FAIL ;
+
+	if ( argc != 2)
+	{
+		BT_IF_DEBUG
+			CO_ProcMonitor(l_logfile,"Invalid Sleep Time",NULL,NULL);
+		APL_GOBACK_FAIL
+	}
+	else
+	{
+		fprintf(l_logfile,"\n ******************  Daemon Started With Sleep Time :%s:****************\n",argv[1]);
+		sscanf(argv[1],"%d.%d",&l_sleep_seconds,&l_sleep_microseconds);
+	   l_sleep_microseconds = l_sleep_microseconds * 10000;
+	}
+	/** Get Connection **/
+	if(CO_Get_DBConnect(l_debug_info_ptr) == APL_FAILURE)
+	{
+		BT_IF_DEBUG
+			CO_ProcMonitor(l_logfile,"Returned Failure CO_RtvSysParams",NULL,NULL);
+		APL_GOBACK_FAIL
+	}
+
+	/** Get System Parameters **/
+	if ( CO_RtvSysParams(l_debug_info_ptr) == APL_FAILURE)
+	{
+		BT_IF_DEBUG
+			CO_ProcMonitor(l_logfile,"Returned Failure CO_RtvSysParams",NULL,NULL);
+		APL_GOBACK_FAIL
+	}
+
+	/** Update Daemon Status **/
+	EXEC SQL	UPDATE PRO_DAEMON_STATUS
+				SET STATUS = 1
+				WHERE PROC_NAME = 'Daemon_BT';
+
+	IS_ANY_ORA_ERROR;
+
+	BT_IF_DEBUG
+		CO_ProcMonitor(l_logfile,"\nEntering While Loop",NULL,NULL);
+
+	/** Infinite While loop **/
+	while(APL_TRUE)
+	{
+                fputs("\n",stdin);
+                fflush(stdin);
+
+		if(l_sleep_seconds != 0)
+		{
+			sleep(l_sleep_seconds);
+		}
+		usleep(l_sleep_microseconds);
+
+		memset(l_rowid,APL_NULL_CHAR,sizeof(l_rowid));
+		memset(l_param_data,APL_NULL_CHAR,sizeof(l_param_data));
+		memset(l_env_data,APL_NULL_CHAR,sizeof(l_env_data));
+		memset(l_error_desc,APL_NULL_CHAR,sizeof(l_error_desc));
+
+
+		i_process_name	=	0;
+		i_process_key	=	0;
+		i_env_data		=	0;
+		i_param_data	=	0;
+		i_error_desc	=	0;
+		i_rowid			=	0;
+
+		/** We take the lock on the fresh Record **/
+		EXEC SQL	SELECT	ROWID
+					INTO :l_rowid:i_rowid
+					FROM PRO_REQUEST_BT
+					WHERE	REQ_NUM = (	SELECT MIN(REQ_NUM)
+											FROM PRO_REQUEST_BT
+											WHERE STATUS = '0')
+					AND ROWNUM < 2 FOR UPDATE NOWAIT;
+
+		if (sqlca.sqlcode == -54)
+		{
+			BT_IF_DEBUG
+				CO_ProcMonitor(l_logfile,"Resourse Busy",NULL,NULL);
+			continue;
+		}
+
+		IS_ANY_ORA_ERROR
+		if (sqlca.sqlcode == 1403)
+		{
+			EXEC SQL COMMIT;
+			IS_ANY_ORA_ERROR;
+			continue;
+		}
+
+		/** We Got The Record With 0 Status, Update it to 1 ... So No one else get mess with Us **/
+		EXEC SQL	UPDATE PRO_REQUEST_BT
+					SET STATUS = '1'
+					WHERE ROWID=:l_rowid;
+		IS_ANY_ORA_ERROR
+		EXEC SQL COMMIT;
+		IS_ANY_ORA_ERROR
+
+		/** Lets Get the fresh One's Details **/
+		EXEC SQL SELECT PROCESS_NAME,
+						PROCESS_KEY,
+						ENV_DATA,
+						PARAM_DATA,
+						ERR_DATA
+				INTO	:l_process_name:i_process_name,
+						:l_process_key:i_process_key,
+						:l_env_data:i_env_data,
+						:l_param_data:i_param_data,
+						:l_error_desc:i_error_desc
+				FROM PRO_REQUEST_BT
+				WHERE ROWID=:l_rowid FOR UPDATE NOWAIT;
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"PRO_REQUEST_BT","FATAL ERR","ROWID");
+
+		/** Append Delimiters for Further processing **/
+		strcat(l_env_data,l_data_fld_sep_str);
+		strcat(l_param_data,l_data_fld_sep_str);
+		strcat(l_error_desc,l_data_fld_sep_str);
+
+		p_intlenv_data_struct_h =  (INTL_ENV_DATA_STRUCT_H *)calloc(1,sizeof(INTL_ENV_DATA_STRUCT_H));
+		APL_MALLOC_FAIL(p_intlenv_data_struct_h);
+		memset(p_intlenv_data_struct_h,NULL,sizeof(p_intlenv_data_struct_h));
+
+		if(CO_Rtv_EnvStruct(p_intlenv_data_struct_h,l_env_data))
+		{
+			BT_IF_DEBUG
+				CO_ProcMonitor(l_logfile,"Returned Failure CO_Rtv_EnvStruct",NULL,NULL);
+			APL_GOBACK_FAIL
+		}
+
+
+		if (strlen(l_error_desc) != 0)
+		{
+			if( CO_Rtv_ErrStruct(l_error_desc,l_debug_info_ptr))
+			{
+				BT_IF_DEBUG
+					CO_ProcMonitor(l_logfile,"Returned Failure CO_Rtv_ErrStruct",NULL,NULL);
+				APL_GOBACK_FAIL
+			}
+		}
+
+		/*Smita - HDFCCA_027 - For NAme Change Event*/
+		strcpy(chr_l_data_key,l_process_name);
+		strcpy(chr_h_comments,"Batch Process");
+		/*Smita - HDFCCA_027 - For NAme Change Event*/
+
+
+		/** We have to Process the record when its fired from EOD/BOD ,if the system is online or if its a conversion process**/
+		if(	!strcmp(l_process_name, BT_EOD_SCH_PROG) ||
+			!strcmp(l_process_name, BT_BOD_SCH_PROG)  ||
+			(NON_DCE_APL_IS_ONLINE) ||
+			!strcmp(l_process_name, CONV_SCH_PROG))
+		{
+			INTL_WARNING
+			/** Calling the Start/Restart function **/
+			if(BT_Restart_Process(	l_process_name,
+											l_process_key,
+											l_param_data,
+											&l_status,
+											l_debug_info_ptr,
+											p_intlenv_data_struct_h) == APL_FAILURE)
+			{
+				BT_IF_DEBUG
+					CO_ProcMonitor(l_logfile,"Returned from CO_ReStartProg with Failure",NULL,NULL);
+				Proc_MarkFail(l_rowid, l_error_desc);
+			}
+			else
+			{
+				BT_IF_DEBUG
+					CO_ProcMonitor(l_logfile,"Returned from CO_ReStartProg with Success\n",NULL,p_intlenv_data_struct_h);
+
+
+	            if(l_status != BT_START)
+	            {
+	               if(l_status == BT_CANNOT_EXECUTE)
+	               {
+  					BT_IF_DEBUG
+						CO_ProcMonitor(l_logfile,"A Copy Of Program Still Running",NULL,NULL);
+
+	               }
+	               else if(l_status == BT_CONFLICT)
+	               {
+  					BT_IF_DEBUG
+						CO_ProcMonitor(l_logfile,"Conflict Program Running",NULL,NULL);
+
+	               }
+	               else if(l_status == BT_PREDECESSOR)
+	               {
+  					BT_IF_DEBUG
+						CO_ProcMonitor(l_logfile,"Pre-Process Not Executed As Yet",NULL,NULL);
+	               }
+	               else if(l_status == BT_RESTART)
+	               {
+  					BT_IF_DEBUG
+						CO_ProcMonitor(l_logfile,"Successfully Re-Started Execution",NULL,NULL);
+
+	               }
+	               else
+	               {
+   					BT_IF_DEBUG
+						fprintf(l_logfile,"Some Error During Execution State Is :%d:",l_status );
+
+	               }
+
+					Proc_MarkSuccess(l_rowid,l_error_desc);
+	            }
+	            else if(l_status == BT_START)
+	            {
+						Proc_MarkSuccess(l_rowid,l_error_desc);
+						BT_IF_DEBUG
+							CO_ProcMonitor(l_logfile,"Successfully Started execution",NULL,NULL);
+	            }
+			}
+			S_NON_DCE_ERASE_DUMMY_WARNING;
+		}
+		else
+		{
+			BT_IF_DEBUG
+				CO_ProcMonitor(l_logfile,"System Is Not Online",NULL,NULL);
+			Proc_MarkSuccess(l_rowid, l_error_desc);
+		}
+		APL_FREE(p_intlenv_data_struct_h);
+		CO_FreeErrLst(l_debug_info_ptr);
+	}
+
+   APL_GOBACK_SUCCESS;
+
+RETURN_SUCCESS:
+
+	EXEC SQL COMMIT ;
+	BT_IF_DEBUG
+		CO_ProcMonitor(l_logfile,"Exiting successfully  out of Batch Daemon\n",NULL,NULL);
+    exit(0);
+
+RETURN_FAILURE:
+	EXEC SQL ROLLBACK;
+	BT_IF_DEBUG
+		CO_ProcMonitor(l_logfile,"Exiting unsuccesfully out of Batch Daemon\n",l_debug_info_ptr,NULL);
+	exit(-1);
+}
+
+int Proc_MarkSuccess(	char *p_rowid,
+									char *p_return_value)
+{
+	FILE *l_logfile = APL_OUT_FILE;
+
+	EXEC SQL	UPDATE PRO_REQUEST_BT
+				SET		STATUS = '2',
+						ERR_DATA='SUCCESS'||:p_return_value
+				WHERE	ROWID=:p_rowid;
+	IS_ANY_ORA_ERROR;
+
+	EXEC SQL COMMIT ;
+	IS_ANY_ORA_ERROR;
+
+	S_NON_DCE_ERASE_DUMMY_WARNING;
+
+
+RETURN_SUCCESS :
+	APL_FUNCTION_RET_SUCCESS(l_logfile)
+
+RETURN_FAILURE :
+	APL_FUNCTION_RET_FAILURE(l_logfile)
+}
+
+int Proc_MarkFail(	char *p_rowid,
+							char *p_error_desc)
+{
+
+	char l_error_desc[BT_REQ_ERRDESC_LEN];
+	FILE *l_logfile = APL_OUT_FILE;
+	EXEC SQL ROLLBACK ;
+	IS_ANY_ORA_ERROR;
+
+	S_NON_DCE_ERASE_DUMMY_WARNING;
+	memset(l_error_desc,APL_NULL_CHAR,sizeof(l_error_desc));
+	sprintf(l_error_desc,"%d%c%d%c%s%c%s%c%s%c%s%c%d%c%d%c%d%c%s%c%c",ERROR,ERR_FLD_SEP,12,ERR_FLD_SEP,APL_NULL_STRING,ERR_FLD_SEP,APL_NULL_STRING,ERR_FLD_SEP,APL_NULL_STRING,ERR_FLD_SEP,"Batch_Dmn.pc",ERR_FLD_SEP,__LINE__,ERR_FLD_SEP,3,ERR_FLD_SEP,0,ERR_FLD_SEP,p_error_desc,ERR_FLD_SEP,ERR_REC_SEP);
+	EXEC SQL	UPDATE	PRO_REQUEST_BT
+				SET		STATUS = '3',
+						ERR_DATA=:l_error_desc
+				WHERE	ROWID	=:p_rowid;
+
+	IS_ANY_ORA_ERROR;
+
+	EXEC SQL COMMIT;
+	IS_ANY_ORA_ERROR;
+	S_NON_DCE_ERASE_DUMMY_WARNING;
+
+RETURN_SUCCESS :
+	APL_FUNCTION_RET_SUCCESS(l_logfile)
+
+RETURN_FAILURE :
+	CO_ProcMonitor(l_logfile,"Unsuccessfully Out",l_debug_info_ptr,NULL);
+  APL_FUNCTION_RET_FAILURE(l_logfile)//AIX Warning Removal
+}

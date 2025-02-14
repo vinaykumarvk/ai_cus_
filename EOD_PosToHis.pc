@@ -1,0 +1,519 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+#include "CO_HostStructdef.h" 
+EXEC SQL INCLUDE SQLCA.H;
+
+#define FILE_NAME_LEN  13
+#define  SEPARATOR 		     "|"
+
+main(int argc,char **argv)
+{
+	struct sqlca sqlca;
+   DEBUG_INFO_STRUCT_H *l_debug_info_ptr = (DEBUG_INFO_STRUCT_H *) NULL;
+	INTL_ENV_DATA_STRUCT_H l_intl_env_data_h;
+ 	FILE *l_finifile;
+ 	FILE *l_logfile    = NULL;
+
+   int int_l_retval=0;
+	int int_num = 0;
+
+	char **temp;
+	char *y;
+   char chr_uname[APL_USERID_LEN] = APL_NULL_STRING;
+   char chr_passwd[APL_PASSWD_LEN] = APL_NULL_STRING;
+   char chr_custody_id_b[APL_USERID_LEN] = APL_NULL_STRING;
+	char chr_l_logdir[PATH_LENGTH] = APL_NULL_STRING;
+	char chr_l_inifile[PATH_LENGTH] = APL_NULL_STRING;
+   char chr_l_logfile_name[FILE_NAME_LEN] = APL_NULL_STRING;
+
+   EXEC SQL VAR chr_uname IS STRING;
+   EXEC SQL VAR chr_passwd IS STRING;
+
+	sqlca.sqlcode = 0;
+
+	memset(&l_intl_env_data_h, NULL, sizeof(INTL_ENV_DATA_STRUCT_H));
+
+	strcpy(chr_l_inifile,getenv("INTL_ROOT_PATH"));
+	strcat(chr_l_inifile,"intl_sun.cfg");
+
+   fprintf(APL_OUT_FILE, "\n\tEntered MAIN. Going for Filename, File allocation etc\n");
+
+	if ( ( l_finifile=fopen(chr_l_inifile,"r") ) == NULL)
+	{
+            APL_GOBACK_FAIL
+	}
+
+	
+
+   APL_FETCH_DB_LOGIN_DETAILS(l_finifile, chr_custody_id_b, chr_uname, chr_passwd, APL_OUT_FILE, &l_debug_info_ptr)
+
+   EXEC SQL CONNECT :chr_uname IDENTIFIED BY :chr_passwd;
+
+   if (sqlca.sqlcode)
+   {
+            APL_GOBACK_FAIL
+   }
+   else
+   {
+
+	
+
+   strcpy(chr_l_inifile,getenv("INTL_ROOT_PATH"));
+   strcat(chr_l_inifile,"intl_sun.cfg");
+
+   if ( ( l_finifile=fopen(chr_l_inifile,"r") ) == NULL)
+   {
+            APL_GOBACK_FAIL
+   }
+
+  if ( APL_FAILURE == CO_ReadToken(l_finifile,
+               "INTL_LOG_PATH",
+               chr_l_logdir,
+               &l_debug_info_ptr ))
+   {
+            APL_GOBACK_FAIL
+   }
+
+      if (APL_FAILURE == CO_Rtv_RptFileName( "3S", 
+            APL_LOGFILE_DESC,
+            100,
+            argv[5],
+            argv,
+            &l_logfile,
+            &l_debug_info_ptr ))
+      {
+            APL_GOBACK_FAIL
+      }
+      
+
+      EXEC SQL COMMIT WORK;
+
+      if (sqlca.sqlcode)
+      {
+         CO_ProcMonitor(l_logfile, "Could not commit after opening chr_log file", NULL, NULL);
+         CO_Proc_RptClose(l_logfile, &l_debug_info_ptr);
+            APL_GOBACK_FAIL
+      }
+
+		
+
+		strcpy(l_intl_env_data_h.usr, argv[3]);
+		strcpy(l_intl_env_data_h.h_mode, argv[4]);
+		strcpy(l_intl_env_data_h.processtion, argv[5]);
+		strcpy(l_intl_env_data_h.auth_req, argv[6]);
+		strcpy(l_intl_env_data_h.subprocess, argv[7]);
+		strcpy(l_intl_env_data_h.h_process, argv[8]);
+
+		
+
+		if (APL_FAILURE == CO_RtvSysParams(&l_debug_info_ptr))
+		{
+				fprintf(l_logfile, "Unsuccessful in GetSystemParams Exiting from main\n");
+         CO_Proc_RptClose(l_logfile, &l_debug_info_ptr);
+            APL_GOBACK_FAIL
+		}
+
+			#ifdef SYS_DEBUG
+				fprintf(l_logfile, "Successfully got Sys Params\n");
+				fprintf(l_logfile, "userid   : (%s)\n",l_intl_env_data_h.usr);
+				fprintf(l_logfile, "mode     : (%s)\n",l_intl_env_data_h.h_mode);
+				fprintf(l_logfile, "function : (%s)\n",l_intl_env_data_h.processtion);
+				fprintf(l_logfile, "auth_req : (%s)\n",l_intl_env_data_h.auth_req);
+				fprintf(l_logfile, "subfun   : (%s)\n",l_intl_env_data_h.subprocess);
+				fprintf(l_logfile, "action   : (%s)\n",l_intl_env_data_h.h_process);
+				fprintf(l_logfile, "About to call Market Price updation Fn\n");
+			#endif
+
+			int_l_retval = CR_Proc_PosToHisMove (argv,l_logfile,&l_debug_info_ptr);
+
+      	if ( int_l_retval == APL_FAILURE )
+      	{
+				fprintf(l_logfile, "Unsuccessful in CR_Proc_PosToHisMove Exiting from main\n");
+         	CO_Proc_RptClose(l_logfile, &l_debug_info_ptr);
+            APL_GOBACK_FAIL
+      	}
+      	else
+      	{
+				fprintf(l_logfile, "CDBMvPosHisFn Successful , Exiting from main\n");
+         	CO_Proc_RptClose(l_logfile, &l_debug_info_ptr);
+
+        	 	EXEC SQL UPDATE SYS_BATCHPROC
+         		SET  status = 'completed'
+         			WHERE PROCESS_NAME=:argv[0]
+         				AND   PROC_INIT=:argv[1]
+         				AND   STARTDATE=:argv[2]
+         				AND   STATUS='started';
+
+         	EXEC SQL COMMIT WORK RELEASE;
+            APL_GOBACK_SUCCESS
+      	}
+   }
+
+  RETURN_SUCCESS : exit(0);
+  RETURN_FAILURE : exit(-1);
+}
+
+int CR_Proc_PosToHisMove(char **argv,FILE *l_logfile,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+  struct sqlca sqlca;
+	char        chr_mainfuncarea[APL_MAINFUNCAREA_LEN]; 
+   char        chr_l_condid[APL_CONDID_LEN]; 
+   short       int_l_condexists;  
+
+   int int_l_eod_run =0;
+	int int_l_maparch_def =0; // Amit Nair (issue log 263)
+	int int_l_matcharch_def=0; // Amit Nair (issue log 263)
+	int int_l_map_arch=0; // Amit Nair (issue log 263)
+	int int_l_match_arch=0; // Amit Nair (issue log 263)
+	int int_l_interface_log=0; // Added by Dipak for Accounting entries optimization
+
+   char                  chr_g_restart_data[APL_RESTARTDATA_LENGTH];
+    short                 g_restart_data_i;
+
+EXEC SQL VAR chr_g_restart_data is string;
+
+	fprintf(l_logfile, "Entered Function CR_Rtv_MPRst\n");
+
+  EXEC SQL SELECT PROCESSING_STATUS INTO :chr_g_restart_data:g_restart_data_i
+     FROM SYS_BATCHPROC
+     WHERE PROCESS_NAME=:argv[0]
+        AND   PROC_INIT=:argv[1]
+        AND   STARTDATE=:argv[2]
+        AND   STATUS='started'
+     FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+  if(APL_ZERO_RESULT_SET)
+   {
+      CO_ProcMonitor(l_logfile,"E:No entry in batch_in_proc\n",NULL,NULL);
+      APL_GOBACK_FAIL
+   }
+
+  IS_ANY_ORA_ERROR
+
+  fprintf(l_logfile, "CDBMvPosHisFn successfully locked the batch record\n");
+
+  sqlca.sqlcode =0;
+
+  EXEC SQL SELECT NVL(COUNT(*),0) INTO :int_l_eod_run
+			FROM DL_HISSAFEK WHERE 
+          POSIT_DATE = (SELECT SYS_DATE
+							FROM PRO_SYS_DATE);
+							
+  if ((sqlca.sqlcode != 0) && (sqlca.sqlcode != 1403))
+		{
+	   fprintf(l_logfile, "SQL ERROR ! Database l_debuglist cannot update  : %d\n",sqlca.sqlcode);
+
+	   APL_GOBACK_FAIL
+		}
+
+
+  if (int_l_eod_run > 0)
+		{
+		
+   
+	   fprintf(l_logfile, "E O D Move positions to history already run!\n");
+
+	   APL_GOBACK_FAIL
+		}
+
+  sqlca.sqlcode =0;
+  
+  
+ 
+	/*	Addition START_SAFEK for HDFC UAT Fix by Rohit	*/
+   EXEC SQL DELETE DL_SAFEK
+         WHERE  ( SAFEKEEP_POS =0 OR SAFEKEEP_POS IS NULL )
+            AND ( NVALRECEIVE =0 OR NVALRECEIVE IS NULL)
+            AND ( NVALDELIVER =0 OR NVALDELIVER IS NULL)
+            AND ( VAL_REC =0 OR VAL_REC IS NULL)
+            AND ( VAL_DEL =0 OR VAL_DEL IS NULL)
+            AND ( DP_DEL =0 OR DP_DEL IS NULL)
+            AND ( DP_REC =0 OR DP_REC IS NULL)
+            AND ( START_SAFEK =0 OR START_SAFEK IS NULL);
+
+
+  IS_ANY_ORA_ERROR
+
+  sqlca.sqlcode =0;
+
+	EXEC SQL INSERT INTO DL_HISSAFEK
+    (SELECT a.instr_code,
+         b.SYS_DATE,
+         a.location_cd,
+         a.client,
+         a.STATUS,
+         a.START_SAFEK,
+         a.safekeep_pos,
+         a.NVALRECEIVE,
+         a.NVALDELIVER,
+         a.VAL_REC,
+         a.VAL_DEL,
+         a.DP_REC,
+         a.DP_DEL,
+         a.BLOCK_TYPE
+  FROM DL_SAFEK a, PRO_SYS_DATE b);
+
+  if ((sqlca.sqlcode != 0) && (sqlca.sqlcode != 1403))
+      {
+      fprintf(l_logfile, "SQL ERROR ! Database l_debuglist cannot update  : %d\n",sqlca.sqlcode);
+
+      APL_GOBACK_FAIL
+      }
+	
+	
+	strcpy(chr_mainfuncarea, "TRD_PMT_CHK");
+   strcpy(chr_l_condid, "RU_REG_CHK");
+   int_l_condexists = 0;
+
+   if ( APL_SUCCESS == CO_Chk_CntryEnabled( chr_mainfuncarea,
+                              chr_l_condid,
+                             &int_l_condexists,
+                              l_debug_info_ptr ))
+   {
+       if ( int_l_condexists > 0 )
+       {
+
+			
+			
+
+			EXEC SQL INSERT INTO DL_RUHISSAFEK
+	 		  (SELECT b.SYS_DATE,
+      	   a.client,
+         	a.instr_code,
+         	a.location_cd,
+         	a.ST_REG_NO,
+         	a.safekeep_pos,
+         	a.VAL_REC,
+         	a.VAL_DEL
+   			FROM DL_RUSAFEK a, PRO_SYS_DATE b);
+
+ 		  if ((sqlca.sqlcode != 0) && (sqlca.sqlcode != 1403))
+      	{
+      		fprintf(l_logfile, "SQL ERROR ! Database l_debuglist cannot update  : %d\n",sqlca.sqlcode);
+
+ 		     APL_GOBACK_FAIL
+      	}
+		}
+	}
+	
+  
+		
+       EXEC SQL DELETE FROM DL_DEALRST 
+       WHERE RESET_DT <= (SELECT SYS_DATE FROM PRO_SYS_DATE)
+       AND INSTR(NVL(MSG_STAT,' '),'R')>0 
+		 AND MOD_HISPOS_IND IS NULL; 
+
+		 IS_ANY_ORA_ERROR
+	/*
+	Author	: Amit Nair
+	Date		: 01/02/2008
+	Purpose	: To Delete data from GFU_ERROR_DET ( Start Issue Log 263 )
+	*/
+
+	EXEC SQL DELETE FROM GFU_ERROR_DET
+	WHERE TRUNC(START_DATE) <= ( SELECT TRUNC(SYS_DATE) -1 FROM PRO_SYS_DATE);
+	
+	IS_ANY_ORA_ERROR
+
+	if ((sqlca.sqlcode != 0) && (sqlca.sqlcode != 1403))
+	{
+		fprintf(l_logfile, "SQL ERROR ! Database l_debuglist cannot update  : %d\n",sqlca.sqlcode);
+		APL_GOBACK_FAIL
+	}
+
+	/*
+	Author	: Amit Nair
+	Date		: 01/02/2008
+	Purpose	: Mapping and Matching data is moved to Archival table ( Issue Log 263 )
+	*/
+
+	// [Start] moving BCN Mapping data into archival data ( where only one weeks data is maintained )
+
+	EXEC SQL SELECT to_number(FIELD_VAL)
+   INTO :int_l_map_arch
+	FROM PRO_GSSPLVAL
+   WHERE MAIN_FUN='ARCHIVAL'
+   and SUB_PROCESS='DL_BCNMAP_RPT_ARCH'
+   and NATION=:g_mt_commonsys_params_struct_h.nation_code;
+            
+   IS_ANY_ORA_ERROR
+
+	if ( APL_ZERO_RESULT_SET)
+	{
+		EXEC SQL SELECT to_number(FIELD_VAL)
+	   INTO :int_l_maparch_def
+		FROM PRO_GSSPLVAL
+	   WHERE MAIN_FUN='ARCHIVAL'
+		and SUB_PROCESS='DL_MAPARCH_DEFAULT'
+		and NATION=:g_mt_commonsys_params_struct_h.nation_code;
+		
+		IS_ANY_ORA_ERROR
+		
+		if ( APL_ZERO_RESULT_SET)
+		{
+			int_l_map_arch = 7;
+		}
+		else
+		{
+			int_l_map_arch = int_l_maparch_def;
+		}
+	}
+	
+	EXEC SQL INSERT INTO DL_BCNMAP_RPT_ARCH (
+	SELECT * FROM DL_BCNMAP_RPT WHERE TRUNC(REPORT_DATE) <=
+	(SELECT TRUNC(SYS_DATE) - :int_l_map_arch FROM PRO_SYS_DATE)	);
+
+	IS_ANY_ORA_ERROR
+
+	if ((sqlca.sqlcode != 0) && (sqlca.sqlcode != 1403))
+	{
+		fprintf(l_logfile, "SQL ERROR ! Database l_debuglist cannot update  : %d\n",sqlca.sqlcode);
+		APL_GOBACK_FAIL
+	}
+
+	EXEC SQL DELETE FROM DL_BCNMAP_RPT WHERE TRUNC(REPORT_DATE) <=
+	(SELECT TRUNC(SYS_DATE) - :int_l_map_arch FROM PRO_SYS_DATE);
+
+	IS_ANY_ORA_ERROR
+
+	if ((sqlca.sqlcode != 0) && (sqlca.sqlcode != 1403))
+	{
+		fprintf(l_logfile, "SQL ERROR ! Database l_debuglist cannot update  : %d\n",sqlca.sqlcode);
+		APL_GOBACK_FAIL
+	}
+	// [End] BCN Mapping report archival and deletion code
+
+	// [Start] moving data of matching report into archival table
+
+	EXEC SQL SELECT to_number(FIELD_VAL)
+   INTO :int_l_match_arch
+	FROM PRO_GSSPLVAL
+   WHERE MAIN_FUN='ARCHIVAL'
+   and SUB_PROCESS='DL_MATCH_RPT_ARCH'
+   and NATION=:g_mt_commonsys_params_struct_h.nation_code;
+            
+   IS_ANY_ORA_ERROR
+
+	if ( APL_ZERO_RESULT_SET)
+	{
+		EXEC SQL SELECT to_number(FIELD_VAL)
+	   INTO :int_l_matcharch_def
+		FROM PRO_GSSPLVAL
+	   WHERE MAIN_FUN='ARCHIVAL'
+		and SUB_PROCESS='DL_MATCHARCH_DEFAULT'
+		and NATION=:g_mt_commonsys_params_struct_h.nation_code;
+		
+		IS_ANY_ORA_ERROR
+		
+		if ( APL_ZERO_RESULT_SET)
+		{
+			int_l_match_arch = 7;
+		}
+		else
+		{
+			int_l_match_arch = int_l_matcharch_def;
+		}
+	}
+
+	EXEC SQL INSERT INTO DL_MATCH_RPT_ARCH
+	( SELECT * FROM DL_MATCH_RPT A WHERE EXISTS 
+	( SELECT B.SETTLEMENT_NO FROM DL_DEAL B WHERE A.SETTLEMENT_NO = B.SETTLEMENT_NO
+	AND TRUNC(B.DEAL_DATE) <= (SELECT TRUNC(SYS_DATE) - :int_l_match_arch FROM PRO_SYS_DATE)));
+
+	IS_ANY_ORA_ERROR
+	
+	if ((sqlca.sqlcode != 0) && (sqlca.sqlcode != 1403))
+	{
+		fprintf(l_logfile, "SQL ERROR ! Database l_debuglist cannot update  : %d\n",sqlca.sqlcode);
+		APL_GOBACK_FAIL
+	}
+
+	EXEC SQL DELETE FROM DL_MATCH_RPT A WHERE EXISTS 
+	( SELECT B.SETTLEMENT_NO FROM DL_DEAL B WHERE A.SETTLEMENT_NO = B.SETTLEMENT_NO
+	AND TRUNC(B.DEAL_DATE) <= (SELECT TRUNC(SYS_DATE) - :int_l_match_arch FROM PRO_SYS_DATE) AND A.EXCH_CODE=B.EXCH_CODE);
+	/*above query changed by sudhanshu for settlement number clash with NSE BSE*/
+
+	IS_ANY_ORA_ERROR
+	
+	if ((sqlca.sqlcode != 0) && (sqlca.sqlcode != 1403))
+	{
+		fprintf(l_logfile, "SQL ERROR ! Database l_debuglist cannot update  : %d\n",sqlca.sqlcode);
+		APL_GOBACK_FAIL
+	}
+
+	// [End] moving data of matching report into archival table
+
+	/* END OF ISSUE LOG 263 */	
+	
+	/* Added by Dipak for Accounting entries passing optimization Start*/
+	IF_COND_EXISTS("LIEN_INTERFACE_ARCH","YES")
+	{
+		Alert("Archival starting for DL_LIEN_INTERFACE_LOG.");
+		EXEC SQL SELECT to_number(FIELD_VAL)
+		INTO :int_l_interface_log
+		FROM PRO_GSSPLVAL
+		WHERE MAIN_FUN='LIEN_INTERFACE_LOG'
+		and SUB_PROCESS='ARCHIVAL_DAYS'
+		and NATION=:g_mt_commonsys_params_struct_h.nation_code;
+			
+		IS_ANY_ORA_ERROR
+
+		if ( APL_ZERO_RESULT_SET)
+		{
+			int_l_interface_log = 10;
+		}
+		
+		EXEC SQL INSERT INTO DL_LIEN_INTERFACE_LOG_ARCH
+		( 	SELECT * FROM DL_LIEN_INTERFACE_LOG 
+			WHERE REQUEST_DTTIME <= (SELECT SYS_DATE - :int_l_interface_log FROM PRO_SYS_DATE ));
+
+		IS_ANY_ORA_ERROR
+		
+		if ((sqlca.sqlcode != 0) && (sqlca.sqlcode != 1403))
+		{
+			fprintf(l_logfile, "SQL ERROR ! Database l_debuglist cannot update  : %d\n",sqlca.sqlcode);
+			APL_GOBACK_FAIL
+		}
+
+		EXEC SQL DELETE FROM DL_LIEN_INTERFACE_LOG  
+		WHERE REQUEST_DTTIME <= (SELECT SYS_DATE - :int_l_interface_log FROM PRO_SYS_DATE );
+
+		IS_ANY_ORA_ERROR
+		
+		if ((sqlca.sqlcode != 0) && (sqlca.sqlcode != 1403))
+		{
+			fprintf(l_logfile, "SQL ERROR ! Database l_debuglist cannot update  : %d\n",sqlca.sqlcode);
+			APL_GOBACK_FAIL
+		}
+		Alert("Archival completed for DL_LIEN_INTERFACE_LOG.");
+	}
+	/* Added by Dipak for Accounting entries passing optimization End*/
+
+
+ APL_GOBACK_SUCCESS
+
+  RETURN_SUCCESS :
+	{
+	EXEC SQL COMMIT WORK;
+	fprintf(l_logfile, "Record Committed. \n E O D Move positions to history Succeeded!\n");
+	return;
+	}
+  RETURN_FAILURE :
+	{
+	EXEC SQL ROLLBACK WORK;
+	fprintf(l_logfile, "Rolling Back. \n E O D Move positions to history failed!\n");
+	return;
+	}
+}
+

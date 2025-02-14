@@ -1,0 +1,794 @@
+
+
+
+
+
+
+#define APL_ONLINE_FLG 'O'
+#include "CR_Common.h"
+#include "Intellect_Interface.h"
+#include "Intellect_Error.h"
+#include "CO_Commdef.h"
+#include "Intellect_Common.h"
+#include "BT_Common.h"
+
+EXEC SQL INCLUDE SQLCA.H;
+
+
+
+static int	CO_Rtv_NextBussDt(const	char		*p_tmp_date,
+								char				*p_out_date,
+								DEBUG_INFO_STRUCT_H   **l_debug_info_ptr
+								)
+{
+	struct sqlca sqlca;	
+
+	char	chr_out_date[APL_DATE_LEN]	=	APL_NULL_STRING;
+	char chr_p_inp_date[APL_DATE_LEN]=APL_NULL_STRING;
+	short	i_out_date	=	0;
+	EXEC SQL VAR p_tmp_date IS STRING;
+	EXEC SQL VAR chr_p_inp_date IS STRING;
+	sprintf(strcpy(chr_p_inp_date,p_tmp_date)+11,"12:00:00");
+
+	EXEC SQL select MAX(H_DATE) + 1
+	into	:chr_out_date:i_out_date
+	from MT_HOLIDAY
+	where STATUS='AA'/*Smita - Changed Col NAme - HDFCCA Base Version*/
+	And bank_ind='Y'
+	connect by prior H_DATE + 1 = H_DATE
+				and prior STATUS = STATUS
+				and prior BANK_IND = BANK_IND
+	start with H_DATE=:chr_p_inp_date and STATUS='AA'
+	AND BANK_IND = 'Y';
+
+	IS_ANY_ORA_ERROR
+
+	if	(i_out_date	==	-1)
+	{
+		strcpy(chr_out_date,chr_p_inp_date);
+	}
+
+	strcpy(p_out_date,chr_out_date);
+	
+		APL_GOBACK_SUCCESS
+      RETURN_SUCCESS  :
+      {
+			return (APL_SUCCESS);
+      }
+      RETURN_FAILURE  :
+      {
+         return (APL_FAILURE);
+		}
+}
+
+
+
+int CO_Chk_LstDtMnth(	char *currdate,
+							int *int_result,
+							DEBUG_INFO_STRUCT_H **l_debug_info_ptr) 
+{
+
+	struct sqlca sqlca;	
+
+	char chr_nextdate[APL_DATE_LEN];
+	char chr_tempdate[APL_DATE_LEN];
+	int h_res;
+	EXEC SQL VAR chr_nextdate IS STRING;
+	EXEC SQL VAR currdate IS STRING;
+	EXEC SQL VAR chr_tempdate IS STRING;
+	EXEC SQL SELECT TO_DATE(:currdate)+1 INTO :chr_tempdate
+	FROM DUAL;
+	IS_ANY_ORA_ERROR
+	if(CO_Rtv_NextBussDt(chr_tempdate,chr_nextdate,l_debug_info_ptr)==APL_FAILURE)
+		APL_GOBACK_FAIL
+	EXEC SQL SELECT LAST_DAY(TO_DATE(:currdate)) INTO :chr_tempdate
+	FROM DUAL;
+	IS_ANY_ORA_ERROR;
+	strncpy(chr_tempdate+11, "12:00:00", 8);
+	chr_tempdate[APL_DATE_LEN -1]=APL_NULL_CHAR;
+	EXEC SQL SELECT TO_DATE(:chr_tempdate)-TO_DATE(:chr_nextdate) INTO :h_res
+	FROM DUAL;
+	IS_ANY_ORA_ERROR
+	if(h_res<0){
+		*int_result=APL_SUCCESS;
+		}
+	else{
+		*int_result=APL_FAILURE;
+		}
+	RETURN_SUCCESS:
+	{
+		return APL_SUCCESS;
+	}
+	RETURN_FAILURE:
+	{
+		return APL_FAILURE;
+	}
+}
+
+
+
+int CO_Pro_EODPolicer(	FILE *p_logfile,
+							INTL_ENV_DATA_STRUCT_H *p_intl_envdatastruct_h,
+							DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	
+
+	struct sqlca sqlca;	
+	int 		int_l_h_count								= 0;
+	int 		int_l_flg										= 0;
+	short		l_i_count								= 0;
+	char		chr_l_buf[50]								= APL_NULL_STRING;
+	char		chr_l_date[APL_DATE_LEN]					= APL_NULL_STRING;
+	char		chr_l_h_instrcode_A[APL_INSTRUMENTCODE_LEN]			= APL_NULL_STRING;
+	char		chr_l_auth_status[RECORD_STAT_LEN]	= APL_NULL_STRING;
+
+	sqlca.sqlcode = 0;
+
+	
+
+	#ifdef SYS_DEBUG
+		printf( "Entered Function CO_Pro_EODPolicer\n"); 
+	#endif
+	
+
+
+	
+
+	if (APL_FAILURE == CO_RtvSysDt(chr_l_date, l_debug_info_ptr))
+	{
+		APL_GOBACK_FAIL
+	}
+
+	if (APL_FAILURE == CO_Chk_LstDtMnth(	chr_l_date,
+													&int_l_flg,
+													l_debug_info_ptr ))
+	{
+		CO_ProcMonitor(p_logfile, "S_IsLastDate Returned failure : exiting ...\n", NULL, NULL);
+		APL_GOBACK_FAIL
+	}
+
+	/* 29/03/2007 KOTAK UAT EOD-Changes PRICE DATE <= SYSDATE    AmitB */
+		
+	if (int_l_flg == APL_SUCCESS)
+	{
+		strcpy(chr_l_auth_status, STATUS_AUTH);
+
+		EXEC SQL DECLARE missmktprccurs CURSOR FOR
+			SELECT INSTR_CODE FROM MT_INSTRUMENT 
+			WHERE	 INSTR_CODE NOT IN (SELECT INSTR_CODE FROM MT_DLYMKTPRC WHERE 
+											PRICE_DATE <= (SELECT SYS_DATE FROM PRO_SYS_DATE) )
+			AND STATUS = :chr_l_auth_status;
+
+		EXEC SQL OPEN missmktprccurs;
+
+		IS_ANY_ORA_ERROR;
+
+		for (;;)
+		{
+			EXEC SQL FETCH missmktprccurs INTO :chr_l_h_instrcode_A;
+
+			IS_ANY_ORA_ERROR;
+
+			if ( APL_ZERO_RESULT_SET )
+			{
+				break;
+			}
+
+			
+
+			memset(chr_l_buf, NULL, 50);
+			sprintf( chr_l_buf, "Market Price Not Found For Instrurity : %s", chr_l_h_instrcode_A );
+      	CO_ProcMonitor(	p_logfile,
+							chr_l_buf,
+							NULL,
+							NULL);
+		}
+	
+		EXEC SQL CLOSE missmktprccurs;
+
+		IS_ANY_ORA_ERROR;
+
+		if ( sqlca.sqlerrd[2] > 0 )
+		{
+			CO_ProcMonitor(p_logfile, "\nMissing Market Prices : Cannot Start EOD\n", NULL, NULL);
+			APL_GOBACK_FAIL
+		}
+	}
+
+   RETURN_SUCCESS :
+
+		fprintf(	p_logfile, 
+					"Exiting CO_Pro_EODPolicer successfully\n");
+
+      return(APL_SUCCESS);
+
+   RETURN_FAILURE :
+
+		fprintf(	p_logfile, 
+					"Exiting CO_Pro_EODPolicer with errors\n");
+
+      #ifdef SYS_DEBUG
+         printf( "Leaving Function CO_Pro_EODPolicer with errors\n");
+		#endif
+
+      return(APL_FAILURE);
+
+}
+
+
+
+int CO_Chk_OpnBatch(	char **argv,
+							FILE *p_logfile,
+							INTL_ENV_DATA_STRUCT_H *p_intl_envdatastruct_h,
+							DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	
+
+	struct sqlca sqlca;	
+	char		chr_l_buf[50]										= 	APL_NULL_STRING;
+	char		chr_l_sysdate_b[APL_DATE_LEN]						=	APL_NULL_STRING;
+	char		chr_l_h_batch_no[10]								=	APL_NULL_STRING;//ISolve-107:AmitB:250507
+	char		chr_l_h_mod_ident[APL_FLAG_LENGTH]				=	APL_NULL_STRING;
+	char		chr_l_h_restart_data[APL_RESTARTDATA_LENGTH]	=	APL_NULL_STRING;
+	char		int_l_status[APL_FLAG_LENGTH]						=	APL_NULL_STRING;
+	char		chr_l_module[20]									=	APL_NULL_STRING;
+	char		chr_l_online_flg[APL_FLAG_LENGTH]					=	APL_NULL_STRING;
+	int		int_l_opnbatch_count								=	0;
+	short		l_i_batch_no									=	0;
+	short		l_i_mod_ident									=	0;
+	short		l_i_restart_data								=	0;
+	short		l_policer_flg									= 	APL_SUCCESS;
+	short		int_l_condexists;
+
+   char 		chr_mainfuncarea[APL_MAINFUNCAREA_LEN];
+   char 		chr_l_condid[APL_CONDID_LEN];
+   char 		chr_l_cntry_flg ;
+	int   int_retval       				                  =  0;
+	short l_pkCondExists = 0;
+	int		l_no_of_days = 0;
+	
+	
+	
+
+	EXEC SQL VAR	chr_l_h_mod_ident 		IS STRING;
+	EXEC SQL VAR 	chr_l_h_batch_no		IS STRING;
+	EXEC SQL VAR 	chr_l_h_restart_data	IS STRING;
+
+	sqlca.sqlcode = 0;
+
+	
+
+	#ifdef SYS_DEBUG
+		printf( "Entered Function CO_Chk_OpnBatch\n"); 
+	#endif
+	
+	
+
+   EXEC SQL SELECT PROCESSING_STATUS 
+				INTO	:chr_l_h_restart_data:l_i_restart_data
+   			FROM 	SYS_BATCHPROC
+   			WHERE PROCESS_NAME		=	:argv[0]
+   			AND   PROC_INIT			=	:argv[1]
+   			AND   STARTDATE	=	:argv[2]
+   			AND   STATUS		=	'started'
+   			FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+	IS_ANY_ORA_ERROR
+
+   if(APL_ZERO_RESULT_SET) 
+	{
+      CO_ProcMonitor(	p_logfile,
+						"E:No entry in batch_in_proc",
+						NULL,
+						NULL);
+      APL_GOBACK_FAIL;
+   }
+
+	
+
+	if (APL_FAILURE == CO_Pro_EODPolicer(	p_logfile,
+													p_intl_envdatastruct_h,
+													l_debug_info_ptr ))
+	{
+		IS_ANY_ERROR_FATAL
+		l_policer_flg = APL_FAILURE;
+	}
+
+	
+
+	int_l_status[0] = 'G';
+	int_l_status[1] = '\0';
+
+	
+
+	
+
+	strcpy(chr_mainfuncarea,"ACC_ENTRIES");
+   strcpy(chr_l_condid,"GR_ACC_ENTRIES");
+
+   int_retval = CO_Chk_CntryEnabled(chr_mainfuncarea,chr_l_condid,&int_l_condexists,l_debug_info_ptr);
+
+   if (int_retval != APL_SUCCESS)
+      APL_GOBACK_FAIL
+
+	int_retval = 0 ;
+	strcpy(chr_mainfuncarea,APL_NULL_STRING);
+	strcpy(chr_l_condid,APL_NULL_STRING);
+
+	strcpy(chr_mainfuncarea,"ACC_ENTRIES");
+	strcpy(chr_l_condid,"G_OPENBATCH");
+	
+	int_retval = CO_Chk_CntryEnabled(chr_mainfuncarea,chr_l_condid,&l_pkCondExists,l_debug_info_ptr);
+
+   if (int_retval != APL_SUCCESS)
+      APL_GOBACK_FAIL
+
+   if (int_l_condexists > 0) 
+   {
+      chr_l_cntry_flg = '1';
+
+  		EXEC SQL DECLARE GRopenbatchcurs CURSOR FOR
+			SELECT PROC_NUM, MODULE_IND
+			FROM	PRO_GRACCTENT
+			WHERE	STATUS = :int_l_status
+			GROUP BY PROC_NUM, MODULE_IND;
+
+  		
+
+  		EXEC SQL OPEN GRopenbatchcurs;
+
+  		IS_ANY_ORA_ERROR;
+	}
+	else 
+	{
+		chr_l_cntry_flg = '2';
+
+      EXEC SQL DECLARE openbatchcurs CURSOR FOR
+         SELECT PROC_NUM, MODULE_IND
+         FROM  PRO_ACCTENT
+         WHERE STATUS = :int_l_status
+         GROUP BY PROC_NUM, MODULE_IND;
+
+      
+
+      EXEC SQL OPEN openbatchcurs;
+
+      IS_ANY_ORA_ERROR;
+	}
+	
+	
+
+	for (;;)
+	{
+		if ( chr_l_cntry_flg == '1')
+		{
+	  		EXEC SQL FETCH GRopenbatchcurs INTO 	:chr_l_h_batch_no:l_i_batch_no,
+														:chr_l_h_mod_ident:l_i_mod_ident;
+
+	  		IS_ANY_ORA_ERROR;
+
+			if ( APL_ZERO_RESULT_SET )
+				break;
+	    }
+		 else 
+		 {
+			EXEC SQL FETCH openbatchcurs INTO    :chr_l_h_batch_no:l_i_batch_no,
+                                          :chr_l_h_mod_ident:l_i_mod_ident;
+
+         IS_ANY_ORA_ERROR;
+
+         if ( APL_ZERO_RESULT_SET )
+            break;
+        }
+			
+		
+
+		int_l_opnbatch_count++;
+
+		
+
+		memset( chr_l_module, NULL, 20 );
+
+		if ( chr_l_h_mod_ident[0] == 'C' )
+		{
+			strcpy( chr_l_module, "Core" );
+		}
+		else if ( chr_l_h_mod_ident[0] == 'A' )
+		{
+			strcpy( chr_l_module, "Corporate Actions" );
+		}
+		else if ( chr_l_h_mod_ident[0] == 'B' )
+		{
+			strcpy( chr_l_module, "Billing" );
+		}
+
+		
+
+		memset( chr_l_buf, NULL, 50 );
+		sprintf(	chr_l_buf, 
+					"Batch Number %s Of %s Module is Open", 
+					chr_l_h_batch_no, chr_l_module );
+		CO_ProcMonitor(	p_logfile, 
+						chr_l_buf,	
+						NULL, 
+						p_intl_envdatastruct_h);
+	}
+
+	
+
+   if ( chr_l_cntry_flg == '1')
+		EXEC SQL CLOSE GRopenbatchcurs;
+
+	else if ( chr_l_cntry_flg == '2')
+		EXEC SQL CLOSE openbatchcurs;
+
+   IS_ANY_ORA_ERROR;
+
+	
+	
+	if ( APL_SUCCESS == CO_ChkErr( *l_debug_info_ptr ) )
+	{
+		APL_GOBACK_FAIL;
+	}
+
+	
+
+	if (l_pkCondExists >0)
+		int_l_opnbatch_count = 0;
+
+       
+	
+	if ((l_policer_flg != APL_FAILURE) )
+	{
+		
+
+
+		/* Avoid Batch Monitor Entry Deletion
+		EXEC SQL DELETE SYS_BATCHPROC 
+		WHERE (TO_DATE(TO_CHAR(STARTDATE,'DD/MM/YYYY')||' 12:00:00')+2
+				< (SELECT SYS_DATE FROM PRO_SYS_DATE)) AND
+				
+				(	PROCESS_NAME NOT LIKE '%I_MsgFn' AND
+					PROCESS_NAME NOT LIKE '%I_MsgTran' AND
+					PROCESS_NAME NOT LIKE '%I_INC'	AND
+					PROCESS_NAME NOT LIKE '%I_15022MsgFn' AND
+					PROCESS_NAME NOT LIKE '%DW_Transmit'	AND
+					PROCESS_NAME NOT LIKE '%BID_Transfer' AND
+					PROCESS_NAME NOT LIKE '%Instrr_Tran');
+		
+
+		IS_ANY_ORA_ERROR
+
+		memset(chr_l_buf, NULL, 50);
+		sprintf(chr_l_buf, "\nDropped %d records from BATCH_IN_PROC\n",sqlca.sqlerrd[2]);
+		CO_ProcMonitor(p_logfile, chr_l_buf, NULL, NULL);*/
+
+		
+
+		if (int_l_condexists > 0)  
+		{
+     		 EXEC SQL DELETE PRO_GRACCTENT
+     		 WHERE STATUS <> 'G' AND (BATCH_DATE+5) < (SELECT CURRENT_DATE FROM PRO_SYS_DATE);          
+			 
+
+     		 IS_ANY_ORA_ERROR
+		}
+		else  
+		{
+			/* Commented and re-written by Gouse - ISKB_2470 - a/c should be deleted after 15 days - Same is been maintained in PRO_GSSPLVAL 
+			EXEC SQL DELETE PRO_ACCTENT
+			WHERE STATUS <> 'G' AND (BATCH_DATE+4) < (SELECT CURRENT_DATE FROM PRO_SYS_DATE);          */ 
+			 
+			EXEC SQL select NVL(FIELD_VAL,0) INTO :l_no_of_days from pro_gssplval where MAIN_FUN='ACC_ENTRIES' and SUB_PROCESS='BATCH_DEL_DAYS';
+			IS_ANY_ORA_ERROR
+			printf("l_no_of_days is |%d|",l_no_of_days);
+
+			EXEC SQL DELETE FROM PRO_ACCTENT
+						WHERE STATUS <> 'G' 
+						AND (BATCH_DATE + :l_no_of_days) < (SELECT SYS_DATE FROM PRO_SYS_DATE);
+
+			IS_ANY_ORA_ERROR
+		}
+
+		memset(chr_l_buf, NULL, 50);
+		sprintf(chr_l_buf, "Dropped %d records from IACCTENT\n",sqlca.sqlerrd[2]);
+		CO_ProcMonitor(p_logfile, chr_l_buf, NULL, NULL);
+
+		APL_GOBACK_SUCCESS;
+	}
+	else
+	{
+		chr_l_online_flg[0] = APL_ONLINE_FLG;
+		chr_l_online_flg[1] = '\0';
+
+		EXEC SQL UPDATE PRO_SYS_DATE SET EOD_IND = :chr_l_online_flg;
+
+		IS_ANY_ORA_ERROR;
+
+		APL_GOBACK_FAIL;
+	}
+
+   RETURN_SUCCESS :
+
+		CO_FreeErrLst(l_debug_info_ptr);
+
+		fprintf(	p_logfile, 
+					"Exiting Open Accounting Entries Batch Check processtion successfully\n");
+
+
+      return(APL_SUCCESS);
+
+   RETURN_FAILURE :
+
+		if (APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+		{
+			CO_ProcMonitor(p_logfile, 
+						"Got Errors : ", 
+						l_debug_info_ptr, 
+						p_intl_envdatastruct_h);
+			CO_FreeErrLst(l_debug_info_ptr);
+		}
+
+		fprintf(	p_logfile, 
+					"Exiting Open Accounting Entries Batch Check processtion with errors\n");
+
+      #ifdef SYS_DEBUG
+         printf( "Leaving Function CO_Chk_OpnBatch with errors\n");
+		#endif
+
+      return(APL_FAILURE);
+
+}
+
+
+
+int   CO_Pro_PurgeIAcctEnt(  FILE                 *p_logfile,
+                        INTL_ENV_DATA_STRUCT_H   *p_intl_envdatastruct_h,
+                        DEBUG_INFO_STRUCT_H         **l_debug_info_ptr)
+{
+
+   struct sqlca sqlca;
+
+
+	EXEC SQL DELETE  PRO_ACCTENT
+            WHERE STATUS = 'N';
+
+   IS_ANY_ORA_ERROR
+
+   APL_GOBACK_SUCCESS
+
+   RETURN_SUCCESS :
+
+      CO_FreeErrLst(l_debug_info_ptr);
+
+      fprintf( p_logfile,
+               "Exiting Delete Rejected Batch processtion successfully\n");
+
+      #ifdef SYS_DEBUG
+         printf( "Leaving Function CO_Pro_PurgeIAcctEnt with success\n");
+      #endif
+
+      return(APL_SUCCESS);
+
+
+ 	RETURN_FAILURE :
+
+      if (APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+      {
+         CO_ProcMonitor(p_logfile,
+                  "Got Errors : ",
+                  l_debug_info_ptr,
+                  p_intl_envdatastruct_h);
+         CO_FreeErrLst(l_debug_info_ptr);
+      }
+
+      fprintf( p_logfile,
+               "Exiting Delete Rejected Accounting Entries Batch Check processtion with errors\n");
+
+      #ifdef SYS_DEBUG
+         printf( "Leaving Function CO_Pro_PurgeIAcctEnt with errors\n");
+      #endif
+
+      return(APL_FAILURE);
+}
+
+
+
+
+int main(int argc,char **argv)
+{
+	struct sqlca sqlca;
+   DEBUG_INFO_STRUCT_H *l_debug_info_ptr 				= 	NULL;
+	INTL_ENV_DATA_STRUCT_H l_intl_env_data_h;
+	FILE 	*l_finifile								=	NULL;
+	FILE 	*l_logfile    							= 	NULL;
+	char	chr_l_logfile_name[PATH_LENGTH] 		= 	APL_NULL_STRING;
+   int	int_l_retval									=	0;
+   char 	chr_uname[APL_USERID_LEN] 				= 	APL_NULL_STRING;
+   char 	chr_custody_id_b[APL_USERID_LEN] 				= 	APL_NULL_STRING;
+   char 	chr_passwd[APL_PASSWD_LEN] 				= 	APL_NULL_STRING;
+	char 	chr_l_logdir[PATH_LENGTH] 				= 	APL_NULL_STRING;
+	char 	chr_l_inifile[PATH_LENGTH] 				= 	APL_NULL_STRING;
+   char  chr_l_day_b4_yesterday[APL_DATE_LEN] =  APL_NULL_STRING;
+   EXEC SQL VAR chr_uname IS STRING;
+   EXEC SQL VAR chr_custody_id_b IS STRING;
+   EXEC SQL VAR chr_passwd IS STRING;
+   EXEC SQL VAR chr_l_day_b4_yesterday IS STRING;
+	sqlca.sqlcode = 0;
+	int i = 0;
+
+	strcpy(chr_l_inifile,getenv("INTL_ROOT_PATH"));
+	strcat(chr_l_inifile,"intl_sun.cfg");
+
+	if ( ( l_finifile=fopen(chr_l_inifile,"r") ) == NULL)
+	{
+		APL_GOBACK_FAIL
+	}
+
+	
+
+	
+
+	/* APL_FETCH_DB_LOGIN_DETAILS(l_finifile, chr_custody_id_b, chr_uname, chr_passwd, APL_OUT_FILE, &l_debug_info_ptr)
+
+   EXEC SQL CONNECT :chr_uname IDENTIFIED BY :chr_passwd;
+
+   if (sqlca.sqlcode)
+   {
+      APL_GOBACK_FAIL
+   } */
+
+   if(CO_Get_DBConnect(l_debug_info_ptr) == APL_FAILURE)
+   {
+		APL_GOBACK_FAIL
+   }
+   else
+   { 
+
+
+		if (APL_FAILURE == CO_Rtv_RptFileName(	"3C",
+														APL_LOGFILE_DESC,
+														100,
+														argv[5],
+														argv,
+														&l_logfile,
+														&l_debug_info_ptr ) )
+		{
+			APL_GOBACK_FAIL
+		}
+
+		
+
+		EXEC SQL COMMIT WORK;
+
+		if (sqlca.sqlcode)
+		{
+			CO_ProcMonitor(l_logfile, "Could not commit after opening chr_log file", NULL, NULL);
+			CO_Proc_RptClose(l_logfile, &l_debug_info_ptr);
+			APL_GOBACK_FAIL
+		}
+
+		strcpy(l_intl_env_data_h.usr, argv[3]);
+		strcpy(l_intl_env_data_h.h_mode, argv[4]);
+		strcpy(l_intl_env_data_h.processtion, argv[5]);
+		strcpy(l_intl_env_data_h.auth_req, argv[6]);
+		strcpy(l_intl_env_data_h.subprocess, argv[7]);
+		strcpy(l_intl_env_data_h.h_process, argv[8]);
+
+		
+
+		fprintf(	l_logfile,
+					"Calling CO_Chk_OpnBatch\n" );
+	
+		printf("\n Inside ChkOpenBatch.pc: before CO_RtvSysParams");	
+		if ( CO_RtvSysParams(&l_debug_info_ptr) == APL_FAILURE)
+					APL_GOBACK_FAIL
+		printf("\n Inside ChkOpenBatch.pc: after CO_RtvSysParams");	
+		
+
+       
+       EXEC SQL SELECT to_date(SYS_DATE-2)
+	             INTO :chr_l_day_b4_yesterday
+	             FROM pro_sys_date;
+	    EXEC SQL DELETE DL_AUTOBRKSETTL
+					 WHERE CURRENTDATE < :chr_l_day_b4_yesterday;
+						
+		 IS_ANY_ORA_ERROR
+       
+		 CO_ProcMonitor(l_logfile, "Deleted records from cautobrksettl table older than 2 days", NULL, NULL);
+
+		 EXEC SQL COMMIT;
+		
+	
+
+		printf("\n Inside ChkOpenBatch.pc: before CO_Chk_OpnBatch");	
+		int_l_retval = CO_Chk_OpnBatch( 	argv, 
+												l_logfile, 
+												&l_intl_env_data_h, 
+												&l_debug_info_ptr);
+
+		printf("\n Inside ChkOpenBatch.pc: after CO_Chk_OpnBatch");	
+		fprintf(	l_logfile,
+					"Returned From CO_Chk_OpnBatch\n" );
+
+
+      if ( int_l_retval == APL_FAILURE )
+      {
+			
+
+		printf("\n Inside ChkOpenBatch.pc: after Failed");	
+			EXEC SQL COMMIT WORK RELEASE;
+			CO_Proc_RptClose(l_logfile, &l_debug_info_ptr);
+         APL_GOBACK_FAIL
+      }
+      else
+      {
+		printf("\n Inside ChkOpenBatch.pc: after Success");	
+
+			if (APL_SUCCESS == CO_Pro_PurgeIAcctEnt(l_logfile,
+                                             &l_intl_env_data_h,
+                                             &l_debug_info_ptr))
+         {
+
+	         EXEC SQL UPDATE SYS_BATCHPROC
+   	      SET  status = 'completed'
+      	   WHERE PROCESS_NAME=:argv[0]
+         	AND   PROC_INIT=:argv[1]
+         	AND   STARTDATE=:argv[2]
+         	AND   STATUS='started';
+
+				
+				if (sqlca.sqlcode)
+				{
+      			CO_ProcMonitor(	l_logfile,
+									"E:Failed To Update Batch In Proc",
+									NULL,
+									NULL);
+					CO_Proc_RptClose(l_logfile, &l_debug_info_ptr);
+      			APL_GOBACK_FAIL;
+				}
+				if(APL_ZERO_RESULT_SET)
+				{
+      			CO_ProcMonitor(	l_logfile,
+									"E:No entry in batch_in_proc",
+									NULL,
+									NULL);
+					CO_Proc_RptClose(l_logfile, &l_debug_info_ptr);
+      			APL_GOBACK_FAIL;
+			   }
+
+			
+	         EXEC SQL COMMIT WORK RELEASE;
+				if (sqlca.sqlcode)
+				{
+      			CO_ProcMonitor(	l_logfile,
+									"E:Failed During Final Commit ",
+									NULL,
+									NULL);
+					
+					CO_Proc_RptClose(l_logfile, &l_debug_info_ptr);
+      			APL_GOBACK_FAIL;
+				}
+
+				CO_Proc_RptClose(l_logfile, &l_debug_info_ptr);
+   	      APL_GOBACK_SUCCESS
+      	}
+			else
+			{
+				fprintf(l_logfile,"Exiting Out Of CO_Pro_PurgeIAcctEnt unsuccessfully\n");
+				CO_Proc_RptClose(l_logfile, &l_debug_info_ptr);
+			}
+   	}
+	}
+	Alert("\n Inside ChkOpenBatch.pc : Finally returning ... \n");
+   	 APL_GOBACK_SUCCESS
+	RETURN_SUCCESS : 
+			Alert("\n Inside ChkOpenBatch.pc : Finally returning Success ... \n");
+			exit(0);
+
+	RETURN_FAILURE :
+			Alert("\n Inside ChkOpenBatch.pc : Finally returning failure ... \n");
+			exit(-1);
+}

@@ -1,0 +1,441 @@
+
+
+
+#include "IV_Control_A.h"
+EXEC SQL INCLUDE SQLCA.H;
+
+
+int IV_PrntTransDetBill_Web(FILE *bill,
+			 FILE *fl_techlog,	
+			 FILE *fl_userlog,	
+			 char *chr_p_billdt,
+			 char *chr_p_client,
+			 SYS_IVCONTROLPARAM_STRUCT l_sys_ivcntl_param_struct,
+			 IV_CLIENTSETUP_STRUCT l_iv_clt_setup_struct,			
+			 char p_mastsub,
+			 DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	extern int IV_PrntTransDetailRound(FILE *,FILE *,FILE *,char *,char *,
+			SYS_IVCONTROLPARAM_STRUCT,IV_CLIENTSETUP_STRUCT,char,char *,char *,
+			char *,char *,char *,char *,char *,double ,double ,double ,double ,double ,
+			double ,double ,double ,double ,double ,char *,DEBUG_INFO_STRUCT_H **);
+
+	char chr_l_buf[BUFFER_LEN];
+
+	char l_client_code[20] = APL_NULL_STRING;
+	char l_client_name[200] = APL_NULL_STRING;
+	char b_ccycd[10] = APL_NULL_STRING;
+
+	char l_settlement_no[16] = APL_NULL_STRING;
+	char l_instr_code[9] = APL_NULL_STRING;
+	char l_brk_name[200] = APL_NULL_STRING;
+	char l_location_code[5] = APL_NULL_STRING;
+	char l_deal_code[10] = APL_NULL_STRING;
+	char l_ref_no[17] = APL_NULL_STRING;
+	char l_deal_date[20] = APL_NULL_STRING;
+
+	double l_qty = 0.0;
+	double l_mkt_prc = 0.0;
+	double l_brk_comm = 0.0;
+	double l_net_value = 0.0;
+	double l_nsdl_chrg = 0.0;
+	double l_cdsl_chrg = 0.0;
+	double l_service_tax = 0.0;
+	double l_edu_cess = 0.0;
+	double l_total_chrg = 0.0;
+	double l_total_value = 0.0;
+	double g_edurate = 0.0;
+
+	char l_style_class[10] = APL_NULL_STRING;
+	int l_fetch_count = 0;
+	
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+	EXEC SQL VAR l_client_code IS STRING;
+	EXEC SQL VAR l_client_name IS STRING;
+
+	EXEC SQL END DECLARE SECTION;
+
+	APL_IF_DEBUG
+	{
+		memset(chr_l_buf,NULL,BUFFER_LEN);
+		sprintf(chr_l_buf,"The billdt is %s",chr_p_billdt);	
+		CO_ProcMonitor(APL_OUT_FILE,chr_l_buf,NULL,NULL);
+
+		memset(chr_l_buf,NULL,BUFFER_LEN);
+		sprintf(chr_l_buf,"The client is  %s",chr_p_client);	
+		CO_ProcMonitor(APL_OUT_FILE,chr_l_buf,NULL,NULL);
+
+		memset(chr_l_buf,NULL,BUFFER_LEN);
+		sprintf(chr_l_buf,"The MastSub is %c",p_mastsub);	
+		CO_ProcMonitor(APL_OUT_FILE,chr_l_buf,NULL,NULL);
+	}
+
+
+	strcpy(b_ccycd,l_iv_clt_setup_struct.b_ccycd);
+	strcpy(l_client_code,chr_p_client);
+	strcpy(l_style_class,"tablerecord");
+
+	EXEC SQL SELECT CLN_NAME INTO :l_client_name 
+		FROM MT_CLIENT 
+		WHERE CLN_CODE=:l_client_code;
+
+	printf("sqlca.sqlcode :|%d|\n",sqlca.sqlcode);
+	
+
+	EXEC SQL SELECT FIELD_VAL INTO :g_edurate
+	FROM PRO_GSSPLVAL 
+	WHERE MAIN_FUN = 'BILLING_TAX' 
+	AND SUB_PROCESS = 'EDUCATION_CESS';
+
+	fprintf(bill,"<TABLE id=\'Table3\' borderColor=\'#000000\' cellSpacing=\'0\' cellPadding=\'1\' width='100%%' border=\'1\'><tr><td borderColor='#ffffff' border='0'>&nbsp;</td><td borderColor='#ffffff' border=\'0\'><BR>\n\n");
+
+	fprintf(bill,"<table class='normal' cellSpacing='0' cellPadding='0' width='100%%' border='0'><tr><td class='lableblue' width='15%%'>Client Code</td><td class='normalbold' width='85%%' align='LEFT' >%s</td></tr><tr><td class='lableblue' width='15%%'>Client Name</td><td class='normalbold' width='85%%' align='LEFT' >%s</td></tr></table><br>\n\n",l_client_code,l_client_name);
+
+	fprintf(bill,"<table  width='100%%' border='1' cellSpacing='0' cellPadding='1'>\n");
+	
+	fprintf(bill,"<tr><td align=\"CENTER\" class=\'ez4\'>Settlement No</td><td align=\"CENTER\" class=\'ez4\'>Instrument Code</td><td align=\"CENTER\" class=\'ez4\'>Broker Name</td><td align=\"CENTER\" class=\'ez4\'>Location</td><td align=\"CENTER\" class=\'ez4\'>Buy/Sell </td><td align=\"CENTER\" class=\'ez4\'>Reference No </td><td align=\"CENTER\" class=\'ez4\'>Deal Date  </td><td align=\"CENTER\" class=\'ez4\'>Qty  </td><td align=\"CENTER\" class=\'ez4\'>Market price </td><td align=\"CENTER\" class=\'ez4\'>Broker Price </td><td align=\"CENTER\" class=\'ez4\'>Net Value (%s) </td><td align=\"CENTER\" class=\'ez4\'>NSDL Charges</td><td align=\"CENTER\" class=\'ez4\'>CDSL Charges</td><td align=\"CENTER\" class=\'ez4\'>Total Value(%s)</td><td align=\"CENTER\" class=\'ez4\'>Service Tax</td><td align=\"CENTER\" class=\'ez4\'>Edu. Cess</td><td align=\"CENTER\" class=\'ez4\'>Net Total Value (%s)</td></tr>\n\n",b_ccycd,b_ccycd,b_ccycd);
+
+
+	/********** Transaction Chanrges Calculation ***************************/
+
+	printf("Entering trns_curr Cursor :|%s||%s|\n",l_client_code,chr_p_billdt);
+
+	EXEC SQL DECLARE trns_curr CURSOR FOR 
+	        SELECT A.SETTLEMENT_NO,A.INSTR_CODE,C.PTY_NAME,A.LOCATION_CD,
+		DECODE(A.DEAL_CD,'1','Sell','2','Buy','3','Sell','4','Buy'),
+		A.IDENTIY_NO,TO_CHAR(A.DEAL_DATE,'DD/MM/YYYY'),
+		A.QTY,B.CLOSING_PR,A.BROKERCOMM,A.AMOUNT
+		FROM DL_DEAL A,MT_DLYMKTPRC B,MT_PARTY C
+		WHERE A.CLIENT = :l_client_code
+		AND A.DATEOFBILLING IS NOT NULL
+		AND A.DATEOFBILLING = :chr_p_billdt
+		AND A.INSTR_CODE = B.INSTR_CODE
+		AND A.DOMESTIC_CPCLT = C.PTY_CODE
+		AND B.PRICE_DATE=(SELECT MAX(PRICE_DATE) FROM MT_DLYMKTPRC D 
+		WHERE D.INSTR_CODE = A.INSTR_CODE);
+
+	EXEC SQL OPEN trns_curr;
+
+	fprintf(fl_userlog, "After Open Cursor trns_curr ORA - [%d] \n", sqlca.sqlcode);
+
+	for(;;)
+	{
+		memset(l_settlement_no,APL_NULL_CHAR,16);
+		memset(l_instr_code,APL_NULL_CHAR,9);
+		memset(l_brk_name,APL_NULL_CHAR,200);
+		memset(l_location_code,APL_NULL_CHAR,5);
+		memset(l_deal_code,APL_NULL_CHAR,10);
+		memset(l_ref_no,APL_NULL_CHAR,17);
+		memset(l_deal_date,APL_NULL_CHAR,20);
+
+		EXEC SQL FETCH trns_curr 
+			 INTO :l_settlement_no,:l_instr_code,
+			      :l_brk_name,:l_location_code,
+			      :l_deal_code,:l_ref_no,
+			      :l_deal_date,:l_qty,
+			      :l_mkt_prc,:l_brk_comm,
+			      :l_net_value;
+
+		fprintf(fl_userlog, "After Fetch Cursor trns_curr ORA - [%d] \n", sqlca.sqlcode);
+
+
+		/********* Service Tax Calculation *********************************************/
+
+		if (l_service_tax > 0 && g_edurate > 0)
+		{
+			l_edu_cess =  (l_service_tax * g_edurate) /100 ;
+		}
+
+
+	       if(sqlca.sqlcode == 1403)
+	       break;
+
+	       if((sqlca.sqlcode < 0)&&(sqlca.sqlcode != -1405))
+	       {
+				fprintf(fl_techlog, "Error: Critical Error in trns_curr Fetch \n");
+				break;
+	       }
+
+		
+		printf("Entering IV_PrntTransDetailRound :|%s||%s|\n",chr_p_client,chr_p_billdt);
+
+		fprintf(fl_userlog,"Calling IV_PrntTransDetailRound for Client[%s] and Bill dt[%s]\n", chr_p_client, chr_p_billdt);
+	       	if (APL_FAILURE == IV_PrntTransDetailRound(bill,
+						fl_techlog,
+						fl_userlog,
+						chr_p_billdt,
+						chr_p_client,
+						l_sys_ivcntl_param_struct,
+						l_iv_clt_setup_struct,
+						p_mastsub,
+						l_settlement_no,
+						l_instr_code,
+						l_brk_name,
+						l_location_code,
+						l_deal_code,
+						l_ref_no,
+						l_deal_date,
+						l_qty,
+						l_mkt_prc,
+						l_brk_comm,
+						l_net_value,
+						l_nsdl_chrg,
+						l_cdsl_chrg,
+						l_total_chrg,
+						l_service_tax,
+						l_edu_cess,						
+						l_total_value,
+						l_style_class,
+						l_debug_info_ptr))
+		{
+			fprintf(fl_userlog,"Failure From IV_PrntTransDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+			fprintf(fl_techlog,"Failure From IV_PrntTransDetailRound for client: %s and dateof_billing :%s\n",chr_p_client,chr_p_billdt);
+			APL_GOBACK_FAIL
+		}
+		else
+		{
+			fprintf(fl_userlog, "Success from IV_PrntTransDetailRound for Client[%s] and Bill dt[%s]\n", chr_p_client, chr_p_billdt);
+		}
+
+		l_fetch_count ++;
+
+	}
+	EXEC SQL CLOSE trns_curr;
+
+	printf("l_fetch_count :|%d|\n",l_fetch_count);
+	
+	if(l_fetch_count == 0)
+	{
+		fprintf(bill,"<tr><td colspan=\'17\' class=\'normal\' >NO RECORDS FOUND </td</tr>\n");
+	}
+
+	fprintf(bill,"</table><br></table><br><br>\n\n");
+
+	 
+	fflush(bill);	
+
+	RETURN_SUCCESS:
+		CO_ProcMonitor(APL_OUT_FILE,"Exiting out of IV_PrntTransDetBill_Web Successfully\n",NULL,NULL);
+                return APL_SUCCESS;
+
+        RETURN_FAILURE:
+		CO_ProcMonitor(APL_OUT_FILE,"Exiting out of IV_PrntTransDetBill_Web UnSuccessfully\n",NULL,NULL);
+		return APL_FAILURE;
+}
+
+int IV_PrntTransDetailRound(FILE *bill,
+		FILE *fl_techlog,
+		FILE *fl_userlog,
+		char *chr_p_billdt,
+		char *chr_p_client,
+		SYS_IVCONTROLPARAM_STRUCT l_sys_ivcntl_param_struct,
+		IV_CLIENTSETUP_STRUCT l_iv_clt_setup_struct,
+		char p_mastsub,
+		char *p_settlement_no,
+		char *p_instr_code,
+		char *p_brk_name,
+		char *p_location_code,
+		char *p_deal_code,
+		char *p_ref_no,
+		char *p_deal_date,
+		double p_qty,
+		double p_mkt_prc,
+		double p_brk_comm,
+		double p_net_value,
+		double p_nsdl_chrg,
+		double p_cdsl_chrg,
+		double p_total_chrg,
+		double p_service_tax,
+		double p_edu_cess,						
+		double p_total_value,
+		char *p_style_class,
+		DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+
+{
+	printf("Inside IV_PrntTransDetailRound \n");
+
+	struct sqlca sqlca;
+
+	int int_retstat;
+
+	int i_qty = 0;
+	int i_mkt_prc = 0;
+	int i_brk_comm = 0;
+	int i_net_value = 0;
+	int i_nsdl_chrg = 0;
+	int i_cdsl_chrg = 0;
+	int i_total_chrg = 0;
+	int i_service_tax = 0;
+	int i_edu_cess = 0;
+	int i_total_value = 0;
+
+	char chr_l_qty[20] = APL_NULL_STRING;
+	char chr_l_mkt_prc[20] = APL_NULL_STRING;
+	char chr_l_brk_comm[20] = APL_NULL_STRING;
+	char chr_l_net_value[20] = APL_NULL_STRING;
+	char chr_l_nsdl_chrg[20] = APL_NULL_STRING;
+	char chr_l_cdsl_chrg[20] = APL_NULL_STRING;
+	char chr_l_total_chrg[20] = APL_NULL_STRING;
+	char chr_l_service_tax[20] = APL_NULL_STRING;
+	char chr_l_edu_cess[20] = APL_NULL_STRING;						
+	char chr_l_total_value[20] = APL_NULL_STRING;
+
+	char chr_l_amtstr[30]; 
+	double roundedamount = 0.0;
+
+	char l_return_value[25] = APL_NULL_STRING;	/* JC - 25/07/2007 */
+	char l_err_desc[100] = APL_NULL_STRING;		/* JC - 25/07/2007 */
+	
+	memset(chr_l_qty, APL_NULL_CHAR, 20);
+	memset(chr_l_mkt_prc, APL_NULL_CHAR, 20);
+	memset(chr_l_brk_comm, APL_NULL_CHAR, 20);
+	memset(chr_l_net_value, APL_NULL_CHAR, 20);
+	memset(chr_l_nsdl_chrg, APL_NULL_CHAR, 20);
+	memset(chr_l_cdsl_chrg, APL_NULL_CHAR, 20);
+	memset(chr_l_total_chrg, APL_NULL_CHAR, 20);
+	memset(chr_l_service_tax, APL_NULL_CHAR, 20);
+	memset(chr_l_edu_cess, APL_NULL_CHAR, 20);
+	memset(chr_l_total_value, APL_NULL_CHAR, 20);
+
+	printf("p_style_class :|%s|\n",p_style_class);
+	printf("p_settlement_no :|%s|\n",p_settlement_no);
+	printf("p_instr_code :|%s|\n",p_instr_code);
+	printf("p_brk_name :|%s|\n",p_brk_name);
+	printf("p_location_code :|%s|\n",p_location_code);
+	printf("p_deal_code :|%s|\n",p_deal_code);
+	printf("p_ref_no :|%s|\n",p_ref_no);
+	printf("p_deal_date :|%s|\n",p_deal_date);
+
+	if(!strcmp(p_settlement_no,APL_NULL_STRING))
+		strcpy(p_settlement_no,"&nbsp;");
+	else if(!strcmp(p_instr_code,APL_NULL_STRING))
+		strcpy(p_instr_code,"&nbsp;");
+	else if(!strcmp(p_brk_name,APL_NULL_STRING))
+		strcpy(p_brk_name,"&nbsp;");
+	else if(!strcmp(p_location_code,APL_NULL_STRING))
+		strcpy(p_location_code,"&nbsp;");
+	else if(!strcmp(p_deal_code,APL_NULL_STRING))
+		strcpy(p_deal_code,"&nbsp;");
+	else if(!strcmp(p_ref_no,APL_NULL_STRING))
+		strcpy(p_ref_no,"&nbsp;");
+	else if(!strcmp(p_deal_date,APL_NULL_STRING))
+		strcpy(p_deal_date,"&nbsp;");
+
+
+	fprintf(bill,"<tr><td class='%s' >%s</td><td class='%s' >%s</td><td class='%s' >%s</td><td class='%s' >%s</td><td class='%s' >%s</td><td class='%s' >%s</td><td class='%s' >%s</td>\n", p_style_class,p_settlement_no,p_style_class,p_instr_code,p_style_class,p_brk_name,p_style_class,p_location_code,p_style_class,p_deal_code,p_style_class,p_ref_no,p_style_class,p_deal_date);
+
+	printf("p_qty :|%lf|\n",p_qty);
+	printf("p_mkt_prc :|%lf|\n",p_mkt_prc);
+	printf("p_brk_comm :|%lf|\n",p_brk_comm);
+	printf("p_net_value :|%lf|\n",p_net_value);
+	printf("p_nsdl_chrg :|%lf|\n",p_nsdl_chrg);
+	printf("p_cdsl_chrg :|%lf|\n",p_cdsl_chrg);
+	printf("p_total_chrg :|%lf|\n",p_total_chrg);
+	printf("p_service_tax :|%lf|\n",p_service_tax);
+	printf("p_edu_cess :|%lf|\n",p_edu_cess);
+	printf("p_total_value :|%lf|\n",p_total_value);
+
+
+	EXEC SQL CALL SP_PRINT_FORMATTING(:p_qty, :l_return_value, :l_err_desc);
+	if(strlen(l_err_desc) > 0)
+	{
+		printf("JC:::::Error in formatting for p_qty: l_err_desc -- %s\n", l_err_desc);
+	}
+	fprintf(bill,"<td class='%s' align='RIGHT'>%s</td>\n", p_style_class, l_return_value);
+
+
+	EXEC SQL CALL SP_PRINT_FORMATTING(:p_mkt_prc, :l_return_value, :l_err_desc);
+	if(strlen(l_err_desc) > 0)
+	{
+		printf("JC:::::Error in formatting for p_mkt_prc: l_err_desc -- %s\n", l_err_desc);
+	}
+	fprintf(bill,"<td class='%s' align='RIGHT'>%s</td>\n", p_style_class, l_return_value);
+
+
+	EXEC SQL CALL SP_PRINT_FORMATTING(:p_brk_comm, :l_return_value, :l_err_desc);
+	if(strlen(l_err_desc) > 0)
+	{
+		printf("JC:::::Error in formatting for p_brk_comm: l_err_desc -- %s\n", l_err_desc);
+	}
+	fprintf(bill,"<td class='%s' align='RIGHT'>%s</td>\n", p_style_class, l_return_value);
+
+
+	EXEC SQL CALL SP_PRINT_FORMATTING(:p_net_value, :l_return_value, :l_err_desc);
+	if(strlen(l_err_desc) > 0)
+	{
+		printf("JC:::::Error in formatting for p_net_value: l_err_desc -- %s\n", l_err_desc);
+	}
+	fprintf(bill,"<td class='%s' align='RIGHT'>%s</td>\n", p_style_class, l_return_value);
+
+
+	EXEC SQL CALL SP_PRINT_FORMATTING(:p_nsdl_chrg, :l_return_value, :l_err_desc);
+	if(strlen(l_err_desc) > 0)
+	{
+		printf("JC:::::Error in formatting for p_nsdl_chrg: l_err_desc -- %s\n", l_err_desc);
+	}
+	fprintf(bill,"<td class='%s' align='RIGHT'>%s</td>\n", p_style_class, l_return_value);
+
+
+	EXEC SQL CALL SP_PRINT_FORMATTING(:p_cdsl_chrg, :l_return_value, :l_err_desc);
+	if(strlen(l_err_desc) > 0)
+	{
+		printf("JC:::::Error in formatting for p_cdsl_chrg: l_err_desc -- %s\n", l_err_desc);
+	}
+	fprintf(bill,"<td class='%s' align='RIGHT'>%s</td>\n", p_style_class, l_return_value);
+
+
+	EXEC SQL CALL SP_PRINT_FORMATTING(:p_total_chrg, :l_return_value, :l_err_desc);
+	if(strlen(l_err_desc) > 0)
+	{
+		printf("JC:::::Error in formatting for p_total_chrg: l_err_desc -- %s\n", l_err_desc);
+	}
+	fprintf(bill,"<td class='%s' align='RIGHT'>%s</td>\n", p_style_class, l_return_value);
+
+
+	EXEC SQL CALL SP_PRINT_FORMATTING(:p_service_tax, :l_return_value, :l_err_desc);
+	if(strlen(l_err_desc) > 0)
+	{
+		printf("JC:::::Error in formatting for p_service_tax: l_err_desc -- %s\n", l_err_desc);
+	}
+	fprintf(bill,"<td class='%s' align='RIGHT'>%s</td>\n", p_style_class, l_return_value);
+
+
+	EXEC SQL CALL SP_PRINT_FORMATTING(:p_edu_cess, :l_return_value, :l_err_desc);
+	if(strlen(l_err_desc) > 0)
+	{
+		printf("JC:::::Error in formatting for p_edu_cess: l_err_desc -- %s\n", l_err_desc);
+	}
+	fprintf(bill,"<td class='%s' align='RIGHT'>%s</td>\n", p_style_class, l_return_value);
+
+
+	EXEC SQL CALL SP_PRINT_FORMATTING(:p_total_value, :l_return_value, :l_err_desc);
+	if(strlen(l_err_desc) > 0)
+	{
+		printf("JC:::::Error in formatting for p_total_value: l_err_desc -- %s\n", l_err_desc);
+	}
+	fprintf(bill,"<td class='%s' align='RIGHT'>%s</td>\n", p_style_class, l_return_value);
+
+
+
+	fprintf(bill,"<tr>\n\n");	
+
+	
+RETURN_SUCCESS:
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Exiting out of IV_PrntTransDetailRound succesfully\n",NULL,NULL);
+	}
+return(APL_SUCCESS);
+
+RETURN_FAILURE:
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Exiting out of IV_PrntTransDetailRound unsuccesfully\n",NULL,NULL);
+	}
+return (APL_FAILURE);
+
+
+}
+

@@ -1,0 +1,414 @@
+/*
+ *    COPYRIGHT NOTICE
+ *
+ *   Copyright 2005 Polaris Software Lab Limited. All rights reserved.
+ *
+ *   These materials are confidential and proprietary to 
+ *    Polaris Software Lab Limited and no part of these materials should
+ *    be reproduced, published, transmitted or distributed in any form or
+ *    by any means, electronic, mechanical, photocopying, recording or 
+ *    otherwise, or stored in any information storage or retrieval system
+ *    of any nature nor should the materials be disclosed to third parties
+ *    or used in any other manner for which this is not authorized, without
+ *    the prior express written authorization of Polaris Software Lab Limited.
+ */
+/*******************************************************************************
+ *
+ * Module Name         :         Reports	
+ *
+ * File Name           :         RBI_Report.pc
+ *
+ * Description         :         This file contains all functions for NRI Report.
+ *
+ *            Version Control Block
+ *
+ * Date        Version		Author              Description		RFS No.
+ * ---------   --------	 ---------------  ----------------------------------
+ * 22/09/2006                                  New File     
+ * *****************************************************************************/
+
+
+#include "Intellect_Common.h"
+#include "Intellect_Interface.h"
+#include "Intellect_Error.h"
+#include "CO_IndStructdef.h"
+#include "CO_OthStructdef.h"
+#include "CO_Commdef.h"
+
+
+EXEC SQL INCLUDE SQLCA.H;
+
+/* Start - To run Exe at EOD - Rahul -21-May-2007*/
+static int      CO_Upd_SToNextBussDt(const      char            *p_tmp_date,
+                                                                char                            *p_out_date,
+                                                                DEBUG_INFO_STRUCT_H   **l_debug_info_ptr
+                                                                )
+{
+        char    chr_out_date[APL_DATE_LEN]      =       APL_NULL_STRING;
+        char chr_p_inp_date[APL_DATE_LEN]=APL_NULL_STRING;
+        short   i_out_date      =       0;
+        EXEC SQL VAR p_tmp_date IS STRING;
+        EXEC SQL VAR chr_p_inp_date IS STRING;
+        sprintf(strcpy(chr_p_inp_date,p_tmp_date)+11,"12:00:00");
+
+        /*Smita - Changed Col Names - HDFCCA Base Version*/
+        EXEC SQL select MAX(H_DATE) + 1
+        into    :chr_out_date:i_out_date
+        from MT_HOLIDAY
+        where STATUS='AA'
+        AND BANK_IND='Y'
+        connect by prior H_DATE + 1 = H_DATE
+                                and prior STATUS = STATUS
+                                and prior BANK_IND = BANK_IND
+        start with H_DATE=:chr_p_inp_date and STATUS='AA'
+        and BANK_IND='Y';
+
+        IS_ANY_ORA_ERROR
+
+        if      (i_out_date     ==      -1)
+        {
+                strcpy(chr_out_date,chr_p_inp_date);
+        }
+
+        strcpy(p_out_date,chr_out_date);
+
+                APL_GOBACK_SUCCESS
+      RETURN_SUCCESS  :
+      {
+                        return (APL_SUCCESS);
+      }
+      RETURN_FAILURE  :
+      {
+         return (APL_FAILURE);
+                }
+}
+
+static int CO_Chk_LstDt(char *currdate,
+                                                                int *int_result,
+                                                                DEBUG_INFO_STRUCT_H **l_debug_info_ptr) {
+
+        char chr_nextdate[APL_DATE_LEN];
+        char chr_tempdate[APL_DATE_LEN];
+        int h_res;
+        EXEC SQL VAR chr_nextdate IS STRING;
+        EXEC SQL VAR currdate IS STRING;
+        EXEC SQL VAR chr_tempdate IS STRING;
+        EXEC SQL SELECT TO_DATE(:currdate)+1 INTO :chr_tempdate
+        FROM DUAL;
+        IS_ANY_ORA_ERROR
+        if(CO_Upd_SToNextBussDt(chr_tempdate,chr_nextdate,l_debug_info_ptr)==APL_FAILURE)
+                APL_GOBACK_FAIL
+        EXEC SQL SELECT LAST_DAY(TO_DATE(:currdate)) INTO :chr_tempdate
+        FROM DUAL;
+        IS_ANY_ORA_ERROR;
+        strncpy(chr_tempdate+11, "12:00:00", 8);
+        chr_tempdate[APL_DATE_LEN -1]=APL_NULL_CHAR;
+        EXEC SQL SELECT TO_DATE(:chr_tempdate)-TO_DATE(:chr_nextdate) INTO :h_res
+        FROM DUAL;
+        IS_ANY_ORA_ERROR
+        if(h_res<0){
+                *int_result=APL_SUCCESS;
+                }
+        else{
+                *int_result=APL_FAILURE;
+                }
+        RETURN_SUCCESS:
+        {
+                return APL_SUCCESS;
+        }
+        RETURN_FAILURE:
+        {
+                return APL_FAILURE;
+        }
+   }
+ /* End - To run Exe at EOD - Rahul -21-May-2007*/
+
+//main(int argc,char *argv[])
+int main(int argc,char **argv)//Changes done for AIX Migration
+{	
+
+	
+	DEBUG_INFO_STRUCT_H   *l_debug_info_struct = NULL, **l_debug_info_ptr = &l_debug_info_struct;
+	l_debug_info_ptr = (DEBUG_INFO_STRUCT_H **)calloc(1,sizeof(DEBUG_INFO_STRUCT_H *));
+	
+	INTL_ENV_DATA_STRUCT_H *l_intl_env_data_h=NULL;	
+	
+	FILE *l_logfile = NULL;
+	l_intl_env_data_h   =  (INTL_ENV_DATA_STRUCT_H*)calloc(1,sizeof(INTL_ENV_DATA_STRUCT_H));
+
+	char chr_l_sysdate[25]= APL_NULL_STRING; // Rahul
+	 int int_l_exitcode; //Rahul
+	 
+	if(CO_Get_DBConnect(l_debug_info_ptr) == APL_FAILURE)
+   {
+		APL_GOBACK_FAIL
+   }
+
+	if (APL_FAILURE == CO_Rtv_RptFileName( "RR",
+				APL_LOGFILE_DESC,
+				100,
+				argv[5],
+				argv,
+				&l_logfile,
+				&l_debug_info_ptr ) )
+	{
+		APL_GOBACK_FAIL
+	}	
+	
+	CO_ProcMonitor(l_logfile, "Entering main function", NULL, NULL);
+printf("\nEntering main function\n");
+	
+	/* Start - To run Exe at EOD - Rahul -21-May-2007*/
+	if( strcmp(argv[9],APL_NULL_STRING) == 0 ) /* ISKB-346 Skip EOD check if exe not run at EOD - Rahul 27Jun2007*/
+	{
+	    EXEC SQL SELECT SYS_DATE INTO :chr_l_sysdate FROM PRO_SYS_DATE;
+			IS_ANY_ORA_ERROR
+
+	    if(CO_Chk_LstDt(chr_l_sysdate,&int_l_exitcode,l_debug_info_ptr)==APL_FAILURE){
+                APL_GOBACK_FAIL
+		  }
+      
+		  if(int_l_exitcode==APL_SUCCESS)
+		  {
+				fprintf(l_logfile,"Todays %s is the last date of the month\n",chr_l_sysdate);
+                fprintf(l_logfile,"RBIReport exe starts...\n");
+		   } 
+		  else 
+		   {
+                fprintf(l_logfile,"Today %s is not the last date of the month\n",chr_l_sysdate);
+                fprintf(l_logfile,"RBIReport exe not reqd . Exitting...\n");
+                APL_GOBACK_SUCCESS;
+			}
+	}
+	/* End - To run Exe at EOD - Rahul -21-May-2007*/
+
+	if(RBIReports(l_logfile,argv,l_debug_info_ptr) == APL_FAILURE)
+	{
+		printf("\nFailure from RBIReports\n");
+		CO_ProcMonitor(l_logfile, "Failure from RBIReports", NULL, NULL);
+		APL_GOBACK_FAIL	
+	}
+	
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+	{
+		CO_ProcMonitor(l_logfile,"Success inside RBIReports",NULL,NULL);
+/*		if(APL_FAILURE == BT_Status_Completed( argv[0],
+				argv[1],
+				argv[2],
+				l_debug_info_ptr))
+		APL_GOBACK_FAIL
+
+		EXEC SQL COMMIT;
+		IS_ANY_ORA_ERROR*/
+         EXEC SQL UPDATE SYS_BATCHPROC
+                        SET STATUS = 'completed'
+                        WHERE PROCESS_NAME = RTRIM(:argv[0])
+                                AND PROC_INIT = RTRIM(:argv[1])
+                                AND STARTDATE = :argv[2]
+                                AND USR = RTRIM(:argv[3])
+                                AND STATUS = RTRIM('started');
+
+                IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND, "BATCH_IN_PROC", argv[0], argv[1]);
+                EXEC SQL COMMIT;
+                IS_ANY_ORA_ERROR
+                CO_ProcMonitor(l_logfile, "\nSUCCESS From RBI Report \n", NULL, NULL);
+                CO_Proc_RptClose(l_logfile,l_debug_info_ptr);
+                fclose(l_logfile);
+              
+printf("\n SUCCESS From RBI Report \n");
+/* return APL_SUCCESS;	*/
+exit(0);
+	}
+
+	RETURN_FAILURE:
+	{
+		CO_ProcMonitor(l_logfile,"Failed inside RBIReports",l_debug_info_ptr,NULL);
+/*		return(-1);*/
+	exit(-1);
+	}
+}
+
+/* ********************************************************************************* */
+
+int RBIReports(FILE *l_logfile,char **argv,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+ char l_fe_date[20] = APL_NULL_STRING;
+ char l_mmyyyy[7] = APL_NULL_STRING;
+ char l_Instr_Code[9] = APL_NULL_STRING;
+ short i_Instr_Code = 0;
+ char l_chr_clncd [11] = APL_NULL_STRING;
+ short i_chr_clncd  = 0;
+
+ double l_Open_Bal = 0.0;
+
+ double l_ca_deal_pur = 0.0;
+ double l_sq_deal_pur = 0.0;
+ double l_bcn_pur = 0.0;
+ double l_tot_pur = 0.0;
+
+ double l_ca_deal_sal = 0.0;
+ double l_sq_deal_sal = 0.0;
+ double l_bcn_sal = 0.0;
+ double l_tot_sal = 0.0;
+	 
+ double l_Close_Bal = 0.0;
+ 
+ int l_rpt_count = 0;
+ char  chr_l_buf[BUFFER_LEN] =  APL_NULL_STRING;
+
+ APL_IF_DEBUG
+    CO_ProcMonitor(l_logfile,"Entered function RBIReports \n",NULL,NULL);
+	printf("Entered function RBIReports \n");
+
+
+	/* Start - AID-4847 & Isolve-107 -- To Run exe in Stand alone & in EOM also - Rahul - 22/03/2007 */
+	if( strcmp(argv[9],APL_NULL_STRING) == 0 )
+	{
+		sprintf(chr_l_buf,"Exe is runing at EOM\n");
+		CO_ProcMonitor(l_logfile,chr_l_buf,NULL,NULL);
+		EXEC SQL SELECT to_char(SYS_DATE,'MMYYYY') INTO :l_mmyyyy FROM PRO_SYS_DATE;
+			 IS_ANY_ORA_ERROR
+	}
+	else
+	{
+			strcpy(l_fe_date, argv[9]);
+			sprintf(chr_l_buf,"Exe is running Stand alone for Date |%s|\n",l_fe_date);
+			CO_ProcMonitor(l_logfile,chr_l_buf,NULL,NULL);
+			EXEC SQL SELECT to_char(to_date(:l_fe_date,'DD/MM/YYYY'),'MMYYYY') INTO :l_mmyyyy FROM PRO_SYS_DATE;
+				IS_ANY_ORA_ERROR
+	}
+	sprintf(chr_l_buf,"Update table for month MMYYYY |%s|\n",l_mmyyyy);
+	CO_ProcMonitor(l_logfile,chr_l_buf,NULL,NULL);
+	/* End - AID-4847 & Isolve-107 -- To Run exe in Stand alone & in EOM also - Rahul - 22/03/2007 */
+
+	EXEC SQL DELETE FROM RPT_RBI_MONTH 
+		WHERE MMYYYY = :l_mmyyyy;
+	fprintf(l_logfile,"After Deleting sqlca.sqlcode |%d|\n",sqlca.sqlcode);
+	IS_ANY_ORA_ERROR;
+		
+		CO_ProcMonitor(l_logfile,"Declearing Cursor rbi_rept_cur\n",NULL,NULL);
+		/* ISKB-346 Changes in Query to consider BCN & Hissafeck table - Rahul - 27Jun2007*/
+		EXEC SQL DECLARE rbi_rept_cur CURSOR FOR 
+					SELECT INSTR_CODE,CLIENT FROM DL_SAFEK WHERE TO_CHAR(ACCESS_STAMP,'MMYYYY') = :l_mmyyyy 
+					UNION SELECT INSTR_CODE,CLIENT FROM DL_HISSAFEK  WHERE TO_CHAR(POSIT_DATE,'MMYYYY')  = :l_mmyyyy
+					UNION SELECT INSTR_CD,CLIENT_CD FROM DL_BCN WHERE STATUS NOT IN ('UU','DU') AND TO_CHAR(DL_DATE,'MMYYYY')  = :l_mmyyyy  
+					UNION SELECT INSTR_CODE,CLN_CODE FROM RPT_RBI_MONTH;
+		IS_ANY_ORA_ERROR;
+
+		EXEC SQL OPEN rbi_rept_cur ;
+		IS_ANY_ORA_ERROR;	
+
+		for(;;)
+		{
+			APL_IF_DEBUG
+			CO_ProcMonitor(l_logfile,"Entered Cursor rbi_rept_cur\n",NULL,NULL);
+
+			EXEC SQL FETCH rbi_rept_cur INTO :l_Instr_Code:i_Instr_Code,
+																	:l_chr_clncd:i_chr_clncd;
+			if(sqlca.sqlcode==1403)
+				break;
+			IS_ANY_ORA_ERROR;
+			
+			sprintf(chr_l_buf,"Records for Client |%s|\n",l_chr_clncd);
+			CO_ProcMonitor(l_logfile,chr_l_buf,NULL,NULL);
+			printf("Records for Client |%s|\n",l_chr_clncd);
+			sprintf(chr_l_buf,"Records for Instrument |%s|\n",l_Instr_Code);
+			CO_ProcMonitor(l_logfile,chr_l_buf,NULL,NULL);
+			printf("Records for Instrument |%s|\n",l_Instr_Code);
+
+			l_Open_Bal = 0.0;
+			l_sq_deal_pur = 0.0;
+			l_bcn_pur = 0.0;
+			l_tot_pur = 0.0;
+			l_sq_deal_sal = 0.0;
+			l_bcn_sal = 0.0;
+			l_tot_sal = 0.0;
+			l_Close_Bal = 0.0;
+		
+			/* Calculating Opening Balance */ 
+			/*AID-4847 & Isolve-107 -- Query change for col MMYYY in RPT_RBI_MONTH table - Rahul - 22/03/2007 */
+			EXEC SQL SELECT NVL(CLOSING_BAL,0) INTO :l_Open_Bal FROM RPT_RBI_MONTH 
+			         WHERE INSTR_CODE = :l_Instr_Code AND CLN_CODE = :l_chr_clncd
+							 AND MMYYYY = (select to_char(max(to_date(MMYYYY,'MMYYYY')),'MMYYYY') FROM RPT_RBI_MONTH   WHERE
+																INSTR_CODE = :l_Instr_Code AND CLN_CODE = :l_chr_clncd);
+			IS_ANY_ORA_ERROR;
+
+			sprintf(chr_l_buf,"Opening Balance is |%lf|\n",l_Open_Bal);
+		    CO_ProcMonitor(l_logfile,chr_l_buf,NULL,NULL);
+
+			/* Calculating Purchase Amount */      
+			EXEC SQL  SELECT NVL(sum(QTY),0) INTO :l_sq_deal_pur FROM DL_DEAL,MT_CLIENT 
+				WHERE CLIENT = CLN_CODE  AND INSTR_CODE = :l_Instr_Code
+				AND CLN_CODE = :l_chr_clncd AND TO_CHAR(DEAL_DATE,'MMYYYY') = :l_mmyyyy
+				AND ((DL_CLASS IN ('17','18','19','21') AND DEAL_STAT = 'CS') OR (DL_CLASS IN ('56') AND DEAL_STAT != 'UU'))
+		        AND DEAL_CD IN ('2','4');
+			IS_ANY_ORA_ERROR;
+		
+			EXEC SQL SELECT NVL(sum(QTY),0) INTO :l_bcn_pur FROM DL_BCN DB, MT_CLIENT MC
+				WHERE CLIENT_CD = CLN_CODE  AND INSTR_CD = :l_Instr_Code AND 
+				CLN_CODE  = :l_chr_clncd AND TO_CHAR(DL_DATE,'MMYYYY') = :l_mmyyyy
+				AND DEAL_CD IN ('2','4') AND DB.STATUS NOT IN ('UU','DU');
+			IS_ANY_ORA_ERROR;
+		
+			l_tot_pur =  l_sq_deal_pur + l_bcn_pur;
+		  sprintf(chr_l_buf,"Purchase Amount is |%lf|\n",l_tot_pur);
+		  CO_ProcMonitor(l_logfile,chr_l_buf,NULL,NULL);
+
+		/* Calculating Sale Amount */	
+			EXEC SQL  SELECT NVL(sum(QTY),0) INTO :l_sq_deal_sal FROM DL_DEAL,MT_CLIENT 
+				WHERE CLIENT = CLN_CODE  AND INSTR_CODE = :l_Instr_Code
+				AND CLN_CODE = :l_chr_clncd AND TO_CHAR(DEAL_DATE,'MMYYYY') = :l_mmyyyy
+				AND ((DL_CLASS IN ('17','18','19','21') AND DEAL_STAT = 'CS') OR (DL_CLASS IN ('56') AND DEAL_STAT != 'UU'))
+		        AND DEAL_CD IN ('1','3');
+			IS_ANY_ORA_ERROR;
+		
+			EXEC SQL SELECT NVL(sum(QTY),0) INTO :l_bcn_sal FROM DL_BCN DB, MT_CLIENT MC
+				WHERE CLIENT_CD = CLN_CODE  AND INSTR_CD = :l_Instr_Code
+				AND CLN_CODE  = :l_chr_clncd AND TO_CHAR(DL_DATE,'MMYYYY') = :l_mmyyyy
+				AND DEAL_CD IN ('1','3') AND DB.STATUS NOT IN ('UU','DU') ;
+			IS_ANY_ORA_ERROR;
+		
+			l_tot_sal = l_sq_deal_sal + l_bcn_sal;
+			sprintf(chr_l_buf,"Sale Amount is |%lf|\n",l_tot_sal);
+			CO_ProcMonitor(l_logfile,chr_l_buf,NULL,NULL);
+	
+			 /* Closing Balance */      
+			 l_Close_Bal = l_Open_Bal + l_tot_pur - l_tot_sal;
+			 sprintf(chr_l_buf,"Closing Balance is |%lf|\n",l_Close_Bal);
+			 CO_ProcMonitor(l_logfile,chr_l_buf,NULL,NULL);
+		 
+			if( l_Open_Bal != 0 || l_tot_pur != 0 || l_tot_sal != 0 || l_Close_Bal != 0 )
+			{
+			  EXEC SQL	INSERT INTO RPT_RBI_MONTH (CLN_CODE,INSTR_CODE,OPNING_BAL,PURCHASE,SALE,CLOSING_BAL,MMYYYY)      
+				 VALUES (:l_chr_clncd,:l_Instr_Code,:l_Open_Bal,:l_tot_pur,:l_tot_sal,:l_Close_Bal,:l_mmyyyy);
+				fprintf(l_logfile,"After Insert into Table Sqlca.sqlcode |%d|\n",sqlca.sqlcode);
+			  IS_ANY_ORA_ERROR;
+			  CO_ProcMonitor(l_logfile,"Record Inserted Into Table\n",NULL,NULL);
+			}
+			else
+				fprintf(l_logfile,"No Position for client |%s| & Instrument |%s| \n",l_chr_clncd,l_Instr_Code);
+			CO_ProcMonitor(l_logfile,"*******************************************\n",NULL,NULL);
+		}
+	
+		CO_ProcMonitor(l_logfile,"Closing Cursor rbi_rept_cur \n",NULL,NULL);
+		EXEC SQL CLOSE rbi_rept_cur;
+
+
+	RETURN_SUCCESS:
+	{
+		CO_ProcMonitor(l_logfile,"leaving RBIReport function successfully\n",NULL,NULL);
+		printf("leaving RBIReport function successfully\n");
+		return (APL_SUCCESS);
+	}
+
+	RETURN_FAILURE:
+ 	{
+	  	CO_ProcMonitor(l_logfile,"leaving RBIReport function unsuccessfully\n",NULL,NULL);
+		printf("leaving RBIReport function unsuccessfully\n");
+		return (APL_FAILURE);
+ 	}
+}
+

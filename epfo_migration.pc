@@ -1,0 +1,661 @@
+
+#include "EPFO_stdio_64.h"
+EXEC SQL INCLUDE SQLCA.H;
+#include "EPFO_Intellect_Common.h"
+#include "EPFO_CO_Commdef.h"
+/* Added by kotubabu for Linux Migration -Start*/
+#ifdef OS_LINUX
+FILE*     g_inifile;
+FILE*     g_logfile;
+#else
+FILE *g_inifile = APL_OUT_FILE;
+FILE *g_logfile = APL_OUT_FILE;
+#endif
+/* Added by kotubabu  for Linux Migration -END*/
+char      chr_g_log_buff[MSG_LENGTH]= APL_NULL_STRING;
+
+main(int argc, char ** argv)
+{
+        struct sqlca sqlca;
+
+        /* Added by kotubabu for Linux Migration-Start*/
+        #ifdef OS_LINUX
+         g_inifile = APL_OUT_FILE;
+		 g_logfile = APL_OUT_FILE;
+        #endif
+        /* Added by kotubabu for Linux Migration-End*/
+        DEBUG_INFO_STRUCT_H     **l_debug_info_ptr=NULL, *l_debug_info_struct=NULL;
+        INTL_ENV_DATA_STRUCT_H  p_intlenv_data_struct_h;
+
+        char   chr_inifile[PATH_LENGTH]= APL_NULL_STRING;
+        char   chr_logfile[PATH_LENGTH]= APL_NULL_STRING;
+        char   chr_custody_id[APL_USERID_LEN];
+        char   chr_l_cutoff_date[APL_DATE_LEN] = APL_NULL_STRING;
+        char   l_start_date[APL_DATE_LEN] = APL_NULL_STRING;
+			 int l_int_datediff = 0;
+
+			 char	l_business_date[APL_DATE_LEN] = APL_NULL_STRING;
+
+        EXEC SQL BEGIN DECLARE SECTION;
+             char chr_uname[APL_USERID_LEN];
+             char chr_passwd[APL_PASSWD_LEN];
+        EXEC SQL END DECLARE SECTION;
+
+        EXEC SQL VAR chr_uname IS STRING;
+        EXEC SQL VAR chr_passwd IS STRING;
+
+        l_debug_info_ptr = &l_debug_info_struct;
+
+        strcpy(chr_inifile,getenv("EPFO_ROOT_PATH"));
+        strcat(chr_inifile,"/intl_sun.cfg");
+
+        if ( ( g_inifile=fopen(chr_inifile,"r") ) == NULL)
+                exit(-1);
+
+        APL_FETCH_DB_LOGIN_DETAILS(g_inifile,chr_custody_id,chr_uname,chr_passwd,APL_OUT_FILE,l_debug_info_ptr)
+        EXEC SQL CONNECT :chr_uname IDENTIFIED BY :chr_passwd;
+        IS_ANY_ORA_ERROR
+
+			 /*if ( CO_Rtv_RptFileName("EM",APL_LOGFILE_DESC,100,argv[5],argv,&g_logfile,l_debug_info_ptr) ==APL_FAILURE)*/
+			 if ( CO_Rtv_RptFileName("EM",APL_LOGFILE_DESC,100,"EPFO",argv,&g_logfile,l_debug_info_ptr) ==APL_FAILURE)
+			 {
+			   printf("\n Could not open log file.. Exiting with failure.. \n");
+				exit(-1);
+			 }
+
+/* 1 */ /* Identify migration run period */ 
+			strcpy(l_start_date,APL_NULL_STRING);
+
+			EXEC SQL SELECT SYS_DATE INTO :l_start_date FROM EPFO_PRO_SYS_DATE;
+			IS_ANY_ORA_ERROR;
+
+			strcpy(chr_l_cutoff_date,argv[9]);
+			printf("\n Migration run for the period: Start Date |%s| to End Date |%s| \n", l_start_date, chr_l_cutoff_date); 
+			sprintf(chr_g_log_buff,"\n Migration run for the period: Start Date |%s| to End Date |%s| \n", l_start_date, chr_l_cutoff_date); 
+			CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+
+/* 2 */ /* Migration execution for identified period */
+
+			for (;;)
+			{
+				EXEC SQL SELECT SYS_DATE INTO :l_business_date FROM EPFO_PRO_SYS_DATE;
+				IS_ANY_ORA_ERROR;
+
+				l_int_datediff = 0;
+				EXEC SQL SELECT 
+					TO_DATE(:chr_l_cutoff_date,'DD/MM/YYYY HH:MI:SS') - 
+					TO_DATE(:l_business_date,'DD/MM/YYYY HH:MI:SS') 
+					INTO :l_int_datediff
+					FROM DUAL;
+
+				/* 3 */ /* Once migration is done for all dates... exit from here */
+
+				if(l_int_datediff<0)
+				{
+					break;
+				}
+				else
+				{
+					/* 4 */ /* Execute BOD */
+
+					printf("\n Starting execution of BOD for date |%s| \n",l_business_date);
+					sprintf(chr_g_log_buff,"\n Starting execution of BOD for date |%s| \n",l_business_date);
+					CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+			 		if ( executeBOD(l_business_date,l_debug_info_ptr) ==APL_FAILURE)
+			 		{
+			   		printf("\n Could not execute BOD for date.. \n",l_business_date);
+						sprintf(chr_g_log_buff,"\n Could not execute BOD for date |%s| \n",l_business_date);
+						CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+						APL_GOBACK_FAIL;	
+			 		}
+					else
+					{
+			   		printf("\n Successfully executed BOD for date.. \n",l_business_date);
+						sprintf(chr_g_log_buff,"\n Successfully executed BOD for date |%s| \n",l_business_date);
+						CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+					}
+
+					printf("\n Completed BOD for date |%s| \n",l_business_date);
+					sprintf(chr_g_log_buff,"\n Completed BOD for date |%s| \n",l_business_date);
+					CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+					/* 5 */ /* Process PR Files */
+
+					printf("\n Starting processing of PR File Data for date |%s| \n",l_business_date);
+					sprintf(chr_g_log_buff,"\n Starting processing of PR File Data for date |%s| \n",l_business_date);
+					CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+			 		if ( processPRRecords(l_business_date,l_debug_info_ptr) ==APL_FAILURE)
+			 		{
+			   		printf("\n Could not process PR records for date.. \n",l_business_date);
+						sprintf(chr_g_log_buff,"\n Could not process PR records for date |%s| \n",l_business_date);
+						CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+						APL_GOBACK_FAIL;	
+			 		}
+					else
+					{
+			   		printf("\n Successfully processed PR records for date.. \n",l_business_date);
+						sprintf(chr_g_log_buff,"\n Successfully processed PR records for date |%s| \n",l_business_date);
+						CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+					}
+
+					printf("\n Completed processing of PR File Data for date |%s| \n",l_business_date);
+
+					/* 6 */ /* Process Maturities */
+
+					printf("\n Starting processing of Maturity Details for date |%s| \n",l_business_date);
+					sprintf(chr_g_log_buff,"\n Starting processing of Maturity Details for date |%s| \n",l_business_date);
+					CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+			 		if ( processMaturities(l_business_date,l_debug_info_ptr) ==APL_FAILURE)
+			 		{
+			   		printf("\n Could not process Maturity records for date.. \n",l_business_date);
+						sprintf(chr_g_log_buff,"\n Could not process Maturity records for date |%s| \n",l_business_date);
+						CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+						APL_GOBACK_FAIL;	
+			 		}
+					else
+					{
+			   		printf("\n Successfully processed Maturity records for date.. \n",l_business_date);
+						sprintf(chr_g_log_buff,"\n Successfully processed Maturity records for date |%s| \n",l_business_date);
+						CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+					}
+
+					printf("\n Completed processing of Maturity Data for date |%s| \n",l_business_date);
+
+					/* 7 */ /* Execute EOD */
+					printf("\n Starting execution of EOD for date |%s| \n",l_business_date);
+					sprintf(chr_g_log_buff,"\n Starting execution of EOD for date |%s| \n",l_business_date);
+					CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+			 		if ( executeEOD(l_business_date,l_debug_info_ptr) ==APL_FAILURE)
+			 		{
+			   		printf("\n Could not execute EOD for date.. \n",l_business_date);
+						sprintf(chr_g_log_buff,"\n Could not execute EOD for date |%s| \n",l_business_date);
+						CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+						APL_GOBACK_FAIL;	
+			 		}
+					else
+					{
+			   		printf("\n Successfully executed EOD for date.. \n",l_business_date);
+						sprintf(chr_g_log_buff,"\n Successfully executed EOD for date |%s| \n",l_business_date);
+						CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+					}
+					
+					printf("\n Completed EOD for date |%s| \n",l_business_date);
+					sprintf(chr_g_log_buff,"\n Completed EOD for date |%s| \n",l_business_date);
+					CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+					printf("\n Starting execution of EOD for date |%s| \n",l_business_date);
+				}	
+			}
+/* 8 */ /* End of for loop */
+
+			APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+	{
+	printf("\n Processing finished successfully ... \n");
+	fclose(g_logfile);					
+	exit(0);
+	}
+RETURN_FAILURE:
+	{
+	printf("\n Error during processing ... \n");
+	fclose(g_logfile);					
+	exit(-1);
+	}
+
+}
+
+int executeEOD(char *p_business_date,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	char l_system_command[200] = APL_NULL_STRING;
+	int l_procid = 0;
+	char l_system_ind[2] = APL_NULL_STRING;
+
+	/* Auto execution of Handover Process */	
+
+	sprintf(chr_g_log_buff,"\n Inserting record into epfo_pro_sys_handover for date |%s| \n",p_business_date);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+	EXEC SQL INSERT INTO epfo_pro_sys_handover (HAND_OVER_DATE, HAND_OVER_IND, HAND_OVER_USER, ACCESS_STAMP)
+	VALUES  (  TO_Date( :p_business_date, 'DD/MM/YYYY HH:MI:SS'),'O','SYSTEM',TO_Date(:p_business_date, 'DD/MM/YYYY HH:MI:SS'));
+ IS_ANY_ORA_ERROR;
+
+	EXEC SQL COMMIT;
+
+ IS_ANY_ORA_ERROR;
+	strcpy(l_system_command,"EOD_Handover EOD_Handover ");
+ strcat(l_system_command,"\"");
+ strcat(l_system_command,p_business_date);
+ strcat(l_system_command,"\" ");
+ strcat(l_system_command," \"SYSTEM1\" \"BAT\" \"\" \"\" \"\" \"\" \"\" ");
+
+	sprintf(chr_g_log_buff,"\n Executing Handover with command |%s| \n",l_system_command);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+	system(l_system_command); 
+	strcpy(l_system_command,APL_NULL_STRING); 
+	/* Auto execution of EOD Process */	
+
+	EXEC SQL SELECT EPFO_MIGRATION_PROCID.NEXTVAL INTO :l_procid FROM DUAL;
+
+	IS_ANY_ORA_ERROR;
+
+	sprintf(chr_g_log_buff,"\n Inserting record into EPFO_SYS_BATCHPROC for EOD date |%s| \n",p_business_date);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+	EXEC SQL INSERT INTO EPFO_SYS_BATCHPROC ( PROCESS_NAME, STARTDATE, STATUS, PROC_INIT, PROCESSING_STATUS, USR,
+	EOD_BOD_IND, STAT_DET, PROCESS_DESC, PROC_ID, PROC_ENDFLG ) VALUES ( 
+	'PROC_EOD',  TO_Date( :p_business_date, 'DD/MM/YYYY HH:MI:SS'), 'started'
+	, 'PROC_EOD', '1', 'SYSTEM1', NULL, 'started', 'PROC_EOD', :l_procid, 'N'); 
+
+ IS_ANY_ORA_ERROR;
+
+	EXEC SQL COMMIT;
+
+ IS_ANY_ORA_ERROR;
+	strcpy(l_system_command,"PROC_EOD PROC_EOD ");
+ strcat(l_system_command,"\"");
+ strcat(l_system_command,p_business_date);
+ strcat(l_system_command,"\" ");
+ strcat(l_system_command," \"SYSTEM1\" \"AUT\" \"\" \"\" \"\" \"\" \"\" ");
+
+	sprintf(chr_g_log_buff,"\n Executing EOD with command |%s| \n",l_system_command);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+	system(l_system_command); 
+
+	for (;;)
+	{
+		printf("\n Checking for EOD completion .. \n");
+		sprintf(chr_g_log_buff,"\n Checking for EOD completion .. \n");
+		CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+		sleep(2);
+		strcpy(l_system_ind,APL_NULL_STRING);
+		EXEC SQL SELECT EOD_IND INTO :l_system_ind FROM EPFO_PRO_SYS_DATE;
+		IS_ANY_ORA_ERROR;
+
+		if (strcmp(l_system_ind,"B") ==0)
+			break;
+	}
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+ {
+	printf("\n EOD finished successfully ... \n");
+	sprintf(chr_g_log_buff,"\n EOD finished successfully \n");
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+	return (APL_SUCCESS);	
+	}
+RETURN_FAILURE:
+	{
+	printf("\n Error during EOD processing ... \n");
+	sprintf(chr_g_log_buff,"\n Error during EOD .. \n");
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+	return (APL_FAILURE);	
+	}
+}
+
+int executeBOD(char *p_business_date,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	char l_system_command[200] = APL_NULL_STRING;
+	int l_procid = 0;
+	char l_system_ind[2] = APL_NULL_STRING;
+
+	/* Auto execution of BOD Process */	
+
+	EXEC SQL SELECT EPFO_MIGRATION_PROCID.NEXTVAL INTO :l_procid FROM DUAL;
+
+	IS_ANY_ORA_ERROR;
+
+	sprintf(chr_g_log_buff,"\n Inserting record into EPFO_SYS_BATCHPROC for BOD date |%s| \n",p_business_date);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+	EXEC SQL INSERT INTO EPFO_SYS_BATCHPROC ( PROCESS_NAME, STARTDATE, STATUS, PROC_INIT, PROCESSING_STATUS, USR,
+	EOD_BOD_IND, STAT_DET, PROCESS_DESC, PROC_ID, PROC_ENDFLG ) VALUES ( 
+	'PROC_BOD',  TO_Date( :p_business_date, 'DD/MM/YYYY HH:MI:SS'), 'started'
+	, 'PROC_BOD', '1', 'SYSTEM2', NULL, 'started', 'PROC_BOD', :l_procid, 'N'); 
+
+ IS_ANY_ORA_ERROR;
+
+	EXEC SQL COMMIT;
+
+ IS_ANY_ORA_ERROR;
+
+	strcpy(l_system_command,"PROC_BOD PROC_BOD ");
+ strcat(l_system_command,"\"");
+ strcat(l_system_command,p_business_date);
+ strcat(l_system_command,"\" ");
+ strcat(l_system_command," \"SYSTEM2\" \"AUT\" \"\" \"\" \"\" \"\" \"\" ");
+
+	sprintf(chr_g_log_buff,"\n Executing BOD with command |%s| \n",l_system_command);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+	system(l_system_command); 
+
+	for (;;)
+	{
+		printf("\n Checking for BOD completion .. \n");
+		sprintf(chr_g_log_buff,"\n Checking for BOD completion .. \n");
+		CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+		sleep(2);
+		strcpy(l_system_ind,APL_NULL_STRING);
+		EXEC SQL SELECT EOD_IND INTO :l_system_ind FROM EPFO_PRO_SYS_DATE;
+		IS_ANY_ORA_ERROR;
+
+		if (strcmp(l_system_ind,"O") ==0)
+			break;
+	}
+
+	APL_GOBACK_SUCCESS
+
+RETURN_SUCCESS:
+	{
+	printf("\n BOD finished successfully ... \n");
+	sprintf(chr_g_log_buff,"\n BOD finished successfully \n");
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+	return (APL_SUCCESS);	
+	}
+RETURN_FAILURE:
+	{
+	printf("\n Error during BOD processing ... \n");
+	sprintf(chr_g_log_buff,"\n Error during BOD .. \n");
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+	return (APL_FAILURE);	
+ }
+		
+}
+
+int processPRRecords(char *p_business_date,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	char l_acc_no[3] = APL_NULL_STRING;
+	char l_sec_code[7] = APL_NULL_STRING;
+	char l_instr_code[9] = APL_NULL_STRING;
+	char l_depo_code[5] = APL_NULL_STRING;
+ char l_instr_type[3] = APL_NULL_STRING;
+	int l_total_purchase = 0;
+ int l_pos_cnt =0;
+ double nominal_val = 0.0;
+	double l_total_val =0.0;
+ int l_posit_val = 0;
+
+/* 1 */ /* Declare cursor for fetching records from PR Upload table */
+
+			sprintf(chr_g_log_buff,"\n Fetching PR records for date |%s| \n",p_business_date);
+			CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+			EXEC SQL DECLARE pr_records_cusrsor CURSOR FOR
+			SELECT acc_no, sec_code, sum(quantity), sum(purchase_val) FROM dl_epfoupl
+			where value_date = (to_Date (:p_business_date,'DD/MM/YYYY HH:MI:SS'))
+			group by acc_no, sec_code
+			order by acc_no,sec_code;
+
+			IS_ANY_ORA_ERROR;
+
+
+/* 2 */ /* Open cursor */
+			EXEC SQL OPEN pr_records_cusrsor; 
+			IS_ANY_ORA_ERROR;
+
+/* 3 */ /* for loop */
+			for(;;)
+			{		
+				strcpy(l_acc_no,	APL_NULL_STRING);
+				strcpy(l_sec_code,	APL_NULL_STRING);
+				strcpy(l_instr_code,	APL_NULL_STRING);
+				strcpy(l_depo_code,	APL_NULL_STRING);
+				strcpy(l_instr_type,	APL_NULL_STRING);
+				l_total_purchase = 0;
+				l_pos_cnt = 0;
+				nominal_val =0.0;
+				l_posit_val = 0;
+				l_total_val =0.0;
+
+			/* 4 */ /* Fetch cursor */
+				EXEC SQL FETCH pr_records_cusrsor INTO
+				:l_acc_no,
+				:l_sec_code,
+				:l_total_purchase,
+				:l_total_val;
+				IS_ANY_ORA_ERROR;
+
+				if (sqlca.sqlcode == 1403)
+				{
+					EXEC SQL CLOSE pr_records_cusrsor;
+					IS_ANY_ORA_ERROR;
+					break;
+				}
+
+				sprintf(chr_g_log_buff,"\n Fetched PR records for account |%s|, secode |%s|, total purchase |%d| total purchase value\n",l_acc_no,l_sec_code,l_total_purchase,l_total_val);
+				CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+				EXEC SQL SELECT INSTR_CODE into :l_instr_code FROM epfo_mt_cln_inst_map
+				WHERE CLN_CODE = :l_acc_no and CLN_INSTR_CODE = :l_sec_code;
+				IS_ANY_ORA_ERROR;
+
+				if (sqlca.sqlcode == 1403)
+				{
+					sprintf(chr_g_log_buff,"\nError: Instrument Code is not found for client instrument |%s| of client |%s| \n",l_sec_code,l_acc_no);
+					CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+					continue;
+				}
+
+				sprintf(chr_g_log_buff,"\n Corresponding to secode |%s| Instrument Code is |%s| \n",l_sec_code,l_instr_code);
+				CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+	
+				EXEC SQL SELECT INSTR_SUB_TYPE,NOMINAL_VALUE into :l_instr_type,:nominal_val FROM epfo_mt_instrument
+				WHERE INSTR_CODE = :l_instr_code;
+				IS_ANY_ORA_ERROR;
+				
+				if (strcmp(l_instr_type,"FD") == 0)
+				{
+					strcpy(l_depo_code,"VAUL");
+				}
+				else
+				{
+					strcpy(l_depo_code,"NSDL");
+				}				 	 
+
+				l_posit_val = (l_total_purchase * 100) / nominal_val;
+				
+				sprintf(chr_g_log_buff,"\n Updating holdings for Account |%s| Instrument Code |%s| Depo Code |%s| with additional purchase qty |%d| Face Value |%lf| \n",l_acc_no,l_instr_code,l_depo_code,l_total_purchase,nominal_val);
+				CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+				EXEC SQL SELECT COUNT(*) into :l_pos_cnt FROM epfo_dl_safek
+				WHERE
+				client = :l_acc_no  and
+				instr_code = :l_instr_code  and
+				location_cd = :l_depo_code and 
+				block_type = 'FREE';
+				
+				IS_ANY_ORA_ERROR;
+
+				if (l_pos_cnt == 0)
+				{
+					EXEC SQL INSERT INTO epfo_dl_safek VALUES (:l_instr_code,:l_depo_code,:l_acc_no,TO_Date( :p_business_date, 'DD/MM/YYYY HH:MI:SS'),'AA',0,(:l_total_purchase*100)/:nominal_val,0,0,0,0,0,0,'FREE',0,:l_total_val);
+			
+					IS_ANY_ORA_ERROR;
+				}
+				else
+				{
+
+				EXEC SQL update epfo_dl_safek
+				set safekeep_pos = safekeep_pos + (:l_total_purchase*100)/:nominal_val,
+				book_cost = book_cost + :l_total_val,
+				access_stamp  = to_date(:p_business_date,'DD/MM/YYYY HH:MI:SS')
+				WHERE
+				client = :l_acc_no  and
+				instr_code = :l_instr_code  and
+				location_cd = :l_depo_code and 
+				block_type = 'FREE';
+
+				IS_ANY_ORA_ERROR;
+				}
+
+			}
+
+			sprintf(chr_g_log_buff,"\n Updating PR status for processed records as Closed...  \n");
+			CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+			EXEC SQL UPDATE DL_EPFOUPL SET STATUS='MC'  
+			where value_date = (to_Date (:p_business_date,'DD/MM/YYYY HH:MI:SS'));
+
+			IS_ANY_ORA_ERROR;
+
+			EXEC SQL COMMIT;
+			IS_ANY_ORA_ERROR;
+
+	APL_GOBACK_SUCCESS
+
+RETURN_SUCCESS:
+	{
+	printf("\n processPRRecords finished successfully ... \n");
+	sprintf(chr_g_log_buff,"\n processPRRecords finished successfully \n");
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+	return (APL_SUCCESS);	
+	}
+RETURN_FAILURE:
+	{
+	printf("\n Error during processPRRecords ... \n");
+	sprintf(chr_g_log_buff,"\n Error during processPRRecords .. \n");
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+	return (APL_FAILURE);	
+ }
+		
+}
+
+int processMaturities(char *p_business_date,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	char l_acc_no[3] = APL_NULL_STRING;
+	char l_instr_code[9] = APL_NULL_STRING;
+	char l_depo_code[5] = APL_NULL_STRING;
+	char l_instr_type[3] = APL_NULL_STRING;
+	int l_redemption_qty = 0;
+
+/* 1 */ /* Declare cursor for fetching records from RD Entitlement */
+
+			sprintf(chr_g_log_buff,"\n Fetching Entitlement records for payment date |%s| \n",p_business_date);
+			CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+/*
+			EXEC SQL DECLARE maturity_records_cusrsor CURSOR FOR
+			select b.client, a.instr_code, b.elig_entitl_pos from epfo_caentitlement b, epfo_caevent a
+			where a.corp_id = b.corp_id and b.status='RP' and
+			a.dateof_payment = (to_Date (:p_business_date,'DD/MM/YYYY HH:MI:SS')) 
+			order by b.client,a.instr_code;
+*/
+
+
+			EXEC SQL DECLARE maturity_records_cusrsor CURSOR FOR
+			select acc_no, instr_cd from epfo_redem_mig 
+		   where maturity = to_date(:p_business_date,'DD/MM/YYYY HH24:MI:SS')	
+			order by acc_no, instr_cd;
+
+			IS_ANY_ORA_ERROR;
+
+
+/* 2 */ /* Open cursor */
+			EXEC SQL OPEN maturity_records_cusrsor; 
+			IS_ANY_ORA_ERROR;
+
+/* 3 */ /* for loop */
+			for(;;)
+			{		
+				strcpy(l_acc_no,	APL_NULL_STRING);
+				strcpy(l_instr_code,	APL_NULL_STRING);
+				strcpy(l_depo_code,	APL_NULL_STRING);
+				strcpy(l_instr_type,	APL_NULL_STRING);
+				l_redemption_qty = 0;
+
+			/* 4 */ /* Fetch cursor */
+				EXEC SQL FETCH maturity_records_cusrsor INTO
+				:l_acc_no,
+				:l_instr_code;
+/*
+				:l_redemption_qty;
+*/
+				IS_ANY_ORA_ERROR;
+
+				if (sqlca.sqlcode == 1403)
+				{
+					EXEC SQL CLOSE maturity_records_cusrsor;
+					IS_ANY_ORA_ERROR;
+					break;
+				}
+
+				sprintf(chr_g_log_buff,"\n Fetched Maturity records for account |%s|, instrument |%s|, redemption qty |%d| \n",l_acc_no,l_instr_code,l_redemption_qty);
+				CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+				EXEC SQL SELECT INSTR_SUB_TYPE into :l_instr_type FROM epfo_mt_instrument
+				WHERE INSTR_CODE = :l_instr_code;
+				IS_ANY_ORA_ERROR;
+				
+				if (strcmp(l_instr_type,"FD") == 0)
+				{
+					strcpy(l_depo_code,"VAUL");
+				}
+				else
+				{
+					strcpy(l_depo_code,"NSDL");
+				}				 	 
+				
+				sprintf(chr_g_log_buff,"\n Updating holdings for Account |%s| Instrument Code |%s| Depo Code |%s| with reduced positions |%d| \n",l_acc_no,l_instr_code,l_depo_code,l_redemption_qty);
+				CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+/*
+				set safekeep_pos = safekeep_pos - :l_redemption_qty,
+*/
+				EXEC SQL update epfo_dl_safek
+				set safekeep_pos = 0,
+				position_value = 0,
+				book_cost = 0,
+				access_stamp  = to_date(:p_business_date,'DD/MM/YYYY HH:MI:SS')
+				WHERE
+				client = :l_acc_no  and
+				instr_code = :l_instr_code  and
+				location_cd = :l_depo_code and 
+				block_type = 'FREE';
+
+				IS_ANY_ORA_ERROR;
+
+			}
+
+			sprintf(chr_g_log_buff,"\n Updating Entitlement status for processed records as Closed...  \n");
+			CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+			EXEC SQL UPDATE epfo_caentitlement set status='CP' where 
+			corp_id in (select corp_id from epfo_caevent where dateof_payment = (to_Date (:p_business_date,'DD/MM/YYYY HH:MI:SS')));
+			IS_ANY_ORA_ERROR;
+
+			sprintf(chr_g_log_buff,"\n Updating Event status for processed records as Closed...  \n");
+			CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+			EXEC SQL UPDATE epfo_caevent set status='CP' where 
+			dateof_payment = (to_Date (:p_business_date,'DD/MM/YYYY HH:MI:SS'));
+
+			IS_ANY_ORA_ERROR;
+
+			EXEC SQL COMMIT;
+			IS_ANY_ORA_ERROR;
+
+	APL_GOBACK_SUCCESS
+
+RETURN_SUCCESS:
+	{
+	printf("\n processMaturities finished successfully ... \n");
+	sprintf(chr_g_log_buff,"\n processMaturities finished successfully \n");
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+	return (APL_SUCCESS);	
+	}
+RETURN_FAILURE:
+	{
+	printf("\n Error during processMaturities ... \n");
+	sprintf(chr_g_log_buff,"\n Error during processMaturities .. \n");
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+	return (APL_FAILURE);	
+ }
+}	

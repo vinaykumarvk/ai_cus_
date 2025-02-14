@@ -1,0 +1,786 @@
+
+
+
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+
+
+#include "stdio_64.h"
+#include "Intellect_Common.h"
+#include "Intellect_Error.h"
+#include "CR_Common.h"
+#include "SMP_InterFace.h"
+#include "MS_Swift.h"
+#include "cmqc.h"
+#include "dirent.h"
+
+#define S_PROGNAME "SFE_OutMsg"
+#define S_KEY "SFE_OutMsg"
+#define S_USERID "SYSTEM"
+#define S_MODE "A"
+#define S_AUTH_REQ "A"
+#define S_SUBFUN "S"
+#define S_ACTION "A"
+#define S_FUNCPARAMS " "
+#define REC_LOCK_ORA_ERROR -54
+
+EXEC SQL INCLUDE SQLCA;
+char            h_ora_rowid[APL_ROWID_LEN];
+short   i_ora_rowid=0;
+char chr_g_imsglog_rowid[APL_ROWID_LEN];
+short i_imsglog_rowid = 0;
+
+
+
+
+DEBUG_INFO_STRUCT_H *l_debuginfo = (DEBUG_INFO_STRUCT_H *)NULL;
+DEBUG_INFO_STRUCT_H **l_debug_info_ptr = NULL;
+
+main(int argc,char **argv)
+{
+
+	struct sqlca sqlca;
+	struct timespec interval,int_remainder;
+	int int_p_funcreturnstate = 0; 
+	INTL_ENV_DATA_STRUCT_H l_intl_environ_data_h;
+	INTL_ENV_DATA_STRUCT_H p_intl_envdatastruct_h; 
+
+	FILE *chr_finifile,*l_logfile;
+	char chr_inifile[PATH_LENGTH],chr_l_uname[APL_USERID_LEN],chr_l_passwd[APL_PASSWD_LEN],chr_custody_id_b[APL_USERID_LEN],chr_buffer[KEY_LENGTH];
+	char chr_logfile[PATH_LENGTH] = APL_NULL_STRING;
+	char chr_msgfile[PATH_LENGTH] = APL_NULL_STRING;
+	char chr_l_swtsfemsgsend[PATH_LENGTH] = APL_NULL_STRING;
+	char chr_l_swsfemsgsend[PATH_LENGTH] = APL_NULL_STRING;
+	char chr_l_sys_date_time[APL_DATE_LEN] = {APL_NULL_STRING};
+	float flt_l_sleep_interval	=	0.25;
+	char chr_l_hsnid[APL_HSNID_LEN],chr_mtemp[100],chr_l_eodflag[2];
+
+   char     chr_qmname[QUEUE_MANAGER_LEN]        =  {APL_NULL_STRING};
+   char     queue_name[QUEUE_LEN]                 =  {APL_NULL_STRING};
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+	EXEC SQL VAR chr_l_hsnid										IS STRING;
+	EXEC SQL VAR chr_l_sys_date_time IS STRING;
+	EXEC SQL VAR chr_l_eodflag	IS STRING;
+	EXEC SQL VAR queue_name	IS STRING;
+	EXEC SQL VAR h_ora_rowid IS STRING;
+
+	
+	EXEC SQL END DECLARE SECTION;
+
+	memset(chr_inifile,APL_NULL_CHAR,PATH_LENGTH);
+	memset(chr_buffer,APL_NULL_CHAR,KEY_LENGTH);
+	memset(chr_l_uname,APL_NULL_CHAR,40);
+	memset(chr_l_passwd,APL_NULL_CHAR,40);
+	memset(chr_mtemp,APL_NULL_CHAR,100);
+	memset(chr_l_hsnid,APL_NULL_CHAR,APL_HSNID_LEN);
+	memset(chr_l_eodflag,APL_NULL_CHAR,2);
+	memset(chr_msgfile,APL_NULL_CHAR,PATH_LENGTH);
+	memset(chr_logfile,APL_NULL_CHAR,PATH_LENGTH);
+	memset(queue_name,APL_NULL_CHAR,QUEUE_LEN);
+
+	l_debug_info_ptr = &l_debuginfo;
+
+	strcpy(p_intl_envdatastruct_h.usr,"SYSTEM");
+	strcpy(p_intl_envdatastruct_h.h_mode,APL_NULL_STRING);
+if(argc == 2)
+{
+	strcpy(p_intl_envdatastruct_h.processtion,"SFE Message Daemon");
+}
+else
+{
+   strcpy(p_intl_envdatastruct_h.processtion, argv[5]);
+}
+	strcpy(p_intl_envdatastruct_h.auth_req,APL_NULL_STRING);
+	strcpy(p_intl_envdatastruct_h.subprocess,APL_NULL_STRING);
+	strcpy(p_intl_envdatastruct_h.h_process,APL_NULL_STRING);
+	
+
+	strcpy(chr_inifile,getenv("INTL_ROOT_PATH"));
+	strcat(chr_inifile,"/intl_sun.cfg");
+	if ((chr_finifile = fopen(chr_inifile,"r")) == NULL)
+        APL_GOBACK_FAIL;
+
+	interval.tv_sec = 0.0;
+   if (argc > 1)
+   {
+      interval.tv_nsec = atof(argv[1]) * 1000000000;
+      flt_l_sleep_interval = atof(argv[1]);
+   }
+   else
+   {
+      CO_ProcMonitor(APL_OUT_FILE,"Invalid Polling Interval....",NULL,NULL);
+      APL_GOBACK_FAIL
+   }
+
+   APL_FETCH_DB_LOGIN_DETAILS(chr_finifile, chr_custody_id_b, chr_l_uname, chr_l_passwd , APL_OUT_FILE , &l_debuginfo)
+   EXEC SQL CONNECT :chr_l_uname IDENTIFIED BY :chr_l_passwd;
+   if(sqlca.sqlcode < 0)
+   {
+     ltoa_r(sqlca.sqlcode,chr_buffer,KEY_LENGTH-1); 
+     CO_InsertErr(&l_debuginfo,DB_ERR_NO,chr_buffer,
+                 APL_NULL_STRING,APL_NULL_STRING,
+                 __LINE__,__FILE__);
+     APL_GOBACK_FAIL
+   }
+
+    EXEC SQL COMMIT WORK;
+    if(sqlca.sqlcode < 0)
+    {
+    	ltoa_r(sqlca.sqlcode,chr_buffer,KEY_LENGTH-1);
+      CO_InsertErr(&l_debuginfo,DB_ERR_NO,chr_buffer,
+      APL_NULL_STRING,APL_NULL_STRING,
+                 __LINE__,__FILE__);
+      APL_GOBACK_FAIL
+    }
+	
+	EXEC SQL SELECT to_char(SYS_DATE,'ddmmyyyy') INTO :chr_l_sys_date_time FROM PRO_SYS_DATE;
+	if(sqlca.sqlcode < 0)
+   {
+     ltoa_r(sqlca.sqlcode,chr_buffer,KEY_LENGTH-1);
+     CO_InsertErr(&l_debuginfo,DB_ERR_NO,chr_buffer,
+     APL_NULL_STRING,APL_NULL_STRING,
+                __LINE__,__FILE__);
+     APL_GOBACK_FAIL
+   } 
+
+	if(argc == 2)
+	{
+        argv[1]=S_KEY;
+        argv[2]=chr_l_sys_date_time;
+        argv[3]=S_USERID;
+        argv[4]=S_MODE;
+        argv[5]="SFE Outgoing Message Daemon";
+        argv[6]=S_AUTH_REQ;
+        argv[7]=S_SUBFUN;
+        argv[8]=S_ACTION;
+        argv[9]=S_FUNCPARAMS;
+	}
+
+               if(APL_SUCCESS ==  EI_Proc_BatchRestart(argv[0],
+                                                  argv[0],
+                                                  APL_NULL_STRING,
+                                                  &int_p_funcreturnstate,
+                                                  &l_debuginfo,
+                                                  p_intl_envdatastruct_h))
+                {
+                      if(int_p_funcreturnstate == 11 || int_p_funcreturnstate == 10)
+                      {
+                                EXEC SQL SELECT  ROWID
+                                INTO :h_ora_rowid:i_ora_rowid
+                                FROM SYS_BATCHPROC
+                                WHERE ( PROCESS_NAME = :argv[0]
+                                AND STATUS = 'started' )
+                                FOR UPDATE OF PROCESSING_STATUS,STATUS,STAT_DET;
+
+
+                                if (sqlca.sqlcode <0)
+                                {
+                                    APL_GOBACK_FAIL
+                                 }
+                       }
+                       else
+                       {
+                             APL_GOBACK_FAIL
+                       }
+                }
+                else
+                {
+                        APL_GOBACK_FAIL
+                }
+
+       EXEC SQL UPDATE SYS_BATCHPROC set STAT_DET = 'Transmitting' where
+      rowid = :h_ora_rowid;
+               if (sqlca.sqlcode <0)
+               {
+                    APL_GOBACK_FAIL
+               }
+
+
+   if (CO_ReadToken(chr_finifile,"INTL_MS_SND_PATH",chr_msgfile,l_debug_info_ptr) == APL_FAILURE)
+	{
+      APL_GOBACK_FAIL;
+	}
+   if (CO_ReadToken(chr_finifile,"INTL_MS_EI_SND",chr_l_swsfemsgsend,l_debug_info_ptr) == APL_FAILURE)
+	{
+      APL_GOBACK_FAIL;
+	}
+   if (CO_ReadToken(chr_finifile,"INTL_MS_EI_SND_T",chr_l_swtsfemsgsend,l_debug_info_ptr) == APL_FAILURE)
+	{
+      APL_GOBACK_FAIL;
+	}
+
+
+	if (APL_FAILURE == CO_Rtv_RptFileName("SFEOM",
+  	   	                              APL_LOGFILE_DESC,
+   	                                 100,
+         	                           "SFE Outgoing Message Log",
+            	                        NULL,
+               	                     &l_logfile,
+                  	                  l_debug_info_ptr) )
+	{
+		exit(-1);
+	}
+
+   if ( CO_RtvSysParams(l_debug_info_ptr) == APL_FAILURE)
+      APL_GOBACK_FAIL
+
+	if (CO_ReadToken(chr_finifile,"INTL_EI_MQ_ADM",chr_qmname,l_debug_info_ptr) == APL_FAILURE)
+	{
+      APL_GOBACK_FAIL
+	}
+   if(!strlen(chr_qmname))
+      APL_GOBACK_FAIL
+
+	EXEC SQL SELECT QUEUE_NAME into	 :queue_name  from PRO_MQNAMES 
+			WHERE EVENT_CLASS = 'O'
+			AND NATION_CODE = :g_mt_commonsys_params_struct_h.nation_code;
+
+
+	IS_ANY_ORA_ERROR
+
+		if(EI_Proc_SFETrans(chr_qmname,queue_name,argv,
+							  chr_msgfile,l_logfile,
+							  chr_l_swsfemsgsend,chr_l_swtsfemsgsend,
+							  l_debug_info_ptr)==APL_SUCCESS)
+		{
+			EXEC SQL UPDATE SYS_BATCHPROC
+							SET STATUS ='completed',
+							PROCESSING_STATUS=NULL,
+							STAT_DET = NULL
+						WHERE  ROWID = :h_ora_rowid;
+
+			IS_ANY_ORA_ERROR
+		
+			EXEC SQL COMMIT;
+
+			APL_GOBACK_SUCCESS
+		}
+		else
+		{
+			EXEC SQL COMMIT;
+			APL_GOBACK_FAIL
+		}
+
+
+	 RETURN_SUCCESS:
+        	fclose(chr_finifile);
+        	fclose(l_logfile);
+        	exit(0);
+
+	 RETURN_FAILURE:
+        	fclose(chr_finifile);
+        	fclose(l_logfile);
+        	exit(-1);
+}
+
+
+int EI_Proc_SFEPut(char *chr_p_filename_a,char *p_buffer3,MQHCONN Hcon, MQHOBJ Hobj,FILE *p_logfile,MQLONG *ReturnCode,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	FILE *fl_msgfile = (FILE *)NULL;
+
+   MQMD     md    =  {MQMD_DEFAULT};
+   MQPMO    pmo   =  {MQPMO_DEFAULT};
+
+   MQLONG   CompCode;
+   MQLONG   Reason;
+   MQLONG   messlen;
+   char     temp[MESSAGERR_LENGTH + 100]       =  {APL_NULL_STRING};
+	char chr_buffer2[10000]	= APL_NULL_STRING;
+	char chr_buffer1[100]	= APL_NULL_STRING;
+	char chr_buffer[KEY_LENGTH];
+	char chr_l_msgfile[PATH_LENGTH] = APL_NULL_STRING;
+
+   memcpy(md.Format,MQFMT_STRING,(size_t)MQ_FORMAT_LENGTH);
+
+   CO_ProcMonitor(APL_OUT_FILE,"Entered MS_Proc_PutMsg Function",NULL,NULL);
+
+   
+   md.Version = MQMD_VERSION_2;
+   md.Report = MQRO_NONE;
+   md.MsgType = MQMT_DATAGRAM;
+   md.Expiry = MQEI_UNLIMITED;
+   md.Feedback = MQFB_NONE;
+   md.Encoding = MQENC_NATIVE;
+   md.CodedCharSetId = MQCCSI_Q_MGR;
+
+	memset(chr_buffer2,APL_NULL_CHAR,10000);
+	memset(chr_buffer1,APL_NULL_CHAR,100);
+
+	strcpy(chr_buffer2,p_buffer3);
+	 
+	
+	messlen = strlen(chr_buffer2);
+   md.Priority = 0;
+   md.Persistence = MQPER_PERSISTENT;
+   strcpy(md.ReplyToQMgr,NULL);
+   md.PutApplType = MQAT_UNIX;
+
+   pmo.Version = MQPMO_VERSION_2;
+   pmo.Options = MQPMO_NEW_MSG_ID + MQPMO_SYNCPOINT + MQPMO_SET_ALL_CONTEXT + MQPMO_FAIL_IF_QUIESCING;
+   pmo.Context = Hobj;
+
+   MQPUT(Hcon,Hobj,&md,&pmo,messlen,chr_buffer2,&CompCode,&Reason);
+   if (Reason != MQRC_NONE)
+   {
+      sprintf(temp,"MQ Put Message Failed with Reason h_code %ld",Reason);
+      CO_ProcMonitor(APL_OUT_FILE,temp,NULL,NULL);
+      memcpy(ReturnCode,&Reason,sizeof(Reason));
+      strcpy(temp,APL_NULL_STRING);
+      APL_GOBACK_FAIL
+   }
+   else
+   {
+		fprintf(p_logfile,"message is to be updated as 'A' is %s\n",chr_p_filename_a);
+
+      EXEC SQL UPDATE MS_MSGLOG SET STATUS = 'A' WHERE rowid = :chr_g_imsglog_rowid; 
+
+		if ((sqlca.sqlcode < 0) || (sqlca.sqlcode == 1403))
+		{
+			fprintf(p_logfile,"Could not commit on update IMSGLOG table %s  with l_debuglist %d",chr_p_filename_a,sqlca.sqlcode);
+         MQBACK(Hcon,&CompCode,&Reason);
+         if (Reason != MQRC_NONE)
+         {
+            CO_ProcMonitor(p_logfile,"Could not roll back MQ Transaction",NULL,NULL);
+         }
+         else
+         {
+            CO_ProcMonitor(p_logfile,"Current MQ Transaction rolled back",NULL,NULL);
+         }
+			APL_GOBACK_FAIL
+		}
+
+      MQCMIT(Hcon,&CompCode,&Reason);
+      if (Reason != MQRC_NONE)
+      {
+			fprintf(p_logfile,"Could not commit on the MQ server for msg %s",chr_p_filename_a);
+         MQBACK(Hcon,&CompCode,&Reason);
+         if (Reason != MQRC_NONE)
+         {
+            CO_ProcMonitor(p_logfile,"Could not roll back MQ Transaction",NULL,NULL);
+         }
+         else
+         {
+            CO_ProcMonitor(p_logfile,"Current MQ Transaction rolled back",NULL,NULL);
+         }
+         APL_GOBACK_FAIL
+      }
+      else
+      {
+         CO_ProcMonitor(p_logfile,temp,NULL,NULL);
+			fprintf(p_logfile,"Message Successfully Delivered to Outbound Queue for msg %s",chr_p_filename_a);
+      }
+   }
+
+   APL_GOBACK_SUCCESS;
+
+   RETURN_SUCCESS :
+		EXEC SQL COMMIT;
+      fprintf(APL_OUT_FILE,"Exiting EI_Proc_SFEPut processtion with success");
+      return(APL_SUCCESS);
+
+   RETURN_FAILURE :
+		EXEC SQL ROLLBACK;
+      fprintf(APL_OUT_FILE,"Exiting EI_Proc_SFEPut processtion with errors");
+      return(APL_FAILURE);
+}
+int EI_Proc_SFETrans(char *p_qmname,char *p_qname,char **argv,char *p_outmsg,FILE *p_logfile,char *p_swsfemsgsend,char *p_swtsfemsgsend,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+extern int MQGetConn(char *, char *, MQHCONN *, MQHOBJ *,char *);
+
+	struct timespec interval,int_remainder;
+	float flt_l_sleep_interval  =  0.25;
+   char chr_o_buffer2[9550] = APL_NULL_STRING; 
+   char chr_o_buffer1[100] = APL_NULL_STRING; 
+   char chr_o_buffer3[10000] = APL_NULL_STRING; 
+	char chr_l_swsfemsgsend[PATH_LENGTH] = APL_NULL_STRING;
+	char chr_l_swtsfemsgsend[PATH_LENGTH] = APL_NULL_STRING;
+	char chr_l_sw_orignator[14] = APL_NULL_STRING;
+	char chr_l_gcn_orignator[14] = APL_NULL_STRING;
+	char chr_l_msg_ident[12] = APL_NULL_STRING;
+	char chr_l_txn_refno[12] = APL_NULL_STRING;
+	short k = 0;
+	char chr_l_destination[14] = APL_NULL_STRING;
+
+	FILE *fl_outmsgfile = (FILE *)NULL;
+	FILE *fl_sfetempfile = (FILE *)NULL;
+	FILE *fl_sfefile = (FILE *)NULL; 
+
+	char chr_l_msgfile[PATH_LENGTH] = APL_NULL_STRING;
+	char chr_l_hdr[123]=APL_NULL_STRING;
+	char chr_l_hdr1[123]=APL_NULL_STRING;
+	double messlen1 = 0; 
+	char chr_l_messlen1[6] = APL_NULL_STRING;
+
+   MS_MSGLOG_STRUCT l_ms_msglog_structb;
+   MS_MSGLOG_I_STRUCT l_ms_msglog_i_struct ;
+
+ 
+	MQHCONN  Hcon;
+	MQHOBJ   Hobj;
+	MQLONG   Reason;
+	MQLONG   CompCode;
+	char     chr_l_qmname[QUEUE_MANAGER_LEN]        =  {APL_NULL_STRING};
+	char     chr_l_qname[QUEUE_LEN]                 =  {APL_NULL_STRING};
+	char chr_mtemp[100] = APL_NULL_STRING;
+	char chr_buffer[KEY_LENGTH];
+
+	EXEC SQL BEGIN DECLARE SECTION;
+   EXEC SQL VAR l_ms_msglog_structb.client   IS STRING;
+   EXEC SQL VAR l_ms_msglog_structb.message_ind IS STRING;
+   EXEC SQL VAR l_ms_msglog_structb.swift_msg_no IS STRING;
+   EXEC SQL VAR l_ms_msglog_structb.maker IS STRING;
+   EXEC SQL VAR l_ms_msglog_structb.maker_dt IS STRING;
+   EXEC SQL VAR l_ms_msglog_structb.status_ind IS STRING;
+   EXEC SQL VAR l_ms_msglog_structb.msg_in_out_ind IS STRING;
+   EXEC SQL VAR l_ms_msglog_structb.msg IS STRING;
+   EXEC SQL VAR l_ms_msglog_structb.contact_details IS STRING;
+   EXEC SQL VAR l_ms_msglog_structb.contact_details1 IS STRING;
+   EXEC SQL VAR l_ms_msglog_structb.baseid IS STRING;
+   EXEC SQL VAR l_ms_msglog_structb.swift_msg_ident IS STRING;
+   EXEC SQL VAR chr_l_msg_ident IS STRING;
+   EXEC SQL VAR chr_g_imsglog_rowid IS STRING;
+	EXEC SQL END DECLARE SECTION;
+
+	memset(chr_mtemp,APL_NULL_CHAR,100);
+	memset(chr_o_buffer2,APL_NULL_CHAR,9550);
+	memset(chr_o_buffer3,APL_NULL_CHAR,10000);
+	memset(chr_o_buffer1,APL_NULL_CHAR,100);
+	memset(chr_buffer,APL_NULL_CHAR,KEY_LENGTH);
+	memset(chr_l_sw_orignator,APL_NULL_CHAR,14);
+	memset(chr_l_gcn_orignator,APL_NULL_CHAR,14);
+	memset(chr_l_msg_ident,APL_NULL_CHAR,12);
+	memset(chr_l_destination,APL_NULL_CHAR,14);
+
+	strcpy(chr_l_qmname,p_qmname);
+	strcpy(chr_l_qname,p_qname);
+
+	interval.tv_sec = 0.0;
+	interval.tv_nsec = atof(argv[1]) * 1000000000;
+	flt_l_sleep_interval = atof(argv[1]);
+
+	if (MQGetConn(chr_l_qmname,chr_l_qname,&Hcon,&Hobj,"O") == APL_FAILURE)
+	{
+		fprintf(APL_OUT_FILE,"Not able to get MQ connection \n");
+		APL_GOBACK_FAIL
+	}
+
+
+	CO_ProcMonitor(APL_OUT_FILE," SSB SWIFT Message Server started......\n",NULL,NULL);
+
+while(1)
+{
+	sqlca.sqlcode = 0;
+
+	EXEC SQL DECLARE MQ_SFE_OUT_MSG  CURSOR FOR
+	SELECT rowid,MS_MSGLOG.*  from MS_MSGLOG
+	WHERE message_class in ('Q','M') and status_ind in ('P','G');
+
+	IS_ANY_ORA_ERROR
+
+
+	EXEC SQL OPEN MQ_SFE_OUT_MSG;
+
+	IS_ANY_ORA_ERROR
+
+	for(;;)
+	{
+	memset(&l_ms_msglog_structb,NULL,sizeof(MS_MSGLOG_STRUCT));
+	memset(&l_ms_msglog_i_struct,NULL,sizeof(MS_MSGLOG_I_STRUCT));
+	memset(chr_l_swsfemsgsend,APL_NULL_CHAR,PATH_LENGTH);
+	memset(chr_l_swtsfemsgsend,APL_NULL_CHAR,PATH_LENGTH);
+	memset(chr_l_msgfile,APL_NULL_CHAR,PATH_LENGTH);
+	memset(chr_o_buffer2,APL_NULL_CHAR,9550);
+	memset(chr_o_buffer3,APL_NULL_CHAR,10000);
+	memset(chr_o_buffer1,APL_NULL_CHAR,100);
+	memset(chr_g_imsglog_rowid,APL_NULL_CHAR,APL_ROWID_LEN);
+	i_imsglog_rowid = 0;
+
+
+   strcpy(chr_l_swsfemsgsend,p_swsfemsgsend);
+   strcpy(chr_l_swtsfemsgsend,p_swtsfemsgsend);
+	strcpy(chr_l_msgfile,p_outmsg); 
+
+
+	EXEC SQL FETCH MQ_SFE_OUT_MSG INTO :chr_g_imsglog_rowid:i_imsglog_rowid,:l_ms_msglog_structb:l_ms_msglog_i_struct;
+
+	IS_ANY_ORA_ERROR
+
+	if (APL_ZERO_RESULT_SET)
+	{
+		break;
+	}
+
+
+   strcat(chr_l_msgfile,l_ms_msglog_structb.msg);
+   printf("msgfile is %s\n",chr_l_msgfile);
+
+   if ((fl_outmsgfile = fopen(chr_l_msgfile,"r")) ==(FILE *)NULL)
+   {
+   	fprintf(p_logfile,"unable to open the outmsg h_file %s\n",chr_l_msgfile);
+		fflush(p_logfile);
+		continue;
+   }
+
+   while(1)
+   {
+      if (feof(fl_outmsgfile)) break;
+		memset(chr_o_buffer1,APL_NULL_CHAR,100);
+      fgets(chr_o_buffer1,sizeof(chr_o_buffer1),fl_outmsgfile);
+      strcat(chr_o_buffer2,chr_o_buffer1);
+   }
+   strcat(chr_o_buffer2,"-");
+   strcat(chr_o_buffer2,"\n");
+
+   messlen1 = strlen(chr_o_buffer2);
+	messlen1 = messlen1 + 122 ;
+
+ 
+
+	memset(chr_l_messlen1,APL_NULL_CHAR,6);
+   if(APL_FAILURE == (CO_ToStr(messlen1,0,0,chr_l_messlen1)))
+   {
+      CO_ProcMonitor(p_logfile,"Failure in CO_ToStr Function for l_messlen1",NULL,NULL);
+      APL_GOBACK_FAIL
+   }
+	if(APL_FAILURE == CO_PadString(chr_l_messlen1,'L',5,"0",l_debug_info_ptr))
+	{
+		CO_ProcMonitor(p_logfile,"Failure in CO_PadString Function for l_messlen1",NULL,NULL);
+		APL_GOBACK_FAIL
+	}
+	memset(chr_l_destination,APL_NULL_CHAR,13);
+	strcpy(chr_l_destination,l_ms_msglog_structb.contact_details);
+	if(APL_FAILURE == CO_PadString(chr_l_destination,'R',13," ",l_debug_info_ptr))
+	{
+		CO_ProcMonitor(p_logfile,"Failure in CO_PadString Function for l_destination",NULL,NULL);
+		APL_GOBACK_FAIL
+	}
+	if (l_ms_msglog_structb.message_class == 'Q')
+	{
+		memset(chr_l_sw_orignator,APL_NULL_CHAR,14);
+		strcpy(chr_l_sw_orignator,l_mt_message_sys_params_struct_h.swift_cd);
+		if(APL_FAILURE == CO_PadString(chr_l_sw_orignator,'R',13," ",l_debug_info_ptr))
+		{
+			CO_ProcMonitor(p_logfile,"Failure in CO_PadString Function for l_sw_orignator",NULL,NULL);
+			APL_GOBACK_FAIL
+		}
+	}
+	else if (l_ms_msglog_structb.message_class == 'M')
+	{
+		memset(chr_l_gcn_orignator,APL_NULL_CHAR,14);
+		strcpy(chr_l_gcn_orignator,l_mt_message_sys_params_struct_h.gcn_cd);
+		if(APL_FAILURE == CO_PadString(chr_l_gcn_orignator,'R',13," ",l_debug_info_ptr))
+		{
+			CO_ProcMonitor(p_logfile,"Failure in CO_PadString Function for l_gcn_orignator",NULL,NULL);
+			APL_GOBACK_FAIL
+		}
+	}
+		memset(chr_l_msg_ident,APL_NULL_CHAR,12);
+		memset(chr_l_txn_refno,APL_NULL_CHAR,12);
+
+
+		EXEC SQL SELECT substr(:l_ms_msglog_structb.msg,4,12) into :chr_l_msg_ident 
+		from dual;
+
+		for (k=0;k<=8;k++)
+		{	
+			if (chr_l_msg_ident[k] == '.') 
+			{
+				break;
+			}
+			chr_l_txn_refno[k] = chr_l_msg_ident[k];
+		}
+
+				chr_l_msg_ident[strlen(chr_l_txn_refno+1)] = APL_NULL_CHAR;
+
+		fprintf(p_logfile,"l_txn_tefno is %s\n",chr_l_txn_refno);	
+		IS_ANY_ORA_ERROR
+
+		if(APL_FAILURE == CO_PadString(chr_l_txn_refno,'L',11,"0",l_debug_info_ptr))
+		{
+			CO_ProcMonitor(p_logfile,"Failure in CO_PadString Function for l_txn_refno",NULL,NULL);
+			APL_GOBACK_FAIL
+		}
+		fprintf(p_logfile,"l_txn_tefno is %s\n",chr_l_txn_refno);	
+
+   strcat(chr_l_swtsfemsgsend,l_ms_msglog_structb.msg);
+   strcat(chr_l_swsfemsgsend,l_ms_msglog_structb.msg);
+   printf("message h_file being opened in temp area is %s\n",chr_l_swtsfemsgsend);
+
+
+   if ((fl_sfetempfile = fopen(chr_l_swtsfemsgsend,"w+")) ==(FILE *)NULL)
+   {
+   fprintf(p_logfile,"unable to open msg h_file in temp area %s\n",chr_l_swtsfemsgsend);
+	APL_GOBACK_FAIL;
+   }
+
+		memset(chr_l_hdr,APL_NULL_CHAR,123); 
+		memset(chr_l_hdr1,APL_NULL_CHAR,123); 
+
+
+
+		sprintf(chr_l_hdr,"EU0000000000%20s"," "); 
+
+	if (l_ms_msglog_structb.message_class == 'Q')
+		strcat(chr_l_hdr,"SFE"); 
+
+	if (l_ms_msglog_structb.message_class == 'M')
+		strcat(chr_l_hdr,"GCN_ADDR"); 
+
+		strcat(chr_l_hdr,chr_l_destination); 
+		printf("%s\n",chr_l_hdr);
+
+	if (l_ms_msglog_structb.message_class == 'Q')
+	{
+		strcat(chr_l_hdr,"SFE"); 
+		strcat(chr_l_hdr,chr_l_sw_orignator); 
+		printf("%s\n",chr_l_hdr);
+	}
+	if (l_ms_msglog_structb.message_class == 'M')
+	{
+		strcat(chr_l_hdr,"GCN_ADDR"); 
+		strcat(chr_l_hdr,chr_l_gcn_orignator); 
+		printf("%s\n",chr_l_hdr);
+	}
+		strcat(chr_l_hdr,"0"); 
+		strcat(chr_l_hdr,l_ms_msglog_structb.swift_msg_no); 		
+		printf("%s\n",chr_l_hdr);
+	
+		memset(chr_l_hdr1,APL_NULL_CHAR,123);
+		sprintf(chr_l_hdr1,"%8s000000000000000%sSM"," "," "); 
+		strcat(chr_l_hdr,chr_l_hdr1);
+
+		strcat(chr_l_hdr,chr_l_txn_refno); 
+		strcat(chr_l_hdr,chr_l_messlen1); 
+
+
+		memset(chr_l_hdr1,APL_NULL_CHAR,123);
+		sprintf(chr_l_hdr1,"%2s"," ");
+		strcat(chr_l_hdr,chr_l_hdr1); 		
+
+		strcat(chr_l_hdr,g_mt_commonsys_params_struct_h.nation_code); 
+
+		memset(chr_l_hdr1,APL_NULL_CHAR,123);
+		sprintf(chr_l_hdr1,"%8s"," ");
+		strcat(chr_l_hdr,chr_l_hdr1);  
+		
+		memset(chr_l_hdr1,APL_NULL_CHAR,123);
+
+		memset(chr_o_buffer3,APL_NULL_CHAR,10000);
+		strcpy(chr_o_buffer3,chr_l_hdr);
+		strcat(chr_o_buffer3,chr_o_buffer2);
+		chr_o_buffer3[strlen(chr_o_buffer3)+1] = APL_NULL_CHAR;
+			
+   fprintf(fl_sfetempfile,chr_l_hdr);
+   fprintf(fl_sfetempfile,chr_o_buffer2);
+
+   fflush(fl_sfetempfile);
+   fclose(fl_outmsgfile);
+   fclose(fl_sfetempfile);
+	link(chr_l_swtsfemsgsend,chr_l_swsfemsgsend);
+	unlink(chr_l_swtsfemsgsend);
+
+		
+
+		
+		if (APL_FAILURE == EI_Proc_SFEPut(l_ms_msglog_structb.msg,chr_o_buffer3,Hcon,Hobj,p_logfile,&Reason,&l_debuginfo))
+		{
+         EXEC SQL UPDATE SYS_BATCHPROC SET 
+				stat_det = 'FAILURE',
+					processing_status = :l_ms_msglog_structb.msg where rowid = :h_ora_rowid;
+
+         IS_ANY_ORA_ERROR
+
+			fprintf(p_logfile,"could not put msg %s into the queue\n",l_ms_msglog_structb.msg);
+			if (flt_l_sleep_interval >= 1)
+			{
+				CO_ProcMonitor(APL_OUT_FILE,"Sleeping ...",NULL,NULL);
+				sleep((int)flt_l_sleep_interval);
+			}
+			else
+			{
+				CO_ProcMonitor(APL_OUT_FILE,"Sleeping ...",NULL,NULL);
+				nanosleep(&interval,&int_remainder);
+			}
+			if ((Reason == MQRC_CONNECTION_BROKEN) || (Reason == MQRC_HCONN_ERROR) || (Reason == MQRC_HOBJ_ERROR))
+			{
+				MQCLOSE(Hcon,&Hobj,MQCO_NONE,&CompCode,&Reason);
+				{
+					sprintf(chr_mtemp,"MQ Close ended with reason %ld",Reason);
+					CO_ProcMonitor(APL_OUT_FILE,chr_mtemp,NULL,NULL);
+				}
+				MQDISC(&Hcon,&CompCode,&Reason);
+				{
+					sprintf(chr_mtemp,"MQ Disc ended with reason %ld",Reason);
+					CO_ProcMonitor(APL_OUT_FILE,chr_mtemp,NULL,NULL);
+				}
+				sleep(10);
+				CO_ProcMonitor(APL_OUT_FILE,"Attempting to reconnect to MQ Server...",NULL,NULL);
+				if (MQGetConn(chr_l_qmname,chr_l_qname,&Hcon,&Hobj,"O") == APL_FAILURE)
+					APL_GOBACK_FAIL
+			}
+			else
+			{
+					sprintf(chr_mtemp,"MQ Put Failed Daemon ending wuth reason %ld",Reason);
+					CO_ProcMonitor(APL_OUT_FILE,chr_mtemp,NULL,NULL);
+					APL_GOBACK_FAIL
+			}
+		}
+		else
+		{
+         EXEC SQL UPDATE SYS_BATCHPROC SET processing_status = :l_ms_msglog_structb.msg
+         where rowid = :h_ora_rowid;
+
+         IS_ANY_ORA_ERROR
+			CO_ProcMonitor(p_logfile,"Message successfully delivered to the MQ Queue",NULL,NULL);
+
+			if (flt_l_sleep_interval >= 1)
+			{
+				CO_ProcMonitor(APL_OUT_FILE,"Sleeping ...",NULL,NULL);
+				sleep(flt_l_sleep_interval);
+			}
+			else
+			{
+				CO_ProcMonitor(APL_OUT_FILE,"Sleeping ...",NULL,NULL);
+				nanosleep(&interval,&int_remainder);
+			}
+		 } 
+
+		} 
+		EXEC SQL CLOSE MQ_SFE_OUT_MSG;
+		IS_ANY_ORA_ERROR
+	} 
+
+
+APL_GOBACK_SUCCESS;
+
+RETURN_SUCCESS:
+{
+	MQCLOSE(Hcon,&Hobj,MQCO_NONE,&CompCode,&Reason);
+	MQDISC(&Hcon,&CompCode,&Reason);
+	CO_ProcMonitor(APL_OUT_FILE,"Exiting successfully out of EI_Proc_SFETrans processtion\n",NULL,NULL);
+   fflush(p_logfile);
+   return APL_SUCCESS;
+}
+RETURN_FAILURE:
+{
+	MQCLOSE(Hcon,&Hobj,MQCO_NONE,&CompCode,&Reason);
+	MQDISC(&Hcon,&CompCode,&Reason);
+	CO_ProcMonitor(APL_OUT_FILE,"Exiting unsuccesfully out of EI_Proc_SFETrans processtion\n",NULL,NULL);
+   fflush(p_logfile);
+   return APL_FAILURE;
+}
+}

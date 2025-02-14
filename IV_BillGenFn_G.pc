@@ -1,0 +1,1044 @@
+
+
+
+
+
+#include "stdio_64.h" 
+#include "IV_Control_A.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int IV_Proc_ConvToFxFn(char *p_from_ccy,char *chr_p_to_ccy,char *p_dom_ccy,char *p_dt,
+	       double *p_rate,int *int_p_retstat,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+
+	char chr_h_from_ccy[APL_CCYCODE_LEN],chr_h_to_ccy[APL_CCYCODE_LEN],chr_h_dom_ccy[APL_CCYCODE_LEN];
+	char chr_h_fx_quote;
+   char     chr_h_date[APL_DATE_LEN]     = APL_NULL_STRING;
+	double h_exchg_rt = 1.0;
+	short i_exch_rt  = 0,i_fx_quote = 0;
+	double h_exchg_rate1 = 0.0,h_exchg_rate2 = 0.0;
+	short i_exch_rate1  = 0,i_exch_rate2 = 0;
+	EXEC SQL VAR chr_h_from_ccy IS STRING;
+	EXEC SQL VAR chr_h_to_ccy   IS STRING;
+	EXEC SQL VAR chr_h_dom_ccy  IS STRING;
+	EXEC SQL VAR chr_h_date  IS STRING;
+
+	EXEC SQL  END  DECLARE SECTION;
+
+	int int_indirect_flg   = 0;
+
+	struct sqlca sqlca;
+
+	#ifdef APL_THREADS
+		APL_SET_CONTEXT
+		EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	sqlca.sqlcode = 0;
+	chr_h_fx_quote  = APL_NULL_CHAR;
+	memset(chr_h_from_ccy,APL_NULL_CHAR, APL_CCYCODE_LEN);
+	memset(chr_h_to_ccy,  APL_NULL_CHAR, APL_CCYCODE_LEN);
+	memset(chr_h_dom_ccy, APL_NULL_CHAR, APL_CCYCODE_LEN);
+
+	strcpy(chr_h_from_ccy,p_from_ccy);
+	strcpy(chr_h_to_ccy,chr_p_to_ccy);
+	strcpy(chr_h_dom_ccy,p_dom_ccy);
+
+	EXEC SQL SELECT DIR_INDIR_FXQT_IND 
+		 INTO :chr_h_fx_quote:i_fx_quote
+	    	 FROM MT_CORE_SYS_PARAMS;
+
+	IS_ANY_ORA_ERROR
+
+	if(i_fx_quote == -1)
+		chr_h_fx_quote = 'D';
+
+	if(chr_h_fx_quote == 'I')
+	{
+		strcpy(chr_h_from_ccy,chr_p_to_ccy);
+		strcpy(chr_h_to_ccy,p_from_ccy);
+	}
+
+	if(  ( (strcmp(chr_h_from_ccy,chr_h_dom_ccy) == 0) &&
+	    	 (strcmp(chr_h_to_ccy,chr_h_dom_ccy)   == 0) )  ||
+	    	 (strcmp(chr_h_from_ccy,chr_h_to_ccy)  == 0)	)
+	{
+		*p_rate = 1;
+		*int_p_retstat = IV_SUCCESS;
+		APL_GOBACK_SUCCESS;
+	}
+
+	if (strcmp(p_dt,APL_NULL_STRING) == 0)
+	{
+		if (APL_FAILURE == CO_RtvSysDt(chr_h_date,l_debug_info_ptr) )
+		{
+			*int_p_retstat = IV_CRITCAL_ERROR_IND;
+			APL_GOBACK_FAIL
+		}
+	}
+	else
+	{
+		strcpy(chr_h_date,p_dt);
+	}
+
+	if( (strcmp(chr_h_from_ccy,chr_h_dom_ccy) != 0) &&
+		 (strcmp(chr_h_to_ccy,chr_h_dom_ccy)   != 0) )
+	{
+		EXEC SQL SELECT a.EXCHGRT/b.EXCHGRT
+		INTO :h_exchg_rt:i_exch_rt
+		FROM MT_EXCHRATE a,MT_EXCHRATE b 
+		WHERE a.currency_cd   = :chr_h_from_ccy 
+		AND b.currency_cd 		= :chr_h_to_ccy
+		AND a.DENOM_CCY 	= :chr_h_dom_ccy 
+		AND b.DENOM_CCY 	= :chr_h_dom_ccy 
+		AND a.RATE_DATE 	   	= (SELECT MAX(RATE_DATE)
+									FROM MT_EXCHRATE
+									WHERE CURRENCY_CD = :chr_h_from_ccy
+									AND	RATE_DATE <= :chr_h_date)
+		AND b.RATE_DATE 	   	= (SELECT MAX(RATE_DATE)
+									FROM MT_EXCHRATE
+									WHERE CURRENCY_CD = :chr_h_to_ccy
+									AND	RATE_DATE <= :chr_h_date);
+	}
+	else
+	{
+		if(strcmp(chr_h_from_ccy,chr_h_dom_ccy) == 0)
+		{
+			strcpy(chr_h_from_ccy,chr_h_to_ccy);
+			int_indirect_flg = 1;
+		}
+		EXEC SQL SELECT EXCHGRT
+		INTO :h_exchg_rt:i_exch_rt
+		FROM MT_EXCHRATE  
+		WHERE CURRENCY_CD 	   = :chr_h_from_ccy 
+		AND DENOM_CCY = :chr_h_dom_ccy 
+		AND RATE_DATE 	   = (SELECT MAX(RATE_DATE)
+								FROM MT_EXCHRATE
+								WHERE CURRENCY_CD = :chr_h_from_ccy
+								AND	RATE_DATE <= :chr_h_date);
+	}
+	if(sqlca.sqlcode < 0 || APL_ZERO_RESULT_SET)
+	{
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+	}
+
+	IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(DB_ERR_NO,chr_h_from_ccy,chr_h_to_ccy,APL_NULL_STRING);
+
+	if(i_exch_rt == -1)
+		h_exchg_rt = 0;
+	if(int_indirect_flg == 1)
+		*p_rate = 1/h_exchg_rt;
+	else
+		*p_rate = h_exchg_rt;
+Alert("h_exchg_rt is %lf",h_exchg_rt);/*added by shruthi Kumbla for ISKB_1901*/
+	*int_p_retstat = IV_SUCCESS;
+
+	APL_GOBACK_SUCCESS
+
+RETURN_SUCCESS:
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,
+			 "Exiting Successfully Out Of IV_Proc_ConvToFxFn\n",
+			 NULL, NULL);
+	}
+	return APL_SUCCESS;
+
+RETURN_FAILURE:
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,
+			 "Exiting Unsuccessfully Out Of IV_Proc_ConvToFxFn\n",
+			 NULL, NULL);
+	}
+	return APL_FAILURE;
+
+}
+
+int IV_Rtv_RecAcc(	IV_CLIENTDET_STRUCT_H		*p_iv_clientdet_struct_h,
+				 		char					*p_recclt,
+				 		char					*p_recccy,
+						int					*int_p_retstat,
+				  		DEBUG_INFO_STRUCT_H		**l_debug_info_ptr)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		char     h_dl_client[APL_CLIENT_LENGTH] = APL_NULL_STRING;
+		char     chr_h_rec_acc[APL_CLIENT_LENGTH] = APL_NULL_STRING;
+		char     h_bill_ccy[APL_CCYCODE_LEN] = APL_NULL_STRING;
+		short  i_rec_acc = 0,i_bill_ccy = 0;
+		EXEC SQL VAR h_dl_client IS STRING;
+		EXEC SQL VAR chr_h_rec_acc IS STRING;
+		EXEC SQL VAR h_bill_ccy IS STRING;
+	EXEC SQL END DECLARE SECTION;
+   struct sqlca sqlca;
+
+	#ifdef APL_THREADS
+		APL_SET_CONTEXT
+		EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+   sqlca.sqlcode = 0;
+	strcpy(h_dl_client,p_iv_clientdet_struct_h->client);
+	EXEC SQL SELECT REC_CLT
+	INTO  :chr_h_rec_acc:i_rec_acc
+   FROM IV_CLIENTSETUP
+   WHERE CLIENT   = :h_dl_client;
+
+	if (sqlca.sqlcode < 0)
+	{
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+		APL_GOBACK_FAIL
+	}
+	if (sqlca.sqlcode == 1403)
+	{
+		*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+		APL_GOBACK_FAIL
+	}
+	
+	if (strcmp(chr_h_rec_acc,APL_NULL_STRING) == 0)
+	{
+		if(p_iv_clientdet_struct_h->dir_db_ind == 'Y')
+		{
+			strcpy(h_bill_ccy,p_iv_clientdet_struct_h->cust_bl_currency);
+
+			EXEC SQL SELECT CLN_GL_ACCOUNT
+			INTO  :chr_h_rec_acc:i_rec_acc
+			FROM 	MT_CLIENT
+			WHERE CLN_CODE   = :h_dl_client;
+
+			if (sqlca.sqlcode < 0)
+			{
+				*int_p_retstat = IV_CRITCAL_ERROR_IND;
+				APL_GOBACK_FAIL
+			}
+			if (sqlca.sqlcode == 1403)
+			{
+				*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+				APL_GOBACK_FAIL
+			}
+			strcpy(p_recclt,chr_h_rec_acc);
+			strcpy(p_recccy,p_iv_clientdet_struct_h->cust_bl_currency);
+			APL_GOBACK_SUCCESS
+		}						
+		else
+		{
+			strcpy(h_dl_client,p_iv_clientdet_struct_h->mst_clt);
+			EXEC SQL SELECT REC_CLT,B_CCYCD
+			INTO  :chr_h_rec_acc:i_rec_acc,h_bill_ccy:i_bill_ccy
+			FROM IV_CLIENTSETUP
+			WHERE CLIENT   = :h_dl_client;
+
+			if (sqlca.sqlcode < 0)
+			{
+				*int_p_retstat = IV_CRITCAL_ERROR_IND;
+				APL_GOBACK_FAIL
+			}
+			if ( (strcmp(chr_h_rec_acc,APL_NULL_STRING) == 0) ||
+				  (sqlca.sqlcode == 1403) )
+				  
+			{
+				strcpy(h_dl_client,l_mt_core_sys_params_struct_h.custody_clt_cd);
+				EXEC SQL SELECT REC_CLT,B_CCYCD
+				INTO  :chr_h_rec_acc:i_rec_acc,h_bill_ccy:i_bill_ccy
+				FROM IV_CLIENTSETUP
+				WHERE CLIENT   = :h_dl_client;
+
+				if (sqlca.sqlcode < 0)
+				{
+					*int_p_retstat = IV_CRITCAL_ERROR_IND;
+					APL_GOBACK_FAIL
+				}
+				if (sqlca.sqlcode == 1403)
+				{
+					*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+					APL_GOBACK_FAIL
+				}
+			}
+			strcpy(p_recclt,chr_h_rec_acc);
+			strcpy(p_recccy,h_bill_ccy);
+			APL_GOBACK_SUCCESS
+		}
+	}
+	else
+	{
+		strcpy(p_recclt,chr_h_rec_acc);
+		strcpy(p_recccy,p_iv_clientdet_struct_h->cust_bl_currency);
+		APL_GOBACK_SUCCESS
+	}
+
+   RETURN_SUCCESS:
+		*int_p_retstat = IV_SUCCESS;
+      return (APL_SUCCESS);
+
+   RETURN_FAILURE:
+      return (APL_FAILURE);
+}
+
+int ConvToFxFn_GR(char *p_from_ccy,char *chr_p_to_ccy,char *p_dom_ccy,char *p_dt,
+               double *p_rate,int *int_p_retstat,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+        EXEC SQL BEGIN DECLARE SECTION;
+
+        char chr_h_from_ccy[APL_CCYCODE_LEN],chr_h_to_ccy[APL_CCYCODE_LEN],chr_h_dom_ccy[APL_CCYCODE_LEN];
+        char chr_h_fx_quote;
+   		char     chr_h_date[APL_DATE_LEN]     = APL_NULL_STRING;
+        double h_exchg_rt = 1.0;
+        short i_exch_rt  = 0,i_fx_quote = 0;
+        double h_exchg_rate1 = 0.0,h_exchg_rate2 = 0.0;
+			short l_cond_gr = 0; 
+			char chr_h_date_bill_gen[APL_DATE_LEN] = APL_NULL_STRING;  
+        short i_exch_rate1  = 0,i_exch_rate2 = 0;
+        EXEC SQL VAR chr_h_from_ccy IS STRING;
+        EXEC SQL VAR chr_h_to_ccy   IS STRING;
+        EXEC SQL VAR chr_h_dom_ccy  IS STRING;
+        EXEC SQL VAR chr_h_date  IS STRING;
+
+        EXEC SQL  END  DECLARE SECTION;
+
+        int int_indirect_flg   = 0;
+
+        struct sqlca sqlca;
+
+        #ifdef APL_THREADS
+                APL_SET_CONTEXT
+                EXEC SQL CONTEXT USE :my_ctx_local;
+        #endif
+
+        sqlca.sqlcode = 0;
+        chr_h_fx_quote  = APL_NULL_CHAR;
+        memset(chr_h_from_ccy,APL_NULL_CHAR, APL_CCYCODE_LEN);
+        memset(chr_h_to_ccy,  APL_NULL_CHAR, APL_CCYCODE_LEN);
+        memset(chr_h_dom_ccy, APL_NULL_CHAR, APL_CCYCODE_LEN);
+
+        strcpy(chr_h_from_ccy,p_from_ccy);
+        strcpy(chr_h_to_ccy,chr_p_to_ccy);
+        strcpy(chr_h_dom_ccy,p_dom_ccy);
+
+        EXEC SQL SELECT DIR_INDIR_FXQT_IND
+                 INTO :chr_h_fx_quote:i_fx_quote
+                 FROM MT_CORE_SYS_PARAMS;
+
+        IS_ANY_ORA_ERROR
+
+	if(i_fx_quote == -1)
+                chr_h_fx_quote = 'D';
+
+        if(chr_h_fx_quote == 'I')
+        {
+                strcpy(chr_h_from_ccy,chr_p_to_ccy);
+                strcpy(chr_h_to_ccy,p_from_ccy);
+        }
+
+        if(  ( (strcmp(chr_h_from_ccy,chr_h_dom_ccy) == 0) &&
+                 (strcmp(chr_h_to_ccy,chr_h_dom_ccy)   == 0) )  ||
+                 (strcmp(chr_h_from_ccy,chr_h_to_ccy)  == 0)    )
+        {
+                *p_rate = 1;
+                *int_p_retstat = IV_SUCCESS;
+                APL_GOBACK_SUCCESS;
+        }
+
+        if (strcmp(p_dt,APL_NULL_STRING) == 0)
+        {
+                if (APL_FAILURE == CO_RtvSysDt(chr_h_date,l_debug_info_ptr) )
+                {
+                        *int_p_retstat = IV_CRITCAL_ERROR_IND;
+                        APL_GOBACK_FAIL
+                }
+        }
+        else
+        {
+                strcpy(chr_h_date,p_dt);
+        }
+	
+	
+        if (APL_FAILURE == CO_Chk_CntryEnabled(  "BILL_PARAM",
+                                               "NO_CHK_PROC_NEXT",
+                                               &l_cond_gr,
+                                               l_debug_info_ptr ))
+        {
+                 APL_GOBACK_FAIL
+        }
+
+	if (l_cond_gr == 1)
+	{
+		if(CA_CO_GetNextBusinessDt(chr_h_date, chr_h_date_bill_gen, l_debug_info_ptr) == APL_FAILURE)
+		{
+			APL_GOBACK_FAIL
+		}
+		strcpy(chr_h_date, chr_h_date_bill_gen);	
+	}
+
+
+        if( (strcmp(chr_h_from_ccy,chr_h_dom_ccy) != 0) &&
+                 (strcmp(chr_h_to_ccy,chr_h_dom_ccy)   != 0) )
+        {
+                EXEC SQL SELECT a.EXCHGRT/b.EXCHGRT
+                INTO :h_exchg_rt:i_exch_rt
+                FROM MT_EXCHRATE a,MT_EXCHRATE b
+                WHERE a.currency_cd   = :chr_h_from_ccy
+                AND b.currency_cd           = :chr_h_to_ccy
+                AND a.DENOM_CCY     = :chr_h_dom_ccy
+                AND b.DENOM_CCY     = :chr_h_dom_ccy
+		AND a.RATE_DATE            = (SELECT MAX(RATE_DATE)
+                                                                        FROM MT_EXCHRATE
+                                                                        WHERE CURRENCY_CD = :chr_h_from_ccy
+                                                                        AND     RATE_DATE <= :chr_h_date)
+                AND b.RATE_DATE            = (SELECT MAX(RATE_DATE)
+                                                                        FROM MT_EXCHRATE
+                                                                        WHERE CURRENCY_CD = :chr_h_to_ccy
+                                                                        AND     RATE_DATE <= :chr_h_date);
+        }
+        else
+        {
+                if(strcmp(chr_h_from_ccy,chr_h_dom_ccy) == 0)
+                {
+                        strcpy(chr_h_from_ccy,chr_h_to_ccy);
+                        int_indirect_flg = 1;
+                }
+                EXEC SQL SELECT EXCHGRT
+                INTO :h_exchg_rt:i_exch_rt
+                FROM MT_EXCHRATE
+                WHERE CURRENCY_CD      = :chr_h_from_ccy
+                AND DENOM_CCY = :chr_h_dom_ccy
+                AND RATE_DATE         = (SELECT MAX(RATE_DATE)
+                                                                FROM MT_EXCHRATE
+                                                                WHERE CURRENCY_CD = :chr_h_from_ccy
+                                                                AND     RATE_DATE <= :chr_h_date);
+        }
+        if(sqlca.sqlcode < 0 || APL_ZERO_RESULT_SET)
+        {
+                *int_p_retstat = IV_CRITCAL_ERROR_IND;
+        }
+
+        IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(DB_ERR_NO,chr_h_from_ccy,chr_h_to_ccy,APL_NULL_STRING);
+
+        if(i_exch_rt == -1)
+                h_exchg_rt = 0;
+        if(int_indirect_flg == 1)
+                *p_rate = 1/h_exchg_rt;
+        else
+		 *p_rate = h_exchg_rt;
+
+        *int_p_retstat = IV_SUCCESS;
+
+        APL_GOBACK_SUCCESS
+
+RETURN_SUCCESS:
+        APL_IF_DEBUG
+        {
+                CO_ProcMonitor(APL_OUT_FILE,
+                         "Exiting Successfully Out Of IV_Proc_ConvToFxFn\n",
+                         NULL, NULL);
+        }
+        return APL_SUCCESS;
+
+RETURN_FAILURE:
+        APL_IF_DEBUG
+        {
+                CO_ProcMonitor(APL_OUT_FILE,
+                         "Exiting Unsuccessfully Out Of IV_Proc_ConvToFxFn\n",
+                         NULL, NULL);
+        }
+        return APL_FAILURE;
+
+}
+
+
+
+
+/* OPT:AIX */
+int  CA_CO_GetNextBusinessDt(char  *chr_p_inp_date,
+                             char  *p_out_date, 
+			     DEBUG_INFO_STRUCT_H   **l_debug_info_ptr )
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+        char    chr_out_date[APL_DATE_LEN]  =       APL_NULL_STRING;
+        short   i_out_date      =       0;
+	char 	chr_tmp_inp_date[APL_DATE_LEN]  =       APL_NULL_STRING;
+	char chr_logstr[20] = APL_NULL_STRING;
+
+	EXEC SQL VAR chr_tmp_inp_date IS STRING;
+
+	EXEC SQL  END  DECLARE SECTION;
+
+        struct sqlca sqlca;
+
+        #ifdef APL_THREADS
+                APL_SET_CONTEXT
+                EXEC SQL CONTEXT USE :my_ctx_local;
+        #endif
+
+        sqlca.sqlcode = 0;
+
+	sprintf(chr_logstr, "ROHAN : chr_p_inp_date = %s", chr_p_inp_date);
+	CO_ProcMonitor(APL_OUT_FILE,
+                         chr_logstr,
+                         NULL, NULL);
+
+	EXEC SQL SELECT to_char(to_date(:chr_p_inp_date,'dd/mm/yyyy hh:mi:ss') + 1) into :chr_tmp_inp_date  from dual;
+
+	IS_ANY_ORA_ERROR
+
+	strcpy(chr_p_inp_date, chr_tmp_inp_date);
+
+	/*Smita - Changed Col Names - HDFCCA Base Version*/
+        EXEC SQL select MAX(H_DATE) +  1
+        into    :chr_out_date:i_out_date
+        from MT_HOLIDAY
+        where STATUS='AA'
+		  AND BANK_IND='Y'
+        connect by prior H_DATE + 1 = H_DATE
+                                and prior STATUS = STATUS
+										  and prior BANK_IND = BANK_IND
+	start with H_DATE=:chr_p_inp_date and STATUS='AA' and BANK_IND='Y';
+
+        IS_ANY_ORA_ERROR
+
+        if      (i_out_date     ==      -1)
+        {
+                strcpy(chr_out_date,chr_tmp_inp_date);
+        }
+
+        strcpy(p_out_date,chr_out_date);
+        
+
+                APL_GOBACK_SUCCESS
+      RETURN_SUCCESS  :
+      {
+                        return (APL_SUCCESS);
+      }
+      RETURN_FAILURE  :
+      {
+         return (APL_FAILURE);
+      }
+}
+
+int BBInsBLOCDEPTRANSAC(char *p_system_date,char *p_account,long p_serv_code,char *p_settle_date,
+						double p_settle_qty,double p_cm_amt,char p_cons_ind,char *p_blccycode,
+						char *p_mstacc,char *p_param_val,char *p_secode,double p_mktprice,double p_exch_rate,char *p_refno,int *int_p_retstat,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	int	l_int_count=0;
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+	blocdeptransac_struct h_blocdeptransac_struct;
+	EXEC SQL VAR h_blocdeptransac_struct.client    IS STRING;
+	EXEC SQL VAR h_blocdeptransac_struct.bl_ccycode IS STRING;
+	EXEC SQL VAR h_blocdeptransac_struct.param_val  IS STRING;
+
+	EXEC SQL END DECLARE SECTION;
+
+	struct sqlca sqlca;
+	#ifdef APL_THREADS
+	  APL_SET_CONTEXT
+	  EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	printf("BBInsBLOCDEPTRANSAC Qty |%lf|\n",p_settle_qty);
+
+	strcpy(h_blocdeptransac_struct.bill_dt,p_system_date);
+   strcpy(h_blocdeptransac_struct.settle_dt,p_settle_date);
+   strcpy(h_blocdeptransac_struct.client,p_account);
+   h_blocdeptransac_struct.cm_amt = p_cm_amt;
+   h_blocdeptransac_struct.settle_qty = p_settle_qty;
+   strcpy(h_blocdeptransac_struct.bl_ccycode,p_blccycode);
+   h_blocdeptransac_struct.cons_ind = p_cons_ind;
+   h_blocdeptransac_struct.serv_code=p_serv_code;
+   strcpy(h_blocdeptransac_struct.mstacc,p_mstacc);
+   strcpy(h_blocdeptransac_struct.param_val,p_param_val);
+   strcpy(h_blocdeptransac_struct.secode,p_secode);
+   h_blocdeptransac_struct.mktprice = p_mktprice;
+   h_blocdeptransac_struct.exch_rate = p_exch_rate;
+	if (p_refno != NULL )
+   strcpy(h_blocdeptransac_struct.identiy_no,p_refno);
+
+h_blocdeptransac_struct.cm_amt = p_cm_amt;
+
+/*
+EXEC SQL INSERT INTO IVDLYSAFEK VALUES(:h_blocdeptransac_struct);
+	*/
+EXEC SQL SELECT COUNT(*) INTO :l_int_count
+FROM IVDLYSAFEK
+		WHERE client = :h_blocdeptransac_struct.client AND
+		bill_dt = :h_blocdeptransac_struct.bill_dt AND
+		serv_code= :h_blocdeptransac_struct.serv_code AND
+		settle_dt = :h_blocdeptransac_struct.settle_dt AND
+		 secode = :h_blocdeptransac_struct.secode AND
+		 param_val = :h_blocdeptransac_struct.param_val;
+	
+	printf("sqlca.sqlcode IVDLYSAFEK |%d| count |%d|\n",sqlca.sqlcode,l_int_count);
+	/*
+if ((sqlca.sqlcode == 1)||(sqlca.sqlcode == -1))
+*/
+if (l_int_count > 0)
+{
+	printf("Delete and Insert into IVDLYSAFEK\n");
+	EXEC SQL DELETE IVDLYSAFEK
+		WHERE client = :h_blocdeptransac_struct.client AND
+		bill_dt = :h_blocdeptransac_struct.bill_dt AND
+		serv_code= :h_blocdeptransac_struct.serv_code AND
+		settle_dt = :h_blocdeptransac_struct.settle_dt AND
+		 secode = :h_blocdeptransac_struct.secode AND
+		 param_val = :h_blocdeptransac_struct.param_val;
+	if ( sqlca.sqlcode < 0 )
+	{
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+	}
+	sqlca.sqlcode = 0;
+}
+	EXEC SQL INSERT INTO IVDLYSAFEK VALUES(:h_blocdeptransac_struct);
+
+
+if(sqlca.sqlcode < 0)
+	*int_p_retstat = IV_CRITCAL_ERROR_IND;
+		
+	IS_ANY_ORA_ERROR 
+	
+	*int_p_retstat = IV_SUCCESS;
+	 APL_GOBACK_SUCCESS;
+
+RETURN_SUCCESS:
+		return APL_SUCCESS;
+RETURN_FAILURE:
+		return APL_FAILURE; 
+}
+
+/* Bageshri 18/06/2007 : HDFC UAT Fix for detailed custody charges - START*/
+/*added feesccy_exch_rt by shruthi kumbla for ISKB_1901*/
+int IV_New_CustPrint(char *p_account,char *p_instr_code,char *p_from_date,char *p_to_date,
+						double p_qty,double p_mktprice,double p_cust_chrg,char *p_upto_date,
+						double p_exch_rate, char *p_feeccycode,
+						char p_port_eval,char *p_mastacc, double p_schdl_fee,
+						char *p_loc_code,char *p_prod_type, double p_portfolio,double feesccy_exch_rt,
+						int *int_p_retstat,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+
+	int l_int_count = 0;
+
+	ivcustprint_struct h_ivcustprint_struct;
+	EXEC SQL VAR h_ivcustprint_struct.client    IS STRING;
+	EXEC SQL VAR h_ivcustprint_struct.instr_code IS STRING;
+	EXEC SQL VAR h_ivcustprint_struct.bill_from_dt  IS STRING;
+	EXEC SQL VAR h_ivcustprint_struct.bill_to_dt  IS STRING;
+	EXEC SQL VAR h_ivcustprint_struct.bill_dt  IS STRING;
+	EXEC SQL VAR h_ivcustprint_struct.fee_ccycode  IS STRING;
+	EXEC SQL VAR h_ivcustprint_struct.mstacc  IS STRING;
+	EXEC SQL VAR h_ivcustprint_struct.loc_code  IS STRING;
+	EXEC SQL VAR h_ivcustprint_struct.instr_sub_type  IS STRING;
+
+	EXEC SQL END DECLARE SECTION;
+
+	struct sqlca sqlca;
+	#ifdef APL_THREADS
+	  APL_SET_CONTEXT
+	  EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Exiting Successfully Out Of  IV_New_CustPrint\n",
+			 NULL, NULL);
+	}
+
+	printf("Qty Parameter	|%lf|\n",p_qty);
+	strcpy(h_ivcustprint_struct.client,p_account);
+	h_ivcustprint_struct.serv_code = 1;
+	strcpy(h_ivcustprint_struct.instr_code,p_instr_code);
+	strcpy(h_ivcustprint_struct.bill_from_dt,p_from_date);
+	strcpy(h_ivcustprint_struct.bill_to_dt,p_to_date);
+	h_ivcustprint_struct.qty = p_qty;
+	h_ivcustprint_struct.mktprice = p_mktprice;
+	h_ivcustprint_struct.cust_chrg = p_cust_chrg;
+	strcpy(h_ivcustprint_struct.bill_dt,p_upto_date);
+	h_ivcustprint_struct.exch_rate = p_exch_rate;
+	/*added feesccy_exch_rt by shruthi kumbla for ISKB_1901*/
+	h_ivcustprint_struct.feesccy_exch_rt = feesccy_exch_rt;
+	strcpy(h_ivcustprint_struct.fee_ccycode,p_feeccycode);
+	h_ivcustprint_struct.port_eval = p_port_eval;
+	strcpy(h_ivcustprint_struct.mstacc,p_mastacc);
+	h_ivcustprint_struct.schdl_fee = p_schdl_fee;
+	strcpy(h_ivcustprint_struct.loc_code,p_loc_code);
+	strcpy(h_ivcustprint_struct.instr_sub_type,p_prod_type);
+	h_ivcustprint_struct.portfolio = p_portfolio;
+
+	printf("h_dl_client :|%s|\n",h_ivcustprint_struct.client);
+	printf("h_instr_code :|%s|\n",h_ivcustprint_struct.instr_code);
+	printf("l_bill_from_dt :|%s|\n",h_ivcustprint_struct.bill_from_dt);
+	printf("l_bill_to_dt :|%s|\n",h_ivcustprint_struct.bill_to_dt);
+	printf("h_safekeep_pos :|%lf|\n",h_ivcustprint_struct.qty);
+	printf("h_closing_pr :|%lf|\n",h_ivcustprint_struct.mktprice);
+	printf("cust_chrg :|%lf|\n",h_ivcustprint_struct.cust_chrg);
+	printf("dbl_h_portval :|%c|\n",h_ivcustprint_struct.port_eval);
+	printf("l_bill_to_dt :|%s|\n",h_ivcustprint_struct.bill_dt);
+	printf("l_exchg_rt :|%lf|\n",h_ivcustprint_struct.exch_rate);
+	printf("chr_g_fee_ccycode :|%s|\n",h_ivcustprint_struct.fee_ccycode);
+	printf("p_mstclt_a :|%s|\n",h_ivcustprint_struct.mstacc);
+	printf("h_loccode :|%s|\n",h_ivcustprint_struct.loc_code);
+	printf("h_prodateype :|%s|\n",h_ivcustprint_struct.instr_sub_type);
+	printf("portfolio :|%lf|\n",h_ivcustprint_struct.portfolio);
+        Alert(" feesccy_exch_rt	|%lf|\n",h_ivcustprint_struct.feesccy_exch_rt);	/*added l_exch_rate by shruthi kumbla for ISKB_1901*/
+
+	/*	EXEC SQL INSERT INTO IV_CUST_PRINT VALUES(:h_ivcustprint_struct);	*/
+	/*	Skip Serivce Code 2 of IV_CUST_PRINT */
+
+	/*trunc by shruthi kumbla for bill optimization on 29/03/2017*/
+	EXEC SQL SELECT COUNT(*) INTO :l_int_count
+	FROM IV_CUST_PRINT
+	WHERE CLIENT = :h_ivcustprint_struct.client
+		AND INSTR_CODE = :h_ivcustprint_struct.instr_code
+		AND (B_FROM_DATE) = (TO_DATE(:h_ivcustprint_struct.bill_from_dt,'dd/mm/yyyy hh24:mi:ss'))
+		AND (B_TO_DATE) = (TO_DATE(:h_ivcustprint_struct.bill_to_dt,'dd/mm/yyyy hh24:mi:ss'))
+		AND (BILLING_DT) = (TO_DATE(:h_ivcustprint_struct.bill_dt,'dd/mm/yyyy hh24:mi:ss'))
+		AND PORTFOLIO_IND = :h_ivcustprint_struct.port_eval
+		AND LOCATION_CD = :h_ivcustprint_struct.loc_code
+		AND SERVICE_CD <> 11;
+
+
+	printf("\n-- Bageshri in IV_CUST_PRINT sqlca.sqlcode |%d| count |%d|",sqlca.sqlcode,l_int_count);
+/*	if ((sqlca.sqlcode == 1)||(sqlca.sqlcode == -1))	*/
+
+	if (l_int_count > 0)
+	{
+		printf("Delete and Insert new Entry !!\n");
+		/*trunc removed by shruthi kumbla for bill optimization on 29/03/2017*/
+		EXEC SQL DELETE FROM IV_CUST_PRINT
+			WHERE CLIENT = :h_ivcustprint_struct.client
+				AND INSTR_CODE = :h_ivcustprint_struct.instr_code
+				AND (B_FROM_DATE) = (TO_DATE(:h_ivcustprint_struct.bill_from_dt,'dd/mm/yyyy hh24:mi:ss'))
+				AND (B_TO_DATE) = (TO_DATE(:h_ivcustprint_struct.bill_to_dt,'dd/mm/yyyy hh24:mi:ss'))
+				AND (BILLING_DT) = (TO_DATE(:h_ivcustprint_struct.bill_dt,'dd/mm/yyyy hh24:mi:ss'))
+				AND PORTFOLIO_IND = :h_ivcustprint_struct.port_eval
+				AND LOCATION_CD = :h_ivcustprint_struct.loc_code
+				AND SERVICE_CD <>  11;
+
+		if ( sqlca.sqlcode < 0 )
+		{
+			*int_p_retstat = IV_CRITCAL_ERROR_IND;
+		}
+	}
+
+		sqlca.sqlcode = 0;
+
+		EXEC SQL INSERT INTO IV_CUST_PRINT VALUES(:h_ivcustprint_struct);
+		printf("\n-- After Insert in IV_CUST_PRINT sqlca.sqlcode |%d|",sqlca.sqlcode);
+
+	if(sqlca.sqlcode < 0)
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+		
+	IS_ANY_ORA_ERROR 
+	
+	*int_p_retstat = IV_SUCCESS;
+	 APL_GOBACK_SUCCESS;
+
+RETURN_SUCCESS:
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Exiting Successfully Out Of  IV_New_CustPrint\n",
+			 NULL, NULL);
+	}
+		return APL_SUCCESS;
+
+RETURN_FAILURE:
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Exiting Unsuccessfully Out Of  IV_New_CustPrint\n",
+			 NULL, NULL);
+	}
+		return APL_FAILURE; 
+}
+
+/* Bageshri 18/06/2007 : HDFC UAT Fix for detailed custody charges - END */
+// shailesh 13072007
+
+int IV_Cal_AvgMktPrc(char *p_account,char *p_instr_code,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+double prev_qty=0.0;
+double new_qty=0.0;
+double mkt_price_sameqty=0.0;
+double mkt_price=0.0;
+int count_sameqty=0;
+int counter_loop=0;
+int int_l_diff=0;
+int l_fetch_count=0;
+
+double avg_mkt_prc=0.0;
+char l_bill_from_prev[20] = APL_NULL_STRING;
+char l_bill_to_prev[20] = APL_NULL_STRING;
+
+char l_client_code[20] = APL_NULL_STRING;
+char l_instr_code[12] = APL_NULL_STRING;
+char l_bill_from[20] = APL_NULL_STRING;
+char l_bill_from_temp[20] = APL_NULL_STRING;
+char l_bill_to_temp[20] = APL_NULL_STRING;
+char l_bill_to[20] = APL_NULL_STRING;
+char l_daily_portfolio = APL_NULL_CHAR;
+char chr_h_bl_upto_dt[APL_DATE_LEN]=APL_NULL_STRING;
+
+double l_qty = 0.0;
+double l_qty_final = 0.0;
+double l_avg_mkt_prc = 0.0;
+
+int l_break_flag = 0,int_l_count = 0;
+int l_qty_counter = 0;
+int l_daily_display_flag = 0;
+
+double l_avg_mkt_prc_total = 0.0;
+double l_cust_chrg_total = 0.0;
+
+double l_qty_prev = 0.0;
+double l_avg_mkt_prc_prev = 0.0;
+double l_cust_chrg_prev = 0.0;
+
+/*********************************/
+EXEC SQL VAR chr_h_bl_upto_dt  IS STRING;
+EXEC SQL VAR l_bill_from  IS STRING;
+EXEC SQL VAR l_bill_to  IS STRING;
+
+memset(chr_h_bl_upto_dt, APL_NULL_CHAR, APL_DATE_LEN);
+memset(l_bill_from, APL_NULL_CHAR, APL_DATE_LEN);
+memset(l_bill_to, APL_NULL_CHAR, APL_DATE_LEN);
+
+
+strcpy(l_client_code,p_account);
+strcpy(l_instr_code,p_instr_code);
+
+//printf("l_client_code |%s| chr_p_billdt |%s| l_instr_code |%s| ",l_client_code,chr_h_bl_upto_dt,l_instr_code);
+
+//strcpy(chr_h_bl_upto_dt,chr_g_bl_upto_dt);
+
+EXEC SQL SELECT TO_CHAR(B_UPTO_DATE,'DD/MM/YYYY HH24:MI:SS') 
+		INTO :chr_h_bl_upto_dt 
+		FROM SYS_IVCONTROLPARAM;
+
+/*	Skip Serivce Code 2 of IV_CUST_PRINT */
+EXEC SQL DECLARE cust_avg_prc CURSOR FOR
+SELECT TO_CHAR(B_FROM_DATE,'DD/MM/YYYY'),TO_CHAR(B_TO_DATE,'DD/MM/YYYY'),
+SUM(NVL(QTY,0)),AVG(NVL(MKT_PRC,0))
+FROM IV_CUST_PRINT 
+WHERE CLIENT = :l_client_code 
+AND INSTR_CODE = :l_instr_code
+AND BILLING_DT = :chr_h_bl_upto_dt
+AND PORTFOLIO_IND = 'D'
+AND QTY <> 0
+AND SERVICE_CD <> 11
+GROUP BY B_FROM_DATE,B_TO_DATE 
+ORDER BY B_FROM_DATE,B_TO_DATE;
+
+EXEC SQL OPEN cust_avg_prc;
+
+printf("After Cursor cust_sub_curr Open :|%d|\n",sqlca.sqlcode);
+
+for(;;)
+{
+	memset(l_bill_from,APL_NULL_CHAR,20);
+	memset(l_bill_to,APL_NULL_CHAR,20);
+	
+	EXEC SQL FETCH cust_avg_prc 
+		INTO :l_bill_from,:l_bill_to,
+			  :l_qty,:l_avg_mkt_prc;
+
+	printf("After Cursor cust_avg_prc Fetch :|%d|\n",sqlca.sqlcode);
+
+	if(sqlca.sqlcode == 1403)
+		l_break_flag = 1;
+
+
+	if((sqlca.sqlcode < 0)&&(sqlca.sqlcode != -1405))
+	{
+		printf("Error :Critical Error in cust_sub_curr Fetch ORA Error :|%d|\n ",sqlca.sqlcode);
+		break;
+	}
+
+	/********** Grouping Part *************************************/
+
+	printf("l_break_flag :|%d|\n",l_break_flag);
+
+	if(l_break_flag == 0)
+	{
+
+		printf(" -- l_qty_counter :|%d|\n",l_qty_counter);
+
+		if(l_qty_counter == 0)
+		{	
+			printf("l_fetch_count :|%d|\n",l_fetch_count);
+
+			if(l_fetch_count == 0)
+			{
+				strcpy(l_bill_from_prev,l_bill_from);
+				strcpy(l_bill_to_prev,l_bill_to);
+
+				l_qty_prev = l_qty;
+				l_avg_mkt_prc_prev = l_avg_mkt_prc;
+				
+				l_avg_mkt_prc_total = l_avg_mkt_prc_prev;
+				
+				l_daily_display_flag = 0;
+
+				l_qty_counter ++;
+			}
+		}
+		else
+		{	
+			if((l_fetch_count > 0)&&(l_qty_counter == 1))
+			{
+				l_avg_mkt_prc_total = l_avg_mkt_prc_prev;
+
+			}
+
+			printf("l_qty :|%lf| l_qty_prev |%lf|	l_avg_mkt_prc |%lf|\n",l_qty,l_qty_prev,l_avg_mkt_prc);
+			printf("l_bill_to :|%s| l_bill_to_prev |%s|\n",l_bill_to,l_bill_to_prev);
+
+			if ( APL_FAILURE == CO_Pro_DateComp(l_bill_to_prev, l_bill_to,
+											 &int_l_diff, l_debug_info_ptr) )
+					APL_GOBACK_FAIL
+
+
+			printf("int_l_diff :|%d|\n",int_l_diff);
+
+			if((l_qty == l_qty_prev)&&(int_l_diff == 1))
+			{
+				l_avg_mkt_prc_total = l_avg_mkt_prc_total + l_avg_mkt_prc;
+
+				l_qty_counter ++;
+
+				l_qty_prev = l_qty;
+
+				strcpy(l_bill_to_prev,l_bill_to);
+
+				printf("l_qty_prev :|%lf|\n",l_qty_prev);
+				printf("l_avg_mkt_prc_total :|%lf|\n",l_avg_mkt_prc_total);
+
+			}
+			else
+			{					
+				strcpy(l_bill_from_temp,l_bill_from);
+				strcpy(l_bill_from,l_bill_from_prev);
+				strcpy(l_bill_from_prev,l_bill_from_temp);
+
+				strcpy(l_bill_to_temp,l_bill_to);
+				strcpy(l_bill_to,l_bill_to_prev);
+				strcpy(l_bill_to_prev,l_bill_to_temp);
+				
+				l_daily_display_flag = 1;
+
+				l_qty_final = l_qty_prev;
+
+				l_avg_mkt_prc_total = (l_avg_mkt_prc_total/l_qty_counter);
+
+				/* Bageshri 18/06/2007 : HDFC UAT Fix for detailed custody charges - START */
+				//l_cust_chrg_total = (l_cust_chrg_total/l_qty_counter);	
+
+				/* Bageshri 18/06/2007 : HDFC UAT Fix for detailed custody charges - END */
+
+				l_qty_prev = l_qty;
+				l_avg_mkt_prc_prev = l_avg_mkt_prc;
+			
+				l_qty_counter = 1;
+
+				printf("l_bill_from :|%s|\n",l_bill_from);
+				printf("l_bill_to :|%s|\n",l_bill_to);
+				
+				printf("l_qty_final :|%lf|\n",l_qty_final);
+				printf("l_avg_mkt_prc_total :|%lf|\n",l_avg_mkt_prc_total);
+
+			}
+		}
+
+	}
+	else
+	{
+		strcpy(l_bill_from_temp,l_bill_from);
+		strcpy(l_bill_from,l_bill_from_prev);
+
+		strcpy(l_bill_to,l_bill_to_prev);
+
+		l_daily_display_flag = 1;
+
+		l_qty_final = l_qty_prev;
+
+		printf(" ** l_qty_counter :|%d|\n",l_qty_counter);
+
+		l_avg_mkt_prc_total = (l_avg_mkt_prc_total/l_qty_counter);
+
+		/* Bageshri 18/06/2007 : HDFC UAT Fix for detailed custody charges - START */
+
+		//l_cust_chrg_total = (l_cust_chrg_total/l_qty_counter);	
+
+		/* Bageshri 18/06/2007 : HDFC UAT Fix for detailed custody charges - END */
+
+		printf("l_bill_from :|%s|\n",l_bill_from);
+		printf("l_bill_to :|%s|\n",l_bill_to);
+		
+		printf("l_qty_final :|%lf|\n",l_qty_final);
+		printf("l_avg_mkt_prc_total :|%lf|\n",l_avg_mkt_prc_total);
+	
+	}
+
+	/**************************************************************/
+
+	Alert("l_daily_display_flag :|%d|\n",l_daily_display_flag);
+
+	if(l_daily_display_flag == 1)
+	{
+
+		/*	Skip Serivce Code 2 of IV_CUST_PRINT */
+		EXEC SQL UPDATE IV_CUST_PRINT SET MKT_PRC=:l_avg_mkt_prc_total 
+		WHERE CLIENT = :l_client_code 
+		AND INSTR_CODE = :l_instr_code
+		AND TRUNC(B_FROM_DATE)
+		BETWEEN TRUNC(TO_DATE(:l_bill_from,'dd/mm/yyyy hh24:mi:ss')) AND  
+		TRUNC(TO_DATE(:l_bill_to,'dd/mm/yyyy hh24:mi:ss'))
+		AND PORTFOLIO_IND = 'D'
+		AND QTY <> 0
+		AND SERVICE_CD <> 11;
+
+		printf("Update SQL |%d|\n",sqlca.sqlcode);
+
+		IS_ANY_ORA_ERROR
+
+		if(l_break_flag == 1)
+		break;
+
+		l_fetch_count ++;
+		l_daily_display_flag = 0;
+
+		l_avg_mkt_prc_total = l_avg_mkt_prc;	/* Bageshri 18/06/2007 : HDFC UAT Fix for detailed custody charges */
+	}
+
+
+}
+EXEC SQL CLOSE cust_avg_prc;
+
+
+
+
+
+/********************************/
+
+APL_GOBACK_SUCCESS//AIX Warning Removal 
+RETURN_SUCCESS:
+        APL_IF_DEBUG
+        {
+                CO_ProcMonitor(APL_OUT_FILE,
+                         "Exiting Successfully Out Of IV_Proc_ConvToFxFn\n",
+                         NULL, NULL);
+        }
+        return APL_SUCCESS;
+
+RETURN_FAILURE:
+        APL_IF_DEBUG
+        {
+                CO_ProcMonitor(APL_OUT_FILE,
+                         "Exiting Unsuccessfully Out Of IV_Proc_ConvToFxFn\n",
+                         NULL, NULL);
+        }
+        return APL_FAILURE;
+} //end of func
+
+
+
+

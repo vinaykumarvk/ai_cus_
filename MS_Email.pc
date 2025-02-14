@@ -1,0 +1,698 @@
+
+/************************************************************************************
+ *    COPYRIGHT NOTICE                                                              *
+ *                                                                                  *
+ *   Copyright 2005 Polaris Software Lab Limited. All rights reserved.              *
+ *                                                                                  *
+ *   These materials are confidential and proprietary to                            *
+ *    Polaris Software Lab Limited and no part of these materials should            *
+ *    be reproduced, published, transmitted or distributed in any form or           *
+ *    by any means, electronic, mechanical, photocopying, recording or              *
+ *    otherwise, or stored in any information storage or retrieval system           *
+ *    of any nature nor should the materials be disclosed to third parties          *
+ *    or used in any other manner for which this is not authorized, without         *
+ *    the prior express written authorization of Polaris Software Lab Limited.      *
+ ************************************************************************************/
+/************************************************************************************
+ *
+ * Module Name         :        Email Transmitter
+ *
+ * File Name           :        MS_Email.pc
+ *
+ *                      Version Control Block
+ *
+ * Date        Version     Author               Description
+ * ---------   --------  ---------------  ---------------------------------------------
+ * 				   1.0       TUX       		Email Transmitter
+ * 26/08/2020    1.1       kotubabu         Linux Migration    Kotak Implementation
+ *************************************************************************************/
+/*********** We can also Use The sendmail program which is universal
+ * mail server for unix platform .... here we are using mailx ****/
+
+/*** For Making Email files always use HTML tags like ..... for New line use < DIV> </DIV> ***/
+/** This Transmitter which uses sendmail to send emails . Email file should be in HTML mime format
+ * . Uses Basic email capabilities of unix.... For robust email client use JAVA Mail API  ***
+ *	Project GLassfish .... might help you ***/
+
+
+ 
+#include <unistd.h>
+#include <string.h>
+#include <strings.h>
+#include "CR_Common.h"
+#include "CO_Commdef.h"
+#include "Intellect_Interface.h"
+#include "Intellect_Error.h"
+#define S_PROGNAME "Biller"
+#define SLEEP_TIME 5
+#define S_KEY "billkey"
+#define S_USERID "SYSTEM"
+#define S_MODE "A"
+#define S_AUTH_REQ "A"
+#define S_SUBFUN "S"
+#define S_ACTION "A"
+#define S_FUNCPARAMS " "
+#define REC_LOCK_ORA_ERR -54
+#define APL_MAXLINE_SIZE 7001  /*** this can be in common.h **/
+
+//AIX Warnings - static variables intialized to avoid BSTAT error
+EXEC SQL INCLUDE SQLCA.H;
+static char chr_g_progname[41]=APL_NULL_STRING;
+static char chr_g_key[41]=APL_NULL_STRING;
+static char chr_g_rowid[APL_ROWID_LEN]=APL_NULL_STRING;
+static char chr_g_startdate[APL_DATE_LEN]=APL_NULL_STRING;
+static char chr_h_restart_data[50]=APL_NULL_STRING; //,chr_h_eod_flg=APL_NULL_CHAR;
+static int int_lineno=0;
+static char h_ora_rowid[APL_ROWID_LEN]=APL_NULL_STRING;
+static short   i_ora_rowid=0,i_restart=0; //,i_eod_flg=0;
+ 
+//static char chr_g_swflineid[21]=APL_NULL_STRING; 
+
+typedef struct {
+ char client[11];	
+ char file_name[61];                       
+ char from_mail[201];                    
+ char to_mail[201];                    
+ char cc_mail[201];
+ char bcc_mail[201];
+ char subject[401];/* changed by Deepti  ISKB_4256 : Intimation and Reminder email Messages subject change FOC change: field lenth changed to 401 from 201*/
+ char bodytext[201];
+ char signature[1001];
+ char file_path[201];
+ char status[2];
+ char trans_dt[APL_DATE_LEN];
+ char attachment[2];
+ } common_email;
+typedef struct {
+ short client;
+ short file_name;
+ short from_name;
+ short to_mail;
+ short cc_mail;
+ short bcc_mail;
+ short subject;
+ short bodytext;
+ short signature;
+ short file_path;
+ short status;
+ short trans_dt;
+ short attachment;
+ } l_common_email_i_struct;
+
+
+/********* End of header *********/
+
+/********* End of ack ***/
+char chr_g_templatename[APL_MAXLINE_SIZE]= APL_NULL_STRING;
+
+int MS_Proc_EmailTran(char **argv,
+							DEBUG_INFO_STRUCT_H **l_debug_info_ptr,
+							INTL_ENV_DATA_STRUCT_H *p_intlenv_data_struct_h) 
+{
+	FILE *chr_finifile=NULL;
+	FILE *chr_femailfile =NULL;
+	FILE *chr_fbodyfile =NULL;
+	FILE *chr_ftemplatefile = NULL;
+	static FILE *chr_logfile=NULL;
+	char *chr_tempchar=NULL;
+	char l_buf[1000] 							=	APL_NULL_STRING;
+	char chr_h_trans_dt[APL_DATE_LEN]	=	APL_NULL_STRING;
+	char chr_l_status[2] 					= 	APL_NULL_STRING; 
+	int l_command_status						=  0;
+	char chr_inifile[PATH_LENGTH]			=	APL_NULL_STRING;
+	char chr_emailfile[PATH_LENGTH]		= APL_NULL_STRING;
+	char chr_bodyfile[PATH_LENGTH]		= APL_NULL_STRING;
+	char chr_templatefile[PATH_LENGTH]	= APL_NULL_STRING;
+	char chr_temp[PATH_LENGTH]				= APL_NULL_STRING;
+	int l_count				= 0;
+	//char *last ;
+
+
+	char chr_h_rowid_a[APL_ROWID_LEN]	=	APL_NULL_STRING;
+	char l_linebuf[APL_MAXLINE_SIZE] 	= APL_NULL_STRING;
+	char chr_emailsender[50]	= APL_NULL_STRING;
+
+	int int_countofrec=0;
+	common_email messageStruct;
+	l_common_email_i_struct indicator;
+	EXEC SQL BEGIN DECLARE SECTION;
+			EXEC SQL VAR chr_h_rowid_a 					IS STRING;
+			EXEC SQL VAR messageStruct.file_name		IS STRING;
+			EXEC SQL VAR messageStruct.from_mail	 	IS STRING;
+			EXEC SQL VAR messageStruct.to_mail		 	IS STRING;
+			EXEC SQL VAR messageStruct.cc_mail			IS STRING;
+			EXEC SQL VAR messageStruct.bcc_mail			IS STRING;
+			EXEC SQL VAR messageStruct.subject 			IS STRING;
+			EXEC SQL VAR messageStruct.bodytext			IS STRING;
+			EXEC SQL VAR messageStruct.signature		IS STRING;
+			EXEC SQL VAR messageStruct.file_path		IS STRING;
+			EXEC SQL VAR messageStruct.status			IS STRING;
+			EXEC SQL VAR messageStruct.trans_dt			IS STRING;
+			EXEC SQL VAR messageStruct.attachment		IS STRING;
+			EXEC SQL VAR chr_h_trans_dt 					IS STRING;
+			EXEC SQL VAR chr_h_rowid_a						IS STRING;
+	EXEC SQL END DECLARE SECTION;
+
+	memset (chr_h_trans_dt, APL_NULL_CHAR, APL_DATE_LEN);
+	memset (l_buf, APL_NULL_CHAR,1000);
+	memset(chr_emailsender,APL_NULL_CHAR,50);
+
+	if(!(chr_tempchar=getenv("INTL_ROOT_PATH")))
+		APL_GOBACK_FAIL
+	sprintf(chr_inifile,"%s/intl_sun.cfg",chr_tempchar);
+	sprintf(chr_templatefile,"%s/%s",chr_tempchar,chr_g_templatename);
+
+
+	if(!(chr_finifile=fopen(chr_inifile,"r")))
+		APL_GOBACK_FAIL
+			if(!chr_logfile)
+			{
+				if(CO_Rtv_RptFileName("ML",
+							APL_LOGFILE_DESC,
+							100,
+							argv[5],
+							argv,
+							&chr_logfile,
+							l_debug_info_ptr)==APL_FAILURE)
+				{
+					return(APL_FAILURE);
+				}
+			}
+
+	if (CO_ReadToken(chr_finifile,"INTL_EMAIL_PATH",chr_emailfile,l_debug_info_ptr) != APL_SUCCESS)
+		      APL_GOBACK_FAIL
+	
+	if (CO_ReadToken(chr_finifile,"INTL_EMAIL_SENDER",chr_emailsender,l_debug_info_ptr) != APL_SUCCESS)
+		      APL_GOBACK_FAIL
+
+	EXEC SQL DECLARE msgCursor CURSOR FOR
+		SELECT COMMON_EMAIL.*,ROWID
+		FROM COMMON_EMAIL
+		WHERE STATUS='P'  FOR UPDATE OF STATUS;
+	IS_ANY_ORA_ERROR
+
+		EXEC SQL OPEN msgCursor;
+	IS_ANY_ORA_ERROR
+
+		while(1)
+		{
+			l_count =0;
+			if(CO_RtvSysDtTime(chr_h_trans_dt,l_debug_info_ptr)==APL_FAILURE)
+			{
+				APL_GOBACK_FAIL
+			}
+			memset(&messageStruct,NULL,sizeof(messageStruct));
+			memset(chr_h_rowid_a,APL_NULL_CHAR,APL_ROWID_LEN);
+			EXEC SQL FETCH msgCursor INTO :messageStruct :indicator,:chr_h_rowid_a;
+			IS_ANY_ORA_ERROR
+				if(APL_ZERO_RESULT_SET) {
+					printf("No Rows Found --- Breaking\n");
+					break;
+				}
+			IS_ANY_ORA_ERROR
+
+				/**** Now creating command to send mail---- using mailx of unix *******/
+				/* In future if requirment change then make change here ***/
+				/** (echo "check the attachments";uuencode mail.txt mail.txt;echo "This is footer") | mailx -s "mail subject" @ac.xyz@polaris.co.in   *********/
+			#ifdef DEBUG	
+				printf("\n Values are as follows ");
+				printf("\n body = |%s| ",messageStruct.bodytext);
+				printf("\n filename = |%s| ",messageStruct.file_path);
+				printf("\n filepath = |%s| ",messageStruct.file_name);
+				printf("\n signature = |%s| ",messageStruct.signature);
+				printf("\n subject = |%s| ",messageStruct.subject);
+				printf("\n To mail = |%s| ",messageStruct.to_mail);
+				printf("\n BCC mail = |%s| ",messageStruct.bcc_mail);
+				printf("\n CC mail = |%s| ",messageStruct.cc_mail);
+				printf("\n ASHWIN is HERE \n");
+			#endif
+
+				if(strcmp(messageStruct.attachment,"Y") != 0)
+				{
+					printf("\n ASHWIN  in if \n ");
+					strcpy(	chr_bodyfile,messageStruct.file_path);
+					strcat(chr_bodyfile,messageStruct.file_name);
+					chr_fbodyfile = fopen(chr_bodyfile,"r");  /*** TBS file ***/
+					if ( chr_fbodyfile== NULL )
+					{
+						printf("\n Error in body file ... Cannot open TBS file in OUTMSG Area");
+						/** Start Changes AmitB:020407:IsolveId-156  **/
+						fprintf(chr_logfile,"\n Error in body file ... Cannot open TBS file in OUTMSG Area.Skipping File=|%s|",messageStruct.file_name);
+						EXEC SQL UPDATE COMMON_EMAIL SET STATUS='E' WHERE rowid=:chr_h_rowid_a;
+						IS_ANY_ORA_ERROR
+						continue ;
+						/** End Changes AmitB:020407:IsolveId-156  **/
+					}
+					chr_ftemplatefile =fopen(chr_templatefile,"r"); /*** TEMPLATE ***/
+					if ( chr_ftemplatefile== NULL )
+					{
+						printf("\n Error in opening Template file ");
+						APL_GOBACK_FAIL
+
+					}
+					strcpy(chr_temp , APL_NULL_STRING);
+					strcpy(chr_temp,chr_emailfile);
+					strcat(chr_temp,messageStruct.file_name);
+					chr_femailfile =fopen(chr_temp,"w"); /*** EMAIL file ***/
+					if ( chr_femailfile== NULL )
+					{
+						printf("\n Error in opening email File ");
+						APL_GOBACK_FAIL
+					}
+
+					fprintf(chr_femailfile,"To: %s \n" , messageStruct.to_mail);
+					fprintf(chr_femailfile,"CC: %s \n" , messageStruct.cc_mail);
+					fprintf(chr_femailfile,"BCC: %s \n" , messageStruct.bcc_mail);
+					fprintf(chr_femailfile,"Subject: %s \n" , messageStruct.subject);
+					rewind(chr_ftemplatefile);
+					for ( l_count = 0;l_count < int_lineno ;l_count++)
+					{
+						memset(l_linebuf,APL_NULL_CHAR,APL_MAXLINE_SIZE);
+						/*fscanf(chr_ftemplatefile,"%[^\n]\n",l_linebuf);*/
+						fgets(l_linebuf,APL_MAXLINE_SIZE,chr_ftemplatefile); 
+						l_linebuf[strlen(l_linebuf)] =APL_NULL_CHAR;
+						fprintf(chr_femailfile,"%s",l_linebuf);
+					}  /**** starting 37 lines written in email file ****/
+					fprintf(chr_femailfile,"<DIV></DIV>");  /** New line in MIME HTML ***/
+					while (!feof(chr_fbodyfile))
+					{
+						memset(l_linebuf,APL_NULL_CHAR,APL_MAXLINE_SIZE);
+						fscanf(chr_fbodyfile,"%[^\n]\n",l_linebuf);
+						/*fgets(l_linebuf,APL_MAXLINE_SIZE,chr_fbodyfile);*/
+						l_linebuf[strlen(l_linebuf)] =APL_NULL_CHAR;
+						fprintf(chr_femailfile,"<DIV>%s</DIV>\n",l_linebuf); /* JC - ISKB 636 - New line after every DIV HTML tag  -- To avoid the stray exclamation mark in email message */
+					} /*** Body text printed ***/
+					fprintf(chr_femailfile,"<DIV></DIV>");  /** New line in MIME HTML ***/
+					while(!feof(chr_ftemplatefile))
+					{
+						memset(l_linebuf,APL_NULL_CHAR,APL_MAXLINE_SIZE);
+						/*fscanf(chr_ftemplatefile,"%[^\n]\n",l_linebuf); */
+						fgets(l_linebuf,APL_MAXLINE_SIZE,chr_ftemplatefile);
+						l_linebuf[strlen(l_linebuf)] =APL_NULL_CHAR;
+						fprintf(chr_femailfile,"%s",l_linebuf);
+					} /*** Last part of email written in file ****/
+					/**** Voila email is created ********
+					 * Now its time to send it with sendmail 
+					 * if it is report then then send it as attachment else 
+					 * send it as eml MIME format 
+					 * God help this mail to reach receipent
+					 */
+					fclose(chr_femailfile);
+					fclose(chr_ftemplatefile);
+					fclose(chr_fbodyfile);
+					/**** Unix mail using path /usr/lib *****Define it in env variable ***/
+					/*	Addition of sender mail id with option f	ISKB_2212	*/
+					sprintf(l_buf, "cat %s | /usr/lib/sendmail -t -f %s ",chr_temp,chr_emailsender);
+					/* Chirag Send Mail made contry specific 21-02-2007*/ 
+					IF_COND_EXISTS("SEND_MAIL","SENDMAIL")
+					{
+							l_command_status = system(l_buf);  
+							printf("Send mail command is |%s|",l_buf);
+							printf("\n shell returned = |%d| ",l_command_status);
+					}
+					if (l_command_status != 0 && l_command_status !=-1) /*Added by kotubabu for Linux Migration(System Command Returns -1 in Linux)*/
+					{
+						fprintf(chr_logfile,"\n Error in sending message for client %s",messageStruct.client);
+						printf("\n ERROR IN SENDING ");
+					}
+					else
+					{
+						fprintf(chr_logfile,"\n Sent mail for client %s at %s ", messageStruct.client,chr_h_trans_dt);
+						printf("\n SENT MAIL ");					
+					}
+					
+				}
+				else
+				{
+					/************ Code for attachement *************/
+					sprintf(l_buf,"(echo \"%s\" ;uuencode %s/%s %s; echo \"%s\" ) | mailx -s \"%s\"  ", messageStruct.bodytext,messageStruct.file_path,messageStruct.file_name,messageStruct.file_name,messageStruct.signature, messageStruct.subject);
+					printf("\n ASHWIN  in else \n ");
+					if (strlen ( messageStruct.bcc_mail) >  0 )
+					{
+						strcat (l_buf," -b \"");
+						strcat (l_buf,messageStruct.bcc_mail);
+						strcat (l_buf,"\" ");
+					}
+					if (strlen ( messageStruct.cc_mail) >  0 )
+					{
+						strcat (l_buf," -c \"");
+						strcat (l_buf,messageStruct.cc_mail);
+						strcat (l_buf,"\"  ");
+					}
+
+					strcat (l_buf, "\"");
+					strcat (l_buf,messageStruct.to_mail);
+					strcat (l_buf,"\"  ");
+
+					fprintf(chr_logfile,"Command = %s Client = %s",l_buf,messageStruct.client);
+					/* Chirag Send Mail made contry specific 21-02-2007*/ 
+					IF_COND_EXISTS("SEND_MAIL","SENDMAIL")
+					{
+							l_command_status = system(l_buf); 
+							printf("Send mail command is |%s|",l_buf);
+							printf("\n shell returned = |%d| ",l_command_status);
+					}
+					if (l_command_status != 0 && l_command_status != -1) /*Added by kotubabu for Linux Migration(System Command Returns -1 in Linux)*/
+					{
+						fprintf(chr_logfile,"\n Error in sending message for client %s",messageStruct.client);
+						printf("\n Cannot Send Mail \n ");
+					}
+					else
+					{
+						fprintf(chr_logfile,"\n Sent mail for client %s at %s ", messageStruct.client,chr_h_trans_dt);
+						printf("\n Sent Mail for this user \n");
+					}
+				}
+				printf("\n Before Updation of status ");
+
+			EXEC SQL SELECT STATUS INTO :chr_l_status FROM COMMON_EMAIL
+				WHERE ROWID=:chr_h_rowid_a
+				FOR UPDATE OF STATUS NOWAIT;
+
+				printf("\n After Updation of status ");
+			if(sqlca.sqlcode == REC_LOCK_ORA_ERR)
+			{
+				sqlca.sqlcode = 0;
+				printf("\n Cannot Lock table ");
+				fflush(stdout);
+				continue;
+			}
+			
+				printf("\n#B  sqlca.sqlcode = |%d| ",sqlca.sqlcode );
+			IS_ANY_ORA_ERROR;
+			/****************** I don't Think CCS is used... so CCS code removed  ************/
+				EXEC SQL UPDATE COMMON_EMAIL
+					SET STATUS='A',
+					TRANS_DT = :chr_h_trans_dt
+				 	WHERE ROWID=:chr_h_rowid_a;
+				printf("\n sqlca.sqlcode = |%d| ",sqlca.sqlcode );
+				IS_ANY_ORA_ERROR;
+
+			if(++int_countofrec==COMMIT_COUNT_I){	/** Changes AmitB:020407:IsolveId-156  **/
+				EXEC SQL COMMIT;
+				IS_ANY_ORA_ERROR
+					EXEC SQL SELECT PROCESSING_STATUS , ROWID
+					INTO :chr_h_restart_data:i_restart, :h_ora_rowid:i_ora_rowid
+					FROM SYS_BATCHPROC
+					WHERE ROWID = :chr_g_rowid
+					FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+
+				IS_ANY_ORA_ERROR
+
+					if (sqlca.sqlcode <0)
+					{
+						APL_GOBACK_FAIL
+					}
+				APL_GOBACK_SUCCESS
+
+			EXEC SQL SELECT PROCESSING_STATUS , ROWID
+				INTO :chr_h_restart_data:i_restart, :h_ora_rowid:i_ora_rowid
+				FROM SYS_BATCHPROC
+				WHERE ROWID = :chr_g_rowid
+				FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+
+			IS_ANY_ORA_ERROR
+
+				if (sqlca.sqlcode <0)
+				{
+					APL_GOBACK_FAIL
+				}
+			fflush(stdout);
+			fflush(chr_logfile);
+			}
+			printf("\n end of inner while loop \n");
+			
+		}
+	APL_GOBACK_SUCCESS
+		RETURN_SUCCESS:
+		{
+			EXEC SQL COMMIT;
+			fflush(chr_logfile);
+			fclose(chr_finifile);
+			
+			return APL_SUCCESS;
+		}
+RETURN_FAILURE:
+	{
+		EXEC SQL ROLLBACK;
+		fflush(chr_logfile);
+		fclose(chr_finifile);
+		fclose(chr_femailfile);
+		fclose(chr_ftemplatefile);
+		fclose(chr_fbodyfile);
+		return APL_FAILURE;
+	}
+}
+
+int main(int argc, char **argv) 
+{
+
+	FILE *chr_finifile;
+	char chr_inifile[PATH_LENGTH] =APL_NULL_STRING;
+	char chr_l_uname[APL_USERID_LEN] =APL_NULL_STRING ;
+	char chr_l_passwd[100]= APL_NULL_STRING;
+	char chr_buffer[KEY_LENGTH] = APL_NULL_STRING;
+	char chr_custody_id_b[APL_USERID_LEN];
+	int int_p_funcreturnstate = 0;
+	char chr_date[APL_DATE_LEN]	=	APL_NULL_STRING;
+	char chr_l_sys_date_time[APL_DATE_LEN]	=	APL_NULL_STRING;
+	char chr_l_statinfo[61]	= APL_NULL_STRING;
+
+	INTL_ENV_DATA_STRUCT_H p_intl_envdatastruct_h;
+	//DEBUG_INFO_STRUCT_H *l_debuglist;
+	INTL_ENV_DATA_STRUCT_H l_intl_environ_data_h;
+	DEBUG_INFO_STRUCT_H *l_debuginfo = NULL;
+	DEBUG_INFO_STRUCT_H **l_debug_info_ptr;
+
+	l_debug_info_ptr=&l_debuginfo;
+
+	strcpy(p_intl_envdatastruct_h.usr,"SYSTEM");
+	strcpy(p_intl_envdatastruct_h.h_mode,APL_NULL_STRING);
+
+	if(argc == 1)
+	{
+		strcpy(p_intl_envdatastruct_h.processtion,"Email Transmitter Daemon");
+	}
+	else
+	{
+		strcpy(p_intl_envdatastruct_h.processtion, argv[5]);
+	}
+	strcpy(p_intl_envdatastruct_h.auth_req,APL_NULL_STRING);
+	strcpy(p_intl_envdatastruct_h.subprocess,APL_NULL_STRING);
+	strcpy(p_intl_envdatastruct_h.h_process,APL_NULL_STRING);
+
+	memset(chr_inifile,APL_NULL_CHAR,PATH_LENGTH);
+	memset(chr_buffer,APL_NULL_CHAR,KEY_LENGTH);
+	memset(chr_l_uname,APL_NULL_CHAR,40);
+	memset(chr_l_passwd,APL_NULL_CHAR,40);
+	chr_finifile=NULL;
+	EXEC SQL BEGIN DECLARE SECTION;
+			EXEC SQL VAR chr_h_restart_data  IS STRING;
+			EXEC SQL VAR h_ora_rowid 			IS STRING;
+			EXEC SQL VAR chr_l_uname 			IS STRING;
+			EXEC SQL VAR chr_l_passwd 			IS STRING;
+			EXEC SQL VAR chr_date 				IS STRING;
+			EXEC SQL VAR chr_g_templatename	IS STRING;
+	EXEC SQL END DECLARE SECTION;
+
+	strcpy(chr_inifile,getenv("INTL_ROOT_PATH"));
+	strcat(chr_inifile,"/intl_sun.cfg");
+	if ( (chr_finifile = fopen(chr_inifile,"r") ) == NULL)
+		APL_GOBACK_FAIL;
+
+	APL_FETCH_DB_LOGIN_DETAILS(chr_finifile,chr_custody_id_b,chr_l_uname,chr_l_passwd,APL_OUT_FILE,l_debug_info_ptr);
+	EXEC SQL CONNECT :chr_l_uname IDENTIFIED BY :chr_l_passwd;
+	IS_ANY_ORA_ERROR
+		strcpy(chr_g_progname,argv[0]);
+	if(argc > 1) strcpy(chr_g_key,argv[1]);
+	if(argc > 2) strcpy(chr_g_startdate,argv[2]);
+
+	//EXEC SQL VAR chr_g_swflineid IS STRING;
+	EXEC SQL VAR chr_g_progname IS STRING;
+	EXEC SQL VAR chr_g_key IS STRING;
+	EXEC SQL VAR chr_g_startdate IS STRING;
+	fclose(chr_finifile);
+	chr_finifile=NULL;
+
+	if(CO_RtvSysDt(chr_date,l_debug_info_ptr)==APL_FAILURE)
+	{
+		APL_GOBACK_FAIL
+	}
+	if(argc == 1)
+	{
+		argv[1]=S_KEY;
+		argv[2]=chr_date;
+		argv[3]=S_USERID;
+		argv[4]=S_MODE;
+		argv[5]="Message Transmitter Daemon";
+		argv[6]=S_AUTH_REQ;
+		argv[7]=S_SUBFUN;
+		argv[8]=S_ACTION;
+		argv[9]=S_FUNCPARAMS;
+	}
+	printf("\n Get sys params ********* ");	
+	if ( CO_RtvSysParams(l_debug_info_ptr) == APL_FAILURE)
+		APL_GOBACK_FAIL
+	if(argc != 1)
+	{
+		EXEC SQL SELECT PROCESSING_STATUS , ROWID
+			INTO :chr_h_restart_data:i_restart, :h_ora_rowid:i_ora_rowid
+			FROM SYS_BATCHPROC
+			WHERE ( PROCESS_NAME = :argv[0]
+					AND PROC_INIT = :argv[1]
+					AND STARTDATE = :argv[2]
+					AND STATUS = 'started' )
+			FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+
+		if (sqlca.sqlcode <0)
+		{
+			APL_GOBACK_FAIL
+		}
+	}
+	else
+	{
+		if(APL_SUCCESS ==  EI_Proc_BatchRestart(argv[0],
+					argv[0],
+					APL_NULL_STRING,
+					&int_p_funcreturnstate,
+					&l_debuginfo,
+					&p_intl_envdatastruct_h)) // AIX-Change added &
+		{
+			if(int_p_funcreturnstate == 11 || int_p_funcreturnstate == 10)
+			{
+				EXEC SQL SELECT PROCESSING_STATUS , ROWID
+					INTO :chr_h_restart_data:i_restart, :h_ora_rowid:i_ora_rowid
+
+					FROM SYS_BATCHPROC
+					WHERE ( PROCESS_NAME = :argv[0]
+							AND STATUS = 'started' )
+					FOR UPDATE OF PROCESSING_STATUS,STATUS,STAT_DET;
+
+
+				if (sqlca.sqlcode <0)
+				{
+					APL_GOBACK_FAIL
+				}
+			}
+			else
+			{
+				APL_GOBACK_FAIL
+			}
+
+		}
+		else
+		{
+			APL_GOBACK_FAIL
+		}
+	}
+
+	strcpy(chr_g_rowid,h_ora_rowid);
+
+
+	EXEC SQL SELECT RTRIM(LTRIM(FIELD_VAL))
+		INTO :chr_g_templatename
+		FROM PRO_GSSPLVAL
+		WHERE MAIN_FUN = 'EMAIL'
+		AND SUB_PROCESS = 'FILE'
+		AND NATION=:g_mt_commonsys_params_struct_h.nation_code;
+
+
+	IS_ANY_ORA_ERROR
+	if ( APL_ZERO_RESULT_SET)
+	{
+			printf("\n Template file name not defined in database ");
+			APL_GOBACK_FAIL
+	}
+
+	EXEC SQL SELECT RTRIM(LTRIM(FIELD_VAL))
+		INTO :int_lineno
+		FROM PRO_GSSPLVAL
+		WHERE MAIN_FUN = 'EMAIL'
+		AND SUB_PROCESS = 'START_LINE'
+		AND NATION=:g_mt_commonsys_params_struct_h.nation_code;
+
+
+	IS_ANY_ORA_ERROR
+	if ( APL_ZERO_RESULT_SET)
+	{
+			printf("\n Template file No. not defined in database ");
+			APL_GOBACK_FAIL
+	}
+
+	/* printf("\n *** Before while loop ********* \n"); */
+
+	while(1) {
+		/*printf("\n in while loop 1001\n"); */
+		EXEC SQL UPDATE SYS_BATCHPROC set STAT_DET = 'Transmitting' where
+			rowid = :h_ora_rowid;
+		if (sqlca.sqlcode <0)
+		{
+			APL_GOBACK_FAIL
+		}
+
+		if(MS_Proc_EmailTran(argv, l_debug_info_ptr,&l_intl_environ_data_h)==APL_SUCCESS)
+			EXEC SQL COMMIT;
+		else
+			EXEC SQL ROLLBACK;
+		EXEC SQL SELECT PROCESSING_STATUS 
+			INTO :chr_h_restart_data:i_restart
+			FROM SYS_BATCHPROC where rowid = :h_ora_rowid
+			FOR UPDATE OF STAT_DET;
+		if (sqlca.sqlcode <0)
+		{
+			APL_GOBACK_FAIL
+		}
+		if (argc != 1)
+			break;
+
+
+
+		if( APL_FAILURE == CO_RtvSysDtTime(chr_l_sys_date_time, l_debug_info_ptr))
+			APL_GOBACK_FAIL;
+		memset(chr_l_statinfo,APL_NULL_CHAR,61);
+		strcpy(chr_l_statinfo, "wait : ");
+		strcat(chr_l_statinfo, chr_l_sys_date_time);
+
+		EXEC SQL UPDATE SYS_BATCHPROC set STAT_DET = :chr_l_statinfo 
+			where rowid = :h_ora_rowid;
+		if (sqlca.sqlcode <0)
+		{
+			APL_GOBACK_FAIL
+		}
+
+		EXEC SQL COMMIT;
+		EXEC SQL SELECT PROCESSING_STATUS 
+			INTO :chr_h_restart_data:i_restart
+			FROM SYS_BATCHPROC where rowid = :h_ora_rowid
+			FOR UPDATE OF STAT_DET;
+		if (sqlca.sqlcode <0)
+		{
+			APL_GOBACK_FAIL
+		}
+		sleep(SLEEP_TIME);
+	}
+	EXEC SQL UPDATE SYS_BATCHPROC
+		SET STATUS              ='completed'
+		WHERE   ROWID           = :h_ora_rowid;
+
+	IS_ANY_ORA_ERROR
+
+		if (sqlca.sqlcode == 1403)
+		{
+			APL_GOBACK_FAIL
+		}
+
+APL_GOBACK_SUCCESS // AIX - Warnings removal
+
+RETURN_SUCCESS:
+	EXEC SQL COMMIT;
+	fclose(chr_finifile);
+	exit(0);
+RETURN_FAILURE:
+	fclose(chr_finifile);
+	exit(-1);
+}
+

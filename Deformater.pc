@@ -1,0 +1,1597 @@
+
+/************************************************************************************************************
+ * 				COPYRIGHT NOTICE 
+ *		 
+ *		  
+ *		   		Copyright @  2005 by Polaris Software Lab Ltd.
+ *		   
+ *		    		All rights reserved. 	
+ *		      	No part of this document may be reproduced, stored in a retrieval system, 
+ *		       	translated, transcribed, or transmitted in any form or by any means, 
+ *		        	without the prior written permission of Polaris Software Lab Limited ('Polaris').
+ *		         
+***********************************************************************************************************/
+
+/**********************************************************************
+*                                                                    *
+
+* Project Name        : INTELLECT CUSTODY                            *
+* Module Name         : DEAL  PROCESSING                          	*
+* File Name           : Deformater.pc                                *
+*                                                                    *
+* Description         : This source file contains the function which *
+                        is used to call the function which process 54x and 515  *
+*                                                                    *
+* Screens Used        : None
+        *
+* Reports Used        : None                                         *
+*                                                                    *
+*                                                                    *
+* Notes               :                                              *
+*                                                                    *
+*            Version Control Block                                   *
+*                                                                    *
+* Date       Version     	Author               Description          *
+* ---------  --------  ---------------  ---------------------------- *
+*                                                                    *
+* 			     1.0       Rakesh Singh    		New File                *
+*24/03/2022   1.1          kotubabu N          Linux Migration    Kotak Implementation  *
+*                                                                    *
+* List of functions   :                                              *
+*                                                                    *
+* Function Name          Description                                 *
+* ----------------  --------------------------------------------------------------------- *
+* ProcessMessages   	The function calls the functions to process the incoming 54x and 515 messages  
+ * *******************************************************************************************/
+
+#include "stdio_64.h"
+#include <string.h>
+#include <math.h>
+#include <dirent.h>
+#include <unistd.h>
+
+#include "CR_Common.h"
+#include "Intellect_Interface.h"
+#include "Intellect_Common.h"
+#include "Df_Fe.h" 
+#include "DL_Interface.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+/*Commented by kotubabu for Linux Migration
+#define OS_UNIX */
+#define INC_PATH_LENGTH  500
+#define DEF_BUFFER_LEN 500
+#define FILERR_NAMERR_LENGTH 100
+#define DEFORMAT_IF_DEBUG if ( 1 )
+#define SLEEP_VALUE 3
+#define MSG_LINE_NO_HU "-5 "
+#define PROCESS_MESSAGE 250
+
+#define MSG_LINE_NO_SWIFT "-6 "
+#define MSG_LINE_NO_SEBI "-1 "
+
+#define SERVERDOWN " Server Timed Out"
+#define NOMAPPING1	"Mapping for the Message Not int_found in the "  
+#define NOMAPPING2   " table - Contact Support Person"	
+#define BLANK	"-"	
+#define INVALID_DAEMON 2
+char	chr_g_log_buff[DEF_BUFFER_LEN]		= APL_NULL_STRING;
+char	g_incmsgarchdir[PATH_LENGTH]	= APL_NULL_STRING;
+char	g_incmsgdir[PATH_LENGTH]	= APL_NULL_STRING;
+char  g_incmsg_swiftdir[PATH_LENGTH]   = APL_NULL_STRING;
+	
+char  g_str_noproc_msg_dir[PATH_LENGTH]	 = APL_NULL_STRING; 
+char	g_str_noproc_trdmsg_dir[PATH_LENGTH]	= APL_NULL_STRING; 
+char	g_str_noproc_camsg_dir[PATH_LENGTH]	= APL_NULL_STRING; 
+
+char	g_addr_frm[17]		= APL_NULL_STRING;
+char	g_addr_to[17]		= APL_NULL_STRING;
+
+int main(int argc,char **argv) //AIX-Warning Removal
+{
+
+	char		l_str_inifile[PATH_LENGTH]		= APL_NULL_STRING;
+	FILE		*chr_finifile			= (FILE *) NULL;
+	char		chr_logfile[PATH_LENGTH]		= APL_NULL_STRING;
+
+
+	//DEBUG_INFO_STRUCT_H	**l_debug_info_ptr			= NULL;
+	DEBUG_INFO_STRUCT_H	**l_debug_info_ptr			= (DEBUG_INFO_STRUCT_H **)NULL;
+	DEBUG_INFO_STRUCT_H *l_debug_info_struct=(DEBUG_INFO_STRUCT_H *)NULL;
+
+	l_debug_info_struct = (DEBUG_INFO_STRUCT_H *)calloc(1,sizeof(DEBUG_INFO_STRUCT_H *));
+	APL_MALLOC_FAIL(l_debug_info_struct);
+
+	l_debug_info_ptr = &l_debug_info_struct;
+
+	char		chr_uname[APL_USERID_LEN];
+	char		chr_passwd[APL_PASSWD_LEN];
+	char		chr_custody_id[APL_USERID_LEN]		= APL_NULL_STRING;
+	//char		chr_l_system_date[30]		= APL_NULL_STRING;
+	FILE		*fl_log       			= NULL;
+	char		chr_l_incmsgdir[PATH_LENGTH]       	= APL_NULL_STRING;
+	char     chr_l_incmsg_swiftdir[PATH_LENGTH]        = APL_NULL_STRING;
+	char		chr_l_incmsgarchdir[PATH_LENGTH]    = APL_NULL_STRING;
+	
+	char		l_str_noproc_msg_dir[PATH_LENGTH]=APL_NULL_STRING;
+	char		l_str_noproc_trdmsg_dir[PATH_LENGTH]=APL_NULL_STRING;
+	char		l_str_noproc_camsg_dir[PATH_LENGTH]=APL_NULL_STRING;
+	
+	int		int_l_int_retval 				= 	0;
+	int		l_available_files	=	0;
+   char    			chr_l_incfl[INC_PATH_LENGTH]               			= 	APL_NULL_STRING;
+	char           chr_l_incf2[INC_PATH_LENGTH]                       =  APL_NULL_STRING;
+   char    			chr_l_buf2[DEF_BUFFER_LEN]                			= 	APL_NULL_STRING;
+	char           chr_l_buf1[DEF_BUFFER_LEN]                        =  APL_NULL_STRING;
+
+	/*	Replace long to int Rohit	*/
+	/*
+	unsigned long l_sleep_microseconds = 0;
+	unsigned long l_sleep_seconds = 0;
+	*/
+
+	int l_sleep_microseconds = 0;
+	int l_sleep_seconds = 0;
+
+	int l_int_dummy_val = 0;	/** Added by sana for declaring a dummy variable for Idle Time issue **/
+
+	EXEC SQL BEGIN DECLARE SECTION;
+	EXEC SQL VAR chr_uname   IS STRING;
+	EXEC SQL VAR chr_passwd  IS STRING;
+	//EXEC SQL VAR chr_l_system_date IS STRING;
+	struct sqlca sqlca;
+	EXEC SQL END DECLARE SECTION;
+
+	DEFORMAT_IF_DEBUG
+	{
+		printf("Entered Function main\n");
+		fflush(stdout);
+	}
+
+
+	 if ( ( (l_debug_info_ptr) = (DEBUG_INFO_STRUCT_H **)calloc(1,sizeof(DEBUG_INFO_STRUCT_H *)) ) == NULL )
+	    APL_GOBACK_FAIL  
+	sqlca.sqlcode = 0;		
+
+	if ( argc != 2)
+	{
+		printf("\n Invalid sleep time for daemon ... \n ");
+		APL_GOBACK_FAIL
+	}
+	else
+	{
+		printf("\n ******************  Server Started With Sleep Time :%s:****************\n",argv[1]);
+		sscanf(argv[1],"%d.%d",&l_sleep_seconds,&l_sleep_microseconds);
+		l_sleep_microseconds = l_sleep_microseconds * 10000;
+	}	
+      
+	strcpy(l_str_inifile,getenv("INTL_ROOT_PATH"));
+	strcat(l_str_inifile,"/intl_sun.cfg");
+
+	if ( (chr_finifile = fopen(l_str_inifile,"r") ) == NULL)
+  {
+		exit(-1);
+	}
+	if (APL_FAILURE ==   CO_ReadToken(chr_finifile,
+				          "INTL_LOG_PATH",
+					   chr_logfile,
+					   l_debug_info_ptr) )
+	{
+		APL_GOBACK_FAIL
+	}
+	APL_FETCH_DB_LOGIN_DETAILS(chr_finifile, chr_custody_id, chr_uname, chr_passwd,APL_OUT_FILE, l_debug_info_ptr)
+	printf("The chr_uname is %s", chr_uname);
+	//printf("\nThe password is %s", chr_passwd);
+
+	
+	EXEC SQL CONNECT :chr_uname IDENTIFIED BY :chr_passwd;
+       IS_ANY_ORA_ERROR
+	
+
+	if (APL_FAILURE == CO_Rtv_RptFileName("9D",
+													APL_LOGFILE_DESC,
+													100,
+				  	  						"INCOMING_MESSAGES",
+					  							NULL,
+				          				&fl_log,
+					  							l_debug_info_ptr) )
+	{
+		APL_GOBACK_FAIL
+	}
+
+	EXEC SQL COMMIT;
+	IS_ANY_ORA_ERROR
+
+
+	
+		
+	if (CO_ReadToken(chr_finifile,
+		         "INTL_MS_INC_PATH",
+		         chr_l_incmsgdir,
+		         l_debug_info_ptr)  == APL_FAILURE)
+	{
+		fprintf(fl_log,"Failed To Open The Incoming Messages Directory\n");
+		APL_GOBACK_FAIL
+	}
+
+	/*----FOR inmsg_swift directory------------*/
+	if (CO_ReadToken(chr_finifile,
+				"INTL_MS_INC_SWIFT_PATH",
+				chr_l_incmsg_swiftdir,
+				l_debug_info_ptr)  == APL_FAILURE)
+	{
+		fprintf(fl_log,"Failed To Open The Incoming SWIFT Messages Directory\n");
+		APL_GOBACK_FAIL
+	}		 
+	/*---------------end----------------------*/	
+ 
+	memset(chr_l_incmsgarchdir,APL_NULL_CHAR,PATH_LENGTH);
+	if (CO_ReadToken(chr_finifile,
+              "INTL_MSINC_ARC_PATH",
+	 	         chr_l_incmsgarchdir,
+		         l_debug_info_ptr)  == APL_FAILURE)
+	{
+		fprintf(fl_log,"Failed To Open The Incoming Messages Archival Directory\n");
+		APL_GOBACK_FAIL
+	}
+	
+	if(CO_ReadToken(chr_finifile,
+					"INTL_MSINC_ARC_PATH",
+					l_str_noproc_msg_dir,
+					l_debug_info_ptr)==APL_FAILURE)
+	{
+		fprintf(fl_log,"Failed To Open The Archival Directory for not processed messages:ORBIC_NOPROC_TRDMESG\n");
+		APL_GOBACK_FAIL
+	}
+	
+	if(CO_ReadToken(chr_finifile,
+					"INTL_NOPROC_MSG",
+					l_str_noproc_trdmsg_dir,
+					l_debug_info_ptr)==APL_FAILURE)
+	{
+		fprintf(fl_log,"Failed To Open The Archival Directory for not processed messages:ORBIC_NOPROC_TRDMESG\n");
+		APL_GOBACK_FAIL
+	}
+	
+	memset(g_incmsgarchdir,APL_NULL_CHAR,PATH_LENGTH);
+	strcpy(g_incmsgarchdir,chr_l_incmsgarchdir);
+	strcpy(g_incmsgdir,chr_l_incmsgdir);
+	memset(g_incmsg_swiftdir,APL_NULL_CHAR,PATH_LENGTH);
+	strcpy(g_incmsg_swiftdir,chr_l_incmsg_swiftdir);
+	
+	strcpy(g_str_noproc_msg_dir,l_str_noproc_msg_dir);
+	
+	memset(g_str_noproc_trdmsg_dir,APL_NULL_CHAR,PATH_LENGTH);//Hardik
+	strcpy(g_str_noproc_trdmsg_dir,l_str_noproc_trdmsg_dir);
+	strcpy(g_str_noproc_camsg_dir,l_str_noproc_camsg_dir);
+
+	/*
+	EXEC SQL SELECT sysdate INTO :chr_l_system_date FROM DUAL;
+	IS_ANY_ORA_ERROR
+		
+	printf("Now here \n");	
+	EXEC SQL INSERT INTO SYS_BATCHPROC(process_name,STARTDATE,status,usr) VALUES('DEFORMATER',
+		  	:chr_l_system_date, 'STARTED', 'SYSTEM'); 
+	printf("the errord is %d\n",sqlca.sqlcode);
+	IS_ANY_ORA_ERROR
+	
+	EXEC SQL COMMIT;
+	IS_ANY_ORA_ERROR
+	*/
+
+		strcpy(chr_l_incfl,g_incmsgdir);
+		strcat(chr_l_incfl,"incl");
+
+		strcpy(chr_l_incf2,g_incmsg_swiftdir);
+		strcat(chr_l_incf2,"incl");
+	
+		memset(chr_l_buf2, APL_NULL_CHAR , DEF_BUFFER_LEN);
+		sprintf(chr_l_buf2, "rm -f %s ", chr_l_incfl);
+		Alert("chr_l_buf2 = |%s|",chr_l_buf2);
+		fflush(stdout);
+		system(chr_l_buf2);
+
+		memset(chr_l_buf1, APL_NULL_CHAR , DEF_BUFFER_LEN);
+	   sprintf(chr_l_buf1, "rm -f %s ", chr_l_incf2);
+	   system(chr_l_buf1);
+
+	while(1)
+	{	
+		/* ISKB_10342 :: Deformater should not get messages when EOD/BOD is in progress by Tushar - Start */
+        char chr_l_chk_sys_online[5] = APL_NULL_STRING;
+
+        EXEC SQL SELECT EOD_IND INTO :chr_l_chk_sys_online FROM PRO_SYS_DATE;
+        IS_ANY_ORA_ERROR
+        if(sqlca.sqlcode != 0)
+        {
+          printf("ORA for select from PRO_SYS_DATE - [%d]\n", sqlca.sqlcode);
+        }
+        if(strcmp(chr_l_chk_sys_online, "O") != 0)
+        {
+          fprintf(fl_log,"System is not online since EOD/BOD is in progress... So, not reading messages from area... Will try after sometime...\n");
+          printf("System is not online since EOD/BOD is in progress... So, not reading messages from area.. Will try after sometime...\n");
+
+          sleep(25);
+          continue;
+        }
+        /* ISKB_10342 :: Deformater should not get messages when EOD/BOD is in progress by Tushar - End */
+		
+		EXEC SQL SELECT 1 into :l_int_dummy_val FROM DUAL;	/** Added By sana to Fix Idle Time issue **/
+		IS_ANY_ORA_ERROR
+		
+		if(l_sleep_seconds != 0)
+		{
+			sleep(l_sleep_seconds);
+		}
+		usleep(l_sleep_microseconds);
+
+		l_available_files = 0;
+		l_available_files = getFileCountInDir(g_incmsgdir,g_incmsg_swiftdir);
+		/* printf("\n Before ProcessMessages Available files for processing in both dirs |%d| \n",l_available_files);
+		fflush(stdout); */
+
+		if (l_available_files != 0)
+		{
+			printf("\n Before ProcessMessages Available files for processing in both dirs |%d| \n",l_available_files);
+			fflush(stdout); 
+		if((int_l_int_retval = ProcessMessages(fl_log,l_debug_info_ptr)) == APL_FAILURE)
+  		{		
+  			fprintf(fl_log, "\n\n Failure in Processing the Messages.....\n"); 
+  			CO_ProcMonitor(APL_OUT_FILE,"Exiting Unsuccessfully out of Deformater: ", l_debug_info_ptr,NULL);
+			APL_GOBACK_FAIL
+  		}		
+
+		fflush(stdout);
+
+		}
+	}
+
+	DEFORMAT_IF_DEBUG
+	{
+		printf("\n Leaving Function main\n");
+	}
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+		fclose(fl_log);	
+		return APL_SUCCESS;
+
+	RETURN_FAILURE:  
+		fclose(fl_log);
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE,"Exiting Unsuccessfully out of Deformater: ", l_debug_info_ptr,NULL);
+		}
+		return APL_FAILURE;
+}
+
+int getFileCountInDir(char *p_dir1, char *p_dir2)
+{
+   FILE *fp_Msg = (FILE *)NULL;
+   char cmd_str[400] = "";
+   char c_file_count[10] = "";
+   int i_file_count1 = 0;
+   int i_file_count2 = 0;
+   int i_file_count = 0;
+
+   strcpy(cmd_str,"ls ");
+   strcat(cmd_str,p_dir1);
+	strcat(cmd_str," |wc -l");
+
+	fp_Msg = popen(cmd_str,"r");
+	fscanf(fp_Msg,"%s",c_file_count);
+	i_file_count1 = atoi(c_file_count);
+	pclose(fp_Msg);
+
+	strcpy(c_file_count,"");
+	strcpy(cmd_str,"");
+
+
+	strcpy(cmd_str,"ls ");
+	strcat(cmd_str,p_dir2);
+	strcat(cmd_str," |wc -l");
+
+	fp_Msg = popen(cmd_str,"r");
+	fscanf(fp_Msg,"%s",c_file_count);
+	i_file_count2 = atoi(c_file_count);
+	pclose(fp_Msg);
+
+	i_file_count = i_file_count1 + i_file_count2;
+	return(i_file_count);
+
+}
+
+
+int ProcessMessages(FILE *p_fl_log,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+       printf("in ProcessMessages function -- ###\n");
+	   fflush(stdout);
+
+      	char    			chr_l_incmsgdir[PATH_LENGTH]   			= 	APL_NULL_STRING;
+			char           chr_l_incmsg_swiftdir[PATH_LENGTH]           =  APL_NULL_STRING;
+			
+      	//char    			chr_l_rmtemp[INC_PATH_LENGTH]  			= 	APL_NULL_STRING;
+      	char    			chr_l_buf2[DEF_BUFFER_LEN]                			= 	APL_NULL_STRING;
+			char           chr_l_buf1[DEF_BUFFER_LEN]                        =  APL_NULL_STRING;
+      	char    			chr_l_incfl[INC_PATH_LENGTH]               			= 	APL_NULL_STRING;
+			char           chr_l_incf2[INC_PATH_LENGTH]                       =  APL_NULL_STRING;
+      	DIR     			*dirp                      				= 	NULL;
+			DIR            *dirp_swift                            =  NULL;
+      	struct dirent 	*dp												=	NULL;
+      	struct dirent 	*dps												=	NULL;
+      	struct dirent 	chr_junk ;
+      	char   			chr_l_inc_file     		       			= 	APL_NULL_CHAR;
+      	struct dirent 	*l_pdp											= 	NULL;
+      	char    			chr_l_fl_name[PATH_LENGTH]		= 	APL_NULL_STRING;
+      	FILE    			*fl_incmsglst              				= (FILE *)NULL;
+			FILE           *fl_incmsg_swiftlst                          = (FILE *)NULL;
+			
+      	char    			chr_fl_name[PATH_LENGTH]  		= APL_NULL_STRING;
+      	char    			cmd_str[4000]              				= APL_NULL_STRING;
+      	char    			cmd_str1[4000]              				= APL_NULL_STRING;
+      	FILE    			*fp_Msg                 					= (FILE *)NULL;
+      	int				int_l_int_retval 								= 0;
+      	char 				l_line6[80] 									= APL_NULL_STRING;
+	//char l_line6_msg[500] = APL_NULL_STRING; Commented by JC
+	char l_line6_msg[4000] = APL_NULL_STRING; /* JC - Increased the variable size from 500 to 4000 */
+			char    			chr_l_incmsgarchdir[PATH_LENGTH] 	= APL_NULL_STRING;
+	
+			char				l_str_noproc_msg_dir[PATH_LENGTH]	=	APL_NULL_STRING; 
+			
+      	char				l_str_msg_refno[36]							= APL_NULL_STRING;
+			int				l_int_Report_Flag 							= 	0;
+			int				l_int_ServerDown_Flag						=	0;
+			char 				l_str_tablename[50]							=  APL_NULL_STRING;
+			DF_COMMON_MSGRPT_STRUCT_H *h_df_common_msgrptStruct	= NULL; 
+			char 				l_str_line[100]								=	APL_NULL_STRING;
+			
+			char 				l_msg[4]											= APL_NULL_STRING;
+      	//char     		l_msg_temp[30]									= APL_NULL_STRING; 
+      	char     		l_path_detail[INC_PATH_LENGTH]								= APL_NULL_STRING;
+      	char     		l_msg_line_no[4]								= APL_NULL_STRING;
+      	int 				chr_l_msg_no									= 0;
+      	int 				l_processmsgcount 							= 0;
+      	//char				chr_l_country_code[4]						= APL_NULL_STRING;	
+      	MESSAGE_STRUCT	**l_message_list								=	NULL;
+      	MESSAGE_STRUCT	**l_message_list_first_record				=	NULL;
+      	FILE          	*fl												= (FILE *)NULL;
+     	
+			//char     		l_str_qual[10]             				=  APL_NULL_STRING; 
+		   //char           l_str_client[11]								=  APL_NULL_STRING;
+			//char   			l_str_refno[17] 								=  APL_NULL_STRING;
+		   //int            l_lng_rpr_seqnum                       =  0;	
+		   char           l_sys_date[20]                         =  APL_NULL_STRING;
+		 
+		   char        	l_message_filename[101]  = APL_NULL_STRING;
+/*Nikhil initialisation Start*/
+	char l_filename[101] = APL_NULL_STRING;
+	char l_servprov[36] = APL_NULL_STRING;
+	char l_sender[36] = APL_NULL_STRING;
+	char l_msg_type[4] = APL_NULL_STRING;
+	char l_status[2] = APL_NULL_STRING;
+	char l_reciever[36] = APL_NULL_STRING;
+	char l_output[2001] = APL_NULL_STRING;
+	char l_flgspeedy[2] = APL_NULL_STRING;
+short i_filename=0;
+short i_servprov=0;
+short i_sender=0;
+short i_msg_type=0; 
+short i_status=0;
+short i_reciever=0;
+short i_flgspeedy=0;
+int l_tag = 0;
+/*Nikhil Intialisation Ends*/
+			
+/*Nikhil Memory Allocation	*/
+	
+memset(l_filename,APL_NULL_CHAR,101);
+memset(l_servprov,APL_NULL_CHAR,36);
+memset(l_sender,APL_NULL_CHAR,36);
+memset(l_msg_type,APL_NULL_CHAR,36);
+memset(l_status,APL_NULL_CHAR,2);
+memset(l_reciever,APL_NULL_CHAR,36);
+memset(l_output,APL_NULL_CHAR,2001);
+memset(l_flgspeedy,APL_NULL_CHAR,2);
+memset(l_str_noproc_msg_dir,APL_NULL_CHAR,sizeof(l_str_noproc_msg_dir));	//Sana
+/*Hardik Start*/
+
+
+memset(l_path_detail,APL_NULL_CHAR,sizeof(l_path_detail));
+memset(l_msg,APL_NULL_CHAR,sizeof(l_msg));
+memset(l_msg,APL_NULL_CHAR,sizeof(chr_fl_name));
+
+/* Hardik End */
+/*Nikhil Memory Allocation ends*/	
+		EXEC SQL BEGIN DECLARE SECTION;
+     	struct sqlca sqlca;
+
+      //EXEC SQL VAR chr_l_country_code IS STRING;
+/*Nikhil S*/
+EXEC SQL VAR l_filename IS STRING;
+EXEC SQL VAR l_servprov IS STRING;
+EXEC SQL VAR l_sender IS STRING;
+EXEC SQL VAR l_msg_type IS STRING;
+EXEC SQL VAR l_status IS STRING;
+EXEC SQL VAR l_reciever IS STRING;
+EXEC SQL VAR l_flgspeedy IS STRING;
+/*Nikhil S*/
+
+      EXEC SQL END DECLARE SECTION;
+/*
+      DEFORMAT_IF_DEBUG
+      {
+			printf("Entered Function ProcessMessages\n");
+      }
+ */     
+
+		memset(chr_l_incmsgdir,APL_NULL_CHAR,sizeof(chr_l_incmsgdir));
+		strcpy(chr_l_incmsgdir, g_incmsgdir);
+		memset(chr_l_incmsg_swiftdir,APL_NULL_CHAR,sizeof(chr_l_incmsg_swiftdir));
+		strcpy(chr_l_incmsg_swiftdir, g_incmsg_swiftdir);
+		
+		memset(chr_l_incmsgarchdir,APL_NULL_CHAR,PATH_LENGTH);
+		strcpy(chr_l_incmsgarchdir, g_incmsgarchdir);
+		memset(chr_l_incfl,APL_NULL_CHAR,sizeof(chr_l_incfl));
+		strcpy(chr_l_incfl,chr_l_incmsgdir);
+		strcat(chr_l_incfl,"incl");
+
+		memset(chr_l_incf2,APL_NULL_CHAR,sizeof(chr_l_incf2));
+		strcpy(chr_l_incf2,chr_l_incmsg_swiftdir);
+		strcat(chr_l_incf2,"incl");
+	
+		if (  (fl_incmsglst  = fopen(chr_l_incfl, "w+" ) ) == (FILE *)NULL )
+		{
+			fprintf(p_fl_log,"Failed To Open File Containing Names of Incoming Message Files\n");
+			memset(chr_l_buf2, APL_NULL_CHAR , DEF_BUFFER_LEN);
+			sprintf(chr_l_buf2, "rm -f %s ", chr_l_incfl);
+			Alert("chr_l_buf2 = |%s|",chr_l_buf2);
+			fflush(stdout);
+			system(chr_l_buf2);
+		}	
+		
+	  if (  (fl_incmsg_swiftlst  = fopen(chr_l_incf2, "w+" ) ) == (FILE *)NULL )
+	  {
+		  fprintf(p_fl_log,"Failed To Open File Containing Names of Incoming SWIFT Message Files\n");
+		  memset(chr_l_buf1, APL_NULL_CHAR , DEF_BUFFER_LEN);
+                  /*Vaibhav SIT issue 1598*/ 
+		  sprintf(chr_l_buf1, "rm -f \"%s\" ", chr_l_incf2);
+			Alert("chr_l_buf1 = |%s|",chr_l_buf1);
+			fflush(stdout);
+		  system(chr_l_buf1);
+	  }			  
+
+		if(!(dirp  =  opendir(chr_l_incmsgdir)))
+		{
+			printf("\n Unable to open SEBI Directory \n");
+			fflush(stdout);
+			fprintf(p_fl_log,"\n Unable to open SEBI Directory \n\n");
+			APL_GOBACK_FAIL;	
+		}
+
+		if (!(dirp_swift=opendir(chr_l_incmsg_swiftdir)))
+		{
+			printf("\n Unable to open SWIFT Directory \n");
+			fflush(stdout);
+			fprintf(p_fl_log,"\n Unable to open SWIFT Directory \n");
+			APL_GOBACK_FAIL;	
+		}
+			
+
+		chr_l_inc_file  = 'F';
+		l_pdp=calloc(1,sizeof(struct dirent));
+
+		
+		//EXEC SQL SELECT nation_code INTO :chr_l_country_code FROM MT_COMMON_SYS_PARAMS;
+
+		//IS_ANY_ORA_ERROR
+
+		/*if(APL_ZERO_RESULT_SET)
+		{
+			fprintf(p_fl_log,"Failed To Map to COMMON_SYS_PARAMS table\n");
+			APL_GOBACK_FAIL;	
+		}
+*/	
+	/*	if(strcmp(chr_l_country_code,"HU") == 0)
+			strcpy(l_msg_line_no, MSG_LINE_NO_HU);
+		else
+			strcpy(l_msg_line_no, MSG_LINE_NO_XX);*/
+		dp = calloc(1,sizeof(struct dirent));
+		
+
+
+		/*#ifdef OS_SUN  Commented by kotubabu for Linux Migration*/
+		
+         #ifdef OS_LINUX  /*Added by kotubabu for Linux Migration*/
+			while((dp=readdir(dirp)) != NULL)
+			{
+				/*if(strstr(dp->d_name,".TBS")== NULL)
+					strcpy(l_msg_line_no, MSG_LINE_NO_SWIFT);
+				else*/
+				strcpy(l_msg_line_no, MSG_LINE_NO_SEBI);
+				
+
+				if((dp->d_name[0] != '.') && (strcmp(dp->d_name, "incl")))
+				{                        	
+					/*Nikhil Memory Allocation	*/
+					
+					memset(g_addr_frm,APL_NULL_CHAR,17);
+					memset(g_addr_to,APL_NULL_CHAR,17);	
+					memset(l_filename,APL_NULL_CHAR,101);
+					memset(l_servprov,APL_NULL_CHAR,36);
+					memset(l_sender,APL_NULL_CHAR,36);
+					memset(l_msg_type,APL_NULL_CHAR,36);
+					memset(l_status,APL_NULL_CHAR,2);
+					memset(l_reciever,APL_NULL_CHAR,36);
+					memset(l_output,APL_NULL_CHAR,2001);
+					memset(l_flgspeedy,APL_NULL_CHAR,2);
+					/*Nikhil Memory Allocation ends*/	
+
+						  memset(cmd_str,APL_NULL_CHAR,4000);
+						  memset(cmd_str1,APL_NULL_CHAR,4000);
+						  strcpy(cmd_str,"head ");
+						  strcat(cmd_str, l_msg_line_no);
+						  strcat(cmd_str,chr_l_incmsgdir);
+				strcat(cmd_str,"\"");    /*Vaibhav SIT issue 1598*/
+						  strcat(cmd_str,dp->d_name);
+				strcat(cmd_str,"\"");  /*Vaibhav SIT issue 1598*/
+
+						  /*Nikhil Adding code for Consolidation*/
+						  strcpy(l_filename,dp->d_name);
+						  strcpy(l_status,"R");
+						  fp_Msg = popen(cmd_str,"r");
+						  fscanf(fp_Msg,"%s",l_output);
+						  pclose(fp_Msg);
+						  printf("Nikhil l_output is :%s:",l_output);
+						  fflush(stdout);
+						  if(l_output[0] != '{')
+						  {
+									 i_servprov=0;
+									 strcpy(l_servprov,l_output);
+									 strcpy(l_output,ltoa(atoi(l_msg_line_no) - 1));
+									 strcat(l_output," ");
+									 strcpy(l_msg_line_no,l_output);
+									 printf("\n Nikhil l_output :%s:",l_output);
+						  fflush(stdout);
+									 memset(cmd_str,APL_NULL_CHAR,4000);
+									 strcpy(cmd_str,"head ");
+									 strcat(cmd_str,l_output );
+									 strcat(cmd_str,chr_l_incmsgdir);
+									 strcat(cmd_str,dp->d_name);
+									 printf("\n NIKHIL NEW COMMAND cmd_str = :%s:",cmd_str);
+						  fflush(stdout);
+									 strcpy(l_flgspeedy,"N");
+						  }
+						  else
+									 strcpy(l_flgspeedy,"Y");
+
+						  /*Nikhil Adding code for Consolidation*/
+						  strcpy(cmd_str1,cmd_str);
+
+						  strcat(cmd_str1,"|cut -d} -f3|cut -d} -f1|cut -d{ -f2");
+
+               strcat(cmd_str,"|cut -d} -f2|cut -d} -f1|cut -d{ -f2");
+
+                  printf("the command  %s\n",cmd_str);
+						  fflush(stdout);
+                  printf("the command 1 %s\n",cmd_str1);
+						  fflush(stdout);
+               fp_Msg = popen(cmd_str,"r");
+
+               fscanf(fp_Msg,"%s",g_addr_frm);
+					/*Nikhil S*/
+					if(!strcmp(l_flgspeedy,"N"))
+						fscanf(fp_Msg,"%s",g_addr_frm);
+					/*Nikhil S*/
+					pclose(fp_Msg); /** TUX **/
+               fp_Msg = popen(cmd_str1,"r");
+
+               fscanf(fp_Msg,"%s",g_addr_to);
+					/*Nikhil S*/
+					if(!strcmp(l_flgspeedy,"N"))
+						fscanf(fp_Msg,"%s",g_addr_to);
+					/*Nikhil S*/
+
+               printf("addr_frm is |%s|\n",g_addr_frm);
+               fflush(stdout);
+               printf("addr_to is |%s|\n",g_addr_to);
+               fflush(stdout);
+					pclose(fp_Msg); /** TUX **/
+					strcpy(l_sender,g_addr_frm);
+					strcpy(l_reciever,g_addr_to);
+
+					strcpy(cmd_str,"head ");
+					strcat(cmd_str, l_msg_line_no);
+		        	strcat(cmd_str,chr_l_incmsgdir);	
+		        	strcat(cmd_str,dp->d_name);
+					
+					/*if(strstr(dp->d_name,".TBS")== NULL)
+						strcat(cmd_str," |tail -1 |cut -f1 -d\" \"");
+					else*/	
+					strcat(cmd_str,"|cut -dN -f2|cut -d} -f1");
+					
+					DEFORMAT_IF_DEBUG
+					{
+						printf("the command  %s\n",cmd_str);
+						  fflush(stdout);
+					}
+					fp_Msg = popen(cmd_str,"r");                        				
+
+					fscanf(fp_Msg,"%s",l_line6);	
+					/*Nikhil Adding code for consolidation*/
+					if(!strcmp(l_flgspeedy,"N"))
+						fscanf(fp_Msg,"%s",l_line6);
+					strcpy(l_msg_type,l_line6);
+					/*Nikhil Adding code for consolidation end*/
+
+					DEFORMAT_IF_DEBUG
+					{
+						printf("line 6 is |%s|\n",l_line6);
+						  fflush(stdout);
+					}
+											
+					strcpy(chr_l_fl_name, l_line6); 	
+					strcat(chr_l_fl_name, " ");
+					strcat(chr_l_fl_name, chr_l_incmsgdir);
+					strcat(chr_l_fl_name, dp->d_name);
+					DEFORMAT_IF_DEBUG
+					{
+						printf("file name %s\n",chr_l_fl_name);
+						  fflush(stdout);
+					}
+					fprintf(fl_incmsglst, "%s\n", chr_l_fl_name);
+					strcpy(chr_l_fl_name, APL_NULL_STRING);
+					chr_l_inc_file  = 'T';                        	
+					pclose(fp_Msg);
+
+					printf("\n ************************************");
+						  fflush(stdout);
+					printf("\n NIKHIL Consolidation Table Structure");
+						  fflush(stdout);
+					printf("\n ************************************");
+						  fflush(stdout);
+					printf("\n l_filename		:%s:",l_filename);
+						  fflush(stdout);
+					printf("\n l_servprov      :%s:",l_servprov);
+						  fflush(stdout);
+					printf("\n l_sender        :%s:",l_sender);
+						  fflush(stdout);
+					printf("\n l_msg_type		:%s:",l_msg_type);
+						  fflush(stdout);
+					printf("\n l_status  		:%s:",l_status);
+						  fflush(stdout);
+					printf("\n l_reciever      :%s:",l_reciever);
+						  fflush(stdout);
+					printf("\n l_flgspeedy		:%s:",l_flgspeedy);
+						  fflush(stdout);
+
+					printf("\n ************************************");
+						  fflush(stdout);
+
+					EXEC SQL INSERT INTO COMMON_MSG_WRAPPER 
+					(FILENAME,SERVPROV,SENDER,MSG_TYPE,STATUS,RECIEVER,FLGSPEEDY ) 
+					VALUES  (:l_filename:i_filename,
+								:l_servprov:i_servprov,
+								:l_sender:i_sender,
+								:l_msg_type:i_msg_type,
+								:l_status:i_status,
+								:l_reciever:i_reciever,
+								:l_flgspeedy:i_flgspeedy);
+
+					IS_ANY_ORA_ERROR
+
+				}
+			}
+			free(dp);
+			dps = calloc(1,sizeof(struct dirent));
+			while(dps=readdir(dirp_swift))
+			{
+				/*if(strstr(dp->d_name,".TBS")== NULL)*/
+				strcpy(l_msg_line_no, MSG_LINE_NO_SWIFT);
+				/*else
+					strcpy(l_msg_line_no, MSG_LINE_NO_SEBI);*/
+
+
+				if((dps->d_name[0] != '.') && (strcmp(dps->d_name, "incl")))
+				{
+					/*NIkhil new comments for msg_no
+					strcpy(cmd_str,"head ");
+					strcat(cmd_str, l_msg_line_no);
+					strcat(cmd_str,chr_l_incmsg_swiftdir);
+					strcat(cmd_str,dps->d_name);*/
+
+				/*	if(strstr(dp->d_name,".TBS")== NULL)*/
+					/*
+					strcat(cmd_str," |tail -1 |cut -f1 -d\" \"");
+					*/
+					
+				/*	else
+						strcat(cmd_str,"|cut -dN -f2|cut -d} -f1");*/
+
+					/* strcat(cmd_str,"|cut -dN -f2|cut -d} -f1");*/
+					/* Commented by Nikhil strcat(cmd_str,"|cut -d{ -f7 | cut -d: -f2");*/
+				/*nikhil new comments for msg_no	strcat(cmd_str,"|cut -d{ -f3 | cut -d: -f2");*/
+				/*Nikhil for msg_no*/	
+				l_tag=0;
+					for(;;)
+					{
+						/*	ISKB_2096	Deformator Issue Fix	*/
+						memset(cmd_str,APL_NULL_CHAR,4000);
+						memset(l_line6_msg,APL_NULL_CHAR,4000);
+
+						strcpy(cmd_str,APL_NULL_STRING);
+						strcpy(l_line6_msg,APL_NULL_STRING);
+
+						l_tag++;
+						sprintf(cmd_str,"head %s %s%s |cut -d{ -f%d | cut -d: -f1" ,l_msg_line_no,
+									chr_l_incmsg_swiftdir,dps->d_name,l_tag);
+						strcat(cmd_str,APL_NULL_STRING);
+						DEFORMAT_IF_DEBUG
+						{
+						printf("the command  %s\n",cmd_str);
+						  fflush(stdout);
+						}
+						fp_Msg = popen(cmd_str,"r");
+						fscanf(fp_Msg,"%s",l_line6_msg);
+						pclose(fp_Msg); 
+						if(strcmp(l_line6_msg,"2")==0)
+						{
+							memset(cmd_str,APL_NULL_CHAR,4000);
+							memset(l_line6_msg,APL_NULL_CHAR,4000);
+
+							strcpy(cmd_str,APL_NULL_STRING);
+							strcpy(l_line6_msg,APL_NULL_STRING);
+
+							sprintf(cmd_str,"head %s %s%s |cut -d{ -f%d | cut -d: -f2" ,l_msg_line_no,
+									chr_l_incmsg_swiftdir,dps->d_name,l_tag);
+							strcat(cmd_str,APL_NULL_STRING);
+							fp_Msg = popen(cmd_str,"r");
+							/* fp_Msg = popen(cmd_str,"r");	*/
+							fscanf(fp_Msg,"%s",l_line6_msg);
+						/** TUX trying to get Message no **/
+							strncpy(l_line6,l_line6_msg+1,3);
+							l_line6[4]=APL_NULL_CHAR;
+							pclose(fp_Msg); /* Added by Dny */
+							break;
+						}
+					}
+
+					printf("\n TUX : Message no is |%s| ",l_line6);
+						  fflush(stdout);
+
+
+					DEFORMAT_IF_DEBUG
+					{
+						printf("line 6 is |%s|\n",l_line6);
+						  fflush(stdout);
+					}
+
+					strcpy(chr_l_fl_name, l_line6);
+					strcat(chr_l_fl_name, " ");
+					strcat(chr_l_fl_name, chr_l_incmsg_swiftdir);
+					strcat(chr_l_fl_name, dps->d_name);
+					DEFORMAT_IF_DEBUG
+					{
+						printf("file name %s\n",chr_l_fl_name);
+						  fflush(stdout);
+					}
+					fprintf(fl_incmsg_swiftlst, "%s\n", chr_l_fl_name);
+					strcpy(chr_l_fl_name, APL_NULL_STRING);
+					chr_l_inc_file  = 'T';
+					/*pclose(fp_Msg);Nikhil commented*/
+				}
+			}
+		//free(dps);
+
+		#else
+			while(1)
+			{
+				readdir_r(dirp, &chr_junk, &l_pdp);
+				if (!l_pdp) break;
+				if((l_pdp->d_name[0] != '.') && (strcmp(l_pdp->d_name, "incl")))
+				{
+					strcpy(cmd_str,"head ");
+					strcat(cmd_str, l_msg_line_no);
+					strcat(cmd_str,g_incmsgdir);
+					strcat(cmd_str,l_pdp->d_name);
+					strcat(cmd_str," |tail -1 |cut -f1 -d\" \"");
+					fp_Msg = popen(cmd_str,"r");
+					fscanf(fp_Msg,"%s",l_line6);
+					strcpy(chr_l_fl_name, l_line6); 	
+					strcat(chr_l_fl_name, " ");
+					strcat(chr_l_fl_name, chr_l_incmsgdir);
+					strcat(chr_l_fl_name, l_pdp->d_name);
+					fprintf(fl_incmsglst, "%s\n", chr_l_fl_name);
+					strcpy(chr_l_fl_name, APL_NULL_STRING);
+					chr_l_inc_file  = 'T';                        	
+					pclose(fp_Msg);
+				}
+			}
+		#endif
+		free(dps); // Line moved, changes done by Amit Nair on 30/01/2008
+		closedir(dirp);
+		closedir(dirp_swift);
+		free(l_pdp);
+
+
+		fflush(fl_incmsglst);
+		rewind(fl_incmsglst);
+		fflush(fl_incmsglst);
+	
+		fflush(fl_incmsg_swiftlst);
+ 		rewind(fl_incmsg_swiftlst);
+ 		fflush(fl_incmsg_swiftlst);
+	
+				h_df_common_msgrptStruct = (DF_COMMON_MSGRPT_STRUCT_H *)calloc(1,sizeof(DF_COMMON_MSGRPT_STRUCT_H));
+  				APL_MALLOC_FAIL(h_df_common_msgrptStruct) ;
+				memset(h_df_common_msgrptStruct,NULL,sizeof(DF_COMMON_MSGRPT_STRUCT_H));
+				/*
+				if((l_message_list_first_record = (MESSAGE_STRUCT **)(calloc(1,sizeof(MESSAGE_STRUCT *)))) == NULL)
+				{
+						  DEFORMAT_IF_DEBUG
+						  {
+									 printf("JC::: Problem in mem allocation for l_message_list_first_record...\n");
+									 fflush(stdout);
+						  }
+						  APL_GOBACK_FAIL
+				}
+				*/
+		while(1)
+		{
+
+			//l_processmsgcount = l_processmsgcount + 1 ;
+			
+			//if ( l_processmsgcount >  PROCESS_MESSAGE )
+			//		break  ;
+		
+			if(l_int_Report_Flag == 1)
+			{
+				DEFORMAT_IF_DEBUG
+					printf("Server Down Flag is %d \n",l_int_Report_Flag);
+							fflush(stdout);
+				
+				/* h_df_common_msgrptStruct = (DF_COMMON_MSGRPT_STRUCT_H *)calloc(1,sizeof(DF_COMMON_MSGRPT_STRUCT_H));
+  				APL_MALLOC_FAIL(h_df_common_msgrptStruct) */
+  				memset(h_df_common_msgrptStruct,NULL,sizeof(DF_COMMON_MSGRPT_STRUCT_H));
+	
+					
+				if(CO_RtvSysDt(h_df_common_msgrptStruct->h_received_on, l_debug_info_ptr) == APL_FAILURE)
+				{
+					APL_GOBACK_FAIL
+				}
+				
+				strcpy(h_df_common_msgrptStruct->h_file_name, (strrchr(l_path_detail ,'/')+1));
+				/*
+				strcpy(h_df_common_msgrptStruct->h_nameof_file, (strrchr(l_path_detail ,'/')+1));
+				*/
+				APL_IF_DEBUG
+					printf("h_df_common_msgrptStruct->h_file_name = -%s- \n",h_df_common_msgrptStruct->h_file_name);	
+							fflush(stdout);
+				if(strlen(l_msg) <= 6)
+				{	
+					strcpy(h_df_common_msgrptStruct->h_msg_no, l_msg); 
+				}
+				else
+				{
+					strcpy(h_df_common_msgrptStruct->h_msg_no, BLANK); 
+				}			
+				if(strstr(l_msg, "56") || (strstr(l_msg, "54"))||(strstr(l_msg, "578"))||(strstr(l_msg, "515")))
+				{
+					if(strstr(l_msg, "56"))
+  					{
+						if(l_int_ServerDown_Flag == 1)
+						{
+							strcpy(h_df_common_msgrptStruct->h_failure_reason,"CA");
+							strcat(h_df_common_msgrptStruct->h_failure_reason,	SERVERDOWN);
+							strcpy(h_df_common_msgrptStruct->h_msgsts, "TMO");
+						}
+						else
+						{
+							strcpy(h_df_common_msgrptStruct->h_failure_reason,NOMAPPING1);
+							strcat(h_df_common_msgrptStruct->h_failure_reason,l_str_tablename);
+							strcat(h_df_common_msgrptStruct->h_failure_reason,NOMAPPING2);
+							strcpy(h_df_common_msgrptStruct->h_msgsts, "MNP");
+						}
+						strcpy(h_df_common_msgrptStruct->h_trd_ca,"C");
+  					}
+  					else if((strstr(l_msg, "54"))||(strstr(l_msg, "578"))||(strstr(l_msg, "515")))
+  					{
+						if(l_int_ServerDown_Flag == 1)
+						{
+							strcpy(h_df_common_msgrptStruct->h_failure_reason,"DEAL");
+							strcat(h_df_common_msgrptStruct->h_failure_reason,	SERVERDOWN);
+							strcpy(h_df_common_msgrptStruct->h_msgsts, "TMO");
+						}
+						else 
+						{
+							strcpy(h_df_common_msgrptStruct->h_failure_reason,NOMAPPING1);
+							strcat(h_df_common_msgrptStruct->h_failure_reason,l_str_tablename);
+							strcat(h_df_common_msgrptStruct->h_failure_reason,NOMAPPING2);
+							strcpy(h_df_common_msgrptStruct->h_msgsts, "MNP");
+						}
+						strcpy(h_df_common_msgrptStruct->h_trd_ca,"T");
+  					}
+				}
+				else 
+				{
+					if(strstr(l_msg,"53"))
+					{
+							strcpy(h_df_common_msgrptStruct->h_failure_reason,NOMAPPING1);
+							strcat(h_df_common_msgrptStruct->h_failure_reason,l_str_tablename);
+							strcat(h_df_common_msgrptStruct->h_failure_reason,NOMAPPING2);
+							strcpy(h_df_common_msgrptStruct->h_msgsts, "MNP");
+					}
+					else
+					{
+						
+						strcpy(h_df_common_msgrptStruct->h_failure_reason,"Invalid Message");	
+						strcpy(h_df_common_msgrptStruct->h_msgsts, "INV");
+						strcpy(h_df_common_msgrptStruct->h_msg_no,BLANK); 
+					}
+				}
+				
+				APL_IF_DEBUG
+					printf("FAIL_REASON =	-%s-	\n",h_df_common_msgrptStruct->h_failure_reason);
+							fflush(stdout);
+				strcpy(h_df_common_msgrptStruct->h_rep_flg,"N");
+				
+				if((strcmp(l_msg,"540")== 0) || (strcmp(l_msg,"541")== 0)||(strcmp(l_msg,"542")== 0)|| 
+					(strcmp(l_msg,"543")== 0)||(strcmp(l_msg,"515")== 0))
+				{
+					strcpy(h_df_common_msgrptStruct->h_in_out ,"I");
+				}
+				else
+				{
+					strcpy(h_df_common_msgrptStruct->h_in_out ,"X");
+				}
+				if(strlen(l_str_msg_refno) == 0) 
+				
+				{
+					strcat(l_str_noproc_msg_dir,h_df_common_msgrptStruct->h_file_name); 
+					
+					APL_IF_DEBUG
+						printf("l_str_noproc_msg_dir = -%s- \n",l_str_noproc_msg_dir);
+							fflush(stdout);
+					if (  (fl = fopen(l_str_noproc_msg_dir, "r" ) ) == (FILE *)NULL)
+					{
+						fprintf(p_fl_log,"....Failed to open the specified h_file ....\n");
+						APL_GOBACK_FAIL	
+					}
+					
+					while(1)
+					{	
+						if(feof(fl))
+							break; 
+						fscanf(fl,"%[^\n]\n",l_str_line);
+						printf("\n line is |%s| ",l_str_line);
+							fflush(stdout);
+						strcpy(l_str_msg_refno, strstr(l_str_line,"SEME//")+6 );
+						l_str_msg_refno[strlen(l_str_msg_refno)] =APL_NULL_CHAR;
+						
+						if(strlen(l_str_msg_refno) != 0)
+						{
+							break;
+						}
+					}
+					fclose(fl);
+				}
+				if(strlen(l_str_msg_refno))
+				{	
+							
+					strcpy(h_df_common_msgrptStruct->h_msg_refno,l_str_msg_refno);
+					strcpy(l_str_msg_refno,APL_NULL_STRING);
+				}
+				else
+				{
+					strcpy(h_df_common_msgrptStruct->h_msg_refno,BLANK);
+				}
+							
+				APL_IF_DEBUG
+				{
+                                     //AIX-Warnings Removal
+					printf("h_df_common_msgrptStruct->h_msg_refno = |%s| strlen = %d\n",h_df_common_msgrptStruct->h_msg_refno,(int)strlen(h_df_common_msgrptStruct->h_msg_refno));
+							fflush(stdout);
+				}	
+				if (GDbInsDF_COMMON_MSGRPT(h_df_common_msgrptStruct,l_debug_info_ptr) == APL_FAILURE)
+				{
+						printf("DEFORMATER|Deformater.pc|h_line 516|Cannot make entry in DF_COMMON_MSGRPT table \n");
+							fflush(stdout);
+						APL_GOBACK_FAIL
+				}
+				l_int_Report_Flag = 0;
+				//free(h_df_common_msgrptStruct); //29/05/2012
+				EXEC SQL COMMIT ;
+				APL_IF_DEBUG
+					printf("COMMIT statement executed \n");
+							fflush(stdout);
+			}
+			/*End of report flag*/
+
+			memset(l_str_noproc_msg_dir,APL_NULL_CHAR,strlen(l_str_noproc_msg_dir));
+			if (feof(fl_incmsglst) && feof(fl_incmsg_swiftlst))
+				break;
+			
+			strcpy(chr_fl_name,APL_NULL_STRING);
+			fscanf(fl_incmsglst, "%[^\n]\n",chr_fl_name);	
+		
+
+			if(feof(fl_incmsglst) && !(strcmp(chr_fl_name,APL_NULL_STRING)))	
+				fscanf(fl_incmsg_swiftlst, "%[^\n]\n",chr_fl_name);
+			/*
+			APL_IF_DEBUG
+					printf("Filename= |%s| strlen(chr_l_buf2)=|%d|!!!!!!!!!!!!!!!\n",chr_fl_name,strlen(chr_l_buf2));
+			*/
+			
+			/*fscanf(fl_incmsglst, "%[^\n]\n",chr_fl_name); NIKHIL COMMENTED IT*/
+	/*		APL_IF_DEBUG
+					printf("Filename= |%s| strlen(chr_l_buf2)=|%d|!!!!!!!!!!!!!!!\n",chr_fl_name,strlen(chr_l_buf2));*/
+							fflush(stdout);
+			if (!strcmp(chr_fl_name, APL_NULL_STRING ))
+			{
+				memset(chr_l_buf2, APL_NULL_CHAR , DEF_BUFFER_LEN);
+				sprintf(chr_l_buf2, "rm -f %s ", chr_l_incfl);
+			Alert("chr_l_buf2 = |%s|",chr_l_buf2);
+			fflush(stdout);
+				system(chr_l_buf2);
+				memset(chr_l_buf2, APL_NULL_CHAR , DEF_BUFFER_LEN);
+				sprintf(chr_l_buf2, "rm -f %s ", chr_l_incf2);
+			Alert("chr_l_buf2 = |%s|",chr_l_buf2);
+			fflush(stdout);
+				system(chr_l_buf2);
+			}
+			else
+			{ 
+				
+			 	sprintf(chr_g_log_buff,"path is %s|\n",chr_fl_name);
+				fprintf(p_fl_log,"\n %s ", chr_g_log_buff);
+				SeparateData(chr_fl_name, ' ', l_msg, l_path_detail);
+				
+				sprintf(chr_g_log_buff,"\nStarted Processing the msg  |%s|\n",(strrchr(l_path_detail,'/')+1));
+
+				printf("\n Hardik Memeset added ");
+							fflush(stdout);
+				printf("\n Nikhil MOVING FILE l_path_detail :%s:",l_path_detail);
+							fflush(stdout);
+				/* CHANGES BY AMISH --20/05 */
+				if( strcmp(l_msg,"515") && strcmp(l_msg,"540") && strcmp(l_msg,"541") && strcmp(l_msg,"542") && strcmp(l_msg,"543"))
+				{
+					if(MoveFileToArch(l_path_detail,chr_l_incmsgarchdir, l_debug_info_ptr) == APL_FAILURE)				
+					{
+						printf("\n Nikhil Unable to move file l_path_detail");
+							fflush(stdout);
+						fprintf(p_fl_log," \n \n Unable to move the h_file to the archival \n");
+						APL_GOBACK_FAIL
+					}
+					EXEC SQL SELECT SYS_DATE INTO :l_sys_date FROM PRO_SYS_DATE
+						IS_ANY_ORA_ERROR;
+					strcpy(l_message_filename,strrchr(chr_fl_name,'/')+1);
+					l_message_filename[strlen(l_message_filename)] =APL_NULL_CHAR;
+					printf("\nFILE NAME***********|%s|\n",l_message_filename);
+							fflush(stdout);
+  				memset(h_df_common_msgrptStruct,NULL,sizeof(DF_COMMON_MSGRPT_STRUCT_H));// 29/05/2012
+					strcpy(h_df_common_msgrptStruct->h_account,"DUMMY");
+					strcpy(h_df_common_msgrptStruct->h_ref_no,"NONREF");
+					strcpy(h_df_common_msgrptStruct->h_file_name,l_message_filename);
+					strcpy(h_df_common_msgrptStruct->h_failure_reason,"INVALID MESSAGE NO");
+					strcpy(h_df_common_msgrptStruct->h_msg_no,"OTH");
+					strcpy(h_df_common_msgrptStruct->h_rep_flg,"N");
+					strcpy(h_df_common_msgrptStruct->h_msgsts,"RJT");
+					strcpy(h_df_common_msgrptStruct->h_in_out,"I");
+					strcpy(h_df_common_msgrptStruct->h_received_on,"DUMMY");
+					strcpy(h_df_common_msgrptStruct->h_msg_refno,"DUMMY");
+					strcpy(h_df_common_msgrptStruct->h_received_on,l_sys_date);
+
+					if (GDbInsDF_COMMON_MSGRPT(h_df_common_msgrptStruct,l_debug_info_ptr) == APL_FAILURE)
+					{
+						APL_GOBACK_FAIL
+					}
+					//free(h_df_common_msgrptStruct);
+					EXEC SQL COMMIT ;
+					APL_IF_DEBUG
+						printf("COMMIT statement executed \n");
+							fflush(stdout);
+					APL_GOBACK_SUCCESS
+				}	
+				fprintf(p_fl_log,"\n%s",chr_g_log_buff);
+				
+				APL_IF_DEBUG
+                                      //AIX-Warnings Removal
+					printf("message number is -%s- strlen = -%d- \n",l_msg,(int)strlen(l_msg));
+							fflush(stdout);
+				if(strlen(l_msg)== 0)
+				{
+					APL_DATA_MISSING("Message Number", APL_NULL_STRING, APL_NULL_STRING);
+					int_l_int_retval = INVALID_DAEMON;
+				}
+				else
+				{
+					int_l_int_retval = CheckForDaemonStatus(l_msg, l_debug_info_ptr);
+				}
+				/* sprintf(chr_g_log_buff,"path is %s|%s\n",l_path_detail,l_msg);
+				CO_ProcMonitor(p_fl_log, chr_g_log_buff, NULL , NULL); */
+				fprintf(p_fl_log,"path is %s|%s\n",l_path_detail,l_msg);
+				
+				if(int_l_int_retval == APL_SUCCESS)
+				{
+					if (  (fl = fopen(l_path_detail, "r" ) ) == (FILE *)NULL)
+					{
+						DEFORMAT_IF_DEBUG
+						{
+							printf("\n ..... Failed to open the specified h_file .... \n");	
+							fflush(stdout);
+						}
+						fprintf(p_fl_log,"....Failed to open the specified h_file ....\n");
+						APL_GOBACK_FAIL	
+					}
+					else
+					{
+						DEFORMAT_IF_DEBUG
+						{
+							printf("Opened the specified h_file Successfully .... \n");
+							fflush(stdout);
+						}
+					}
+
+					//if((l_message_list = (MESSAGE_STRUCT **)(calloc(1,sizeof(MESSAGE_STRUCT **)))) == NULL) //21/05/2012
+					//free(l_message_list);
+					if((l_message_list = (MESSAGE_STRUCT **)(calloc(1,sizeof(MESSAGE_STRUCT *)))) == NULL)
+					{
+						DEFORMAT_IF_DEBUG
+						{
+							printf("\n Problem in memory allocation for l_message_list ............. \n");
+							fflush(stdout);
+						}
+						
+						APL_GOBACK_FAIL
+					}
+printf("\n Test 109 ");
+fflush(stdout);
+
+
+					/* Retro from scotia -- JC - 03-Feb-2010 - memory allocation for l_messasge_list_first_record - Start */
+					//if((l_message_list_first_record = (MESSAGE_STRUCT **)(calloc(1,sizeof(MESSAGE_STRUCT **)))) == NULL) //21/05/2012
+/*
+					if((l_message_list_first_record = (MESSAGE_STRUCT **)(calloc(1,sizeof(MESSAGE_STRUCT *)))) == NULL)
+					{
+						DEFORMAT_IF_DEBUG
+						{
+							printf("JC::: Problem in mem allocation for l_message_list_first_record...\n");
+							fflush(stdout);
+						}
+						APL_GOBACK_FAIL
+					}
+*/
+					/* JC - 03-Feb-2010 - memory allocation for l_messasge_list_first_record - End */
+					printf("\n Test 109 ");
+					fflush(stdout);
+					
+					l_message_list_first_record = l_message_list;
+					printf ("the name is |%s|\n",l_msg);	
+						fflush(stdout);
+					if((int_l_int_retval = ConvFileToList(fl, l_msg, l_message_list)) == APL_FAILURE)
+					{
+						sprintf(chr_g_log_buff,"\n\n Error in making link list\n\n");
+						CO_ProcMonitor(p_fl_log, chr_g_log_buff, NULL , NULL);
+						fclose(fl);
+						APL_GOBACK_FAIL		
+					}
+					else if(int_l_int_retval == SYS_NO_DATA)
+					{
+						/*sprintf(chr_g_log_buff,"\n\n No mapping int_found in Sequence Table while creating link list.....\n\n");
+						CO_ProcMonitor(p_fl_log, chr_g_log_buff, NULL , NULL); */
+						fprintf(p_fl_log,"\n No mapping int_found in Sequence Table while creating link list.....\n");
+						APL_IF_DEBUG
+							printf("File to be copied: -%s- \n File being copied to: -%s- \n",l_path_detail,g_str_noproc_msg_dir);	
+							fflush(stdout);
+						memset(l_str_noproc_msg_dir,APL_NULL_CHAR,sizeof(l_str_noproc_msg_dir));	//Sana
+						strcpy(l_str_noproc_msg_dir,g_str_noproc_msg_dir);
+						APL_IF_DEBUG
+						{
+							printf("g_str_noproc_msg_dir = |%s| l_str_noproc_msg_dir =|%s|\n",g_str_noproc_msg_dir,l_str_noproc_msg_dir);
+							fflush(stdout);
+						}
+						if(MoveFileToArch(l_path_detail,l_str_noproc_msg_dir, l_debug_info_ptr) == APL_FAILURE)
+						{
+							fprintf(p_fl_log," \n \n Unable to move the h_file to the archival \n");	
+							APL_GOBACK_FAIL
+						}
+						l_int_Report_Flag = 1;	
+						strcpy(l_str_tablename,"DFSEQUENCEMAP");
+						
+						fclose(fl);
+						continue;
+					}
+					
+					
+
+					//fclose(fl);
+					l_message_list = l_message_list_first_record ;
+					DEFORMAT_IF_DEBUG
+					{
+						int_l_int_retval = DisplayMessageDetails(l_message_list);
+					}
+				}
+				else 
+				{
+					
+					DEFORMAT_IF_DEBUG
+							printf("Daemon status_ind is checked \n");
+							fflush(stdout);
+					
+					memset(l_str_noproc_msg_dir,APL_NULL_CHAR,sizeof(l_str_noproc_msg_dir));	//Sana
+					if(int_l_int_retval != INVALID_DAEMON)
+					{
+						l_int_ServerDown_Flag = 1; 
+						
+						if(strstr(l_msg, "56"))
+						{
+								strcpy(l_str_noproc_msg_dir, g_str_noproc_camsg_dir);
+						}
+						else if((strstr(l_msg, "54"))||(strstr(l_msg, "578"))||(strstr(l_msg, "515")))
+						{
+								strcpy(l_str_noproc_msg_dir, g_str_noproc_trdmsg_dir);
+						}
+					}	
+					else 
+					{
+						strcpy(l_str_noproc_msg_dir,g_str_noproc_msg_dir);
+					}
+					DEFORMAT_IF_DEBUG
+						printf("Moving h_file to archival area: -%s- \n",l_str_noproc_msg_dir);
+							fflush(stdout);
+					if(MoveFileToArch(l_path_detail,l_str_noproc_msg_dir, l_debug_info_ptr) == APL_FAILURE)
+					{
+						fprintf(p_fl_log," \n \n Unable to move the h_file to the archival \n");	
+						APL_GOBACK_FAIL
+					}
+					l_int_Report_Flag = 1; 
+					fclose(fl);
+					APL_IF_DEBUG
+						printf("l_msg =	-%s- \n",l_msg);
+							fflush(stdout);
+					continue;	
+				}
+				l_message_list = l_message_list_first_record ; 
+			
+				chr_l_msg_no = atoi(l_msg);
+
+				/*	
+				if ((chr_l_msg_no == 540) || (chr_l_msg_no == 541) || (chr_l_msg_no == 542) || (chr_l_msg_no == 543))
+				{
+					memset(l_str_qual,APL_NULL_CHAR,10);
+					if(I_GetQual(l_message_list,":23G:",l_str_qual,"A","1")!=APL_SUCCESS)
+					{
+						APL_GOBACK_FAIL
+					}
+					printf("the qual of messageis %s\n",l_str_qual);
+							fflush(stdout);
+				}
+				*/
+
+				printf("chr_l_msg_no %d",chr_l_msg_no);
+				fflush(stdout);
+				
+				switch(chr_l_msg_no)
+				{
+
+					case 540:
+					{
+							int_l_int_retval = ProcessMessage_54x(l_message_list,l_path_detail,p_fl_log,l_msg,l_debug_info_ptr);
+							memset(l_str_noproc_msg_dir,APL_NULL_CHAR,sizeof(l_str_noproc_msg_dir));	//Sana
+							strcpy(l_str_noproc_msg_dir, g_str_noproc_trdmsg_dir);
+						
+							break;
+						
+					}
+
+					case 541: 
+					{
+							int_l_int_retval = ProcessMessage_54x(l_message_list,l_path_detail, p_fl_log,l_msg, l_debug_info_ptr);					
+							Alert("int_l_int_retval = |%d|",int_l_int_retval);
+							memset(l_str_noproc_msg_dir,APL_NULL_CHAR,sizeof(l_str_noproc_msg_dir));	//Sana
+							strcpy(l_str_noproc_msg_dir, g_str_noproc_trdmsg_dir);
+					  	
+							break;
+					}
+
+					case 542: 
+					{
+							int_l_int_retval = ProcessMessage_54x(l_message_list,l_path_detail,p_fl_log,l_msg,l_debug_info_ptr);
+							memset(l_str_noproc_msg_dir,APL_NULL_CHAR,sizeof(l_str_noproc_msg_dir));	//Sana
+							strcpy(l_str_noproc_msg_dir, g_str_noproc_trdmsg_dir);
+							break;
+					}
+					case 543:
+					{
+							int_l_int_retval = ProcessMessage_54x(l_message_list,l_path_detail,p_fl_log,l_msg,l_debug_info_ptr);
+							memset(l_str_noproc_msg_dir,APL_NULL_CHAR,sizeof(l_str_noproc_msg_dir));	//Sana
+							strcpy(l_str_noproc_msg_dir, g_str_noproc_trdmsg_dir);
+							break;	
+					}
+			
+					
+					case 515: 
+					{
+						int_l_int_retval = ProcessMessage_515(l_message_list,l_path_detail,p_fl_log,l_msg,l_debug_info_ptr);
+						memset(l_str_noproc_msg_dir,APL_NULL_CHAR,sizeof(l_str_noproc_msg_dir));	//Sana
+						strcpy(l_str_noproc_msg_dir, g_str_noproc_trdmsg_dir);
+					  	break;
+					}
+	
+					/*
+					
+					case 545:
+					{
+						int_l_int_retval = ProcessMessage_54x(l_message_list,l_path_detail,p_fl_log,l_msg,l_debug_info_ptr);
+						strcpy(l_str_noproc_msg_dir, g_str_noproc_trdmsg_dir);
+					  	break;
+					}
+					case 546:
+				 	{
+						int_l_int_retval = ProcessMessage_54x(l_message_list,l_path_detail,p_fl_log,l_msg,l_debug_info_ptr);
+						strcpy(l_str_noproc_msg_dir, g_str_noproc_trdmsg_dir);
+						break;
+					}
+					case 547: 
+					{
+						int_l_int_retval = ProcessMessage_54x(l_message_list,l_path_detail,p_fl_log,l_msg,l_debug_info_ptr);
+						strcpy(l_str_noproc_msg_dir, g_str_noproc_trdmsg_dir);
+						break;
+					}	
+					case 548: 
+					{
+						int_l_int_retval = ProcessMessage_548(l_message_list,l_path_detail,p_fl_log,l_msg,l_debug_info_ptr);
+						strcpy(l_str_noproc_msg_dir, g_str_noproc_trdmsg_dir);
+						break;
+					}
+					case 578:
+			 		{
+						int_l_int_retval = ProcessMessage_578(l_message_list,l_path_detail,p_fl_log,l_msg,l_debug_info_ptr);
+						strcpy(l_str_noproc_msg_dir, g_str_noproc_trdmsg_dir);
+						break;
+					}
+					case 564:
+			 		{
+						int_l_int_retval = ProcessMessage_564(l_message_list,l_path_detail,p_fl_log,l_msg,l_debug_info_ptr);
+						strcpy(l_str_noproc_msg_dir, g_str_noproc_camsg_dir);
+						break;
+					}
+					case 566:
+		 			{
+						int_l_int_retval = ProcessMessage_566(l_message_list,l_path_detail,p_fl_log,l_msg,l_debug_info_ptr);
+						strcpy(l_str_noproc_msg_dir, g_str_noproc_camsg_dir);
+						break;
+					}	
+					case 568:
+		 			{
+						int_l_int_retval = ProcessMessage_568(l_message_list,l_path_detail,p_fl_log,l_msg,l_debug_info_ptr);
+						strcpy(l_str_noproc_msg_dir, g_str_noproc_camsg_dir);
+						break;
+					}
+					*/
+					
+					default: break;
+
+				}
+				Alert("After Switch --- ");
+				fflush(stdout);
+
+				if( int_l_int_retval == APL_FAILURE)
+				{
+					sprintf(chr_g_log_buff,"Failure is Processing the msg ......%s ..... \n", strrchr(l_path_detail,'/')+1); 
+					CO_ProcMonitor(p_fl_log, chr_g_log_buff, NULL , NULL);
+					APL_GOBACK_FAIL	
+				}
+				else
+				if	(int_l_int_retval	==SYS_NO_DATA)
+				{
+					
+					memset(l_str_noproc_msg_dir,APL_NULL_CHAR,sizeof(l_str_noproc_msg_dir));	//Sana
+					strcpy(l_str_noproc_msg_dir, g_str_noproc_msg_dir); 
+					DEFORMAT_IF_DEBUG
+						printf("Moving NOT Processed h_file to archival area: -%s- \n",l_str_noproc_msg_dir);
+							fflush(stdout);
+				}
+				else
+				{
+					
+					if(CO_ScanErrCode(*l_debug_info_ptr, 0)!= APL_SUCCESS) 
+					
+					{		
+						memset(l_str_noproc_msg_dir,APL_NULL_CHAR,sizeof(l_str_noproc_msg_dir));	//Sana
+						strcpy(l_str_noproc_msg_dir,chr_l_incmsgarchdir); 
+						APL_IF_DEBUG
+							printf("Error Code Not 0\n");
+							fflush(stdout);
+					}
+					else
+					{
+						Alert("Error Code 0");
+						fflush(stdout);
+
+						/*APL_IF_DEBUG	
+							printf("Error Code 0\n");
+							fflush(stdout); */
+						l_int_Report_Flag = 1; 
+						l_int_ServerDown_Flag = 1;
+						if(l_message_list_first_record == NULL)
+						{
+							printf("Mesage List is NULL \n");
+							fflush(stdout);
+						}
+						if(I_GetVal(l_message_list,":20C:",":SEME/",l_str_msg_refno,"A","1") == APL_FAILURE)
+     						APL_GOBACK_FAIL
+					}
+				}
+				DEFORMAT_IF_DEBUG
+				{
+					printf("Moving h_file to archival area: -%s- \n",l_str_noproc_msg_dir);
+							fflush(stdout);
+				}
+				if(MoveFileToArch(l_path_detail,l_str_noproc_msg_dir, l_debug_info_ptr) == APL_FAILURE)
+				{
+					fprintf(p_fl_log," \n \n Unable to move the h_file to the archival \n");	
+					APL_GOBACK_FAIL
+				}
+
+				Alert("After MoveFileToArch");
+				fflush(stdout);
+					
+				sprintf(chr_g_log_buff,"Finished Processing the msg ......... |%s| ..........\n",(strrchr(l_path_detail,'/')+1));
+				CO_ProcMonitor(p_fl_log, chr_g_log_buff, NULL , NULL);
+			   
+			/*l_message_list = l_message_list_first_record ; */
+
+		 Alert("After l_message_list ");	
+			/*
+  			if(I_FreeMessageList(l_message_list) == APL_FAILURE)
+			{
+					  printf("Failure \n");
+					  fflush(stdout);
+					  CO_ProcMonitor(p_fl_log,"Returned Failure from I_FreeMessageList Process 564 \n",NULL,NULL);
+					  APL_GOBACK_FAIL
+			} 
+			*/
+			fflush(stdout);
+        /*
+			if(I_FreeMessageList(l_message_list_first_record) == APL_FAILURE)
+			{
+     				printf("Failure \n");
+				fflush(stdout);
+     				CO_ProcMonitor(p_fl_log,"Returned Failure from I_FreeMessageList Process 564 \n",NULL,NULL);
+     				APL_GOBACK_FAIL
+  			} */
+			//free(*l_message_list);
+			//free(l_message_list);
+			Alert("Success from I_FreeMessageList");
+			
+			}
+		}
+		//free(h_df_common_msgrptStruct);//29/05/2012
+		fclose(fl_incmsglst);
+		fclose(fl_incmsg_swiftlst);
+		Alert("\n Leaving Function ProcessMessages\n");		
+		fflush(stdout);
+		
+/*
+		DEFORMAT_IF_DEBUG
+		{
+			printf("\n Leaving Function ProcessMessages\n");
+							fflush(stdout);
+		}
+*/
+		APL_GOBACK_SUCCESS
+
+
+RETURN_SUCCESS:
+   CO_ProcMonitor(p_fl_log, "Successfully leaving the ProcessMessage processtion\n", NULL , NULL);
+   return APL_SUCCESS;
+
+RETURN_FAILURE:
+	CO_ProcMonitor(p_fl_log, "Leaving the ProcessMessage processtion with errors\n", l_debug_info_ptr , NULL);
+   return APL_FAILURE;
+   fflush(stdout);
+}
+
+
+

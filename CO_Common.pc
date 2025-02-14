@@ -1,0 +1,419 @@
+/*
+ *     COPYRIGHT NOTICE
+ * 
+ *		Copyright 2005 Polaris Software Lab Limited. All rights reserved.
+ *     
+ *         These materials are confidential and proprietary to
+ *         Polaris Software Lab Limited and no part of these materials should
+ *         be reproduced, published, transmitted or distributed in any form or
+ *         by any means, electronic, mechanical, photocopying, recording or
+ *         otherwise, or stored in any information storage or retrieval system
+ *         of any nature nor should the materials be disclosed to third parties
+ *         or used in any other manner for which this is not authorized, without
+ *         the prior express written authorization of Polaris Software Lab Limited.
+ */
+/*********************************************************************************************************
+ *  
+ *    Module Name         :               Maintenance
+ *    
+ *    File Name           :               CO_Common.pc
+ *    
+ *    Description         :               Contains all common Functions for
+ *                                             different Units .
+ *           
+ *            
+ *             
+ *                          Version Control Block
+ *               
+ *   Date        Version     Author         Description            								 RFS No.
+ *    ---------   --------  --------------  -----------------       								 ----------
+ *   28/11/05		1.0			Sonali		Function CO_PopulateAuditString is used 			HDFCGN_001	
+ *   													to get the valuefor primary key and the
+ *   													audit data along with the seperator
+ *                                           
+ *   *****************************************************************************************************/
+
+#include "stdio_64.h"
+#include "MS_Swift.h"
+#include "MT_Interface.h"
+#include "Intellect_Common.h"
+#include <unistd.h>
+#include "DL_Interface.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int CO_PopulateAuditString(char *p_entity_name,char *p_param_str_temp,char *p_audit_data,char *p_datavalue,DEBUG_INFO_STRUCT_H ** l_debug_info_ptr)   // AIX -Warnings Removal
+{
+
+        char **temp;
+        char **temp_data_key;
+        int					int_l_num_audit			=	0;
+        int 				int_l_num_data_key		=	0;
+        int 				int_l_key					=	0;
+        int 				int_l_audit					=	0;
+        char 				chr_l_value[4000] 		=	APL_NULL_STRING;
+        char				chr_l_data_value[4000] 	= 	APL_NULL_STRING;
+        char 				chr_l_datavalue[4000] 	=	APL_NULL_STRING;
+        char 				chr_l_audit_data[4000]	=  APL_NULL_STRING;
+        char 				chr_h_data_key[4000]	 	=  APL_NULL_STRING;
+        char 				chr_l_data_key[4000] 	=  APL_NULL_STRING;
+	char 				chr_l_param_str_temp[4000]  =  APL_NULL_STRING;
+	char				l_ca_event[CA_CA_EVENT_LEN] = APL_NULL_STRING;
+	short				i_l_ca_event = 0;
+
+        EXEC SQL BEGIN DECLARE SECTION;
+
+        char    h_audit_data[4000] = APL_NULL_STRING;
+        char    h_entity_name[100] = APL_NULL_STRING;
+
+        EXEC SQL VAR h_audit_data IS STRING;
+        EXEC SQL VAR chr_h_data_key IS STRING;
+        EXEC SQL VAR h_entity_name IS STRING;
+        EXEC SQL VAR p_entity_name IS STRING;
+
+        EXEC SQL END DECLARE SECTION;
+
+	EXEC SQL SELECT audit_data,key_data,entity_name 
+		INTO :h_audit_data,:chr_h_data_key,:h_entity_name 
+		FROM GN_AUDIT_MAP 
+		WHERE ENTITY_NAME=:p_entity_name;
+/*      	printf("\n sqlca.sqlcode ... |%d|\n",sqlca.sqlcode);*/
+		if(sqlca.sqlcode==1403)
+			APL_SUCCESS;
+		else
+         		IS_ANY_ORA_ERROR;
+
+         strcpy(chr_l_param_str_temp,p_param_str_temp);
+         CO_Rtv_DataString(p_param_str_temp,chr_h_data_key,chr_l_data_key);
+         strcpy(p_param_str_temp,chr_l_param_str_temp);
+
+
+    	if (APL_FAILURE == CO_SplitStr( chr_h_data_key,
+                                     ',',
+                                     &int_l_num_data_key,
+                                     &temp_data_key ))
+    	{
+     	   APL_GOBACK_FAIL;
+   	}
+
+      for (int_l_key=0;int_l_key<int_l_num_data_key;++int_l_key)
+      {
+      	strcpy(chr_l_data_value,APL_NULL_STRING);
+        CO_Rtv_DataString(p_param_str_temp,temp_data_key[int_l_key],chr_l_data_value);
+        strcat(chr_l_datavalue,AUDIT_DATA_FIELD_SEPRTR);
+        strcat(chr_l_datavalue,temp_data_key[int_l_key]);
+	strcat(chr_l_datavalue,AUDIT_DATA_VALUE_SEPRTR);
+        strcat(chr_l_datavalue,chr_l_data_value);
+	strcpy(p_param_str_temp,chr_l_param_str_temp);
+
+	/* JC - Additional allotted qty = 0 in case of Buy Back event [Start] */
+	if((strcmp(p_entity_name, "CA_RTBB_ALLOTMENT") == 0) && 
+		(strcmp(temp_data_key[int_l_key], "CORP_ID") == 0))
+	{
+		printf("\nJC::: Entity is CA_RTBB_ALLOTMENT and Field is CORP_ID. Hence checking for BB or RT\n");
+
+		EXEC SQL SELECT CA_EVENT INTO :l_ca_event:i_l_ca_event
+			FROM CAEVENT
+			WHERE CORP_ID = :chr_l_data_value;
+
+		printf("JC::: ORA for selecting ca event - [%d]\n", sqlca.sqlcode);
+		IS_ANY_ORA_ERROR
+
+		printf("JC::: CA event is [%s]\n", l_ca_event);
+	}
+	/* JC - Additional allotted qty = 0 in case of Buy Back event [End] */
+      }
+
+      strcat(chr_l_datavalue,APL_NULL_STRING);
+
+      strcpy(p_datavalue,chr_l_datavalue);
+
+    	if (APL_FAILURE == CO_SplitStr( h_audit_data,
+                                     ',',
+                                     &int_l_num_audit,
+                                     &temp ))
+    	{
+      	APL_GOBACK_FAIL;
+    	}
+
+      for (int_l_audit=0;int_l_audit<int_l_num_audit;++int_l_audit)
+      {
+      	strcpy(chr_l_value,APL_NULL_STRING);
+        /*added by Shradha for KOTAK Phase2 IOP*/
+        if(strcmp(h_entity_name,"DL_DEAL")==0 && strcmp(temp[int_l_audit],"EXCH_CODE")==0 )
+		CO_Rtv_DataString(p_param_str_temp,"EXCH_CODE_NEW",chr_l_value);
+	else
+        	CO_Rtv_DataString(p_param_str_temp,temp[int_l_audit],chr_l_value);
+
+	/* JC - Additional allotted qty = 0 in case of Buy Back event [Start] */
+	if((strcmp(p_entity_name, "CA_RTBB_ALLOTMENT") == 0) && 
+		(strcmp(temp[int_l_audit], "ADD_ALLOT_QTY") == 0) && 
+		(strcmp(l_ca_event, "BB") == 0))
+	{
+		printf("\nJC::: Entity is CA_RTBB_ALLOTMENT, field is ADD_ALLOT_QTY and event is BB. ");
+		printf("So, assigning 0 to ADD_ALLOT_QTY\n");
+		strcpy(chr_l_value, "0.0");
+		printf("JC::: Audit data --> [%s] - [%s]\n", temp[int_l_audit], chr_l_value);
+	}
+	/* JC - Additional allotted qty = 0 in case of Buy Back event [End] */
+
+         strcat(chr_l_audit_data,AUDIT_DATA_FIELD_SEPRTR);
+         strcat(chr_l_audit_data,temp[int_l_audit]);
+         strcat(chr_l_audit_data,AUDIT_DATA_VALUE_SEPRTR);
+         strcat(chr_l_audit_data,chr_l_value);
+         strcpy(p_param_str_temp,chr_l_param_str_temp);
+      }
+
+      strcat(chr_l_audit_data,APL_NULL_STRING);
+
+      strcpy(p_audit_data,chr_l_audit_data);
+
+APL_GOBACK_SUCCESS  // AIX -Warnings Removal
+RETURN_SUCCESS :
+   return(APL_SUCCESS);
+
+RETURN_FAILURE :
+   return(APL_FAILURE);
+}
+
+/* Function: CA_InsAudLog
+ * Purpose: Insert record into GN_AUDIT_LOG
+ * Author: PJ */
+
+int CA_InsAudLog(	GN_AUDIT_LOG_STRUCT_H *p_gn_audit_log_struct_h,
+					CA_GN_AUDIT_LOG_STRUCT_H *p_ca_gn_audit_log_struct_h,
+					DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	struct	sqlca	sqlca;
+	char            chr_l_datavalue[4000]   =  APL_NULL_STRING;
+	char            chr_l_tokvalue[4000]   =  APL_NULL_STRING;
+	char            chr_l_audit_data[4000]  =  APL_NULL_STRING;
+
+	memset (chr_l_datavalue, APL_NULL_CHAR, 4000);
+	memset (chr_l_audit_data, APL_NULL_CHAR, 4000);
+
+	if ( !strlen(p_gn_audit_log_struct_h->h_log_time) )
+	{
+		if( CO_RtvSysDtTime(p_gn_audit_log_struct_h->h_log_time,l_debug_info_ptr) ==
+				APL_FAILURE )
+			APL_GOBACK_FAIL
+	}
+	/* Key Data */
+	sprintf(chr_l_tokvalue,"%cDL_CLIENT%c",GN_DATA_FIELD_SEPRTR,GN_DATA_VALUE_SEPRTR); /*Changed by Shradha for SIT issue */
+	strcat(chr_l_datavalue,chr_l_tokvalue);
+	strcat(chr_l_datavalue,p_ca_gn_audit_log_struct_h->h_dl_client);
+	
+	sprintf(chr_l_tokvalue,"%cDL_REF_NO%c",GN_DATA_FIELD_SEPRTR,GN_DATA_VALUE_SEPRTR); /*Changed by Shradha for SIT issue */
+	strcat(chr_l_datavalue,chr_l_tokvalue);
+	strcat(chr_l_datavalue,p_ca_gn_audit_log_struct_h->h_cln_refno);
+
+	strcpy(p_gn_audit_log_struct_h->h_key_value, chr_l_datavalue);
+	strcpy(chr_l_audit_data, chr_l_datavalue);
+
+	sprintf(chr_l_tokvalue,"%cINSTR_CD%c",GN_DATA_FIELD_SEPRTR,GN_DATA_VALUE_SEPRTR);
+	strcat(chr_l_audit_data,chr_l_tokvalue);
+	strcat(chr_l_audit_data,p_ca_gn_audit_log_struct_h->h_instr_code);
+		
+	sprintf(chr_l_tokvalue,"%cDEAL_CD%c",GN_DATA_FIELD_SEPRTR,GN_DATA_VALUE_SEPRTR);
+	strcat(chr_l_audit_data,chr_l_tokvalue);
+	strcat(chr_l_audit_data,p_ca_gn_audit_log_struct_h->h_deal_cd);
+
+	sprintf(chr_l_datavalue, "%lf", p_ca_gn_audit_log_struct_h->h_qty);
+	sprintf(chr_l_tokvalue,"%cQTY%c",GN_DATA_FIELD_SEPRTR,GN_DATA_VALUE_SEPRTR);
+	strcat(chr_l_audit_data,chr_l_tokvalue);
+	strcat(chr_l_audit_data,chr_l_datavalue);
+	
+	sprintf(chr_l_datavalue, "%lf", p_ca_gn_audit_log_struct_h->h_amount);
+	sprintf(chr_l_tokvalue,"%cAMOUNT%c",GN_DATA_FIELD_SEPRTR,GN_DATA_VALUE_SEPRTR);
+	strcat(chr_l_audit_data,chr_l_tokvalue);
+	strcat(chr_l_audit_data,chr_l_datavalue); 
+
+	sprintf(chr_l_tokvalue,"%cDEAL_DATE%c",GN_DATA_FIELD_SEPRTR,GN_DATA_VALUE_SEPRTR);
+	strcat(chr_l_audit_data,chr_l_tokvalue);
+	strcat(chr_l_audit_data,p_ca_gn_audit_log_struct_h->h_deal_date);
+
+	sprintf(chr_l_tokvalue,"%cSETL_DATE%c",GN_DATA_FIELD_SEPRTR,GN_DATA_VALUE_SEPRTR);
+	strcat(chr_l_audit_data,chr_l_tokvalue);
+	strcat(chr_l_audit_data,p_ca_gn_audit_log_struct_h->h_setl_date);
+
+	strcpy(p_gn_audit_log_struct_h->h_audit_data, chr_l_audit_data);
+
+
+	EXEC SQL INSERT INTO GN_AUDIT_LOG VALUES (
+						:p_gn_audit_log_struct_h->h_userid, 
+						:p_gn_audit_log_struct_h->h_rec_mode,
+						:p_gn_audit_log_struct_h->h_entity_name,
+						:p_gn_audit_log_struct_h->h_key_value,
+						:p_gn_audit_log_struct_h->h_audit_data,
+						:p_gn_audit_log_struct_h->h_log_time,
+						:p_gn_audit_log_struct_h->h_comments
+						);
+
+	IS_ANY_ORA_ERROR	
+
+APL_GOBACK_SUCCESS
+RETURN_SUCCESS:
+	APL_FUNCTION_RET_SUCCESS(APL_OUT_FILE)
+RETURN_FAILURE:
+	APL_FUNCTION_RET_FAILURE(APL_OUT_FILE)
+}
+
+/*Added by Shradha for Kotak Phase 2 IOP Starts*/
+/* Function: DL_InsAuditLog
+ * Purpose: Insert record into GN_AUDIT_LOG for Auto markshortage and Prematch deal created
+ * Author: MAHESH */
+
+int DL_InsAuditLog(	GN_AUDIT_LOG_STRUCT_H *p_gn_audit_log_struct_h,
+					SYS_DL_DEAL_STRUCT_H *p_short_deal_struct_h,
+					DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	struct	sqlca	sqlca;
+	char            chr_l_datavalue[4000]   =  APL_NULL_STRING;
+	char            chr_l_tokvalue[4000]   =  APL_NULL_STRING;
+	char            chr_l_audit_data[4000]  =  APL_NULL_STRING;
+
+	memset (chr_l_datavalue, APL_NULL_CHAR, 4000);
+	memset (chr_l_audit_data, APL_NULL_CHAR, 4000);
+
+	if ( !strlen(p_gn_audit_log_struct_h->h_log_time) )
+	{
+		if( CO_RtvSysDtTime(p_gn_audit_log_struct_h->h_log_time,l_debug_info_ptr) ==
+				APL_FAILURE )
+			APL_GOBACK_FAIL
+	}
+	/* Key Data */
+	
+	sprintf(chr_l_tokvalue,"%cDL_CLIENT%c",GN_DATA_FIELD_SEPRTR,GN_DATA_VALUE_SEPRTR);
+	strcat(chr_l_datavalue,chr_l_tokvalue);
+	strcat(chr_l_datavalue,p_short_deal_struct_h->h_dl_client);
+	
+	sprintf(chr_l_tokvalue,"%cDL_REF_NO%c",GN_DATA_FIELD_SEPRTR,GN_DATA_VALUE_SEPRTR);
+	strcat(chr_l_datavalue,chr_l_tokvalue);
+	strcat(chr_l_datavalue,p_short_deal_struct_h->h_indentity_no);
+
+	strcpy(p_gn_audit_log_struct_h->h_key_value, chr_l_datavalue);
+	strcpy(chr_l_audit_data, chr_l_datavalue);
+
+	sprintf(chr_l_tokvalue,"%cINSTR_CD%c",GN_DATA_FIELD_SEPRTR,GN_DATA_VALUE_SEPRTR);
+	strcat(chr_l_audit_data,chr_l_tokvalue);
+	strcat(chr_l_audit_data,p_short_deal_struct_h->h_instr_code);
+	
+	sprintf(chr_l_tokvalue,"%cDEAL_CD%c",GN_DATA_FIELD_SEPRTR,GN_DATA_VALUE_SEPRTR);
+	strcat(chr_l_audit_data,chr_l_tokvalue);
+	strcat(chr_l_audit_data,p_short_deal_struct_h->h_dealcd);
+	
+	sprintf(chr_l_datavalue, "%lf", p_short_deal_struct_h->h_pr);
+	sprintf(chr_l_tokvalue,"%cCOST%c",GN_DATA_FIELD_SEPRTR,GN_DATA_VALUE_SEPRTR);
+	strcat(chr_l_audit_data,chr_l_tokvalue);
+	strcat(chr_l_audit_data,chr_l_datavalue); 
+	
+	sprintf(chr_l_datavalue, "%lf", p_short_deal_struct_h->h_amt);
+	sprintf(chr_l_tokvalue,"%cAMOUNT%c",GN_DATA_FIELD_SEPRTR,GN_DATA_VALUE_SEPRTR);
+	strcat(chr_l_audit_data,chr_l_tokvalue);
+	strcat(chr_l_audit_data,chr_l_datavalue); 
+	
+	sprintf(chr_l_tokvalue,"%cDEAL_DATE%c",GN_DATA_FIELD_SEPRTR,GN_DATA_VALUE_SEPRTR);
+	strcat(chr_l_audit_data,chr_l_tokvalue);
+	strcat(chr_l_audit_data,p_short_deal_struct_h->h_dlt);
+
+	sprintf(chr_l_tokvalue,"%cPAYIN_DT%c",GN_DATA_FIELD_SEPRTR,GN_DATA_VALUE_SEPRTR);
+	strcat(chr_l_audit_data,chr_l_tokvalue);
+	strcat(chr_l_audit_data,p_short_deal_struct_h->h_payin_dt);
+
+	sprintf(chr_l_tokvalue,"%cPAYOUT_DT%c",GN_DATA_FIELD_SEPRTR,GN_DATA_VALUE_SEPRTR);
+	strcat(chr_l_audit_data,chr_l_tokvalue);
+	strcat(chr_l_audit_data,p_short_deal_struct_h->h_payout_dt);
+
+	sprintf(chr_l_tokvalue,"%cSETL_DATE%c",GN_DATA_FIELD_SEPRTR,GN_DATA_VALUE_SEPRTR);
+	strcat(chr_l_audit_data,chr_l_tokvalue);
+	strcat(chr_l_audit_data,p_short_deal_struct_h->h_setldt);
+
+    sprintf(chr_l_tokvalue,"%cTRD_EXCH%c",GN_DATA_FIELD_SEPRTR,GN_DATA_VALUE_SEPRTR);
+	strcat(chr_l_audit_data,chr_l_tokvalue);
+	strcat(chr_l_audit_data,p_short_deal_struct_h->h_trd_exch);
+	
+    sprintf(chr_l_tokvalue,"%cEXCH_CODE%c",GN_DATA_FIELD_SEPRTR,GN_DATA_VALUE_SEPRTR);
+	strcat(chr_l_audit_data,chr_l_tokvalue);
+	strcat(chr_l_audit_data,p_short_deal_struct_h->h_exch_code);
+
+	sprintf(chr_l_tokvalue,"%cCLH_FLG%c",GN_DATA_FIELD_SEPRTR,GN_DATA_VALUE_SEPRTR);
+	strcat(chr_l_audit_data,chr_l_tokvalue);
+	strcat(chr_l_audit_data,p_short_deal_struct_h->h_clh_flg);
+	
+	sprintf(chr_l_tokvalue,"%cTRD_MKT_TYPE%c",GN_DATA_FIELD_SEPRTR,GN_DATA_VALUE_SEPRTR);
+	strcat(chr_l_audit_data,chr_l_tokvalue);
+	strcat(chr_l_audit_data,p_short_deal_struct_h->h_trd_mkt_type);
+
+    sprintf(chr_l_tokvalue,"%cMKT_TYPE%c",GN_DATA_FIELD_SEPRTR,GN_DATA_VALUE_SEPRTR);
+	strcat(chr_l_audit_data,chr_l_tokvalue);
+	strcat(chr_l_audit_data,p_short_deal_struct_h->h_mkt_type);	
+	
+	sprintf(chr_l_tokvalue,"%cDL_TYPE%c",GN_DATA_FIELD_SEPRTR,GN_DATA_VALUE_SEPRTR);
+	strcat(chr_l_audit_data,chr_l_tokvalue);
+	strcat(chr_l_audit_data,p_short_deal_struct_h->h_classofdl);	
+	
+	sprintf(chr_l_datavalue, "%lf", p_short_deal_struct_h->h_qty);
+	sprintf(chr_l_tokvalue,"%cQTY%c",GN_DATA_FIELD_SEPRTR,GN_DATA_VALUE_SEPRTR);
+	strcat(chr_l_audit_data,chr_l_tokvalue);
+	strcat(chr_l_audit_data,chr_l_datavalue);
+
+	sprintf(chr_l_tokvalue,"%cDOMESTIC_CPCLT%c",GN_DATA_FIELD_SEPRTR,GN_DATA_VALUE_SEPRTR);
+	strcat(chr_l_audit_data,chr_l_tokvalue);
+	strcat(chr_l_audit_data,p_short_deal_struct_h->h_domcpclt_cd);	
+	
+	
+	
+
+	strcpy(p_gn_audit_log_struct_h->h_audit_data, chr_l_audit_data);
+
+
+	EXEC SQL INSERT INTO GN_AUDIT_LOG VALUES (
+												:p_gn_audit_log_struct_h->h_userid, 
+												:p_gn_audit_log_struct_h->h_rec_mode,
+												:p_gn_audit_log_struct_h->h_entity_name,
+												:p_gn_audit_log_struct_h->h_key_value,
+												:p_gn_audit_log_struct_h->h_audit_data,
+												:p_gn_audit_log_struct_h->h_log_time,
+												:p_gn_audit_log_struct_h->h_comments
+												);
+
+	IS_ANY_ORA_ERROR	
+APL_GOBACK_SUCCESS
+RETURN_SUCCESS:
+	APL_FUNCTION_RET_SUCCESS(APL_OUT_FILE)
+RETURN_FAILURE:
+	APL_FUNCTION_RET_FAILURE(APL_OUT_FILE)
+}
+/*Added by Shradha for Kotak Phase 2 IOP Ends*/
+
+/*Added by Usman for Kotak CSGL API call Start*/
+int callCSGLAPI(char chr_usr_id[], char ref_entity[], char keyvalue[]) {
+    int l_retval = 0;
+    char intl_root_path[100];
+    
+    // Dynamically allocate memory for l_buf
+    char *l_buf = (char *)malloc(1000 * sizeof(char));
+    if (l_buf == NULL) {
+        fprintf(stderr, "Memory allocation failed\n");
+        return -1;
+    }
+
+    strcpy(intl_root_path, getenv("INTL_ROOT_PATH"));
+    memset(l_buf, APL_NULL_CHAR, 1000);
+    printf(" intl_root_path |%s| ", intl_root_path);
+    strcpy(l_buf, intl_root_path);
+    strcat(l_buf, "CSGL_API_call.ksh ");
+    strcat(l_buf, ref_entity);
+    strcat(l_buf, " ");
+    strcat(l_buf, chr_usr_id);
+    strcat(l_buf, " ");
+    strcat(l_buf, keyvalue);
+    fflush(stdout);
+    printf(" l_buf |%s| ", l_buf);
+    l_retval = system(l_buf);
+
+    free(l_buf);
+
+    return (l_retval == 0) ? 0 : 1;
+}
+/*Added by Usman for Kotak CSGL API call End*/

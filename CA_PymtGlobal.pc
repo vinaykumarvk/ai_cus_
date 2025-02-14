@@ -1,0 +1,956 @@
+
+
+	
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+
+
+#include "CR_Common.h"
+#include "CA_Common.h"
+
+EXEC SQL INCLUDE SQLCA.H;
+
+
+
+
+#define LOG_BUFFER_LEN 70
+
+
+
+
+static	int 	CA_Proc_GlobalPymtNew(CA_CAGLPYMT_STRUCT_H  *p_ca_caglpymt_struct_h,
+				                  INTL_ENV_DATA_STRUCT_H   *p_intlenv_data_struct_h,
+	      				         DEBUG_INFO_STRUCT_H         **l_debug_info_ptr
+                 				);
+
+static	int 	CA_Proc_GlobalPymtMod(CA_CAGLPYMT_STRUCT_H *p_ca_caglpymt_struct_h,
+				         	       INTL_ENV_DATA_STRUCT_H   *p_intlenv_data_struct_h,
+  	      				   	    DEBUG_INFO_STRUCT_H         **l_debug_info_ptr
+                  			);
+
+
+static	int	CA_ChkGlbPymtMandData( CA_CAGLPYMT_STRUCT_H    *p_ca_caglpymt_struct_h,
+ 				                  INTL_ENV_DATA_STRUCT_H   *p_intlenv_data_struct_h,
+            			         DEBUG_INFO_STRUCT_H         **l_debug_info_ptr
+                 				);
+
+int	CA_Mod_GlobalPymtCreate(CA_CAGLPYMT_STRUCT_H	*p_ca_caglpymt_struct_h,
+    								CA_CAGLPYMT_STRUCT_I	*p_globalpymt_struct_i,
+									DEBUG_INFO_STRUCT_H		**l_debug_info_ptr
+									);
+
+
+
+
+
+int CA_Mod_UpdGlobalPymt( CA_CAGLPYMT_STRUCT_H    *p_ca_caglpymt_struct_h,
+                     INTL_ENV_DATA_STRUCT_H   *p_intlenv_data_struct_h,
+                     DEBUG_INFO_STRUCT_H         **l_debug_info_ptr
+                  )
+{
+	struct sqlca sqlca;
+
+	#ifdef APL_THREADS
+	APL_SET_CONTEXT
+	EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE,"Entered A_DbUpdGlobalPymtFn",NULL,p_intlenv_data_struct_h);
+		}
+										
+	printf("\n value of mode is %s",p_intlenv_data_struct_h->h_mode);
+
+	if (	(	!strcmp(p_intlenv_data_struct_h->h_mode,APL_FUNC_INPUT)	)	)
+		{
+			if (	CA_Proc_GlobalPymtNew(	p_ca_caglpymt_struct_h,
+										p_intlenv_data_struct_h,
+										l_debug_info_ptr
+										) == APL_FAILURE
+				)
+				{
+					APL_GOBACK_FAIL
+				}
+			else
+				{
+					APL_GOBACK_SUCCESS
+				}
+		}
+
+	
+	else if ( (	!strcmp(p_intlenv_data_struct_h->h_mode,APL_FUNC_DELETE)	) ||
+				(!strcmp(p_intlenv_data_struct_h->h_mode,APL_FUNC_AUTHORISE)) ||
+				(!strcmp(p_intlenv_data_struct_h->h_mode,APL_FUNC_RESET)) ||
+				(!strcmp(p_intlenv_data_struct_h->h_mode,APL_FUNC_MODIFY)) /*Modified by siva.ganapathi for ISKB_2293*/
+			  )
+		{
+			if (	CA_Proc_GlobalPymtMod(	p_ca_caglpymt_struct_h,
+											p_intlenv_data_struct_h,
+											l_debug_info_ptr
+										) == APL_FAILURE)
+				{
+					APL_GOBACK_FAIL
+				}
+			else
+				{
+					APL_GOBACK_SUCCESS
+				}
+		}
+
+    else  
+      {
+            CO_InsertErr(l_debug_info_ptr,
+                           ERR_INVALID_MODE,
+                           p_intlenv_data_struct_h->h_mode,
+                           APL_NULL_STRING,
+                           APL_NULL_STRING,
+                           __LINE__,
+                           __FILE__
+                           );
+            APL_GOBACK_FAIL
+      }
+
+	
+		
+	APL_GOBACK_SUCCESS
+	RETURN_SUCCESS	:
+		{
+			APL_IF_DEBUG
+			{
+				CO_ProcMonitor(APL_OUT_FILE,"Exiting A_DbUpdGlobalPymt successfully",NULL,p_intlenv_data_struct_h);
+			}	
+			return (APL_SUCCESS);
+		}
+	RETURN_FAILURE	:
+		{
+			APL_IF_DEBUG
+			{
+				CO_ProcMonitor(APL_OUT_FILE,"Exiting A_DbUpdGlobalPymt unsuccessfully",NULL,p_intlenv_data_struct_h);
+			}	
+			return (APL_FAILURE);
+		}
+
+
+}
+
+
+
+static	int CA_Proc_GlobalPymtNew(	CA_CAGLPYMT_STRUCT_H 	*p_ca_caglpymt_struct_h,
+   									INTL_ENV_DATA_STRUCT_H	*p_intlenv_data_struct_h,
+	   					   		DEBUG_INFO_STRUCT_H 			**l_debug_info_ptr
+									)
+{
+	
+
+	struct	sqlca	sqlca;
+	CA_CAGLPYMT_STRUCT_I	*l_ca_caglpymt_struct_ib		=	NULL;
+	CA_CAEVENT_STRUCT_H       *l_ca_caevent_struct_ha         =NULL;
+	CA_CAEVENT_STRUCT_I       *l_ca_caeventimg_struct_i         =NULL;
+	char		chr_event_rowid[APL_ROWID_LEN] = APL_NULL_STRING;
+	char		pro_sys_date[APL_DATE_LEN]=APL_NULL_STRING;
+	char		*int_pos;
+	int		int_is_pydt_valid=0;
+	char     h_disct_flag[APL_FLAG_LENGTH]=APL_NULL_STRING;
+	short		i_disct_flag=0;
+	char   	h_taxonmat_ind[APL_FLAG_LENGTH] = APL_NULL_STRING;
+	short		i_taxonmat_ind = 0;
+	int		int_date_diff = 0;
+	int		int_holiday_flag = 0;
+
+	#ifdef APL_THREADS
+	APL_SET_CONTEXT
+	EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+	
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Entering S_GlobalPymtInput",NULL,p_intlenv_data_struct_h);
+	}	
+
+	
+	if	 (	CA_ChkGlbPymtMandData(	p_ca_caglpymt_struct_h,
+										p_intlenv_data_struct_h,
+										l_debug_info_ptr
+										) == APL_FAILURE
+		 )
+			{
+				APL_GOBACK_FAIL
+			}
+
+	
+	(l_ca_caevent_struct_ha) = (CA_CAEVENT_STRUCT_H * ) calloc ( 1, sizeof(CA_CAEVENT_STRUCT_H ) );
+	APL_MALLOC_FAIL(l_ca_caevent_struct_ha);
+
+	(l_ca_caeventimg_struct_i) = (CA_CAEVENT_STRUCT_I * ) calloc ( 1, sizeof(CA_CAEVENT_STRUCT_I ) );
+	APL_MALLOC_FAIL(l_ca_caeventimg_struct_i);
+
+	
+	(l_ca_caglpymt_struct_ib) = (CA_CAGLPYMT_STRUCT_I*)calloc(1,
+							sizeof(CA_CAGLPYMT_STRUCT_I));	
+	APL_MALLOC_FAIL(l_ca_caglpymt_struct_ib) 
+
+	
+	if (CO_RtvSysDtTime(pro_sys_date,l_debug_info_ptr) == APL_FAILURE )
+   {
+     APL_GOBACK_FAIL
+   }
+	strcpy(p_ca_caglpymt_struct_h->h_access_stamp,pro_sys_date);
+	strcpy(pro_sys_date,strtok_r(pro_sys_date," ",&int_pos));
+	strcat(pro_sys_date,APL_NULL_TIME);
+
+	
+	if (	CA_RtvEvnt(  p_ca_caglpymt_struct_h->h_corp_id,
+							l_ca_caevent_struct_ha,
+							l_ca_caeventimg_struct_i,
+							chr_event_rowid,
+ 	 		   		   p_intlenv_data_struct_h, 
+						 	l_debug_info_ptr
+         		   	 )	==	APL_FAILURE 
+		)
+	{
+		APL_GOBACK_FAIL
+	}
+
+	
+	/*
+			(!strcmp(l_ca_caevent_struct_ha->h_evt_class,EVT_SPLIT)  )  condition excluded for AIX Prod issue SR_110 */
+	Alert("l_ca_caevent_struct_ha->h_evt_class is |%s|",l_ca_caevent_struct_ha->h_evt_class);
+	if ( (!strcmp(l_ca_caevent_struct_ha->h_evt_class,EVT_OFFER) ) ||	
+			(!strcmp(l_ca_caevent_struct_ha->h_evt_class,EVT_MEETING) ) ||	
+			(!strcmp(l_ca_caevent_struct_ha->h_evt_class,EVT_OTH)  )       
+		) 	
+	{
+		Alert("In Inside If");
+		CO_InsertErr(l_debug_info_ptr,
+							ERR_INVALID_EVNT_GLBLPAYMNT,
+							l_ca_caevent_struct_ha->h_evt_class,
+							APL_NULL_STRING,
+							APL_NULL_STRING,
+							__LINE__,
+							__FILE__
+							);
+		APL_GOBACK_FAIL
+	}
+
+	 
+			
+
+	if ( !strcmp(l_ca_caevent_struct_ha->h_evt_class,EVT_BOND_REDMP) )
+	{
+		EXEC SQL SELECT  DISCT_IND,TAXONMAT_IND
+		INTO :h_disct_flag:i_disct_flag,
+			  :h_taxonmat_ind:i_taxonmat_ind
+		FROM
+				MT_INSTRUMENT
+		where instr_code = :l_ca_caevent_struct_ha->h_instr_code;
+
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,
+															"Instrurity",
+															APL_NULL_STRING,
+															APL_NULL_STRING
+														 )
+	
+		if ( (!strcmp(h_disct_flag,APL_YES_IND))  &&
+				(!strcmp(h_taxonmat_ind,APL_YES_IND))
+			)
+		{
+			CO_InsertErr(l_debug_info_ptr,
+								ERR_INVALID_INSTR_GLBLPAYMNT,
+								l_ca_caevent_struct_ha->h_instr_code,
+								APL_NULL_STRING,
+								APL_NULL_STRING,
+								__LINE__,
+								__FILE__
+								);
+			APL_GOBACK_FAIL
+		}
+ 
+	}
+
+	
+	
+	
+
+	 
+			
+	
+	if ( strcmp(l_ca_caevent_struct_ha->h_evt_stat,STATUS_RDY_PYMT) &&
+	     strcmp(l_ca_caevent_struct_ha->h_evt_stat,STATUS_PART_PAID) 
+		)	
+	{
+		if ( CO_InsertErr(l_debug_info_ptr,
+									ERR_EVNTSTS_INVALID,
+									APL_NULL_STRING,
+									APL_NULL_STRING,
+									APL_NULL_STRING,
+									__LINE__,
+									__FILE__
+									) == APL_FAILURE
+			)
+			{
+				APL_GOBACK_FAIL
+			}
+	}
+
+	 
+	if ( CA_ChkInstr(l_ca_caevent_struct_ha->h_instr_code,
+							  l_ca_caevent_struct_ha->h_res_instr_code,
+								"N",
+								l_debug_info_ptr
+							 ) == APL_FAILURE
+		)
+	{
+		if ( CO_ChkErr(*l_debug_info_ptr) == APL_FAILURE )
+		{
+			APL_GOBACK_FAIL
+		}
+	}		
+
+	 
+			
+			
+			
+
+			if ( !strcmp(l_ca_caevent_struct_ha->h_evt_class,EVT_CASH_DIV) ||
+			 	  !strcmp(l_ca_caevent_struct_ha->h_evt_class,EVT_BOND) ||
+				  !strcmp(l_ca_caevent_struct_ha->h_evt_class,EVT_DECR_VAL)	
+				)		
+			{
+				if(strlen(l_ca_caevent_struct_ha->h_rec_date))
+				{		
+					EXEC SQL SELECT 
+						TO_DATE(:p_ca_caglpymt_struct_h->h_pymt_dt)	-
+						TO_DATE(:l_ca_caevent_struct_ha->h_rec_date)	
+						INTO	:int_date_diff
+						FROM	DUAL;
+
+					IS_ANY_ORA_ERROR
+						if	(	int_date_diff	<	0	)
+						{
+							CO_InsertErr(l_debug_info_ptr,
+									ERR_PAYDT_CANT_BEFORE_RECDT,
+									p_ca_caglpymt_struct_h->h_pymt_dt,
+									l_ca_caevent_struct_ha->h_rec_date,	
+									APL_NULL_STRING,
+									__LINE__,
+									__FILE__
+									);
+							APL_GOBACK_FAIL
+						}
+				}	
+
+			}
+	
+
+		int_holiday_flag = 0;
+      if (  CO_Chk_Holiday(p_ca_caglpymt_struct_h->h_pymt_dt,
+                              &int_holiday_flag,
+                              l_debug_info_ptr,APL_NULL_STRING)
+            == APL_FAILURE
+         )
+            {
+               APL_GOBACK_FAIL
+            }
+      if (  int_holiday_flag   )
+         {
+            CO_InsertErr(l_debug_info_ptr,
+                             ERR_DATE_IS_HOLIDAY,
+                             "Pay Date ",
+                             APL_NULL_STRING,
+                             APL_NULL_STRING,
+                             __LINE__,
+                             __FILE__);
+        
+				if ( CO_ChkErr(*l_debug_info_ptr) == APL_FAILURE )
+				{
+					APL_GOBACK_FAIL
+				}
+ 			}
+
+
+	 
+	if ( CA_ChkNoUUEntitl(p_ca_caglpymt_struct_h->h_corp_id,
+									l_debug_info_ptr
+								 	) == APL_FAILURE
+		)
+	{
+		if ( CO_ChkErr(*l_debug_info_ptr) == APL_FAILURE )
+		{
+			APL_GOBACK_FAIL
+		}
+	}		
+
+	 
+	if ( CA_ChkSumGlPymt ( p_ca_caglpymt_struct_h,
+								 p_intlenv_data_struct_h,
+								 l_debug_info_ptr
+								) == APL_FAILURE
+		)
+	{
+		if ( CO_ChkErr(*l_debug_info_ptr) == APL_FAILURE )
+		{
+			APL_GOBACK_FAIL
+		}
+	}
+
+	 
+			
+
+	if ( CO_ChkErr(*l_debug_info_ptr) == APL_SUCCESS )
+	{ 
+		APL_GOBACK_FAIL
+	}
+
+	
+	strcpy(p_ca_caglpymt_struct_h->h_maker,p_intlenv_data_struct_h->usr);
+	strcpy(p_ca_caglpymt_struct_h->h_maker_dt,pro_sys_date);
+
+	l_ca_caglpymt_struct_ib->i_checker		=	-1;
+	l_ca_caglpymt_struct_ib->i_checker_dt	=	-1;
+
+	
+	strcpy(p_ca_caglpymt_struct_h->h_new_dt,pro_sys_date);
+	
+	
+	strcpy(p_ca_caglpymt_struct_h->h_pymt_stat,APL_STATUS_UNAUTH);
+
+	
+
+		if	(	CA_Mod_GlobalPymtCreate(p_ca_caglpymt_struct_h,
+										l_ca_caglpymt_struct_ib,
+										l_debug_info_ptr
+										)	==	APL_FAILURE
+			)
+			{
+				APL_GOBACK_FAIL
+			}
+	
+	
+		
+	APL_GOBACK_SUCCESS
+	RETURN_SUCCESS	:
+		{
+			APL_FREE(l_ca_caglpymt_struct_ib);
+			APL_FREE(l_ca_caevent_struct_ha);
+			APL_FREE(l_ca_caeventimg_struct_i);
+			APL_IF_DEBUG
+			{	
+				CO_ProcMonitor(APL_OUT_FILE,"Exiting CA_Proc_GlobalPymtNew successfully",NULL,p_intlenv_data_struct_h);
+			}	
+			return (APL_SUCCESS);
+		}
+	RETURN_FAILURE	:
+		{
+			APL_FREE(l_ca_caglpymt_struct_ib);
+			APL_FREE(l_ca_caevent_struct_ha);
+			APL_FREE(l_ca_caeventimg_struct_i);
+			APL_IF_DEBUG
+			{
+				CO_ProcMonitor(APL_OUT_FILE,"Exiting CA_Proc_GlobalPymtNew unsuccessfully",NULL,p_intlenv_data_struct_h);
+			}	
+			return (APL_FAILURE);
+		}
+}
+
+
+
+
+static	int 	CA_Proc_GlobalPymtMod(  CA_CAGLPYMT_STRUCT_H    *p_ca_caglpymt_struct_h,
+					                  INTL_ENV_DATA_STRUCT_H   *p_intlenv_data_struct_h,
+  		      				         DEBUG_INFO_STRUCT_H         **l_debug_info_ptr
+                  				)
+{
+	struct	sqlca	sqlca;
+	CA_CAGLPYMT_STRUCT_H	*l_ca_caglpymt_struct_ha_a		=	NULL;
+	CA_CAGLPYMT_STRUCT_I	*l_ca_caglpymt_struct_i	   =	NULL;
+	CA_CAEVENT_STRUCT_H       *l_ca_caevent_struct_ha         =NULL;
+	CA_CAEVENT_STRUCT_I       *l_ca_caeventimg_struct_i         =NULL;
+	char		*int_pos;
+	char	 	rowid[APL_ROWID_LEN]=APL_NULL_STRING;
+	char		pro_sys_date[APL_DATE_LEN]=APL_NULL_STRING;
+	char		access_stamp[APL_DATE_LEN]=APL_NULL_STRING;
+   char     stat_pymt[APL_STATUS_LEN]=APL_NULL_STRING;
+	int		int_p_count=0;
+	char     chr_py_st_del_unauth[APL_STATUS_LEN] = {STATUS_DEL_UNAUTH};
+	char     chr_sys_sts_unauth[APL_STATUS_LEN] = {APL_STATUS_UNAUTH};
+	
+	#ifdef APL_THREADS
+	APL_SET_CONTEXT
+	EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Entered CA_Proc_GlobalPymtMod function",NULL,p_intlenv_data_struct_h);
+	}
+
+		
+	
+	if(	!strlen(p_ca_caglpymt_struct_h->h_access_stamp)	)
+				{
+					APL_DATA_MISSING("Access Stamp",APL_NULL_STRING,APL_NULL_STRING)	
+				}
+					
+	if(	!strlen(p_ca_caglpymt_struct_h->h_corp_id)	)
+				{
+					APL_DATA_MISSING("Corporate Action ID",APL_NULL_STRING,APL_NULL_STRING)	
+				}
+
+	if	(	 CO_ChkErr(*l_debug_info_ptr)	== APL_SUCCESS	)
+			APL_GOBACK_FAIL
+	
+	
+	
+		(l_ca_caglpymt_struct_ha_a) = (CA_CAGLPYMT_STRUCT_H*)calloc(1,
+										sizeof(CA_CAGLPYMT_STRUCT_H));	
+		APL_MALLOC_FAIL(l_ca_caglpymt_struct_ha_a) 
+		
+		(l_ca_caglpymt_struct_i) = (CA_CAGLPYMT_STRUCT_I*)calloc(1,
+										sizeof(CA_CAGLPYMT_STRUCT_I));	
+	 	APL_MALLOC_FAIL(l_ca_caglpymt_struct_i) 
+
+	
+	(l_ca_caevent_struct_ha) = (CA_CAEVENT_STRUCT_H * ) calloc ( 1, sizeof(CA_CAEVENT_STRUCT_H ) );
+	APL_MALLOC_FAIL(l_ca_caevent_struct_ha);
+
+	(l_ca_caeventimg_struct_i) = (CA_CAEVENT_STRUCT_I * ) calloc ( 1, sizeof(CA_CAEVENT_STRUCT_I ) );
+	APL_MALLOC_FAIL(l_ca_caeventimg_struct_i);
+
+	
+   if	(	CA_RtvGblPymtRec(p_ca_caglpymt_struct_h->h_corp_id,
+											l_ca_caglpymt_struct_ha_a,
+											l_ca_caglpymt_struct_i,
+											rowid,
+											l_debug_info_ptr
+										)	==	APL_FAILURE
+		)
+	{
+		APL_GOBACK_FAIL
+	}
+	
+	
+	if (	strcmp(	p_ca_caglpymt_struct_h->h_access_stamp,l_ca_caglpymt_struct_ha_a->h_access_stamp))
+	{
+		CO_InsertErr(l_debug_info_ptr,
+							ERR_ACCESSSTAMP_CHGD,
+							APL_NULL_STRING,
+							APL_NULL_STRING,
+							APL_NULL_STRING,
+							__LINE__,
+							__FILE__
+							);
+		APL_GOBACK_FAIL
+	}
+
+	
+	if (CO_RtvSysDtTime(pro_sys_date,l_debug_info_ptr) == APL_FAILURE )
+   {
+     APL_GOBACK_FAIL
+   }
+	strcpy(access_stamp,pro_sys_date);
+	strcpy(pro_sys_date,strtok_r(pro_sys_date," ",&int_pos));
+	strcat(pro_sys_date,APL_NULL_TIME);
+
+	
+	
+	
+	
+	if ( !strcmp(p_intlenv_data_struct_h->h_mode,APL_FUNC_DELETE) )
+	{
+		
+		if ( !strcmp(l_ca_caglpymt_struct_ha_a->h_pymt_stat,APL_STATUS_UNAUTH) )
+	 {
+		EXEC SQL UPDATE CAGLPYMT
+		SET
+			 maker=:p_intlenv_data_struct_h->usr,
+			 MAKER_DT=:pro_sys_date,
+			 stat_pymt = :chr_py_st_del_unauth,
+			 checker = NULL,
+			 CHECKER_DT = NULL,
+			 access_stamp= :access_stamp
+		WHERE
+			ROWID =:rowid;
+	
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_GLBLPAYMNT_NOTFND,
+															p_ca_caglpymt_struct_h->h_corp_id,
+															APL_NULL_STRING,
+															APL_NULL_STRING
+														 )	
+		APL_GOBACK_SUCCESS
+	}
+
+	else	if ( !strcmp(l_ca_caglpymt_struct_ha_a->h_pymt_stat,STATUS_DEL_UNAUTH) )
+		{
+			CO_InsertErr(l_debug_info_ptr,
+								ERR_GLBLPAYMNT_DEL_AUTHORIZED,
+								APL_NULL_STRING,
+								APL_NULL_STRING,
+								APL_NULL_STRING,
+								__LINE__,
+								__FILE__
+								);
+			APL_GOBACK_FAIL
+		}
+
+		else if ( !strcmp(l_ca_caglpymt_struct_ha_a->h_pymt_stat,APL_FUNC_AUTHORISE) )
+		{
+			CO_InsertErr(l_debug_info_ptr,
+								ERR_GLBLPAYMNT_DEL_AUTHORIZED,
+								APL_NULL_STRING,
+								APL_NULL_STRING,
+								APL_NULL_STRING,
+								__LINE__,
+								__FILE__
+								);
+			APL_GOBACK_FAIL
+		}
+		
+		else
+		{
+			CO_InsertErr(l_debug_info_ptr,
+								ERR_INVALID_STATUS,
+								APL_NULL_STRING,
+								APL_NULL_STRING,
+								APL_NULL_STRING,
+								__LINE__,
+								__FILE__
+								);
+			APL_GOBACK_FAIL
+		}
+
+	}
+	else if ( !strcmp(p_intlenv_data_struct_h->h_mode,APL_FUNC_AUTHORISE) )
+	{
+		
+		if ( !strcmp(p_intlenv_data_struct_h->usr,l_ca_caglpymt_struct_ha_a->h_maker) )
+		{
+            CO_InsertErr(l_debug_info_ptr,
+                           ERR_MAKER_CHECKER_SAME,
+                           p_intlenv_data_struct_h->usr,
+                           APL_NULL_STRING,
+                           APL_NULL_STRING,
+                           __LINE__,
+                           __FILE__
+                           );
+            APL_GOBACK_FAIL
+		}
+
+		
+      if (  l_ca_caglpymt_struct_i->i_checker != -1 )
+         {
+            CO_InsertErr(l_debug_info_ptr,
+                           ERR_REC_AUTHORIZED,
+                           APL_NULL_STRING,
+                           APL_NULL_STRING,
+                           APL_NULL_STRING,
+                           __LINE__,
+                           __FILE__
+                           );
+            APL_GOBACK_FAIL
+         }
+
+		if ( !strcmp(l_ca_caglpymt_struct_ha_a->h_pymt_stat,STATUS_DEL_UNAUTH) )
+	 	{
+			EXEC SQL DELETE CAGLPYMT
+			WHERE
+				ROWID =:rowid;
+	
+			IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_GLBLPAYMNT_NOTFND,
+																p_ca_caglpymt_struct_h->h_corp_id,
+																APL_NULL_STRING,
+																APL_NULL_STRING
+															 )	
+			APL_GOBACK_SUCCESS
+		}
+		else
+		{
+			CO_InsertErr(l_debug_info_ptr,
+								ERR_INVALID_STATUS,
+								APL_NULL_STRING,
+								APL_NULL_STRING,
+								APL_NULL_STRING,
+								__LINE__,
+								__FILE__
+								);
+			APL_GOBACK_FAIL
+		}
+
+
+	}
+	else if ( !strcmp(p_intlenv_data_struct_h->h_mode,APL_FUNC_RESET) )
+	{
+		
+		if ( !strcmp(p_intlenv_data_struct_h->usr,l_ca_caglpymt_struct_ha_a->h_maker) )
+		{
+            CO_InsertErr(l_debug_info_ptr,
+                           ERR_MAKER_CHECKER_SAME,
+                           p_intlenv_data_struct_h->usr,
+                           APL_NULL_STRING,
+                           APL_NULL_STRING,
+                           __LINE__,
+                           __FILE__
+                           );
+            APL_GOBACK_FAIL
+		}
+
+		
+      if (  l_ca_caglpymt_struct_i->i_checker != -1 )
+         {
+            CO_InsertErr(l_debug_info_ptr,
+                           ERR_REC_AUTHORIZED,
+                           APL_NULL_STRING,
+                           APL_NULL_STRING,
+                           APL_NULL_STRING,
+                           __LINE__,
+                           __FILE__
+                           );
+            APL_GOBACK_FAIL
+         }
+		
+		if ( !strcmp(l_ca_caglpymt_struct_ha_a->h_pymt_stat,STATUS_DEL_UNAUTH) )
+	 	{
+			EXEC SQL UPDATE CAGLPYMT
+			SET
+			 maker=:p_intlenv_data_struct_h->usr,
+			 MAKER_DT=:pro_sys_date,
+			 stat_pymt = :chr_sys_sts_unauth,
+			 checker = NULL,
+			 CHECKER_DT = NULL,
+			 access_stamp= :access_stamp
+			WHERE
+				ROWID =:rowid;
+	
+			IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_GLBLPAYMNT_NOTFND,
+																p_ca_caglpymt_struct_h->h_corp_id,
+																APL_NULL_STRING,
+																APL_NULL_STRING
+															 )	
+			APL_GOBACK_SUCCESS
+		
+		}
+		else
+		{
+			CO_InsertErr(l_debug_info_ptr,
+								ERR_INVALID_STATUS,
+								APL_NULL_STRING,
+								APL_NULL_STRING,
+								APL_NULL_STRING,
+								__LINE__,
+								__FILE__
+								);
+			APL_GOBACK_FAIL
+		}
+		
+	}
+	/*added by siva.ganapathi for ISSUE 2293 -- started*/
+	else if ( !strcmp(p_intlenv_data_struct_h->h_mode,APL_FUNC_MODIFY) )
+	{
+		printf("\nModifying the record for Global Benefit");
+
+		printf("\n corp_id is %s",p_ca_caglpymt_struct_h->h_corp_id);
+
+		printf("\n Location code is %s",p_ca_caglpymt_struct_h->h_loccode);
+
+		printf("\n updating the location code");
+
+		printf("\n row is %s",rowid);
+
+		EXEC SQL UPDATE CAGLPYMT
+		SET
+			 LOCATION_CD = :p_ca_caglpymt_struct_h->h_loccode,
+			 maker=:p_intlenv_data_struct_h->usr,
+			 MAKER_DT=:pro_sys_date,
+			 stat_pymt = :chr_sys_sts_unauth,
+			 checker = NULL,
+			 CHECKER_DT = NULL,
+			 access_stamp= :access_stamp
+		WHERE
+				ROWID =:rowid;
+
+
+		if(sqlca.sqlcode!=0)
+		{
+			printf("\n sqlca.sqlcode = [%d]",sqlca.sqlcode);
+			APL_GOBACK_FAIL
+		}
+			else
+			APL_GOBACK_SUCCESS		
+
+	}
+        /*added by siva.ganapathi for ISSUE 2293 -- Ended*/
+	
+	
+	APL_GOBACK_SUCCESS
+	RETURN_SUCCESS	:
+		
+	{
+		APL_FREE(l_ca_caglpymt_struct_ha_a)	
+		APL_FREE(l_ca_caglpymt_struct_i)	
+		APL_FREE(l_ca_caevent_struct_ha);
+		APL_FREE(l_ca_caeventimg_struct_i);
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE,"Exiting CA_Proc_GlobalPymtMod successfully",NULL,p_intlenv_data_struct_h);
+		}	
+		return (APL_SUCCESS);
+	}
+	RETURN_FAILURE	:
+	{
+		APL_FREE(l_ca_caglpymt_struct_ha_a)	
+		APL_FREE(l_ca_caglpymt_struct_i)	
+		APL_FREE(l_ca_caevent_struct_ha);
+		APL_FREE(l_ca_caeventimg_struct_i);
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE,"Exiting CA_Proc_GlobalPymtMod unsuccessfully",NULL,p_intlenv_data_struct_h);
+		}	
+		return (APL_FAILURE);
+	}
+}
+
+
+
+int	CA_Mod_GlobalPymtCreate(CA_CAGLPYMT_STRUCT_H	*p_ca_caglpymt_struct_h,
+								CA_CAGLPYMT_STRUCT_I	*p_globalpymt_struct_i,
+								DEBUG_INFO_STRUCT_H		   **l_debug_info_ptr
+								)
+{
+	struct	sqlca	sqlca;
+
+	#ifdef APL_THREADS
+	APL_SET_CONTEXT
+	EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+	
+	EXEC SQL INSERT INTO CAGLPYMT VALUES (:p_ca_caglpymt_struct_h:p_globalpymt_struct_i);
+	
+	IS_ANY_ORA_ERROR_AND_DUPLICATE(ERR_DUPLICATE_GLBLPYMNT,
+												 p_ca_caglpymt_struct_h->h_corp_id, 
+												 APL_NULL_STRING,
+												 APL_NULL_STRING
+
+												)		 
+
+		
+			APL_GOBACK_SUCCESS
+			RETURN_SUCCESS	:
+		
+		{
+			APL_IF_DEBUG
+			{
+				CO_ProcMonitor(APL_OUT_FILE,"Record inserted successfuly",NULL,NULL);
+				CO_ProcMonitor(APL_OUT_FILE,"Exiting CA_Mod_GlobalPymtCreate successfully",NULL,NULL);
+			}
+			return (APL_SUCCESS);
+		}
+		RETURN_FAILURE	:
+		{
+			APL_IF_DEBUG
+			{
+				CO_ProcMonitor(APL_OUT_FILE,"Exiting CA_Mod_GlobalPymtCreate unsuccessfully",NULL,NULL);
+			}	
+			return (APL_FAILURE);
+		}
+}
+
+
+
+static	int	CA_ChkGlbPymtMandData( CA_CAGLPYMT_STRUCT_H    *p_ca_caglpymt_struct_h,
+ 				                  INTL_ENV_DATA_STRUCT_H   *p_intlenv_data_struct_h,
+            			         DEBUG_INFO_STRUCT_H         **l_debug_info_ptr
+                 				)
+{
+
+	struct	sqlca	sqlca;
+	int		int_l_count_mod = 0;		
+
+	#ifdef APL_THREADS
+	APL_SET_CONTEXT
+	EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	
+	if(	!strlen(p_ca_caglpymt_struct_h->h_corp_id)	)
+			APL_DATA_MISSING("Corporate Action ID",APL_NULL_STRING,APL_NULL_STRING)	
+	
+	if(	p_ca_caglpymt_struct_h->h_entitl_pos	==	0	)
+			APL_DATA_MISSING("Entitl Posn",APL_NULL_STRING,APL_NULL_STRING)
+	
+	if(	(p_ca_caglpymt_struct_h->h_quantity_due == 0) &&
+	   	(p_ca_caglpymt_struct_h->h_amount_due == 0)
+		)
+			APL_DATA_MISSING("Qty/Amt Due Both"," Cannot be 0",APL_NULL_STRING)	
+
+	if  ( !strlen(p_ca_caglpymt_struct_h->h_pymt_dt ) )
+	{
+		APL_DATA_MISSING("Pay Date",APL_NULL_STRING,APL_NULL_STRING)
+	}
+
+
+	if(	(p_ca_caglpymt_struct_h->h_cur_quantity_due == 0) &&
+	   	(p_ca_caglpymt_struct_h->h_cur_amount_due == 0)
+		)
+			APL_DATA_MISSING("Cur Qty/Amt Due ","Both Cannot be 0",APL_NULL_STRING)	
+
+	if(	(p_ca_caglpymt_struct_h->h_cur_quantity_due < 0) )
+			APL_DATA_MISSING("Cur Qty Due "," Cannot be < 0",APL_NULL_STRING)	
+
+	if(	(p_ca_caglpymt_struct_h->h_cur_amount_due < 0) )
+			APL_DATA_MISSING("Cur Amt Due "," Cannot be < 0",APL_NULL_STRING)	
+
+	
+   EXEC SQL SELECT nvl(count(*),0) into :int_l_count_mod FROM CACHGEVENT
+            WHERE corp_id = :p_ca_caglpymt_struct_h->h_corp_id;
+
+   IS_ANY_ORA_ERROR
+
+   if (int_l_count_mod != 0)
+   {
+       CO_InsertErr(l_debug_info_ptr,
+                           ERR_UNPRO_EVNT_MOD_EXST,
+                           APL_NULL_STRING,
+                           APL_NULL_STRING,
+                           APL_NULL_STRING,
+                           __LINE__,
+                           __FILE__
+                           );
+            APL_GOBACK_FAIL
+   }
+	
+
+		if ( CO_ChkErr(*l_debug_info_ptr) == APL_SUCCESS )
+		{
+			APL_GOBACK_FAIL
+		}
+
+	
+	APL_GOBACK_SUCCESS
+	RETURN_SUCCESS	:
+	{
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE,"Exiting CA_ChkGlbPymtMandData successfully",NULL,NULL);
+		}	
+		return (APL_SUCCESS);
+	}
+	RETURN_FAILURE	:
+	{
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE,"Exiting CA_ChkGlbPymtMandData unsuccessfully",NULL,NULL);
+		}
+		return (APL_FAILURE);
+	}
+}
+
+

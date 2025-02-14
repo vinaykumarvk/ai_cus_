@@ -1,0 +1,464 @@
+/*
+ *    COPYRIGHT NOTICE
+ *
+ *   Copyright 2016 Intellect Design Arena Limited. All rights reserved.
+ *
+ *    These materials are confidential and proprietary to 
+ *    Intellect Design Arena Limited and no part of these materials should
+ *    be reproduced, published, transmitted or distributed in any form or
+ *    by any means, electronic, mechanical, photocopying, recording or 
+ *    otherwise, or stored in any information storage or retrieval system
+ *    of any nature nor should the materials be disclosed to third parties
+ *    or used in any other manner for which this is not authorized, without
+ *    the prior express written authorization of Intellect Design Arena Limited.
+ *
+ *******************************************************************************
+ *
+ * Module Name         :         Archival Processing
+ *
+ * File Name           :         CA_MsgArch.pc
+ *
+ * Description         :        
+ *
+ *                         Version Control Block
+ *
+ * Date        Version		 Author         Description		    RFS No.
+ * ---------   --------	 ---------------  -----------------   --------------
+ * 14/04/2014  1.1       Prateek Singh    Changes done for ISKB_2469
+ * 19/12/2016  1.2       Prateek Singh    Re-Initiation of Archival Enhancement     ISKB_2071 (Old IsolveIds 2244 and 2469)
+ * ***************************************************************************************************************************/
+
+
+#include "CR_Common.h"
+EXEC SQL INCLUDE SQLCA.H;
+
+#define	APL_BATCHSTATUS_LEN	16
+#define	APL_STATUS_BATCH_COMPLETED "completed"
+#define	APL_STATUS_BATCH_STARTED "started"
+#define  APL_STATINFO_LEN  71
+#define 	APL_COMMIT_FREQENCY  1000  
+
+
+
+
+
+int  CA_ArchMsgs(		FILE  *p_flogfile,
+							char  **argv,
+                     char  *pro_sys_date,
+                     char  *chr_sys_date_time,
+					   	INTL_ENV_DATA_STRUCT_H *p_intlenv_data_struct_h,
+                     DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	char chr_batch_in_proc_rowid[APL_ROWID_LEN] = APL_NULL_STRING;
+	char chr_status_started [APL_BATCHSTATUS_LEN] = {APL_STATUS_BATCH_STARTED};
+	unsigned int int_sys_commit_freq = APL_COMMIT_FREQENCY;
+	char chr_log_buff[100] = APL_NULL_STRING;
+	struct sqlca sqlca;
+
+	
+	
+	
+
+	
+	CO_ProcMonitor(p_flogfile,"\nStarting Archival of Payment Messages ",NULL,NULL);
+	
+	
+
+	EXEC SQL INSERT INTO MS_ARCHMSGSTAT
+	( SELECT * FROM MS_MSGSTAT
+		WHERE SWIFT_MSG_REP in ( '554N01','555N01','556N02','563N03',
+									 '554R01','555R01','556R02',
+									 '566N07', '566N06', '566N08', '566N03',
+									 '566R07', '566R01', '566R08'
+								  )		
+				and proc_init not in (  select corp_id||seqnum_pay from
+										CACHEQUE 
+									)
+	);
+	
+	IS_ANY_ORA_ERROR
+	
+	sprintf(chr_log_buff,"Shifted %d Payment Archival Messages to Archival Table",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(p_flogfile,chr_log_buff,NULL,NULL);
+
+	EXEC SQL COMMIT;
+	IS_ANY_ORA_ERROR
+	
+	CO_ProcMonitor(p_flogfile,"COMMITED",NULL,NULL);
+
+		
+		EXEC SQL SELECT ROWID
+		INTO :chr_batch_in_proc_rowid
+		FROM SYS_BATCHPROC
+		WHERE
+				    PROCESS_NAME =:argv[0] 
+				and PROC_INIT = :argv[1]
+				and STARTDATE =:argv[2]
+				and STATUS =:chr_status_started
+		FOR UPDATE;
+
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"BATCH_IN_PROC",argv[0],argv[1])
+	
+	
+	
+	CO_ProcMonitor(p_flogfile,"\nStarting Deletion of Payment Messages\n",NULL,NULL);
+
+	
+
+	for (;;)
+	{
+		EXEC SQL DELETE MS_MSGSTAT
+   	WHERE
+				SWIFT_MSG_REP in ( '554N01','555N01','556N02','563N03',
+                            '554R01','555R01','556R02',
+                            '566N07', '566N06', '566N08', '566N03',
+                            '566R07', '566R01', '566R08'
+                          )
+            and proc_init not in (  select corp_id||seqnum_pay from
+                              CACHEQUE
+                           )
+	
+		and rownum < :int_sys_commit_freq;
+
+		IS_ANY_ORA_ERROR
+
+		CO_ProcMonitor(p_flogfile,"Deleting within cursor\n",NULL,NULL);
+
+		if ( sqlca.sqlerrd[2] == 0)
+		{
+			break;
+		}
+
+		EXEC SQL COMMIT;
+		IS_ANY_ORA_ERROR
+
+		
+		EXEC SQL SELECT ROWID
+		INTO :chr_batch_in_proc_rowid
+		FROM SYS_BATCHPROC
+		WHERE
+				    PROCESS_NAME =:argv[0] 
+				and PROC_INIT = :argv[1]
+				and STARTDATE =:argv[2]
+				and STATUS =:chr_status_started
+		FOR UPDATE;
+
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"BATCH_IN_PROC",argv[0],argv[1])
+	}
+
+	CO_ProcMonitor(p_flogfile,"Finished Deleting Payment Messages",NULL,NULL);
+
+	
+	CO_ProcMonitor(p_flogfile,"\nStarting Archival of Event / Ent  Messages ",NULL,NULL);
+	
+	EXEC SQL INSERT INTO MS_ARCHMSGSTAT
+	( SELECT * FROM MS_MSGSTAT
+		WHERE 
+				proc_init  in (  select corp_id from
+							  CAARCHEVENT where ARCHIVAL_DATE=:pro_sys_date			
+									)
+	);
+	
+	IS_ANY_ORA_ERROR
+
+	sprintf(chr_log_buff,"Shifted %d Event/Ent Archival Messages to Archival Table",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(p_flogfile,chr_log_buff,NULL,NULL);
+	
+	EXEC SQL COMMIT;
+	IS_ANY_ORA_ERROR
+	
+	CO_ProcMonitor(p_flogfile,"COMMITED",NULL,NULL);
+
+		
+		EXEC SQL SELECT ROWID
+		INTO :chr_batch_in_proc_rowid
+		FROM SYS_BATCHPROC
+		WHERE
+				    PROCESS_NAME =:argv[0] 
+				and PROC_INIT = :argv[1]
+				and STARTDATE =:argv[2]
+				and STATUS =:chr_status_started
+		FOR UPDATE;
+
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"BATCH_IN_PROC",argv[0],argv[1])
+
+	
+	CO_ProcMonitor(p_flogfile,"\nStarting Deletion of Event / Ent  Messages\n",NULL,NULL);
+	for (;;)
+	{
+		EXEC SQL DELETE MS_MSGSTAT
+   	WHERE
+				proc_init  in (  select corp_id from
+							  CAARCHEVENT where ARCHIVAL_DATE=:pro_sys_date			
+									)
+	
+		and rownum < :int_sys_commit_freq;
+
+		IS_ANY_ORA_ERROR
+
+		if ( sqlca.sqlerrd[2] == 0)
+		{
+			break;
+		}
+
+		EXEC SQL COMMIT;
+		IS_ANY_ORA_ERROR
+
+		CO_ProcMonitor(p_flogfile,"Deleting within Event cursor\n",NULL,NULL);
+		
+		EXEC SQL SELECT ROWID
+		INTO :chr_batch_in_proc_rowid
+		FROM SYS_BATCHPROC
+		WHERE
+				    PROCESS_NAME =:argv[0] 
+				and PROC_INIT = :argv[1]
+				and STARTDATE =:argv[2]
+				and STATUS =:chr_status_started
+		FOR UPDATE;
+
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"BATCH_IN_PROC",argv[0],argv[1])
+	}
+
+	CO_ProcMonitor(p_flogfile,"Finished Deletion of Event / Ent Messages",NULL,NULL);
+
+	
+	CO_ProcMonitor(p_flogfile,"\nStarting Archival of Rights Messages ",NULL,NULL);
+	
+	
+
+	EXEC SQL INSERT INTO MS_ARCHMSGSTAT
+	( SELECT * FROM MS_MSGSTAT
+		WHERE 
+				SWIFT_MSG_REP in ( '563N01','563N02', '566N01', '566N02')
+	and  months_between(:pro_sys_date,generate_dt) >= :g_mt_commonsys_params_struct_h.monthsfor_arch	
+	);
+	
+	IS_ANY_ORA_ERROR
+
+	sprintf(chr_log_buff,"Shifted %d Rights Messages to Archival Table",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(p_flogfile,chr_log_buff,NULL,NULL);
+	
+	EXEC SQL COMMIT;
+	IS_ANY_ORA_ERROR
+	
+	CO_ProcMonitor(p_flogfile,"COMMITED",NULL,NULL);
+
+		
+		EXEC SQL SELECT ROWID
+		INTO :chr_batch_in_proc_rowid
+		FROM SYS_BATCHPROC
+		WHERE
+				    PROCESS_NAME =:argv[0] 
+				and PROC_INIT = :argv[1]
+				and STARTDATE =:argv[2]
+				and STATUS =:chr_status_started
+		FOR UPDATE;
+
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"BATCH_IN_PROC",argv[0],argv[1])
+	
+	CO_ProcMonitor(p_flogfile,"\nStarting Deletion of Rights  Messages ",NULL,NULL);
+
+	
+
+	for (;;)
+	{
+		EXEC SQL DELETE MS_MSGSTAT
+   	WHERE
+				SWIFT_MSG_REP in ( '563N01','563N02', '566N01', '566N02')
+		and months_between(:pro_sys_date,generate_dt) >= :g_mt_commonsys_params_struct_h.monthsfor_arch			and rownum < :int_sys_commit_freq;
+
+		IS_ANY_ORA_ERROR
+
+		if ( sqlca.sqlerrd[2] == 0)
+		{
+			break;
+		}
+
+		EXEC SQL COMMIT;
+		IS_ANY_ORA_ERROR
+
+		
+		EXEC SQL SELECT ROWID
+		INTO :chr_batch_in_proc_rowid
+		FROM SYS_BATCHPROC
+		WHERE
+				    PROCESS_NAME =:argv[0] 
+				and PROC_INIT = :argv[1]
+				and STARTDATE =:argv[2]
+				and STATUS =:chr_status_started
+		FOR UPDATE;
+
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"BATCH_IN_PROC",argv[0],argv[1])
+	}
+
+	CO_ProcMonitor(p_flogfile,"Finished Deletion Rights Messages",NULL,NULL);
+
+	/* Added by Gouse for ISKB_2469 - Start */	
+	
+	CO_ProcMonitor(p_flogfile,"\nStarting Deletion of Event / Ent  Messages\n",NULL,NULL);
+	for (;;)
+	{
+		//Added by Prateek for ISKB_2469(Records of MS_MSGLOG table were not archived)- START
+		long  no_of_row_processed_mslog=0;
+
+		long  no_of_row_processed_msgent=0;
+		//Added by Prateek for ISKB_2469(Records of MS_MSGLOG table were not archived)- END
+
+		EXEC SQL INSERT INTO MS_ARCHMSGLOG	(SELECT MS_MSGLOG.*,:pro_sys_date FROM MS_MSGLOG
+			WHERE MONTHS_BETWEEN(:pro_sys_date,MAKER_DT) >= :g_mt_commonsys_params_struct_h.monthsfor_arch
+			and rownum < :int_sys_commit_freq);
+
+		IS_ANY_ORA_ERROR
+
+		EXEC SQL DELETE FROM MS_MSGLOG
+			WHERE MONTHS_BETWEEN(:pro_sys_date,MAKER_DT) >= :g_mt_commonsys_params_struct_h.monthsfor_arch
+			and rownum < :int_sys_commit_freq;
+		
+		IS_ANY_ORA_ERROR
+
+		//Added by Prateek for ISKB_2469(Records of MS_MSGLOG table were not archived)-START
+		no_of_row_processed_mslog=sqlca.sqlerrd[2];
+		//Added by Prateek for ISKB_2469(Records of MS_MSGLOG table were not archived)- END
+
+		EXEC SQL INSERT INTO MS_ARCHMSGENT
+				 (SELECT MS_MSGENT.*,:pro_sys_date FROM MS_MSGENT WHERE swift_msg_seqno IN (
+							SELECT MESSAGE_IND FROM MS_ARCHMSGLOG WHERE ARCHIVAL_DATE = :pro_sys_date )
+							AND rownum < :int_sys_commit_freq);
+
+		IS_ANY_ORA_ERROR
+
+		EXEC SQL DELETE FROM MS_MSGENT WHERE swift_msg_seqno IN (
+							SELECT MESSAGE_IND FROM MS_ARCHMSGLOG WHERE ARCHIVAL_DATE = :pro_sys_date 
+							AND rownum < :int_sys_commit_freq);
+
+		IS_ANY_ORA_ERROR
+
+		//Added by Prateek for ISKB_2469(Records of MS_MSGLOG table were not archived)-START
+		no_of_row_processed_msgent=sqlca.sqlerrd[2];
+		//Added by Prateek for ISKB_2469(Records of MS_MSGLOG table were not archived)- END
+
+		//Commented and rewritten by Prateek for ISKB_2469(Records of MS_MSGLOG table were not archived)-START
+		//if ( sqlca.sqlerrd[2] == 0)
+		if ( (no_of_row_processed_mslog == 0)&&(no_of_row_processed_msgent==0) )
+		//Commented and rewritten by Prateek for ISKB_2469(Records of MS_MSGLOG table were not archived)-END
+		{
+			break;
+		}
+
+		EXEC SQL COMMIT;
+		IS_ANY_ORA_ERROR
+
+		CO_ProcMonitor(p_flogfile,"Doing Archival for MS_MSGLOG and MS_MSGENT\n",NULL,NULL);
+		
+		EXEC SQL SELECT ROWID
+		INTO :chr_batch_in_proc_rowid
+		FROM SYS_BATCHPROC
+		WHERE
+				    PROCESS_NAME =:argv[0] 
+				and PROC_INIT = :argv[1]
+				and STARTDATE =:argv[2]
+				and STATUS =:chr_status_started
+		FOR UPDATE;
+
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"BATCH_IN_PROC",argv[0],argv[1])
+	}
+
+	CO_ProcMonitor(p_flogfile,"Finished Archival of MSGENT and MSGLOG",NULL,NULL);
+	
+	CO_ProcMonitor(p_flogfile,"\nStarting Deletion of Email Messages\n",NULL,NULL);
+	for (;;)
+	{
+		EXEC SQL INSERT INTO COMMON_EMAIL_ARCH	(SELECT COMMON_EMAIL.*,:pro_sys_date FROM COMMON_EMAIL
+			WHERE MONTHS_BETWEEN(:pro_sys_date,TRANS_DT) >= :g_mt_commonsys_params_struct_h.monthsfor_arch
+			and rownum < :int_sys_commit_freq);
+
+		IS_ANY_ORA_ERROR
+
+		EXEC SQL DELETE FROM COMMON_EMAIL
+			WHERE MONTHS_BETWEEN(:pro_sys_date,TRANS_DT) >= :g_mt_commonsys_params_struct_h.monthsfor_arch
+			and rownum < :int_sys_commit_freq;
+		
+		IS_ANY_ORA_ERROR
+
+		if ( sqlca.sqlerrd[2] == 0)
+		{
+			break;
+		}
+
+		EXEC SQL COMMIT;
+		IS_ANY_ORA_ERROR
+
+		CO_ProcMonitor(p_flogfile,"Doing Archival for COMMON_EMAIL\n",NULL,NULL);
+		
+		EXEC SQL SELECT ROWID
+		INTO :chr_batch_in_proc_rowid
+		FROM SYS_BATCHPROC
+		WHERE
+				    PROCESS_NAME =:argv[0] 
+				and PROC_INIT = :argv[1]
+				and STARTDATE =:argv[2]
+				and STATUS =:chr_status_started
+		FOR UPDATE;
+
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"BATCH_IN_PROC",argv[0],argv[1])
+	}
+
+	CO_ProcMonitor(p_flogfile,"Finished Archival of COMMON_EMAIL ",NULL,NULL);
+
+	CO_ProcMonitor(p_flogfile,"\nStarting Deletion of Message Upload Data\n",NULL,NULL);
+	for (;;)
+	{
+		//Commented and Rewritten by Prateek for ISKB_2469(Archival & Purging) UAT fix(Not enough values) on 10-02-2014
+		//EXEC SQL INSERT INTO COMMON_MSG_WRAPPER_ARCH	(SELECT * FROM COMMON_MSG_WRAPPER
+		EXEC SQL INSERT INTO COMMON_MSG_WRAPPER_ARCH (SELECT COMMON_MSG_WRAPPER.*,:pro_sys_date  FROM COMMON_MSG_WRAPPER
+			WHERE MONTHS_BETWEEN(:pro_sys_date,DEAL_DT) >= :g_mt_commonsys_params_struct_h.monthsfor_arch
+			and rownum < :int_sys_commit_freq);
+
+		IS_ANY_ORA_ERROR
+
+		EXEC SQL DELETE FROM COMMON_MSG_WRAPPER
+			WHERE MONTHS_BETWEEN(:pro_sys_date,DEAL_DT) >= :g_mt_commonsys_params_struct_h.monthsfor_arch
+			and rownum < :int_sys_commit_freq;
+		
+		IS_ANY_ORA_ERROR
+
+		if ( sqlca.sqlerrd[2] == 0)
+		{
+			break;
+		}
+
+		EXEC SQL COMMIT;
+		IS_ANY_ORA_ERROR
+
+		CO_ProcMonitor(p_flogfile,"Doing Archival for Message Upload Data\n",NULL,NULL);
+		
+		EXEC SQL SELECT ROWID
+		INTO :chr_batch_in_proc_rowid
+		FROM SYS_BATCHPROC
+		WHERE
+				    PROCESS_NAME =:argv[0] 
+				and PROC_INIT = :argv[1]
+				and STARTDATE =:argv[2]
+				and STATUS =:chr_status_started
+		FOR UPDATE;
+
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"BATCH_IN_PROC",argv[0],argv[1])
+	}
+
+	CO_ProcMonitor(p_flogfile,"Finished Archival of Message Upload Data ",NULL,NULL);
+
+	/* Added by Gouse for ISKB_2469 - End */		
+   APL_GOBACK_SUCCESS
+ 
+   RETURN_SUCCESS:
+	{
+   	return(APL_SUCCESS);
+	}
+   RETURN_FAILURE:
+   {
+		CO_ProcMonitor(p_flogfile,NULL,l_debug_info_ptr,NULL);
+		CO_FreeErrLst(l_debug_info_ptr);
+   	return(APL_FAILURE);
+	}
+
+}

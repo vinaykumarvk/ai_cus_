@@ -1,0 +1,796 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#include  <stdlib.h>
+#include  <string.h>
+#include  "CO_HostStructdef.h"
+#include "Intellect_Common.h"
+
+#define PAGELENGTH 24
+#define HEADLEN 100
+#define MAX_ITEMS 20
+#define MAX_VNAMERR_LEN 30
+#define MAX_INAMERR_LEN 30
+#define LOCNCODE  "MCSD"
+#define PRNTMINE fprintf(p_logfile,"sqlca.sqlcode = %d\n" , sqlca.sqlcode );
+
+EXEC SQL INCLUDE SQLCA;
+EXEC SQL INCLUDE SQLDA;
+
+SQLDA *bind_dp;
+SQLDA *select_dp;
+extern SQLDA *sqlald();
+static int int_l_rep_linecount  = 0;
+
+
+//main(int argc , char **argv )
+int main(int argc,char **argv)//Changes done for AIX Migration
+{
+  struct sqlca sqlca ;
+  DEBUG_INFO_STRUCT_H             *l_debug_info_ptr = NULL  ;
+  INTL_ENV_DATA_STRUCT_H       l_intl_env_data_h ;
+  FILE			    			*l_finifile   = NULL ;
+  FILE			    			*l_logfile    = NULL ;
+  int			    			int_l_int_num     = 0 ;
+  int 			    			int_l_flg         = 0 ;
+  int 			   			int_l_int_retval  = 0 ;
+  char			    			**chr_l_str_parm  = NULL ;
+  char			    			chr_uname[APL_USERID_LEN]  = APL_NULL_STRING ;
+  char 			    			chr_custody_id_b[APL_USERID_LEN] = APL_NULL_STRING ;
+  char			    			chr_passwd[APL_PASSWD_LEN] = APL_NULL_STRING ;
+  char 			   			chr_l_inifile[PATH_LENGTH] = APL_NULL_STRING ;
+  char 			    			chr_l_logdir[PATH_LENGTH]  = APL_NULL_STRING ;
+  char			    			chr_l_buf[BUFFER_LEN]       = APL_NULL_STRING ;
+
+  EXEC SQL VAR chr_uname  IS STRING;
+  EXEC SQL VAR chr_passwd IS STRING;
+
+  memset(&l_intl_env_data_h , NULL , sizeof(INTL_ENV_DATA_STRUCT_H)) ;
+
+  
+
+  strcpy(l_intl_env_data_h.usr   ,argv[3]);
+  strcpy(l_intl_env_data_h.h_mode     ,argv[4]);
+  strcpy(l_intl_env_data_h.processtion ,argv[5]);
+  strcpy(l_intl_env_data_h.auth_req ,argv[6]);
+  strcpy(l_intl_env_data_h.subprocess   ,argv[7]);
+  strcpy(l_intl_env_data_h.h_process   ,argv[8]);
+
+  strcpy(chr_l_inifile,getenv("INTL_ROOT_PATH"));
+  strcat(chr_l_inifile,"intl_sun.cfg");
+
+
+  if ((l_finifile = fopen(chr_l_inifile,"r")) == NULL )
+   return(-1);
+
+  
+
+  APL_FETCH_DB_LOGIN_DETAILS(l_finifile , chr_custody_id_b , chr_uname , chr_passwd ,APL_OUT_FILE , &l_debug_info_ptr )
+
+  
+	
+  EXEC SQL CONNECT :chr_uname IDENTIFIED BY :chr_passwd;
+  
+  if(sqlca.sqlcode)
+  {
+	  APL_GOBACK_FAIL
+  }
+  
+  
+
+  if(APL_FAILURE == CO_Rtv_RptFileName("3o" , 
+                                    APL_LOGFILE_DESC ,
+                                    100 ,
+                                    argv[5] ,
+                                    argv ,
+                                    &l_logfile ,
+                                    &l_debug_info_ptr) )
+  {
+   APL_GOBACK_FAIL
+  }
+
+  
+
+   EXEC SQL COMMIT WORK ;
+
+	IS_ANY_ORA_ERROR
+
+   if (sqlca.sqlcode)
+      {
+         CO_ProcMonitor(l_logfile,"Could not commit after opening chr_log file",NULL,NULL);
+         CO_Proc_RptClose(l_logfile,&l_debug_info_ptr);
+         APL_GOBACK_FAIL
+      }
+
+   CO_ProcMonitor(l_logfile , "\nPosition Recon Report\n",NULL,NULL);
+   CO_ProcMonitor(l_logfile ,   "--------------------------\n",NULL,NULL);
+   CO_ProcMonitor(l_logfile , "Work Committed After LogFile Creation\n",NULL,NULL);
+
+   if(CO_RtvSysParams(&l_debug_info_ptr) != APL_SUCCESS )
+   {
+    CO_ProcMonitor(l_logfile , "Unable to get the system parameters : Rollback Done \n",NULL,&l_intl_env_data_h);
+    CO_Proc_RptClose(l_logfile,&l_debug_info_ptr) 	;
+    EXEC SQL ROLLBACK WORK RELEASE ;
+
+    IS_ANY_ORA_ERROR
+
+    APL_GOBACK_FAIL
+   }
+
+   if (APL_FAILURE == PosnReconFn(argv,l_logfile,&l_intl_env_data_h,&l_debug_info_ptr))
+      {
+         CO_ProcMonitor(l_logfile, "PosnReconFn returned failure", NULL, NULL);
+         CO_Proc_RptClose(l_logfile, &l_debug_info_ptr);
+         EXEC SQL ROLLBACK WORK RELEASE;
+         APL_GOBACK_FAIL
+      }
+   else
+      {
+         EXEC SQL UPDATE SYS_BATCHPROC
+         SET  status = 'completed'
+         WHERE PROCESS_NAME=:argv[0]
+         AND   PROC_INIT=:argv[1]
+         AND   STARTDATE=:argv[2]
+         AND   STATUS='started';
+
+         EXEC SQL COMMIT WORK RELEASE;
+         CO_Proc_RptClose(l_logfile, &l_debug_info_ptr);
+         APL_GOBACK_SUCCESS
+      }
+
+
+   
+
+   RETURN_SUCCESS :
+    {
+     fclose(l_finifile) ;
+     return(0) ;
+    }
+   RETURN_FAILURE :
+    {
+     fclose(l_finifile);
+     return(-1) ;
+    }
+}
+
+
+
+
+
+int PosnReconFn(char **argv,FILE *p_logfile,INTL_ENV_DATA_STRUCT_H *p_intl_envdatastruct_h,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+   struct sqlca sqlca;
+
+   FILE  *l_repfile      	    = NULL;
+   INTL_REPT_STRUCT_H *l_intl_rept_struct_ha = NULL;
+
+  
+   char chr_l_client_a[11]             = APL_NULL_STRING;
+   char chr_l_instrcode_a[9]               = APL_NULL_STRING;
+   char chr_l_ruacc[11]               = APL_NULL_STRING;
+   char chr_l_ruinstr[9]                = APL_NULL_STRING;
+   char chr_l_rulocn[5]               = APL_NULL_STRING;
+   char chr_l_today[APL_DATE_LEN]     = APL_NULL_STRING;
+   char chr_l_buf[BUFFER_LEN]          = APL_NULL_STRING;
+   char chr_l_hdr_posndesc[1000]      = APL_NULL_STRING;
+   char chr_l_posndesc[41]            = APL_NULL_STRING;
+   char chr_l_posntype_A[5]             = APL_NULL_STRING;
+   char chr_l_comm_recq[2000]              = APL_NULL_STRING;
+   char chr_l_rusfk_only_recq[2000]        = APL_NULL_STRING;
+   char chr_l_posntyp_temp[100]         = APL_NULL_STRING;
+   char chr_colname[201];
+   char chr_l_acc[20]                 = APL_NULL_STRING;
+   char chr_l_sec[20]                 = APL_NULL_STRING;
+   char *chr_posofspace;
+   char *chr_l_space                  = APL_NULL_STRING;
+   
+   int i                    = 0;
+   int int_nlen                 = 0;
+   int int_null_ok              = 0;
+   int int_precision            = 0;
+   int int_scale                = 0;
+   int int_l_num_len            = 0;
+   
+   double l_rusafekeep_pos         = 0;
+   double l_rusfk           = 0;
+   double l_safekeep_pos           = 0;
+   long  l_asafek           = 0;
+   long  l_bsafek           = 0;
+   long  l_psafek           = 0;
+   double dbl_l_avl_posn        = 0;
+   double dbl_l_blck_posn       = 0;
+   double l_pldg_posn       = 0;
+   double l_rusafekeep_pos_posn    = 0;
+   long   l_smcsdsafek      = 0;
+
+   short l_i_account      = 0;
+   short l_i_instr_code       = 0;
+   short l_i_ruacc        = 0;
+   short l_i_ruinstr        = 0;
+   short l_i_rulocn       = 0;
+   short l_i_rusfk        = 0;
+   short l_i_safek        = 0;
+   short l_i_asafek       = 0;
+   short l_i_bsafek       = 0;
+   short l_i_psafek       = 0;
+   short l_i_rusafek      = 0;
+   short l_i_posntype     = 0;
+   short l_i_posndesc     = 0;
+
+   char                  chr_g_restart_data[APL_RESTARTDATA_LENGTH];
+    short                 g_restart_data_i;
+
+  
+   
+	short l_i_sysdate     = 0 ;
+
+
+	int int_l_int_pageno = 1;	
+	int int_l_nrow = 0;			
+	int int_ctr = 0;
+
+	CO_ProcMonitor(p_logfile,"Entered processtion PosnReconFn \n",NULL,p_intl_envdatastruct_h);
+	CO_ProcMonitor(APL_OUT_FILE,"Entered processtion PosnReconFn",NULL,NULL);
+
+
+  
+EXEC SQL VAR chr_g_restart_data is string;
+  EXEC SQL VAR chr_l_client_a         IS STRING;
+  EXEC SQL VAR chr_l_instrcode_a          IS STRING;
+  EXEC SQL VAR chr_l_ruacc           IS STRING;
+  EXEC SQL VAR chr_l_ruinstr           IS STRING;
+  EXEC SQL VAR chr_l_rulocn          IS STRING;
+  EXEC SQL VAR chr_l_client_a         IS STRING;
+  EXEC SQL VAR chr_l_posndesc        IS STRING;
+  EXEC SQL VAR chr_l_posntype_A        IS STRING;
+  EXEC SQL VAR chr_l_comm_recq       IS STRING;
+
+  
+  sqlca.sqlcode  = 0;
+
+  EXEC SQL DECLARE c_sfk_minus_rusfk CURSOR FOR
+	   SELECT client, instr_code 
+	   FROM DL_SAFEK_VEW 
+	   WHERE location_cd = 'MCSD'
+		AND safekeep_pos > 0
+	   GROUP BY client,instr_code
+	   MINUS
+	   SELECT client, instr_code
+	   FROM DL_RUSAFEK
+
+	   GROUP BY client, instr_code
+		ORDER BY client,instr_code;
+		PRNTMINE
+
+
+  EXEC SQL DECLARE c_posntype CURSOR FOR
+	   SELECT a.map_val,a.map_desc 
+	   FROM PRO_SGENSTAT a, cscode b
+	   WHERE a.map_type = b.code_typ
+	   AND a.map_type = 'MCSD_POSN'
+	   ORDER BY a.map_val;
+	   PRNTMINE
+
+   sqlca.sqlcode = 0;
+
+
+
+
+
+ 
+
+   EXEC SQL SELECT PROCESSING_STATUS INTO :chr_g_restart_data:g_restart_data_i
+   FROM SYS_BATCHPROC
+   WHERE PROCESS_NAME=:argv[0]
+   AND   PROC_INIT=:argv[1]
+   AND   STARTDATE=:argv[2]
+   AND   STATUS='started'
+   FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+   if (APL_ZERO_RESULT_SET)
+      {
+         CO_ProcMonitor(p_logfile,"E:No entry in batch_in_proc",NULL,p_intl_envdatastruct_h);
+         APL_GOBACK_FAIL
+      }
+
+   if (APL_FAILURE == CO_Rtv_RptFileName("MR" ,
+                                "Position Recon Report" ,
+                                100 ,
+                                argv[5] ,
+                                argv ,
+                                &l_repfile ,
+                                l_debug_info_ptr) )
+     {
+      APL_GOBACK_FAIL
+     }
+
+   if (APL_FAILURE == CO_RtvSysDt(chr_l_today,l_debug_info_ptr))
+      {
+	APL_GOBACK_FAIL
+      }
+
+   
+   strcpy(chr_l_comm_recq,"SELECT a.client, a.instr_code, a.safekeep_pos ");
+
+  
+   strcpy(chr_l_rusfk_only_recq,"SELECT b.client, b.instr_code, 0 as SAFEK ");
+	
+
+   EXEC SQL OPEN c_posntype;
+   IS_ANY_ORA_ERROR
+   memset(chr_l_hdr_posndesc,NULL,1000);
+   i=0;
+   for ( ; ; )
+   {
+    fprintf(p_logfile,"value of i is :  and chr_header chr_str :%s \n",chr_l_hdr_posndesc);
+
+ 	EXEC SQL FETCH c_posntype INTO :chr_l_posntype_A:l_i_posntype,:chr_l_posndesc:l_i_posndesc; 
+	IS_ANY_ORA_ERROR
+
+	PRNTMINE
+
+	if(sqlca.sqlcode == 1403)
+	{
+		break;
+	}
+	strcat(chr_l_hdr_posndesc,strcat(chr_l_posndesc,"|"));
+	sprintf(chr_l_posntyp_temp,",SUM(DECODE(b.stregno,'%s',b.safekeep_pos,0)) AS A%d",chr_l_posntype_A,i); 
+	strcat(chr_l_comm_recq,chr_l_posntyp_temp);
+
+  
+	strcat(chr_l_rusfk_only_recq,chr_l_posntyp_temp);
+	
+	i++;
+        int_l_num_len = i; 
+
+   }
+
+strcat(chr_l_comm_recq, " FROM csafek_vew a, crusafek b WHERE a.client= b.client AND a.instr_code = b.instr_code AND a.location_cd = b.location_cd AND a.location_cd = 'MCSD' ");
+strcat(chr_l_comm_recq, "AND a.safekeep_pos != (SELECT NVL(SUM(c.safekeep_pos),0) FROM crusafek c "); 
+strcat(chr_l_comm_recq,"WHERE a.client = c.client AND a.instr_code = c.instr_code AND a.location_cd = c.location_cd)  GROUP BY a.client, a.instr_code, a.safekeep_pos order by a.client, a.instr_code");
+
+  printf("\n\n");
+  printf(chr_l_comm_recq);
+  printf("\n\n");
+
+  
+strcat(chr_l_rusfk_only_recq, " FROM crusafek b WHERE NOT EXISTS ");
+strcat(chr_l_rusfk_only_recq, " (SELECT client,instr_code from csafek_vew c WHERE b.client = c.client AND b.instr_code = c.instr_code AND c.location_cd = 'MCSD') and b.safekeep_pos > 0  ");
+strcat(chr_l_rusfk_only_recq, " GROUP BY b.client, b.instr_code");
+
+
+  printf("\n\n");
+  printf(chr_l_rusfk_only_recq);
+  printf("\n\n");
+
+  
+
+
+  if (APL_FAILURE == CBPrintReconHdrFn( l_repfile, chr_l_today, chr_l_hdr_posndesc))
+      {
+         APL_GOBACK_FAIL
+      }
+
+
+
+if(APL_FAILURE == process_dynamic_sql(p_logfile,l_repfile,chr_l_comm_recq,chr_l_today,chr_l_hdr_posndesc,select_dp,bind_dp,l_debug_info_ptr))
+{
+	APL_GOBACK_FAIL
+}
+	 
+
+
+	 
+    EXEC SQL OPEN c_sfk_minus_rusfk;
+
+    IS_ANY_ORA_ERROR
+
+	 for ( ; ; )
+	 {
+
+	   EXEC SQL FETCH c_sfk_minus_rusfk INTO :chr_l_client_a:l_i_account,:chr_l_instrcode_a:l_i_instr_code;
+
+	   IS_ANY_ORA_ERROR
+
+	   PRNTMINE
+
+	   if (sqlca.sqlcode)
+	   {
+	      break;
+	   }
+	      memset(chr_l_buf,NULL,sizeof(BUFFER_LEN));
+	     sprintf(chr_l_buf,"Account: %s Instrode: %s ",chr_l_client_a,chr_l_instrcode_a);
+	      CO_ProcMonitor(p_logfile,chr_l_buf,NULL,NULL);
+
+	   EXEC SQL SELECT safekeep_pos INTO :l_safekeep_pos:l_i_safek
+	            FROM DL_SAFEK_VEW 
+	            WHERE client = :chr_l_client_a
+	            AND instr_code = :chr_l_instrcode_a
+	            AND location_cd = 'MCSD';
+
+	   IS_ANY_ORA_ERROR
+
+	   fprintf(l_repfile,"%-17s %-16s %25s", chr_l_client_a,chr_l_instrcode_a,ltoa(l_safekeep_pos));
+	   for(i=0;i<int_l_num_len;i++)
+	   {
+	     fprintf(l_repfile," %24s0",chr_l_space);
+	   }
+	   fprintf(l_repfile,"\n\n");
+
+		fprintf(p_logfile," inside safekeep_pos only h_line no %d\n",int_l_rep_linecount);
+		if(++int_l_rep_linecount == PAGELENGTH)
+		{
+         fprintf(l_repfile,"");   
+		   if (APL_FAILURE == CBPrintReconHdrFn( l_repfile, chr_l_today, chr_l_hdr_posndesc))
+            {
+               APL_GOBACK_FAIL
+            }
+		   int_l_rep_linecount = 0;
+		}
+	 }  
+
+	 EXEC SQL CLOSE c_sfk_minus_rusfk;
+	 IS_ANY_ORA_ERROR
+	 
+
+    
+
+if(APL_FAILURE == process_dynamic_sql(p_logfile,l_repfile,chr_l_rusfk_only_recq,chr_l_today,chr_l_hdr_posndesc,select_dp,bind_dp,l_debug_info_ptr))
+{
+	APL_GOBACK_FAIL
+}
+
+
+
+		fprintf(p_logfile," inside safekeep_pos only h_line no %d\n",int_l_rep_linecount);
+    for(i=0;i<(62+(int_l_num_len * 26));fprintf(l_repfile,"-"),i++);
+
+APL_GOBACK_SUCCESS // AIX - Warnings	
+
+  RETURN_SUCCESS :
+
+         CO_ProcMonitor(p_logfile,
+                  "Leaving Function PosnReconFn successfully",
+                  NULL,
+                  p_intl_envdatastruct_h);
+         CO_ProcMonitor(APL_OUT_FILE,
+                  "Leaving Function PosnReconFn successfully",
+                  NULL,
+                  p_intl_envdatastruct_h);
+      return(APL_SUCCESS);
+
+  RETURN_FAILURE :
+
+         CO_ProcMonitor(p_logfile,
+                  "Leaving Function PosnReconFn with errors",
+                  l_debug_info_ptr,
+                  p_intl_envdatastruct_h);
+         CO_ProcMonitor(APL_OUT_FILE,
+                  "Leaving Function PosnReconFn with errors",
+                  NULL,
+                  p_intl_envdatastruct_h);
+      return(APL_FAILURE);
+
+}
+
+
+int process_dynamic_sql(FILE *p_logfile,FILE *l_repfile,char *l_sqlquery,char *chr_l_today,char *chr_l_hdr_posndesc,SQLDA *select_dp,SQLDA *bind_dp,DEBUG_INFO_STRUCT_H **l_debug_info_ptr )
+{  
+   int i                    = 0;
+   int int_nlen                 = 0;
+   int int_null_ok              = 0;
+   int int_precision            = 0;
+   int int_scale                = 0;
+   int int_l_num_len            = 0;
+
+   char chr_colname[201];
+   char chr_l_acc[20]                 = APL_NULL_STRING;
+   char chr_l_sec[20]                 = APL_NULL_STRING;
+   char *chr_posofspace;
+   char *chr_l_space                  = APL_NULL_STRING;
+
+	memset(chr_colname,APL_NULL_CHAR,201);
+   memset(chr_l_acc,APL_NULL_CHAR,20);
+   memset(chr_l_sec,APL_NULL_CHAR,20);
+
+
+    if ((bind_dp =
+            sqlald(MAX_ITEMS, MAX_VNAMERR_LEN, MAX_INAMERR_LEN)) == (SQLDA *) 0)
+    {
+   CO_InsertErr(l_debug_info_ptr, ERR_NO_MEMORY,APL_NULL_STRING, APL_NULL_STRING,APL_NULL_STRING, __LINE__,__FILE__);
+        return APL_FAILURE;
+
+    }
+
+    if ((select_dp =
+        sqlald (MAX_ITEMS, MAX_VNAMERR_LEN, MAX_INAMERR_LEN)) == (SQLDA *) 0)
+    {
+   CO_InsertErr(l_debug_info_ptr, ERR_NO_MEMORY,APL_NULL_STRING, APL_NULL_STRING,APL_NULL_STRING,__LINE__,__FILE__);
+        return APL_FAILURE;
+    }
+    select_dp->N = MAX_ITEMS;
+
+    
+    for (i = 0; i < MAX_ITEMS; i++)
+   {
+        bind_dp->I[i] = (short *) malloc(sizeof (short));
+        select_dp->I[i] = (short *) malloc(sizeof(short));
+        bind_dp->V[i] = (char *) malloc(1);
+        select_dp->V[i] = (char *) malloc(1);
+    }
+
+
+
+
+  select_dp->N = MAX_ITEMS;
+
+  printf("\n\n");
+  printf(l_sqlquery);
+  printf("\n\n");
+
+  EXEC SQL PREPARE S FROM :l_sqlquery;	
+  IS_ANY_ORA_ERROR
+
+  EXEC SQL DECLARE c_mis_posn CURSOR FOR s;	
+  
+  EXEC SQL OPEN c_mis_posn USING DESCRIPTOR bind_dp;
+
+  EXEC SQL DESCRIBE SELECT LIST FOR S INTO select_dp;
+  IS_ANY_ORA_ERROR
+  
+      
+    select_dp->N = select_dp->F;
+    for (i = 0; i < select_dp->F; i++)
+    {
+        
+        sqlnul (&(select_dp->T[i]), &(select_dp->T[i]), &int_null_ok);
+
+        switch (select_dp->T[i])
+        {
+            case  1 : 
+                break;
+            case  2 : 
+                sqlprc (&(select_dp->L[i]), &int_precision, &int_scale);
+                      
+                if (int_precision == 0) int_precision = 40;
+                      
+                
+                if (int_scale > 0)
+                    select_dp->L[i] = sizeof(double);
+                else
+                    select_dp->L[i] = sizeof(int);
+                break;
+
+            case  8 : 
+                select_dp->L[i] = 240;
+                break;
+
+            case 11 : 
+                select_dp->L[i] = 18;
+
+            case 12 : 
+                select_dp->L[i] = 19;
+        }
+        
+
+         if (select_dp->T[i] != 2)
+           select_dp->V[i] = (char *) realloc(select_dp->V[i],
+                                    select_dp->L[i] + 1);
+         else
+           select_dp->V[i] = (char *) realloc(select_dp->V[i],
+                                    select_dp->L[i]);
+
+
+        
+        if (select_dp->T[i] != 24 && select_dp->T[i] != 2)
+            select_dp->T[i] = 1;
+
+        
+        if (select_dp->T[i] == 2)
+        { // AIX - Warnings
+          if (int_scale > 0)
+             select_dp->T[i] = 4;   
+          else
+             select_dp->T[i] = 3;  
+        }
+    }
+
+    
+    for (;;)
+    {
+		  fprintf(p_logfile,"FETCHING VALUES FROM DYNAMIC SQL \n");
+        EXEC SQL FETCH c_mis_posn USING DESCRIPTOR select_dp;
+		  IS_ANY_ORA_ERROR
+		  PRNTMINE
+        if(sqlca.sqlcode == 1403)
+        break;
+		  
+		  for (i=0;i<select_dp->F;i++)
+				{
+					  
+
+		           memset(chr_colname,APL_NULL_CHAR,201);
+      		     chr_posofspace = strstr(select_dp->S[i]," ");
+           		  if(chr_posofspace == NULL)
+                    strcpy(chr_colname,select_dp->S[i]);
+                 else
+                 {
+                    int_nlen = chr_posofspace - select_dp->S[i];
+                    strncpy(chr_colname,select_dp->S[i],int_nlen);
+                 }
+					  fprintf(p_logfile,"Col Name is %s  ,",chr_colname);
+					  fprintf(p_logfile,"Col Type is %d  ,",select_dp->T[i]);
+
+					  
+
+					  if (select_dp->T[i]==1 || select_dp->T[i]==96)
+					  { 
+							if (!strcmp(chr_colname,"CLIENT"))
+							{
+								strncpy(chr_l_acc,select_dp->V[i],select_dp->L[i]);
+								fprintf(l_repfile,"%-18s",chr_l_acc);	
+					  			fprintf(p_logfile,"Col Value is %s  ,\n",chr_l_acc);
+							}
+							else if (!strcmp(chr_colname,"INSTR_CODE"))
+							{
+								strncpy(chr_l_sec,select_dp->V[i],select_dp->L[i]);
+								fprintf(l_repfile,"%-16s",chr_l_sec);	
+					  			fprintf(p_logfile,"Col Value is %s  ,\n",chr_l_sec);
+							}
+					  }
+					  if ( select_dp->T[i]==3 || select_dp->T[i]==4)
+					  { 
+							
+								fprintf(l_repfile,"%26s",ltoa(*(int *)select_dp->V[i]));
+					  			fprintf(p_logfile,"Col Value is %d  ,\n",*(int *)select_dp->V[i]);
+
+							
+					  }
+             }
+		  fprintf(l_repfile,"\n\n");
+		fprintf(p_logfile," nside process h_line no %d\n",int_l_rep_linecount);
+		  if(++int_l_rep_linecount == PAGELENGTH)
+		  {
+           fprintf(l_repfile,"");   
+			  if (APL_FAILURE == CBPrintReconHdrFn( l_repfile, chr_l_today, chr_l_hdr_posndesc))
+              {
+                 APL_GOBACK_FAIL
+              }
+				int_l_rep_linecount = 0;
+		  }
+     }
+EXEC SQL CLOSE c_mis_posn;
+IS_ANY_ORA_ERROR
+
+APL_GOBACK_SUCCESS // AIX - Warnings
+
+  RETURN_SUCCESS :
+
+         CO_ProcMonitor(p_logfile,
+                  "Leaving Function PosnReconFn successfully",
+                  NULL,
+                  NULL);
+         CO_ProcMonitor(APL_OUT_FILE,
+                  "Leaving Function PosnReconFn successfully",
+                  NULL,
+                  NULL);
+      return(APL_SUCCESS);
+
+  RETURN_FAILURE :
+
+         CO_ProcMonitor(p_logfile,
+                  "Leaving Function PosnReconFn with errors",
+                  l_debug_info_ptr,
+                  NULL);
+         CO_ProcMonitor(APL_OUT_FILE,
+                  "Leaving Function PosnReconFn with errors",
+                  NULL,
+                  NULL);
+      return(APL_FAILURE);
+}
+
+
+
+
+int  CBPrintReconHdrFn(FILE *fp,char *p_today,char *posndesc)
+{
+	int i                  = 0;
+        int int_l_pos              = 0;
+	int int_l_num              = 0;
+	int int_l_rep_len          = 0;
+
+	char **int_l_temp;
+	char *chr_l_space          = APL_NULL_STRING;
+	char chr_l_date[11]        = APL_NULL_STRING;
+	static short l_pg_no   = 0;
+        char chr_l_format_str[14]  = APL_NULL_STRING;
+	char chr_l_hdr_format[HEADLEN] = APL_NULL_STRING;
+
+	CO_ProcMonitor(APL_OUT_FILE,"Entered in CBPrintReconHdrFn for Printing header",NULL,NULL);
+
+	if(APL_FAILURE == CO_SplitStr(posndesc,'|',&int_l_num,&int_l_temp))
+	{
+		APL_GOBACK_FAIL
+	}
+
+	int_l_rep_len = 62+(int_l_num * 26);
+	l_pg_no++;
+	int_l_pos = (int_l_rep_len - 46)/2;
+	strcat(chr_l_format_str,"\n%");
+	strcat(chr_l_format_str, ltoa(int_l_pos));
+	strcat(chr_l_format_str, "s");
+	fprintf(fp,chr_l_format_str,chr_l_space);   
+	fprintf(fp, "MCSD Positions Reconcilement Report - Mismatch"); 
+	fprintf(fp,chr_l_format_str,chr_l_space);
+	for (i=0;i<46;fprintf(fp, "-"),i++);
+
+	fprintf(fp, "\n");
+
+	memset(chr_l_date,NULL,11);
+	strncpy(chr_l_date,p_today,10);
+
+	memset(chr_l_format_str,NULL,14);
+        strcat(chr_l_format_str, "%");
+        strcat(chr_l_format_str, ltoa(int_l_pos));
+        strcat(chr_l_format_str, "s%-40s\n");
+        fprintf(fp, chr_l_format_str , chr_l_space, g_mt_commonsys_params_struct_h.ca_identname);
+
+	fprintf(fp, "Date: %s", chr_l_date);
+
+	memset(chr_l_format_str,NULL,14);
+	strcat(chr_l_format_str,"%");
+	strcat(chr_l_format_str, ltoa(int_l_rep_len - 28));
+	strcat(chr_l_format_str,"s");
+	fprintf(fp,chr_l_format_str,chr_l_space);
+	fprintf(fp, "Page %d\n", l_pg_no);
+	for (i=0;i<int_l_rep_len;fprintf(fp, "="),i++);
+	fprintf(fp, "\n");
+	fprintf(fp, "CUSTOMER ACCOUNT  INSTRUMENT CODE                    POSITIONS ");
+	memset(chr_l_format_str,NULL,14);
+	for(i=0;i<int_l_num;i++)
+	{
+		strcat(chr_l_hdr_format,"%");	
+		memset(chr_l_format_str,NULL,14);
+		strcat(chr_l_format_str,ltoa(26 - (strlen(int_l_temp[i]))));
+		strcat(chr_l_hdr_format,chr_l_format_str);	
+		strcat(chr_l_hdr_format,"s");	
+		strcat(chr_l_hdr_format,int_l_temp[i]);	
+	}
+		
+	for(i=0;i<(((int_l_rep_len - 62)/2) - 4);fprintf(fp,"-"),i++);
+	fprintf(fp,"  MCSD  ");
+	for(i=0;i<(((int_l_rep_len - 62)/2) - 4);fprintf(fp,"-"),i++);
+	fprintf(fp, "\n%60s", chr_l_space);
+	fprintf(fp,chr_l_hdr_format,chr_l_space);
+	fprintf(fp,"\n");
+	for (i=0;i<int_l_rep_len;fprintf(fp, "="),i++);
+	fprintf(fp, "\n");
+
+APL_GOBACK_SUCCESS // AIX - Warnings
+
+  RETURN_SUCCESS :
+      CO_ProcMonitor(APL_OUT_FILE,"Exiting CBPrintReconHdrFn with success.",NULL,NULL);
+      return(APL_SUCCESS);
+
+  RETURN_FAILURE :
+      CO_ProcMonitor(APL_OUT_FILE,"Exiting CBPrintReconHdrFn with errors.",NULL,NULL);
+      return(APL_FAILURE);
+}
+

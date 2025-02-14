@@ -1,0 +1,1635 @@
+/********************************************************************************
+ *   Module Name         :         Intimation and Reminder email Messages Generation
+ *
+ *   File Name           :         MS_Trans.pc
+
+ *   Description         :         This file contains all functions to prepare SWIFT Messages
+ *
+ *     Version Control Block
+
+ *  Date        Version     Author               Description
+ *  --------   --------  ---------------  ---------------------------
+ *  11/04/2011   1.0.1.9        Deepti Agrawal    ISKB_4256:Intimation and Reminder email Messages subject change FOC change
+ *  22/07/2011   1.0.1.10       Siva Ganapathi    ISKB_4256: Intimation and Reminder email Messages subject change FOC change UAT Issue
+ *  29/08/2011   1.0.1.11       Vilin Patil       ISKB_4256: Intimation and Reminder email Messages subject change FOC change UAT Issue
+ *
+***************************************************************************************/
+
+ 
+#include "CR_Common.h"
+#define SLEEP_TIME 5
+#include <unistd.h>
+#include "CO_Commdef.h"
+#include "Intellect_Interface.h"
+#include "Intellect_Error.h"
+#include "dirent.h"
+#define S_PROGNAME "Biller"
+#define S_KEY "billkey"
+#define S_USERID "SYSTEM"
+#define S_MODE "A"
+#define S_AUTH_REQ "A"
+#define S_SUBFUN "S"
+#define S_ACTION "A"
+#define S_FUNCPARAMS " "
+#define TESTNR2	"TEST NR"
+#define TESTNR1   "TEST Y AMT"
+#define	SWIFT	"SWIFT_ADDR"
+#define	SWIFT_GR	"ATHAR"
+#define SWIFTADDRCONST 	"X 00000"
+#define GCNADDRCONST 	"X00000"
+#define GCNPREFIXCONST  "0000 00"
+#define REC_LOCK_ORA_ERR -54
+#define ORIG_BASICBLOCK	"{1:F01KKBKINBBAXXX2677057689}"
+#define BASICBLOCK         "{1:F01KKBKINBBACUS1111111111}"  /** Hard coded for Kotak ***/
+/*#define BASICBLOCK       "{1:F01KKBKINB0AXXX1111111111}" */ /** Hard coded for Kotak ***/ /* BIC Code Changed to KKBKINB0ACUS for UAT fix as on 05-06-12*/
+#define APPBLOCK1	"{2:I"
+#define BODYBLOCK "{4:"
+#define CLOSEBLOCK "-}"
+
+EXEC SQL INCLUDE SQLCA.H;
+//AIX - Warnings Removal- STatic variables intialized
+static char chr_g_progname[41]=APL_NULL_STRING;
+static char chr_g_key[41]=APL_NULL_STRING;
+static char chr_g_rowid[APL_ROWID_LEN]=APL_NULL_STRING;
+static char chr_g_startdate[APL_DATE_LEN]=APL_NULL_STRING;
+static char            chr_h_restart_data[50]=APL_NULL_STRING; //,chr_h_eod_flg=APL_NULL_CHAR;
+static char            h_ora_rowid[APL_ROWID_LEN]=APL_NULL_STRING;
+static short   i_ora_rowid=0,i_restart=0; //,i_eod_flg=0;
+char chr_g_basicblock[201]; /* UAT Issue AmitN*/
+ 
+static char chr_g_swflineid[21]=APL_NULL_STRING; 
+typedef struct {
+ char client[11];                       
+ char message_ind[61];                    
+ char swift_msg_no[7];                       
+ char maker[15];           
+ char maker_dt[APL_DATE_LEN];
+ char status_ind[2];
+ char msg_in_out_ind[2];
+ char msg[31];
+ char contact_details[201];
+ char contact_details1[201];
+ char baseid[7];
+ char message_class[2];
+ char swift_msg_ident[17];
+ char checker[15];
+ char checker_dt[APL_DATE_LEN];
+ char access_stamp[APL_DATE_LEN];
+ } imsglog;
+typedef struct {
+ short client;                       
+ short message_ind;                    
+ short swift_msg_no;                       
+ short maker;           
+ short maker_dt;
+ short status_ind;
+ short msg_in_out_ind;
+ short msg;
+ short contact_details;
+ short contact_details1;
+ short baseid;
+ short message_class;
+ short swift_msg_ident;
+ short checker;
+ short checker_dt;
+ short access_stamp;
+ } l_ms_msglog_i_struct;
+typedef struct {
+ char client[11];	
+ char file_name[61];                       
+ char from_mail[201];                    
+ char to_mail[201];                    
+ char cc_mail[201];
+ char bcc_mail[201];
+ char subject[401];/* changed by Deepti  ISKB_4256 : Intimation and Reminder email Messages subject change FOC change: field lenth changed to 401 from 201*/
+ char bodytext[201];
+ char signature[1001];
+ char file_path[201];
+ char status[2];
+ char trans_dt[APL_DATE_LEN];
+ char attachment[2];
+ } common_email;
+typedef struct {
+ short client;
+ short file_name;
+ short from_name;
+ short to_mail;
+ short cc_mail;
+ short bcc_mail;
+ short subject;
+ short bodytext;
+ short signature;
+ short file_path;
+ short status;
+ short trans_dt;
+ short attachment;
+ } l_common_email_i_struct;
+int CreateHdr(FILE *fp,imsglog *p_ms_logstruct,l_ms_msglog_i_struct *ind, DEBUG_INFO_STRUCT_H **l_debug_info_ptr) 
+{
+	char chr_l_tmp_swift_code[201]	=	APL_NULL_STRING;
+	short	int_l_condexists_A			=	0;
+	char l_temp[20] =APL_NULL_STRING;
+	 
+	int int_noelem=0;
+	double l_header_num=0.0;
+	int int_l_final_value          =  0;
+	char **chr_l_param ;
+	char chr_l_param_str[201] = APL_NULL_STRING;
+	char chr_l_swflineid[21] = APL_NULL_STRING;
+	char chr_l_grd_ccycode[4]      =  {APL_GRD_CCYCODE};
+	char chr_l_emu_ccycode[4]      =  {APL_EMU_CCYCODE};
+        char chr_l_firstpart[9]         =  APL_NULL_STRING;
+        char chr_l_secondpart[4]       =  APL_NULL_STRING; 
+	double l_exchggrt           =  1.0 ;
+	int i =0,j=0;
+	char l_sebi_header_val[21] =APL_NULL_STRING;
+	short i_sebi_header_val;
+
+	EXEC SQL VAR chr_l_param_str  IS STRING ;
+	EXEC SQL VAR chr_l_swflineid  IS STRING ;
+	EXEC SQL VAR chr_l_grd_ccycode IS STRING;
+	EXEC SQL VAR chr_l_emu_ccycode IS STRING;
+	EXEC SQL VAR l_sebi_header_val IS STRING;
+	EXEC SQL VAR l_temp IS STRING;
+	printf("\n 101 *******%s************", l_mt_message_sys_params_struct_h.ccs_int_ind );
+	if(!strcmp(l_mt_message_sys_params_struct_h.ccs_int_ind, "Y")) 
+	{
+			if (APL_FAILURE == CO_Chk_CntryEnabled(   "TRANSMITTER_HDR",
+					                                    "SWIFTHDR",
+															      &int_l_condexists_A,
+															      l_debug_info_ptr) )	
+
+			{
+					return(APL_FAILURE);
+			}
+			printf("int_l_condexists_A is %d\n",int_l_condexists_A);
+			if(int_l_condexists_A==1 && p_ms_logstruct->message_class[0]=='S' )
+			{
+						printf("here printing header with BIC CODE!!!\n");
+				
+			  			//fprintf(fp, "%s", BASICBLOCK); 
+						fprintf(fp, "%s", chr_g_basicblock); /*AmitN*/
+			  			fprintf(fp, "%s", APPBLOCK1);
+						fprintf(fp, "%s",p_ms_logstruct->swift_msg_no);
+				/*		fprintf(fp, "%s",p_ms_logstruct->contact_details); */
+						/** if address greater than 8 characters then on 9th characters print X **/
+						if(strlen(p_ms_logstruct->contact_details)>8)
+						{
+							memset(l_temp,APL_NULL_CHAR,20);
+							strncpy(l_temp,p_ms_logstruct->contact_details,8);
+							l_temp[strlen(l_temp)] =APL_NULL_CHAR;
+							printf("\n First Temp = |%s|",l_temp);
+							fprintf(fp, "%sX",l_temp);
+							memset(l_temp,APL_NULL_CHAR,20);
+							strncpy(l_temp,p_ms_logstruct->contact_details+8,3);
+							l_temp[strlen(l_temp)] =APL_NULL_CHAR;
+							printf("\n Second Temp = |%s|",l_temp);
+							fprintf(fp, "%s",l_temp);
+						}
+						else
+						{
+							memset(l_temp,APL_NULL_CHAR,20);
+							strncpy(l_temp,p_ms_logstruct->contact_details,8);
+							l_temp[strlen(l_temp)] =APL_NULL_CHAR;
+							fprintf(fp, "%sXXXX",l_temp);
+						}
+						fprintf(fp, "%s","N}");
+			  			fprintf(fp, "%s\n", BODYBLOCK);
+			}
+			else
+			{
+
+
+				if((p_ms_logstruct->message_class[0]=='S'))
+				{
+					if (APL_FAILURE == CO_Chk_CntryEnabled(	"TRANSMITTER_HDR",
+								"SWIFTHDR_2ND_LINE",
+								&int_l_condexists_A,
+								l_debug_info_ptr) )
+					{
+						return(APL_FAILURE);
+					}
+					else
+					{
+						if ( int_l_condexists_A == 0 )
+						{
+							fprintf(fp, "%s\n", SWIFT);
+						}
+						else
+						{
+							fprintf(fp, "%s\n", SWIFT_GR);
+						}
+					}
+				}
+				else if(p_ms_logstruct->message_class[0]=='C') 
+				{
+
+					fprintf(fp, "%s\n", p_ms_logstruct->contact_details);
+				}
+				else if(p_ms_logstruct->message_class[0]=='T') 
+				{
+
+					fprintf(fp, "%s\n", p_ms_logstruct->contact_details1);
+				}
+				else if(p_ms_logstruct->message_class[0]=='I')   /******** TUX :  SEBI Message ***/
+				{
+					/** Don't have time to what function extracts gssplval value ***/
+					EXEC SQL Select FIELD_VAL
+			      into :l_sebi_header_val:i_sebi_header_val
+			      From PRO_GSSPLVAL where ((MAIN_FUN = 'SEBI') AND
+				   (SUB_PROCESS = 'HEADER') AND NATION = :g_mt_commonsys_params_struct_h.nation_code );
+					if (sqlca.sqlcode < 0)
+						return(APL_FAILURE);
+					if (sqlca.sqlcode == 1403)
+					{
+						printf("\n GSSPLVAL value for SEBI HEADER not present ");
+						return(APL_FAILURE);
+					}
+					/** Here goes value from gssplval ***/
+					fprintf(fp,"{IFN%s}{%s}{%s}{\n",p_ms_logstruct->swift_msg_no,l_sebi_header_val , p_ms_logstruct->contact_details);
+
+
+					/*fprintf(fp,"{IFN%s}{%s}{%s}{\n",p_ms_logstruct->swift_msg_no,l_mt_message_sys_params_struct_h.swift_cd , p_ms_logstruct->contact_details);*/
+				}
+
+				if (p_ms_logstruct->message_class[0]!='I' )
+				{
+					fprintf(fp, ".%sCB\n", l_mt_message_sys_params_struct_h.gcn_cd); /** 111 ***/
+
+
+					if (strcmp(p_ms_logstruct->swift_msg_no,"100")==0 )
+					{
+						EXEC SQL SELECT proc_data  INTO :chr_l_param_str
+							FROM MS_MSGENT
+							WHERE swift_msg_seqno=:p_ms_logstruct->message_ind;
+
+
+
+						if (sqlca.sqlcode < 0)
+							return(APL_FAILURE);
+
+						CO_SplitStr(chr_l_param_str,
+								';', &int_noelem, &chr_l_param);
+						l_header_num = atof(chr_l_param[3]);
+
+						if ( strcmp(chr_l_param[1],chr_l_param[2]) != 0 )
+						{
+							if( strcmp(l_mt_core_sys_params_struct_h.dir_indir_fxqt_ind,"I") == 0)
+							{
+								EXEC SQL SELECT
+									a.EXCHGRT INTO :l_exchggrt
+									FROM MT_EXCHRATE a
+									WHERE a.DENOM_CCY = :chr_l_emu_ccycode
+									AND a.currency_cd = :chr_l_grd_ccycode
+									AND a.RATE_DATE = ( SELECT MAX(b.RATE_DATE)
+											FROM MT_EXCHRATE b
+											WHERE b.DENOM_CCY = :chr_l_emu_ccycode
+											AND b.currency_cd = :chr_l_grd_ccycode
+											);
+							}
+							else	if( strcmp(l_mt_core_sys_params_struct_h.dir_indir_fxqt_ind,"D") == 0)
+							{
+								EXEC SQL SELECT
+									a.EXCHGRT INTO :l_exchggrt
+									FROM MT_EXCHRATE a
+									WHERE a.DENOM_CCY = :chr_l_grd_ccycode
+									AND a.currency_cd = :chr_l_emu_ccycode
+									AND a.RATE_DATE = ( SELECT MAX(b.RATE_DATE)
+											FROM MT_EXCHRATE b
+											WHERE b.DENOM_CCY = :chr_l_grd_ccycode
+											AND b.currency_cd = :chr_l_emu_ccycode
+											);
+							}
+						}
+						else
+							l_exchggrt = 1.0;
+
+						if (sqlca.sqlcode < 0)
+							return(APL_FAILURE);
+
+						l_header_num=l_header_num/l_exchggrt;
+
+						EXEC SQL select trunc(:l_header_num) into :int_l_final_value
+							from dual;
+
+						if (sqlca.sqlcode < 0)
+							return(APL_FAILURE);
+
+						fprintf(fp,"%s %d\n",TESTNR1,int_l_final_value);
+					}
+					else
+					{
+						fprintf(fp, "%s\n", TESTNR2);
+					} 
+				}
+
+
+
+				if(p_ms_logstruct->message_class[0] != 'T') 
+				{
+
+					if(p_ms_logstruct->message_class[0]=='S')
+					{	
+						printf("\nIn Message class S  ");	
+
+						if (APL_FAILURE == CO_Chk_CntryEnabled("TRANSMITTER_HDR",	"SWIFTHDR_5TH_LINE",&int_l_condexists_A,l_debug_info_ptr) )
+						{
+							printf("\n returning  fail");
+							return(APL_FAILURE);
+						}
+						else
+						{
+							if ( int_l_condexists_A == 1 )
+							{
+								for(i=0;i<8;i++)
+									chr_l_firstpart[i] = l_mt_message_sys_params_struct_h.swift_cd[i];
+								chr_l_firstpart[i+1]='\0';
+								printf("\nThe int_first part is %s",chr_l_firstpart);
+								for (j=0,i=8;i<11;i++,j++)
+									chr_l_secondpart[j] = l_mt_message_sys_params_struct_h.swift_cd[i];
+								chr_l_secondpart[j+1]='\0';
+								printf("\nThe Instrond part is %s",chr_l_secondpart);
+								fprintf(fp, "%sA%s 00000\n", chr_l_firstpart,chr_l_secondpart);   
+							}		
+							else
+							{
+								if(strlen(p_ms_logstruct->contact_details) != 8) 
+								{
+									memset(chr_l_tmp_swift_code,APL_NULL_CHAR,201);
+									strcpy(chr_l_tmp_swift_code, l_mt_message_sys_params_struct_h.swift_cd);
+									if(APL_FAILURE==CO_PadString(chr_l_tmp_swift_code, 'R', 11, "X", l_debug_info_ptr))
+										return(APL_FAILURE);
+									fprintf(fp, "%s%s\n", chr_l_tmp_swift_code, SWIFTADDRCONST);
+								}
+								else
+								{
+									fprintf(fp, "%sAXX%s\n", l_mt_message_sys_params_struct_h.swift_cd, SWIFTADDRCONST);
+								}
+							}	
+						}	
+					}
+
+
+					else if(p_ms_logstruct->message_class[0]=='C' && ind->contact_details1 != -1)
+					{
+
+
+						if(strlen(p_ms_logstruct->contact_details1) != 8)
+						{
+							memset(chr_l_tmp_swift_code,APL_NULL_CHAR,201);
+							strcpy(chr_l_tmp_swift_code, p_ms_logstruct->contact_details1);
+							if(APL_FAILURE==CO_PadString(chr_l_tmp_swift_code, 'R', 5, "X", l_debug_info_ptr))
+								return(APL_FAILURE);
+
+							fprintf(fp, "%s%s%s\n", GCNPREFIXCONST, chr_l_tmp_swift_code, GCNADDRCONST);
+						}
+						else
+
+							fprintf(fp, "%s%sAXX%s\n", GCNPREFIXCONST, p_ms_logstruct->contact_details1, GCNADDRCONST);
+
+
+						if(strlen(l_mt_message_sys_params_struct_h.swift_cd) != 8)
+						{
+							memset(chr_l_tmp_swift_code,APL_NULL_CHAR,201);
+							strcpy(chr_l_tmp_swift_code, l_mt_message_sys_params_struct_h.swift_cd);
+							if(APL_FAILURE==CO_PadString(chr_l_tmp_swift_code, 'R', 11, "X", l_debug_info_ptr))
+								return(APL_FAILURE);
+
+							fprintf(fp, "%s%s%s\n", GCNPREFIXCONST, chr_l_tmp_swift_code, GCNADDRCONST);
+						}
+						else
+
+							fprintf(fp, "%s%sAXX%s\n", GCNPREFIXCONST, l_mt_message_sys_params_struct_h.swift_cd, GCNADDRCONST);
+					}
+
+					if ( p_ms_logstruct->message_class[0]!='I')
+						fprintf(fp, "%s 02\n", p_ms_logstruct->swift_msg_no);
+
+
+					if(p_ms_logstruct->message_class[0]=='S')
+					{
+						memset(chr_l_tmp_swift_code,APL_NULL_CHAR,201);
+						strcpy(chr_l_tmp_swift_code, p_ms_logstruct->contact_details);
+						if(APL_FAILURE==CO_PadString(chr_l_tmp_swift_code, 'R', 11, "X", l_debug_info_ptr))
+							return(APL_FAILURE);
+						fprintf(fp, "%s\n", chr_l_tmp_swift_code);
+					}
+				}
+				printf("\n en dof if \n");
+			}
+	}
+	else
+	{
+        if(p_ms_logstruct->message_class[0]=='C'||p_ms_logstruct->message_class[0]=='T')
+		  {
+		  	 fprintf(fp,"TELEX/GCN/SWIFT: %c\n\n",'G');
+		  }
+		  else
+		  {
+		    fprintf(fp,"TELEX/GCN/SWIFT: %s\n\n",p_ms_logstruct->message_class);
+        }
+		  
+        if ( (p_ms_logstruct->message_class[0]=='T') && ( strlen(p_ms_logstruct->contact_details1) > 0 ) )
+				{ fprintf(fp,"ADDRESS: %s\n\n",p_ms_logstruct->contact_details1); }
+        else
+				{ fprintf(fp,"ADDRESS: %s\n\n",p_ms_logstruct->contact_details); }
+		  
+	  if(p_ms_logstruct->message_class[0]=='C'||p_ms_logstruct->message_class[0]=='S')
+			  fprintf(fp,"MESSAGE TYPE: %s\n\n",p_ms_logstruct->swift_msg_no);
+		  else
+			  
+			  fprintf(fp,"MESSAGE TYPE: %s\n\n","999");
+		  fprintf(fp,"TEST: N\n\n");
+		  fprintf(fp,"CCY:\n\n");
+		  fprintf(fp,"AMOUNT:\n\n");
+	
+		  if((strlen(p_ms_logstruct->baseid) == 0))
+		  {
+		  	fprintf(fp,"BASE NO.:%s\n\n",p_ms_logstruct->baseid); 
+        }
+		  else
+		  {
+		  	fprintf(fp,"BASE NO.: %s\n\n",p_ms_logstruct->baseid); 
+		   }
+		  if((p_ms_logstruct->message_class[0]=='C')&&(ind->message_class!=-1))
+		  {
+			if((strlen(p_ms_logstruct->contact_details1)==0))
+			{
+		    	fprintf(fp,"CITIDEX:%s\n\n",p_ms_logstruct->contact_details1);
+         }
+			else
+			{
+		  		fprintf(fp,"CITIDEX: %s\n\n",p_ms_logstruct->contact_details1);
+         }
+        }
+		  else
+		  
+		  fprintf(fp,"CITIDEX:\n\n"); 
+		  fprintf(fp,"PRIORITY:\n\n");
+
+ 
+	}
+	printf("\n header created *********** \n");
+return(APL_SUCCESS);
+}
+/**** voila no ack ... *******/
+/********* THIS FUNCTION WILL NEVER BE USED *****/
+
+int MS_Proc_MsgTran(char **argv,
+				    FILE *chr_logfile,
+							DEBUG_INFO_STRUCT_H **l_debug_info_ptr,
+							INTL_ENV_DATA_STRUCT_H *p_intlenv_data_struct_h) 
+{
+	FILE *chr_finifile=NULL;
+	FILE *ibbsSendFile=NULL;
+	FILE *messageSendFile=NULL;
+	char chr_l_a[2*PATH_LENGTH]; 
+	char chr_l_b[2*PATH_LENGTH]; 
+	//static FILE *chr_logfile=NULL;
+	char chr_chartemp[1000];
+	char chr_h_rowid_a[APL_ROWID_LEN];
+	char chr_inifile[PATH_LENGTH];
+	char chr_disp_email[PATH_LENGTH] =APL_NULL_STRING;
+	char *chr_tempchar=NULL;
+	char chr_msgch;
+	char chr_glsendtemp[PATH_LENGTH];
+	common_email h_email_struct ;
+	l_common_email_i_struct i_email_struct;
+	char l_temp[201] =APL_NULL_STRING;
+	char l_buf[1000] = APL_NULL_STRING;
+
+	DIR *dp = NULL;
+	struct dirent *dir=NULL;
+	char **l_param ;
+	char **l_param_cc ;/*shailesh 28-03-2008 ISKB 604 changes related to CC list */
+	int l_noofelem  = 0;
+	char chr_h_trans_dt[APL_DATE_LEN];
+	char chr_messagesendtemp[PATH_LENGTH];
+	char chr_messagesend[PATH_LENGTH];
+	char chr_swfglsend[PATH_LENGTH];
+	char chr_gcnglsend[PATH_LENGTH];
+	char chr_gcntpglsend[PATH_LENGTH];
+	char chr_swftpglsend[PATH_LENGTH];
+	char l_sebi_dir[PATH_LENGTH] =APL_NULL_STRING;
+	char chr_l_status[2] = APL_NULL_STRING; /* PJ */
+	char l_str_outmsg[PATH_LENGTH ] =APL_NULL_STRING;
+	int i ;
+	int l_temp1 = 0;
+	short	int_l_condexists_A			=	0;
+	char chr_l_clntyp[5] = APL_NULL_STRING; /* vaibhav 17 July 2006 */
+        short i_clntyp=0; /* vaibhav 17 July 2006 */
+	char chr_l_msgno[7] = APL_NULL_STRING;
+	char chr_l_msgclass[2] = APL_NULL_STRING;
+	short i_msgno=0;
+	short i_msgclass=0;
+	char chr_h_trans_dt_temp[APL_DATE_LEN];
+	memset (chr_h_trans_dt_temp, APL_NULL_CHAR, APL_DATE_LEN);
+	memset ( l_str_outmsg,APL_NULL_CHAR,PATH_LENGTH);
+	memset(chr_disp_email,APL_NULL_CHAR,PATH_LENGTH);
+	memset(l_sebi_dir,APL_NULL_CHAR ,PATH_LENGTH);
+	memset(l_buf,APL_NULL_CHAR,1000);
+	int int_countofrec=0;
+	//Changes for single mail for each client - ISKB 604 - AmitB
+	char l_to_list[201] = APL_NULL_STRING; /* ISKB 604 */
+	int k=0; /* ISKB 604 */
+        char l_cc_list[201] = APL_NULL_STRING; /*shailesh 28-03-2008 ISKB 604 CC field*/
+	char copy_to_path[PATH_LENGTH];/*shailesh 12-03-2008*/
+	char copy_from_path[PATH_LENGTH];/*shailesh 12-03-2008*/
+
+	char chr_l_basicblock[21] = APL_NULL_STRING; /* UAT issue AmitN*/
+  
+	EXEC SQL VAR chr_l_basicblock IS STRING; /* UAT issue AmitN*/  
+
+	char l_buf2[200];
+
+	memset(copy_to_path,APL_NULL_CHAR,PATH_LENGTH);
+	memset(copy_from_path,APL_NULL_CHAR,PATH_LENGTH);
+	/*Added By Sana to set memory for AIX upgradation -- Start 
+    	memset(chr_messagesendtemp,APL_NULL_CHAR,PATH_LENGTH);
+    	memset(chr_h_trans_dt,APL_NULL_CHAR,APL_DATE_LEN);
+	memset(chr_glsendtemp,APL_NULL_CHAR,PATH_LENGTH);
+	memset(chr_messagesend,APL_NULL_CHAR,PATH_LENGTH);
+	memset(chr_swfglsend,APL_NULL_CHAR,PATH_LENGTH);
+    	memset(chr_gcnglsend,APL_NULL_CHAR,PATH_LENGTH);
+	memset(chr_gcntpglsend,APL_NULL_CHAR,PATH_LENGTH);
+	memset(chr_swftpglsend,APL_NULL_CHAR,PATH_LENGTH);
+	Added By Sana to set memory for AIX upgradation -- End */
+	
+
+	int lretval = 0;
+	imsglog messageStruct;
+	l_ms_msglog_i_struct indicator;
+	if(!(chr_tempchar=getenv("INTL_ROOT_PATH")))
+		APL_GOBACK_FAIL
+			sprintf(chr_inifile,"%s/intl_sun.cfg",chr_tempchar);
+	if(!(chr_finifile=fopen(chr_inifile,"r")))
+		APL_GOBACK_FAIL
+
+	/* Commented for BOJ -- Defined in main() */
+
+			/*if(!chr_logfile)
+			{
+				if(CO_Rtv_RptFileName("4G",
+							APL_LOGFILE_DESC,
+							100,
+							argv[5],
+							argv,
+							&chr_logfile,
+							l_debug_info_ptr)==APL_FAILURE)
+				{
+					return(APL_FAILURE);
+				}
+			}*/
+
+	if(CO_ReadToken(chr_finifile,"INTL_GL_SND_N_T",chr_gcntpglsend,l_debug_info_ptr)==APL_FAILURE)
+		APL_GOBACK_FAIL;
+	if(CO_ReadToken(chr_finifile,"INTL_S_T",chr_swftpglsend,l_debug_info_ptr)==APL_FAILURE)
+		APL_GOBACK_FAIL;
+	/********* TUX this is only for display purpose **********/
+	/****** Email files would be copied to this folder *********/
+	if(CO_ReadToken(chr_finifile,"INTL_DISP_EMAIL",chr_disp_email,l_debug_info_ptr)==APL_FAILURE)
+	{
+		printf("\n Unable to find token $INTL_ROOT/outmsg/email ");
+		APL_GOBACK_FAIL;
+	}
+
+	if(strcmp(chr_gcntpglsend,chr_swftpglsend) == 0 ) 
+	{
+		fprintf(chr_logfile,"The directories paths GCN_T_IBBS_SEND and SWF_T_IBBS_SEND "
+				"need to be different in intl_sun.cfg File\n");
+		fprintf(chr_logfile,"\t\tNo Message Transmitted - EXITING the program...\n");
+		fprintf(stderr,"Failure: GCN_T_IBBS_SEND and SWF_T_IBBS_SEND are same-Exiting...\n");
+		exit(1);
+	}
+	if(CO_ReadToken(chr_finifile,"INTL_GL_SND_S",chr_swfglsend,l_debug_info_ptr)==APL_FAILURE)
+		APL_GOBACK_FAIL;
+	if(CO_ReadToken(chr_finifile,"INTL_GL_SND_N",chr_gcnglsend,l_debug_info_ptr)==APL_FAILURE)
+		APL_GOBACK_FAIL;
+
+	if(CO_ReadToken(chr_finifile,"INTL_SEBI_SND",l_sebi_dir,l_debug_info_ptr)==APL_FAILURE) /** TUX : SEBI **/
+		APL_GOBACK_FAIL;
+	/* Commented by Gouse for space issue 
+	printf("\n ***  is =%s\n", chr_swfglsend);	
+	printf("\n ***  is/t =%s\n", chr_swftpglsend);	
+	printf("\n *** Sebidir =%s\n", l_sebi_dir);
+	printf("\n *** chr_messagesend=%s\n", chr_messagesend); */
+
+	if(CO_ReadToken(chr_finifile,"INTL_MS_SND_PATH",chr_messagesend,l_debug_info_ptr)==APL_FAILURE)
+		APL_GOBACK_FAIL;
+	
+	if(CO_ReadToken(chr_finifile,"INTL_MS_OUT_PATH",l_str_outmsg,l_debug_info_ptr)==APL_FAILURE)
+		APL_GOBACK_FAIL;
+
+	/* UAT Issue [Start] AmitN*/
+	EXEC SQL Select FIELD_VAL
+	into :chr_l_basicblock
+ From PRO_GSSPLVAL where ((MAIN_FUN = 'MESSAGES') AND
+ (SUB_PROCESS = 'BASICBLOCK') AND NATION = :g_mt_commonsys_params_struct_h.installed_at_bank);
+
+	IS_ANY_ORA_ERROR ;
+
+	if (sqlca.sqlcode == 1403)
+ {
+		Alert("\n GSSPLVAL value for BASIC BLOCK not present ");
+		strcpy(chr_g_basicblock,BASICBLOCK);
+ }
+	else if (sqlca.sqlcode == 0)
+	{
+		if(CO_ReadToken(chr_finifile,chr_l_basicblock,chr_g_basicblock,l_debug_info_ptr)==APL_FAILURE)
+		{
+			printf("\n Basic Block not defined in intl_sun.cfg \n ");
+			APL_GOBACK_FAIL;
+		}
+	}
+
+	/* [End] AmitN*/
+	EXEC SQL VAR messageStruct.client IS STRING;
+	EXEC SQL VAR chr_h_rowid_a IS STRING;
+	EXEC SQL VAR messageStruct.message_ind IS STRING;
+	EXEC SQL VAR messageStruct.swift_msg_no IS STRING;
+	EXEC SQL VAR messageStruct.maker IS STRING;
+	EXEC SQL VAR messageStruct.maker_dt IS STRING;
+	EXEC SQL VAR messageStruct.status_ind IS STRING;
+	EXEC SQL VAR messageStruct.msg_in_out_ind IS STRING;
+	EXEC SQL VAR messageStruct.msg IS STRING;
+	EXEC SQL VAR messageStruct.contact_details IS STRING;
+	EXEC SQL VAR messageStruct.contact_details1 IS STRING;
+	EXEC SQL VAR messageStruct.baseid IS STRING;
+	EXEC SQL VAR messageStruct.message_class IS STRING;
+	EXEC SQL VAR messageStruct.checker IS STRING;
+	EXEC SQL VAR messageStruct.checker_dt IS STRING;
+	EXEC SQL VAR messageStruct.access_stamp IS STRING;
+
+	EXEC SQL VAR chr_h_trans_dt IS STRING;
+
+   /*added by Deepti  ISKB_4256 : Intimation and Reminder email Messages subject change FOC change:start*/
+   char lv_subject[401] =APL_NULL_STRING;
+   EXEC SQL VAR lv_subject IS STRING;
+   char lv_swift_msg_no[100]=APL_NULL_STRING;
+   EXEC SQL VAR lv_swift_msg_no IS STRING;
+   short i_lv_subject;
+   short i_lv_swift_msg_no;
+   /*added by Deepti ISKB_4256 : Intimation and Reminder email Messages subject change FOC change :end*/
+
+
+	EXEC SQL DECLARE msgCursor CURSOR FOR
+		SELECT MS_MSGLOG.*,ROWID
+		FROM MS_MSGLOG
+		WHERE STATUS='P' and message_class not in ('Q','M') AND STATUS !=DECODE(message_class,'B','M','I','M','A') FOR UPDATE OF STATUS;
+			if(sqlca.sqlcode != 0)
+			Alert("\n***** Sql CA |%d|*****After Cursor Declare******\n",sqlca.sqlcode);
+	IS_ANY_ORA_ERROR
+
+		EXEC SQL OPEN msgCursor;
+			if(sqlca.sqlcode != 0)
+			Alert("\n***** Sql CA |%d|*****After Cursor Open******\n",sqlca.sqlcode);
+	IS_ANY_ORA_ERROR
+
+		while(1)
+		{
+			l_temp1 = 0;
+			Alert("\n in while loop 636 %s********* \n", chr_h_trans_dt); 
+			if(CO_RtvSysDtTime(chr_h_trans_dt,l_debug_info_ptr)==APL_FAILURE)
+			{
+				APL_GOBACK_FAIL;
+			}
+			strcpy(chr_h_trans_dt_temp, chr_h_trans_dt);
+			Alert("\n 645 %s**%s** \n", chr_h_trans_dt, chr_h_trans_dt_temp); 
+			memset(&messageStruct,NULL,sizeof(imsglog));
+			EXEC SQL FETCH msgCursor INTO :messageStruct :indicator,:chr_h_rowid_a;
+			if(sqlca.sqlcode != 0)
+			Alert("\n***** Sql CA |%d|*****Line No 609******\n",sqlca.sqlcode);
+			IS_ANY_ORA_ERROR;
+			if(sqlca.sqlcode != 0)
+			Alert("\n***** Sql CA |%d|*****Line No 611******\n",sqlca.sqlcode);
+			/* Vaibhav 17 July 2006 */
+			if(strlen(messageStruct.client) > 0)
+			{
+			Alert("******** Client is |%s|*********\n",messageStruct.client);
+			Alert("******** Message Indicator |%s|*********\n",messageStruct.message_ind);
+			}
+			EXEC SQL SELECT COUNT(*) into :l_temp1 from MT_PARTY WHERE PTY_CODE=:messageStruct.client;
+			IS_ANY_ORA_ERROR;
+
+			if(l_temp1 == 0)
+			{
+			EXEC SQL SELECT CLN_TYPE  INTO :chr_l_clntyp:i_clntyp FROM MT_CLIENT a
+			  WHERE 	 a.CLN_CODE= :messageStruct.client;
+			IS_ANY_ORA_ERROR;
+			}
+			else
+			{
+				strcpy(chr_l_clntyp,"X");
+			}
+
+			if(sqlca.sqlcode != 0)
+			Alert("\n***** Sql CA |%d|***********\n",sqlca.sqlcode);
+        			 
+			if (strlen(chr_l_clntyp) > 0)		 
+			{		
+			  Alert("\n****** Client Type is |%s|******************\n",chr_l_clntyp);/* Vaibhav */				
+			}
+			  
+			if(APL_ZERO_RESULT_SET) 
+			{
+				//printf("\n SHYAM::in cursor :chr_swftpglsend<%s> \n",chr_swftpglsend);
+				  if((dp = opendir(chr_swftpglsend))==NULL)
+				{
+					printf("\n #1 FATAL ERROR Unable to Open dir |%s|",chr_swftpglsend);
+					exit(0);
+				}
+
+				//while(dir=readdir(dp)) {
+				while((dir=readdir(dp))) { //AIX - Warnings Removal
+					strcpy(chr_l_a,chr_swftpglsend);
+					strcat(chr_l_a,dir->d_name);
+					//printf("chr_l_a is %s\n",chr_l_a);
+					strcpy(chr_l_b,chr_swfglsend);
+					strcat(chr_l_b,dir->d_name);
+					//printf("chr_l_b is %s\n",chr_l_b);
+					link(chr_l_a,chr_l_b);	
+					unlink(chr_l_a);
+				}
+				closedir(dp);
+				if((dp = opendir(chr_gcntpglsend))==NULL)
+				{
+					printf("\n FATAL ERROR Unable to Open dir |%s|",chr_gcntpglsend);
+					exit(0);
+				}
+
+				//while(dir=readdir(dp))
+				while((dir=readdir(dp)))//AIX - Warnings Removal
+				{
+					strcpy(chr_l_a,chr_gcntpglsend);
+					strcat(chr_l_a,dir->d_name);
+					strcpy(chr_l_b,chr_gcnglsend);
+					strcat(chr_l_b,dir->d_name);
+					link(chr_l_a,chr_l_b);
+					unlink(chr_l_a);
+				}
+				closedir(dp);
+
+				EXEC SQL COMMIT;
+				IS_ANY_ORA_ERROR;
+				//printf("Breaking\n");
+				break;
+			
+			}
+			printf("\n come out of cursor \n");
+		   /*************** vaibhav 17 July 2006 *****************************/	
+			printf("\n***** Swift Message Number = |%s|**********\n",messageStruct.swift_msg_no);
+			printf("\n***** Message Class = |%c|**********\n",messageStruct.message_class[0]);
+			printf("\n***** Client Type = |%s|**********\n",chr_l_clntyp);
+			if(!strcmp(messageStruct.swift_msg_no,"548") && !strcmp(messageStruct.message_class,"I") && !strcmp(chr_l_clntyp,"M") )
+			{
+				printf("\n*****if message is 548  and client type is Mutual funds and message_class ='I' - ignore by transmitter****************\n");
+				continue;
+			}
+			/****************** Vaibhav 17 July 2006 ************************/
+
+
+
+			EXEC SQL SELECT STATUS INTO :chr_l_status FROM MS_MSGLOG
+				WHERE ROWID=:chr_h_rowid_a
+				FOR UPDATE OF STATUS NOWAIT;
+			if(sqlca.sqlcode == REC_LOCK_ORA_ERR)
+			{
+				sqlca.sqlcode = 0;
+				printf("\n Lock Found on MS_MSGLOG Table so again trying ");
+				continue;
+			}
+			IS_ANY_ORA_ERROR;
+			memset(chr_messagesendtemp,APL_NULL_CHAR,PATH_LENGTH);
+			if(chr_messagesend[strlen(chr_messagesend)-1] == '/')
+			{	
+				sprintf(chr_messagesendtemp,"%s%s",chr_messagesend,messageStruct.msg);
+			}
+			else
+			{	
+				sprintf(chr_messagesendtemp,"%s/%s",chr_messagesend,messageStruct.msg);
+			}
+
+			/*sprintf(chr_messagesendtemp,"%s/%s",chr_messagesend,messageStruct.msg);*/
+	               if(!(messageSendFile=fopen(chr_messagesendtemp,"r+"))) //AIX Change
+			{
+				fprintf(chr_logfile,"Could not find %s\n",chr_messagesendtemp);
+				fflush(chr_logfile);
+				//fclose(messageSendFile);
+				printf("\n Could not open file |%s| ... so skipping ",chr_messagesendtemp);
+				continue;
+			}
+
+			fflush(messageSendFile);
+			EXEC SQL SELECT MESSAGE_CLASS INTO :chr_msgch
+				FROM MS_MSGLOG
+				WHERE ROWID=:chr_h_rowid_a;
+			IS_ANY_ORA_ERROR;
+			CO_Filter(messageSendFile,chr_msgch);
+			fflush(messageSendFile);
+			rewind(messageSendFile);
+			fflush(messageSendFile);
+
+			printf("\n Message Class = %c ", messageStruct.message_class[0] );	
+			if( messageStruct.message_class[0] == 'S'  || messageStruct.message_class[0] == 'B')
+			{
+				if(chr_swftpglsend[strlen(chr_swftpglsend)-1] =='/')
+					sprintf(chr_glsendtemp,"%s%s",chr_swftpglsend,messageStruct.msg);
+				else
+					sprintf(chr_glsendtemp,"%s/%s",chr_swftpglsend,messageStruct.msg);
+			}
+			else if ( messageStruct.message_class[0] == 'I' )
+			{
+				printf("\n Inside SEBI Dir ");
+				if(l_sebi_dir[strlen(l_sebi_dir)-1] == '/')
+					sprintf(chr_glsendtemp,"%s%s",l_sebi_dir,messageStruct.msg);
+				else
+					sprintf(chr_glsendtemp,"%s/%s",l_sebi_dir,messageStruct.msg);
+			}
+			else 
+			{
+				if(chr_gcntpglsend[strlen(chr_gcntpglsend)-1] == '/')
+					sprintf(chr_glsendtemp,"%s%s",chr_gcntpglsend,messageStruct.msg);
+				else
+					sprintf(chr_glsendtemp,"%s/%s",chr_gcntpglsend,messageStruct.msg);
+			}
+
+			printf("\n Inserting Header Information in file |%s| ", chr_glsendtemp );
+			/*** Skiping header creation for emails ********/
+			if ( messageStruct.message_class[0] !='E')     /*** TUX : if message is not email ***/
+			{
+				if(messageStruct.message_class[0] !='E' || messageStruct.message_class[0] =='B' || messageStruct.message_class[0] =='I')
+				{
+				if((ibbsSendFile=fopen(chr_glsendtemp,"w"))==NULL)
+				{
+					fprintf(chr_logfile,"Could not open %s\n",chr_glsendtemp);
+					fflush(chr_logfile);
+					printf("\n File can't be open |%s|",chr_glsendtemp);
+					continue;
+				}
+				}
+				if(messageStruct.message_class[0] !='E' && messageStruct.message_class[0] !='B' && messageStruct.message_class[0] !='I')
+				{
+				CreateHdr(ibbsSendFile,&messageStruct,&indicator, l_debug_info_ptr);
+				}
+				if(messageStruct.message_class[0] !='E' || messageStruct.message_class[0] =='B' || messageStruct.message_class[0] =='I')
+				{
+					fflush(ibbsSendFile);
+					memset(chr_chartemp,APL_NULL_CHAR,1000);
+					while(fgets(chr_chartemp,1000,messageSendFile))
+					{
+					fprintf(ibbsSendFile,"%s",chr_chartemp);
+					memset(chr_chartemp,APL_NULL_CHAR,1000);
+				}
+				}
+				printf("\nchr_chartemp is %s\n",chr_chartemp);
+
+				if(messageStruct.message_class[0] !='E' && messageStruct.message_class[0] !='B' && messageStruct.message_class[0] !='I')
+				{
+				if(!strcmp(l_mt_message_sys_params_struct_h.ccs_int_ind,"Y"))
+				{
+					if(messageStruct.message_class[0] =='T')
+						fprintf(ibbsSendFile,"NNNN\n");
+					if (APL_FAILURE == CO_Chk_CntryEnabled(   "TRANSMITTER_HDR",
+								"SWIFTHDR",
+								&int_l_condexists_A,
+								l_debug_info_ptr) )
+
+					{
+						return(APL_FAILURE);
+					}
+					if(messageStruct.message_class[0] =='I')
+						fprintf(ibbsSendFile,"-}\n");
+					else if(int_l_condexists_A==1  )
+					{
+						printf("here inside AA\n");
+						fprintf(ibbsSendFile,"-}\n");
+					}
+					else
+						fprintf(ibbsSendFile,"-\n");
+				}
+
+				else
+					fprintf(ibbsSendFile,"^\n");
+			  }
+				fflush(ibbsSendFile);
+				fclose(ibbsSendFile);
+				//shailesh 12-03-2008 changes to copy the file
+				printf("\n messageStruct.message_class[0] is [%c]",messageStruct.message_class[0]);				
+				if(messageStruct.message_class[0] == 'S') //condition added 05-06-2008 shailesh
+				{
+				strcpy(copy_from_path,chr_swftpglsend);
+				printf("\n messageStruct.msg =[%s]",messageStruct.msg);
+				printf("\n Copying TBS file from path ::%s",copy_from_path);
+
+				if(copy_from_path[strlen(copy_from_path)-1] == '/')
+					sprintf(copy_from_path,"%s%s",copy_from_path,messageStruct.msg);
+				else
+					sprintf(copy_from_path,"%s/%s",copy_from_path,messageStruct.msg);
+
+				printf("\n Copying TBS file  ::%s",copy_from_path);
+				
+				if(CO_ReadToken(chr_finifile,"INTL_MS_OUT_SWIFT_PATH",copy_to_path,l_debug_info_ptr)==APL_FAILURE)
+				{
+				printf("\n Path %s not found",copy_to_path);
+				}
+			
+				printf("\n Before Copying the file %s To %s",copy_from_path,copy_to_path);
+				memset(l_buf2,APL_NULL_CHAR,200);
+				sprintf(l_buf2,"chmod 755 %s",copy_from_path);
+				printf("\n permission command ::[%s]",l_buf2);
+				lretval = system(l_buf2);
+				printf("\n lretval after changing permisssion = [%d]",lretval);
+				memset(l_buf,APL_NULL_CHAR,1000);
+				sprintf(l_buf,"cp -f %s %s",copy_from_path,copy_to_path);
+
+				printf("\n command:: %s",l_buf);
+				lretval = 0;
+				lretval = system(l_buf);
+
+				if( lretval != 0 && lretval !=-1)  /*Changed by kotubabu for Linux Migration(System Command Returns -1 in Linux)*/
+				{
+				printf("\n Error in copying file %s to %s .error = %d",copy_from_path,copy_to_path,lretval);
+				}
+				else
+				{
+				printf("\n File %s copied to %s",copy_from_path,copy_to_path);
+				}
+				}//shailesh 05-06-2008 changes end
+
+			}
+
+			fclose(messageSendFile);
+
+			printf("\n 760 %s**%s** \n", chr_h_trans_dt, chr_h_trans_dt_temp); 
+			strcpy(chr_h_trans_dt, chr_h_trans_dt_temp);
+			strcpy(messageStruct.maker_dt,chr_h_trans_dt);
+			printf("\n 762 ccs=|%s| ******", l_mt_message_sys_params_struct_h.ccs_int_ind );
+			printf("\n message class = |%c| ",messageStruct.message_class[0]);
+
+			/*** inserting record in common_mail table ***/
+			/*** Email Transmitter changes ***/
+
+			if ( messageStruct.message_class[0] == 'E')
+			{ 
+				//Start Changes for single mail for each client - ISKB 604 - AmitB
+				memset(l_temp,APL_NULL_CHAR,201);
+				memset(l_to_list,APL_NULL_CHAR,201); /* ISKB 604 */
+				k=0; /* ISKB 604 */
+				strcpy(l_temp,messageStruct.contact_details);
+				strcat(l_temp,";");
+				CO_SplitStr(l_temp, ';', &l_noofelem, &l_param);
+				printf("\n str = |%s| NO OF ELEMENTS = |%d| ",messageStruct.contact_details,l_noofelem);
+
+				strcpy(l_to_list,"<");
+				for(k=0;k<l_noofelem;k++)
+				{
+					if(k > 0)
+					{
+						strcat(l_to_list,"<");
+					}
+					strcat(l_to_list,l_param[k]);
+					if(k == l_noofelem-1)
+					{
+						strcat(l_to_list,">");
+					}
+					else
+					{
+					strcat(l_to_list,">,");
+					}
+				}
+/*				for(i =0;i<l_noofelem;i ++)
+				{
+*/					//End Changes for single mail for each client -- For loop Removed - ISKB 604 - AmitB
+					printf("\n ******** Inside message class ***");
+					memset( &h_email_struct,NULL,sizeof(common_email));
+					memset(&i_email_struct,0,sizeof(i_email_struct));//h_email_struct to i_email_struct - Changed by Gouse
+					strcpy(h_email_struct.client,messageStruct.client); 
+					printf("\n client = |%s| ", messageStruct.client);
+					strcpy(h_email_struct.file_name,messageStruct.msg); 
+					printf("\n msg= |%s| ", messageStruct.msg);
+					strcpy(h_email_struct.from_mail,"KOTAK BANK"); 
+					memset(l_temp,APL_NULL_CHAR,201);
+					strcpy(l_temp,APL_NULL_STRING);
+				     //Start Changes for single mail for each client - ISKB 604 - AmitB
+/*					if (strlen(l_param[i]) > 0) 
+					{
+						strcat(l_temp,"<");
+						strcat(l_temp,l_param[i]);
+						strcat(l_temp,">");
+					}
+					strcpy(h_email_struct.to_mail,l_temp); 
+					memset(l_temp,APL_NULL_CHAR,201);
+					strcpy(l_temp,APL_NULL_STRING);
+					strcpy(l_temp,APL_NULL_STRING);
+*/					strcpy(h_email_struct.to_mail,l_to_list);
+					printf("\n to_mail= |%s| ", h_email_struct.to_mail);
+					//End Changes for single mail for each client - ISKB 604 - AmitB
+
+					/*shailesh 28-03-2008  ISKB 604  changes for CC field start  */
+					memset(l_cc_list,APL_NULL_CHAR,201); 
+				        k=0; 
+					l_noofelem = 0;
+				        strcpy(l_temp,messageStruct.contact_details1);
+   				         strcat(l_temp,";");
+				         CO_SplitStr(l_temp, ';', &l_noofelem, &l_param_cc);
+				         printf("\n CHECKING CC str = |%s| NO OF ELEMENTS = |%d| ",messageStruct.contact_details1,l_noofelem);
+
+				      if(strlen(messageStruct.contact_details1) > 0)
+			         	{
+					    strcpy(l_cc_list,"<");
+				
+				         for(k=0;k<l_noofelem;k++)
+				         {
+				        	if(k > 0)
+				         	{
+						strcat(l_cc_list,"<");
+				         	}
+				         	strcat(l_cc_list,l_param_cc[k]);
+					        if(k == l_noofelem-1)
+				 	         {
+						    strcat(l_cc_list,">");
+					         }
+					        else
+					         {
+					          strcat(l_cc_list,">,");
+					          }
+				          }
+				      }
+				
+				/*shailesh 28-03-2008 commented since the above code is added
+					if (strlen(messageStruct.contact_details1) > 0) 
+					{
+						strcat(l_temp,"<");
+						strcat(l_temp,messageStruct.contact_details1);
+						strcat(l_temp,">");
+					}
+					strcpy(h_email_struct.cc_mail,l_temp); 
+				*/
+				  strcpy(h_email_struct.cc_mail,l_cc_list); 
+    			/*shailesh 28-03-2008  ISKB 604  changes for CC field end */
+
+					printf("\n ccmail= |%s| ", h_email_struct.cc_mail);
+					/*Isolve ID 321 - Manish M as on 28-May-2007 Changes for subject for the CA event emails */
+					
+					
+               /*added by Deepti  ISKB_4256 : Intimation and Reminder email Messages subject change FOC change:start*/
+               /*added by Siva Ganapathi  ISKB_4256 UAT observation EMAIL_MSG_EVENT_TYPE was added in place of EVENT_TYPE -- started  */
+
+		//strcpy(h_email_struct.subject,"Kotak Mahindra Bank - Corporate Action Intimation"); 
+
+                 printf("/nmessage ind:%s",messageStruct.message_ind);
+                 fflush(stdout);
+					  EXEC SQL SELECT swift_msg_no 
+					  into :lv_swift_msg_no:i_lv_swift_msg_no from
+					  ms_msgent where swift_msg_seqno=:messageStruct.message_ind;
+
+                printf("\n sql error after getting swift_msg_no is %d",sqlca.sqlcode);
+                fflush(stdout);
+
+		IS_ANY_ORA_ERROR
+
+                printf("/n swift message no is!!!! %s",lv_swift_msg_no);
+                fflush(stdout);
+
+                               if((strcmp(lv_swift_msg_no,"564N99")==0)||(strcmp(lv_swift_msg_no,"564N98")==0)||(strcmp(lv_swift_msg_no,"567N02")==0))
+				{
+
+                                       printf("inside IF statement!!!!!!!!!!!!!/n");
+                                       fflush(stdout);
+                                   EXEC SQL SELECT p1.map_desc
+				   ||' - '
+				   ||s.response_days*24
+					||' '
+				   ||'Hrs Reminder for'
+				   ||' '
+				   ||initcap(p2.map_desc)
+				   ||' - '
+				   ||initcap(i.instr_name) into :lv_subject:i_lv_subject
+				   FROM pro_sgenstat p1,
+				   pro_sgenstat p2      ,
+				   caevent c            ,
+				   ms_msgent m          ,
+				   mt_instrument i      ,
+				   mt_message_sys_params s 
+				   WHERE p1.map_type = 'REMINDER_MSG'
+				  AND p1.nation_code  =
+				  (SELECT NATION_CODE FROM mt_common_sys_params
+				  )
+				  AND p2.map_type       = 'EMAIL_MSG_EVENT_TYPE'
+                               /* Added by Vilin Patil ISKB_4256 UAT observation  for ISKB_4256 started*/
+			       /* AND p2.map_val        =nvl(c.op_evt_class,c.ca_event)  */
+                                  AND p2.map_val        = decode(c.ca_event,'SM',nvl(c.entitl_infono,c.ca_event),nvl(c.op_evt_class,c.ca_event))
+                               /* Added by Vilin Patil ISKB_4256 UAT observation  for ISKB_4256 end   */
+				  AND c.corp_id         = m.proc_init
+				  AND i.instr_code      = c.instr_code
+				  AND m.swift_msg_seqno =:messageStruct.message_ind;
+
+                                  printf("\n sql error at remainder msg subject is %d",sqlca.sqlcode);
+                                  fflush(stdout);
+                                   IS_ANY_ORA_ERROR
+				}
+				else
+				{
+				printf("inside ELSE  statement!!!!!!!!!!!!!/n");
+            printf("message_ind is:%s",messageStruct.message_ind);
+				 EXEC SQL select p1.map_desc||' '||initcap(p2.map_desc)||' - '||initcap(i.instr_name) into :lv_subject:i_lv_subject
+					 from pro_sgenstat p1, pro_sgenstat p2, caevent c, ms_msgent m, mt_instrument i 
+					 where p1.map_type = 'CA_INTIMATION' 
+					 and p1.nation_code =(SELECT NATION_CODE FROM mt_common_sys_params)
+					 and p2.map_type = 'EMAIL_MSG_EVENT_TYPE' 
+                                /* Added by Vilin Patil ISKB_4256 UAT observation  for ISKB_4256 started */
+				   /* 	 and p2.map_val =nvl(c.op_evt_class,c.ca_event)  */
+                                         and p2.map_val = decode(c.ca_event,'SM',nvl(c.entitl_infono,c.ca_event),nvl(c.op_evt_class,c.ca_event))
+                                /* Added by Vilin Patil ISKB_4256 UAT observation  for ISKB_4256 end     */
+					 and c.corp_id = m.proc_init
+					 and i.instr_code = c.instr_code
+					 and m.swift_msg_seqno =:messageStruct.message_ind;
+
+                                        printf("\n sql error at intimation msg subject is %d",sqlca.sqlcode);
+                                        fflush(stdout);  
+
+					IS_ANY_ORA_ERROR
+             }
+               printf("\n lv_subject is %s   ",lv_subject);
+               fflush(stdout);  
+               strcpy(h_email_struct.subject,lv_subject);
+       
+					printf("\n subject = |%s| ", h_email_struct.subject);
+                                        fflush(stdout);  
+					/*added by Deepti  ISKB_4256 : Intimation and Reminder email Messages subject change FOC change:end*/
+					/*added by Siva Ganapathi  ISKB_4256 UAT observation EMAIL_MSG_EVENT_TYPE was added in place of EVENT_TYPE -- Ended  */
+
+					strcpy(h_email_struct.bodytext,"Kindly refer below mail"); 
+					strcpy(h_email_struct.signature,APL_NULL_STRING); 
+					strcpy(h_email_struct.file_path,l_str_outmsg); 
+					printf("\n PATH= |%s| ", l_str_outmsg);
+					strcpy(h_email_struct.status,"P"); 
+					strcpy(h_email_struct.trans_dt,APL_NULL_STRING); 
+					strcpy(h_email_struct.attachment,"N"); 
+
+					printf("h_email_struct.to_mail is %s\n",h_email_struct.to_mail);
+					EXEC SQL SELECT LOWER(:h_email_struct.to_mail) INTO :h_email_struct.to_mail:i_email_struct.to_mail FROM DUAL;
+					IS_ANY_ORA_ERROR
+						printf("h_email_struct.to_mail is %s\n",h_email_struct.to_mail);
+					printf("h_email_struct.cc_mail is %s\n",h_email_struct.cc_mail);
+					EXEC SQL SELECT LOWER(:h_email_struct.cc_mail) INTO :h_email_struct.cc_mail:i_email_struct.cc_mail FROM DUAL;
+					IS_ANY_ORA_ERROR
+						printf("h_email_struct.cc_mail is %s\n",h_email_struct.cc_mail);
+
+					/*** Now this struture is filled now insert in table ***/
+					printf("\n Before Insert *************");
+
+					EXEC SQL INSERT INTO COMMON_EMAIL VALUES (:h_email_struct:i_email_struct);
+					printf("sqlca = |%d| ",sqlca.sqlcode);
+
+					IS_ANY_ORA_ERROR
+/*				}
+	*/
+				/****** Copying file to DISP folder ********/
+    				/*Added By Sana for AIX upgrade -- start */
+    				memset(chr_messagesendtemp,APL_NULL_CHAR,PATH_LENGTH); 
+				if(chr_messagesend[strlen(chr_messagesend)-1] == '/')
+                                {
+                                        sprintf(chr_messagesendtemp,"%s%s",l_str_outmsg,messageStruct.msg);
+                                }
+                                else
+                                {
+                                        sprintf(chr_messagesendtemp,"%s/%s",l_str_outmsg,messageStruct.msg);
+                                }
+    				/*Added By Sana for AIX upgrade -- end */
+
+				sprintf(l_buf, "cp %s %s",chr_messagesendtemp,chr_disp_email);
+				if( (system(l_buf)) != 0 && (system(l_buf)) != -1)    /*Changed by kotubabu for Linux Migration(System Command Returns -1 in Linux)*/
+				{
+					fprintf(chr_logfile,"\n Error in copying file %s to %s",chr_messagesendtemp,chr_disp_email);
+					APL_GOBACK_FAIL
+				}
+			}
+
+			if(strcmp(l_mt_message_sys_params_struct_h.ccs_int_ind,"Y"))
+			{
+				printf("\n 758 %s %s\n", chr_h_trans_dt, chr_h_rowid_a);
+				EXEC SQL UPDATE MS_MSGLOG
+					SET STATUS='T',
+						 MAKER_DT=:chr_h_trans_dt
+							 WHERE ROWID=:chr_h_rowid_a;
+				IS_ANY_ORA_ERROR;
+			}
+			else
+			{ 
+				printf("\n 767 \n");
+
+				if(messageStruct.message_class[0] =='B' || messageStruct.message_class[0] =='I')
+				{
+					printf("\n Broker OR Client \n");
+					EXEC SQL UPDATE MS_MSGLOG
+					SET STATUS='M',
+						 MAKER_DT=:chr_h_trans_dt
+							 WHERE ROWID=:chr_h_rowid_a;
+			IS_ANY_ORA_ERROR;
+				}
+				else
+				{	printf("\n NotBroker-NotClient %s %s \n",chr_h_trans_dt_temp,messageStruct.maker_dt);
+				EXEC SQL UPDATE MS_MSGLOG
+					SET STATUS='A',
+						 MAKER_DT=:chr_h_trans_dt_temp   /* Changed by Sana as a part of AIX upgrade */
+							 WHERE ROWID=:chr_h_rowid_a;
+			IS_ANY_ORA_ERROR;
+				}
+		}
+//Retro done by Aastha for ISKB_8508 MQ Enhancement starts
+ /* Added by Satya */
+ IF_COND_EXISTS("MS_MSG","MQ_SUPPORT")
+ {
+   EXEC SQL INSERT INTO MS_MQ_MSGLOG 
+          SELECT MAKER,MAKER_DT,'P',MSG_IN_OUT_IND,MSG,MESSAGE_CLASS,CHECKER,CHECKER_DT,ACCESS_STAMP 
+             FROM MS_MSGLOG  WHERE ROWID=:chr_h_rowid_a;
+   IS_ANY_ORA_ERROR;
+ }
+ /* End - Added by Satya */
+//Retro done by Aastha for ISKB_8508 MQ Enhancement Ends
+
+
+
+	Alert("\n Count of rec %d %d\n", int_countofrec, COMMIT_COUNT_I);
+	if(int_countofrec++==COMMIT_COUNT_I) {
+		if((dp=opendir(chr_swftpglsend)) == NULL)
+		{
+			printf("\n FATAL ERROR : Unable to open dir |%s| Line = |%d| ",chr_swftpglsend,__LINE__);
+			exit(0);
+		}
+		//while(dir=readdir(dp)) {
+		while((dir=readdir(dp))) {//AIX - Warnings Removal
+			strcpy(chr_l_a,chr_swftpglsend);
+			strcat(chr_l_a,dir->d_name);
+			strcpy(chr_l_b,chr_swfglsend);
+			strcat(chr_l_b,dir->d_name);
+			link(chr_l_a,chr_l_b);	
+			unlink(chr_l_a);
+		}
+		closedir(dp);
+		if((dp = opendir(chr_gcntpglsend)) ==NULL)
+		{
+			printf("\n FATAL ERROR : Cannot open directory |%s|",chr_gcntpglsend);
+			exit(0);
+		}
+		//while(dir=readdir(dp))
+		while((dir=readdir(dp)))//AIX - Warnings Removal
+		{
+			strcpy(chr_l_a,chr_gcntpglsend);
+			strcat(chr_l_a,dir->d_name);
+			strcpy(chr_l_b,chr_gcnglsend);
+			strcat(chr_l_b,dir->d_name);
+			link(chr_l_a,chr_l_b);
+			unlink(chr_l_a);
+		}
+		closedir(dp);
+
+		EXEC SQL COMMIT;
+		IS_ANY_ORA_ERROR
+			EXEC SQL SELECT PROCESSING_STATUS , ROWID
+			INTO :chr_h_restart_data:i_restart, :h_ora_rowid:i_ora_rowid
+
+			FROM SYS_BATCHPROC
+			WHERE ROWID = :chr_g_rowid
+			FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+
+		IS_ANY_ORA_ERROR
+
+			if (sqlca.sqlcode <0)
+			{
+				APL_GOBACK_FAIL
+			}
+		APL_GOBACK_SUCCESS
+	}
+
+	EXEC SQL SELECT PROCESSING_STATUS , ROWID
+		INTO :chr_h_restart_data:i_restart, :h_ora_rowid:i_ora_rowid
+
+		FROM SYS_BATCHPROC
+		WHERE ROWID = :chr_g_rowid
+		FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+
+	IS_ANY_ORA_ERROR
+
+		if (sqlca.sqlcode <0)
+		{
+			APL_GOBACK_FAIL
+		}
+	printf("\n end of inner while loop \n");
+}
+	APL_GOBACK_SUCCESS;
+
+RETURN_SUCCESS:
+	{
+		EXEC SQL COMMIT;
+		//printf("\n success ");
+		//CO_ProcMonitor(APL_OUT_FILE,"Exiting MS_Proc_MsgTran successfully\n", l_debug_info_ptr, NULL);
+		CO_FreeErrLst(l_debug_info_ptr);
+	//  fflush(chr_logfile);
+	//	fclose(chr_logfile);
+		fclose(chr_finifile);
+		return APL_SUCCESS;
+	}
+RETURN_FAILURE:
+	{
+		EXEC SQL ROLLBACK;
+		CO_ProcMonitor(APL_OUT_FILE,"Exiting MS_Proc_MsgTran unsuccessfully\n", l_debug_info_ptr, NULL);
+		CO_FreeErrLst(l_debug_info_ptr);
+		printf("\n Failure ");
+	//	fflush(chr_logfile);
+	//	fclose(chr_logfile);
+		fclose(chr_finifile);
+		return APL_FAILURE;
+	}
+}
+
+int main(int argc, char **argv) 
+{
+
+int int_chpid;
+int int_p_funcreturnstate = 0;
+char chr_date[APL_DATE_LEN]	=	APL_NULL_STRING;
+char chr_l_sys_date_time[APL_DATE_LEN]	=	APL_NULL_STRING;
+char chr_l_statinfo[61]	= APL_NULL_STRING;
+char chr_inifile[PATH_LENGTH],chr_l_uname[APL_USERID_LEN],chr_l_passwd[100],chr_buffer[KEY_LENGTH];
+char chr_custody_id_b[APL_USERID_LEN];
+char l_sleep_time[5] = APL_NULL_STRING; /* Retrofit done by Gaurang on 07.09.2017 - Performance Optimization - ISKB_7759*/
+DEBUG_INFO_STRUCT_H *l_debuginfo = NULL;
+DEBUG_INFO_STRUCT_H **l_debug_info_ptr;
+DEBUG_INFO_STRUCT_H *l_debuglist;
+INTL_ENV_DATA_STRUCT_H l_intl_environ_data_h;
+INTL_ENV_DATA_STRUCT_H p_intl_envdatastruct_h;
+FILE *chr_finifile = (FILE*)NULL;
+
+FILE *chr_logfile=NULL; // For BOJ
+
+l_debug_info_ptr=&l_debuginfo;
+
+/*** SUBU For AIX ***/
+memset(p_intl_envdatastruct_h.auth_req,APL_NULL_CHAR,sizeof(p_intl_envdatastruct_h.auth_req));
+memset(p_intl_envdatastruct_h.subprocess,APL_NULL_CHAR,sizeof(p_intl_envdatastruct_h.subprocess));
+memset(p_intl_envdatastruct_h.h_process,APL_NULL_CHAR,sizeof(p_intl_envdatastruct_h.h_process));
+/*** SUBU For AIX ***/
+
+strcpy(p_intl_envdatastruct_h.usr,"SYSTEM");
+strcpy(p_intl_envdatastruct_h.h_mode,APL_NULL_STRING);
+if(argc == 1)
+{
+	strcpy(p_intl_envdatastruct_h.processtion,"Message Transmitter Daemon");
+}
+else
+{
+	strcpy(p_intl_envdatastruct_h.processtion, argv[5]);
+}
+strcpy(p_intl_envdatastruct_h.auth_req,APL_NULL_STRING);
+strcpy(p_intl_envdatastruct_h.subprocess,APL_NULL_STRING);
+strcpy(p_intl_envdatastruct_h.h_process,APL_NULL_STRING);
+
+memset(chr_inifile,APL_NULL_CHAR,PATH_LENGTH);
+memset(chr_buffer,APL_NULL_CHAR,KEY_LENGTH);
+memset(chr_l_uname,APL_NULL_CHAR,40);
+memset(chr_l_passwd,APL_NULL_CHAR,40);
+EXEC SQL VAR chr_h_restart_data IS STRING;
+EXEC SQL VAR h_ora_rowid IS STRING;
+
+EXEC SQL VAR chr_l_uname IS STRING;
+EXEC SQL VAR chr_l_passwd IS STRING;
+EXEC SQL VAR chr_date IS STRING;
+
+strcpy(chr_inifile,getenv("INTL_ROOT_PATH"));
+strcat(chr_inifile,"/intl_sun.cfg");
+if ( (chr_finifile = fopen(chr_inifile,"r") ) == NULL)
+        APL_GOBACK_FAIL;
+
+APL_FETCH_DB_LOGIN_DETAILS(chr_finifile,chr_custody_id_b,chr_l_uname,chr_l_passwd,APL_OUT_FILE,l_debug_info_ptr);
+EXEC SQL CONNECT :chr_l_uname IDENTIFIED BY :chr_l_passwd;
+IS_ANY_ORA_ERROR
+strcpy(chr_g_progname,argv[0]);
+if(argc > 1) strcpy(chr_g_key,argv[1]);
+if(argc > 2) strcpy(chr_g_startdate,argv[2]);
+ 
+EXEC SQL VAR chr_g_swflineid IS STRING;
+EXEC SQL VAR chr_g_progname IS STRING;
+EXEC SQL VAR chr_g_key IS STRING;
+EXEC SQL VAR chr_g_startdate IS STRING;
+fclose(chr_finifile);
+printf("\n ********* get sys time %d****** \n", argc);
+	if(CO_RtvSysDt(chr_date,l_debug_info_ptr)==APL_FAILURE)
+	{
+		APL_GOBACK_FAIL
+	}
+if(argc == 1)
+{
+		  argv[1]=S_KEY;
+		  argv[2]=chr_date;
+		  argv[3]=S_USERID;
+		  argv[4]=S_MODE;
+		  argv[5]="Message Transmitter Daemon";
+		  argv[6]=S_AUTH_REQ;
+		  argv[7]=S_SUBFUN;
+		  argv[8]=S_ACTION;
+		  argv[9]=S_FUNCPARAMS;
+}
+printf("\n Get sys params ********* ");	
+	if ( CO_RtvSysParams(l_debug_info_ptr) == APL_FAILURE)
+		APL_GOBACK_FAIL
+	printf("\n 940 ccs =|%s| *******", l_mt_message_sys_params_struct_h.ccs_int_ind );
+       if(argc != 1)
+       {
+               EXEC SQL SELECT PROCESSING_STATUS , ROWID
+                                INTO :chr_h_restart_data:i_restart, :h_ora_rowid:i_ora_rowid
+                                FROM SYS_BATCHPROC
+                                WHERE ( PROCESS_NAME = :argv[0]
+                                AND PROC_INIT = :argv[1]
+                                AND STARTDATE = :argv[2]
+                                AND STATUS = 'started' )
+                                FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+
+               if (sqlca.sqlcode <0)
+               {
+                    APL_GOBACK_FAIL
+               }
+          }
+          else
+          {
+               if(APL_SUCCESS ==  EI_Proc_BatchRestart(argv[0],
+                                                  argv[0],
+                                                  APL_NULL_STRING,
+                                                  &int_p_funcreturnstate,
+                                                  &l_debuginfo,
+               /** SUBU FOR AIX Added & ***/                                   &p_intl_envdatastruct_h))
+                {
+                      if(int_p_funcreturnstate == 11 || int_p_funcreturnstate == 10)
+                      {
+                                EXEC SQL SELECT PROCESSING_STATUS , ROWID
+                                INTO :chr_h_restart_data:i_restart, :h_ora_rowid:i_ora_rowid
+
+                                FROM SYS_BATCHPROC
+                                WHERE ( PROCESS_NAME = :argv[0]
+                                AND STATUS = 'started' )
+                                FOR UPDATE OF PROCESSING_STATUS,STATUS,STAT_DET;
+
+
+                                if (sqlca.sqlcode <0)
+                                {
+                                    APL_GOBACK_FAIL
+                                 }
+                       }
+                       else
+                       {
+                             APL_GOBACK_FAIL
+                       }
+
+                }
+                else
+                {
+                        APL_GOBACK_FAIL
+                }
+       }
+
+strcpy(chr_g_rowid,h_ora_rowid);
+
+
+EXEC SQL SELECT RTRIM(LTRIM(FIELD_VAL))
+			  INTO :chr_g_swflineid
+			  FROM PRO_GSSPLVAL
+			  WHERE MAIN_FUN = 'MSGLINEID'
+			  AND SUB_PROCESS = 'SWIFT'
+			  AND NATION=:g_mt_commonsys_params_struct_h.nation_code;
+
+
+IS_ANY_ORA_ERROR
+
+if( APL_ZERO_RESULT_SET)
+	{ strcpy(chr_g_swflineid, l_mt_message_sys_params_struct_h.line_ind); }
+
+/***** Retrofit done by Gaurang on 07.09.2017 - Performance Optimization-ISKB_7759 
+Sleep time defined in PRO_SGENSTAT to be used
+Start ***/
+EXEC SQL
+SELECT	MAP_VAL INTO :l_sleep_time
+FROM		PRO_SGENSTAT
+WHERE		MAP_TYPE = 'MSTRANS_SLEEP_TIME'
+				AND NATION_CODE = 'XX';
+IS_ANY_ORA_ERROR
+
+if(APL_ZERO_RESULT_SET)
+{
+	strcpy(l_sleep_time, "60");
+}
+/* Retrofit done by Gaurang on 07.09.2017 - Performance Optimization -ISKB_7759- End */
+printf("\n *** Before while loop ********* \n");
+
+/* Added for BOJ -- Moved from function MS_Proc_MsgTran() to main() */
+
+	if(!chr_logfile)
+	{
+		if(CO_Rtv_RptFileName("4G",
+					APL_LOGFILE_DESC,
+					100,
+					argv[5],
+					argv,
+					&chr_logfile,
+					l_debug_info_ptr)==APL_FAILURE)
+		{
+			return(APL_FAILURE);
+		}
+	}
+
+Alert("\n MS_Proc_MsgTran : Before main while \n");
+while(1) {
+/*printf("\n in while loop 1001\n");*/
+	Alert("JC::: New while loop started...");
+       EXEC SQL UPDATE SYS_BATCHPROC set STAT_DET = 'Transmitting' where
+		rowid = :h_ora_rowid;
+               if (sqlca.sqlcode <0)
+               {
+                    APL_GOBACK_FAIL
+               }
+
+
+if(MS_Proc_MsgTran(argv, chr_logfile,l_debug_info_ptr,&l_intl_environ_data_h)==APL_SUCCESS)
+	EXEC SQL COMMIT;
+else
+	EXEC SQL ROLLBACK;
+       EXEC SQL SELECT PROCESSING_STATUS 
+                INTO :chr_h_restart_data:i_restart
+		FROM SYS_BATCHPROC where rowid = :h_ora_rowid
+		FOR UPDATE OF STAT_DET;
+               if (sqlca.sqlcode <0)
+               {
+                    APL_GOBACK_FAIL
+               }
+       EXEC SQL UPDATE SYS_BATCHPROC set STAT_DET = 'Acknowledgement' where
+		rowid = :h_ora_rowid;
+               if (sqlca.sqlcode <0)
+               {
+                    APL_GOBACK_FAIL
+               }
+		/*** Removed Acknowledge code ****/
+       EXEC SQL SELECT PROCESSING_STATUS 
+                INTO :chr_h_restart_data:i_restart
+		FROM SYS_BATCHPROC where rowid = :h_ora_rowid
+		FOR UPDATE OF STAT_DET;
+               if (sqlca.sqlcode <0)
+               {
+                    APL_GOBACK_FAIL
+               }
+        if (argc != 1)
+         break;
+
+	            
+
+				 if( APL_FAILURE == CO_RtvSysDtTime(chr_l_sys_date_time, l_debug_info_ptr))
+							APL_GOBACK_FAIL;
+	   	    memset(chr_l_statinfo,APL_NULL_CHAR,61);
+				 strcpy(chr_l_statinfo, "wait : ");
+	   	    strcat(chr_l_statinfo, chr_l_sys_date_time);
+
+       EXEC SQL UPDATE SYS_BATCHPROC set STAT_DET = :chr_l_statinfo 
+                where rowid = :h_ora_rowid;
+               if (sqlca.sqlcode <0)
+               {
+                    APL_GOBACK_FAIL
+               }
+       
+       EXEC SQL COMMIT;
+       EXEC SQL SELECT PROCESSING_STATUS 
+                INTO :chr_h_restart_data:i_restart
+		FROM SYS_BATCHPROC where rowid = :h_ora_rowid
+		FOR UPDATE OF STAT_DET;
+               if (sqlca.sqlcode <0)
+               {
+                    APL_GOBACK_FAIL
+               }
+//sleep(SLEEP_TIME);
+Alert("JC::: Sleeping for %d seconds...\n", atoi(l_sleep_time));
+sleep(atoi(l_sleep_time)); /* Retrofit done by Gaurang on 07.09.2017 - Performance Optimization ISKB_7759*/
+}
+   EXEC SQL UPDATE SYS_BATCHPROC
+                                SET STATUS              ='completed'
+                                WHERE   ROWID           = :h_ora_rowid;
+
+        IS_ANY_ORA_ERROR
+
+        if (sqlca.sqlcode == 1403)
+   {
+      APL_GOBACK_FAIL
+   }
+
+APL_GOBACK_SUCCESS // AIX - Warnings
+
+RETURN_SUCCESS:
+	EXEC SQL COMMIT;
+	fflush(chr_logfile);
+	fclose(chr_logfile);
+	exit(0);
+RETURN_FAILURE:
+	fflush(chr_logfile);
+	fclose(chr_logfile);
+	exit(-1);
+}

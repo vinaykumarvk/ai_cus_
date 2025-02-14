@@ -1,0 +1,4419 @@
+
+
+
+
+
+
+#include "CO_HostStructdef.h"
+#include "CA_Common.h"
+
+#define L_COMMITSIZE 1000
+#define L_DEFCCY_FLG "Y"
+EXEC SQL INCLUDE SQLCA.H;
+
+
+
+
+int DL_Mod_AccEntNew(	char	*p_batch_no,
+							PRO_ACCTENT_STRUCT_H	*p_pro_acctent_struct_h_a,
+							DEBUG_INFO_STRUCT_H **l_debug_info_ptr )
+{
+	static char	chr_l_batchno[5]	= APL_NULL_STRING;
+
+   #ifdef SYS_DEBUG
+      printf( "Entered Function DL_Mod_AccEntNew\n");
+	#endif
+
+	if ( !strlen(p_pro_acctent_struct_h_a->proc_num) )
+	{
+		if ( !strlen(chr_l_batchno) )
+		{
+			if ( APL_FAILURE == IV_Proc_GenBatchNoFn(	chr_l_batchno,
+															l_debug_info_ptr ) )
+			{
+				APL_GOBACK_FAIL;
+			}
+			
+			strcpy( p_batch_no, chr_l_batchno);
+			strcpy( p_pro_acctent_struct_h_a->proc_num, chr_l_batchno );
+		
+			if ( APL_FAILURE == IV_Mod_ActEntNew(	p_pro_acctent_struct_h_a,
+																l_debug_info_ptr ) )
+			{
+				APL_GOBACK_FAIL;
+			}
+		}
+		else
+		{
+			strcpy( p_batch_no, chr_l_batchno);
+			strcpy( p_pro_acctent_struct_h_a->proc_num, chr_l_batchno );
+		
+			if ( APL_FAILURE == IV_Mod_ActEntNew(	p_pro_acctent_struct_h_a,
+																l_debug_info_ptr ) )
+			{
+				APL_GOBACK_FAIL;
+			}
+		}
+	}
+	else
+	{
+		if ( APL_FAILURE == IV_Mod_ActEntNew(	p_pro_acctent_struct_h_a,
+															l_debug_info_ptr ) )
+		{
+			APL_GOBACK_FAIL;
+		}
+	}
+
+	APL_GOBACK_SUCCESS;
+
+   RETURN_SUCCESS :
+
+      #ifdef SYS_DEBUG
+         printf( "Leaving Function DL_Mod_AccEntNew with success\n");
+		#endif
+
+      return(APL_SUCCESS);
+
+   RETURN_FAILURE :
+
+      #ifdef SYS_DEBUG
+         printf( "Leaving Function DL_Mod_AccEntNew with errors\n");
+		#endif
+
+      return(APL_FAILURE);
+
+}
+
+
+
+int DL_Proc_DateFmt(	char	*p_sdate,
+							char	*p_tdate,
+							DEBUG_INFO_STRUCT_H **l_debug_info_ptr )
+{
+	char	chr_l_shortdate[SETL_DATE_LEN]	= APL_NULL_STRING;
+
+   #ifdef SYS_DEBUG
+      printf( "Entered Function DL_Proc_DateFmt\n");
+	#endif
+
+	EXEC SQL SELECT TO_CHAR(TO_DATE(:p_sdate), 'YYYYMMDD')
+	INTO :chr_l_shortdate
+	FROM DUAL;
+
+	IS_ANY_ORA_ERROR
+
+	strcpy(p_tdate, chr_l_shortdate);
+
+	APL_GOBACK_SUCCESS
+
+   RETURN_SUCCESS :
+
+      #ifdef SYS_DEBUG
+         printf( "Leaving Function DL_Proc_DateFmt with success\n");
+		#endif
+
+      return(APL_SUCCESS);
+
+   RETURN_FAILURE :
+
+      #ifdef SYS_DEBUG
+         printf( "Leaving Function DL_Proc_DateFmt with errors\n");
+		#endif
+
+      return(APL_FAILURE);
+
+}
+
+
+
+int DL_Rtv_OthFrmOrd(	char *p_batch_no,
+							char *p_deal_rowid,
+							FILE *p_logfile,
+							char **argv,
+							int  *p_runseq,
+							double *p_dct,
+							double *p_cct, 
+							INTL_ENV_DATA_STRUCT_H *p_intl_envdatastruct_h,
+							DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	struct sqlca sqlca;
+	PRO_ACCTENT_STRUCT_H	*l_pro_acctent_struct_ha				=	NULL;
+	char		chr_l_h_trd_client[APL_CLIENT_LENGTH]			=	APL_NULL_STRING;
+	char		chr_l_h_trd_refno[APL_TXNREFNO_LEN]			=	APL_NULL_STRING;
+	char		chr_l_h_trd_inputdt[APL_DATE_LEN]				=	APL_NULL_STRING;
+	char		chr_l_h_trd_trcode[APL_FLAG_LENGTH]				=	APL_NULL_STRING;
+	char		chr_l_h_trd_ccycode[APL_CCYCODE_LEN]			=	APL_NULL_STRING;
+	char		chr_l_h_ordt_tax[APL_FLAG_LENGTH]					=	APL_NULL_STRING;
+	char		chr_l_h_stx_client[GL_ACCOUNT_LEN]		=	APL_NULL_STRING;
+	char		chr_l_h_commn_client[GL_ACCOUNT_LEN]	=	APL_NULL_STRING;
+	char		chr_l_h_tpay_client[GL_ACCOUNT_LEN]		=	APL_NULL_STRING;
+	char		chr_l_h_texp_client[GL_ACCOUNT_LEN]		=	APL_NULL_STRING;
+	char		chr_l_sysdate_b[APL_DATE_LEN]						=	APL_NULL_STRING;
+	char		chr_l_v_sysdate[SETL_DATE_LEN]				=	APL_NULL_STRING;
+	double	dbl_l_comm											=	0;
+	double	l_round_comm									=	0;
+	double	l_taxpay											=	0;
+	double	l_round_taxpay									=	0;
+	double	l_taxexp											=	0;
+	double	l_round_taxexp									=	0;
+	double	l_sundryamount									=	0;
+	double	l_iseamount										=	0;
+	double	l_lcy												=	0;
+	double	l_h_trd_brokercomm								=	0;
+	double	l_h_trd_amount									=	0;
+	short		l_i_trd_brkcomm								=	0;
+	short		l_i_trd_account								=	0;
+	short		l_i_trd_refno									=	0;
+	short		l_i_trd_inputdt								=	0;
+	short		l_i_trd_trcode									=	0;
+	short		l_i_trd_amount									=	0;
+	short		l_i_trd_ccycode								=	0;
+	short		l_i_ordt_tax									=	0;
+	short		l_i_stx_account								=	0;
+	short		l_i_commn_account								=	0;
+	short		l_i_tpay_account								=	0;
+	short		l_i_texp_account								=	0;
+	short		int_l_condexists_A									=	0;
+	int		int_l_ccy_decimallen								=	0;
+
+	#ifdef SYS_DEBUG
+		printf(	"Entered Function DL_Rtv_OthFrmOrd\n" );
+	#endif
+
+	sqlca.sqlcode = 0;
+
+	
+
+	EXEC SQL VAR	chr_l_h_trd_client	IS STRING;
+	EXEC SQL VAR 	chr_l_h_trd_refno		IS STRING;
+	EXEC SQL VAR 	chr_l_h_trd_inputdt	IS STRING;
+	EXEC SQL VAR 	chr_l_h_trd_trcode		IS STRING;
+	EXEC SQL VAR 	chr_l_h_trd_ccycode	IS STRING;
+	EXEC SQL VAR 	chr_l_h_ordt_tax		IS STRING;
+	EXEC SQL VAR 	chr_l_h_stx_client	IS STRING;
+	EXEC SQL VAR 	chr_l_h_commn_client	IS STRING;
+	EXEC SQL VAR 	chr_l_h_tpay_client	IS STRING;
+	EXEC SQL VAR 	chr_l_h_texp_client	IS STRING;
+
+	
+
+	l_pro_acctent_struct_ha = (PRO_ACCTENT_STRUCT_H*)calloc(1,sizeof(PRO_ACCTENT_STRUCT_H));
+	APL_MALLOC_FAIL(l_pro_acctent_struct_ha);
+
+	
+
+	EXEC SQL SELECT	BROKERCOMM,
+							CLIENT,
+							IDENTIY_NO,
+							DATEOF_INPUT,
+							AMOUNT,
+							DEAL_CD,
+							CURRENCY_CD
+				INTO		:l_h_trd_brokercomm:l_i_trd_brkcomm,
+							:chr_l_h_trd_client:l_i_trd_account,
+							:chr_l_h_trd_refno:l_i_trd_refno,
+							:chr_l_h_trd_inputdt:l_i_trd_inputdt,
+							:l_h_trd_amount:l_i_trd_amount,
+							:chr_l_h_trd_trcode:l_i_trd_trcode,
+							:chr_l_h_trd_ccycode:l_i_trd_ccycode
+				FROM		DL_DEAL
+				WHERE		ROWID	=	:p_deal_rowid;
+
+	IS_ANY_ORA_ERROR;
+
+	dbl_l_comm	=	l_h_trd_brokercomm;
+	l_taxpay	=	l_h_trd_brokercomm * l_mt_core_sys_params_struct_h.comm_tax_rt /100;
+
+	
+
+	EXEC SQL DECLARE OrdtDetCurs CURSOR FOR
+				SELECT TAX	
+				FROM		OR_EXECORDER
+				WHERE		CLIENT	=	:chr_l_h_trd_client 
+				AND		IDENTIY_NO		=	:chr_l_h_trd_refno
+				AND		EXEC_DATE	=	:chr_l_h_trd_inputdt;
+	
+	EXEC SQL OPEN OrdtDetCurs;
+
+	IS_ANY_ORA_ERROR
+
+	EXEC SQL FETCH	OrdtDetCurs INTO	:chr_l_h_ordt_tax:l_i_ordt_tax;
+
+	IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_REC_NOTFND,
+														"Ord. Exec. Dtls.",
+														APL_NULL_STRING,
+														APL_NULL_STRING);
+
+	if ( chr_l_h_ordt_tax[0] == 'N' )
+	{
+		l_taxexp = l_h_trd_brokercomm * l_mt_core_sys_params_struct_h.comm_tax_rt / 100;
+	}
+
+	EXEC SQL CLOSE OrdtDetCurs;
+
+	
+
+	int_l_condexists_A = 0;
+	
+	if ( APL_FAILURE == CO_Chk_CntryEnabled(	"ACC_ENTRIES",
+														"CALCOTH_SNDRYAMT_RU",
+														&int_l_condexists_A,
+														l_debug_info_ptr ) )
+	{
+		APL_GOBACK_FAIL;
+	}
+
+	if ( int_l_condexists_A == 0 ) 
+	{
+		if ( chr_l_h_trd_trcode[0] == DEALCD_DVP || chr_l_h_trd_trcode[0] == DEALCD_CR || chr_l_h_trd_trcode[0] == DEALCD_RCR) 
+		{
+			l_sundryamount	=	l_h_trd_amount;
+		}
+		else
+		{
+			l_sundryamount	=	-1 * l_h_trd_amount;
+		}
+	}
+	else
+	{
+		if ( chr_l_h_trd_trcode[0] == DEALCD_DVP || chr_l_h_trd_trcode[0] == DEALCD_CR || chr_l_h_trd_trcode[0] == DEALCD_RCR ) 
+		{
+			l_sundryamount	=	-1 * l_h_trd_amount;
+		}
+		else
+		{
+			l_sundryamount	=	l_h_trd_amount;
+		}
+	}
+
+	
+
+	if ( APL_FAILURE == CO_RtvSysDt(	chr_l_sysdate_b,
+														l_debug_info_ptr ) )
+	{
+		APL_GOBACK_FAIL;
+	}
+
+	
+
+	if ( APL_FAILURE == CR_Rtv_CCYFldVal(	chr_l_h_trd_ccycode,
+													"decimallen",
+													&int_l_ccy_decimallen,
+													l_debug_info_ptr ) )
+	{
+		APL_GOBACK_FAIL;
+	} 
+
+	CO_Round(dbl_l_comm, int_l_ccy_decimallen, &l_round_comm );
+	CO_Round(l_taxpay, int_l_ccy_decimallen, &l_round_taxpay );
+	CO_Round(l_taxexp, int_l_ccy_decimallen, &l_round_taxexp );
+
+	
+
+	EXEC SQL SELECT	STX_CLIENT,
+							COMM_CLT,
+							TPAY_CLIENT,
+							TEXP_CLIENT
+				INTO		:chr_l_h_stx_client:l_i_stx_account,
+							:chr_l_h_commn_client:l_i_commn_account,
+							:chr_l_h_tpay_client:l_i_tpay_account,
+							:chr_l_h_texp_client:l_i_texp_account
+				FROM		MT_CLIENT_ENTRIES;
+
+	IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_ACCNOT_FND,
+														"Setup Summary A/Cs",
+														APL_NULL_STRING,
+														APL_NULL_STRING );
+
+	memset( l_pro_acctent_struct_ha, NULL, sizeof(PRO_ACCTENT_STRUCT_H) );
+
+	l_iseamount = l_sundryamount - l_round_comm - l_round_taxpay + l_round_taxexp;
+
+	if ( l_iseamount < 0 )
+	{
+		l_lcy = -1 * l_iseamount;
+	}
+	else
+	{
+		l_lcy = l_iseamount;
+	}
+
+	if ( l_iseamount < 0 )
+	{
+		*p_dct += -1 * l_iseamount;
+	}
+	else
+	{
+		*p_cct += l_iseamount;
+	}
+
+	l_pro_acctent_struct_ha->module_ind = 'C';
+	strcpy( l_pro_acctent_struct_ha->brnch_cd, g_mt_commonsys_params_struct_h.brnch_cd );
+   strcpy( l_pro_acctent_struct_ha->inden_num,APL_NULL_STRING);
+	strcpy( l_pro_acctent_struct_ha->client, chr_l_h_stx_client );
+	strcpy( l_pro_acctent_struct_ha->curr_cd, AE_CCYCD );	
+	l_pro_acctent_struct_ha->lcl_amount = l_lcy;
+	if ( l_iseamount < 0 )
+	{
+		strcpy( l_pro_acctent_struct_ha->deal_cd, AE_CREDIT_DLCD );
+		l_pro_acctent_struct_ha->db_cr_ind =  AE_DEBIT_IND ;
+	}
+	else
+	{
+		strcpy( l_pro_acctent_struct_ha->deal_cd, AE_DEBIT_DLCD );
+		l_pro_acctent_struct_ha->db_cr_ind =  AE_CREDIT_IND ;
+	}
+
+	if (APL_FAILURE == DL_Proc_DateFmt(	chr_l_sysdate_b, 
+													chr_l_v_sysdate, 
+													l_debug_info_ptr ))
+	{
+		APL_GOBACK_FAIL
+	}
+	strcpy( l_pro_acctent_struct_ha->val_date, chr_l_v_sysdate );
+
+	strcpy( l_pro_acctent_struct_ha->description, "A/C" );
+	strcat( l_pro_acctent_struct_ha->description, chr_l_h_stx_client );
+
+	strcpy( l_pro_acctent_struct_ha->proc_num, p_batch_no );
+	l_pro_acctent_struct_ha->rec_refer = AE_SUMMARY_IND ;
+	strcpy( l_pro_acctent_struct_ha->proc_dt, chr_l_sysdate_b );
+
+	l_pro_acctent_struct_ha->fccy_amt = 0;
+	l_pro_acctent_struct_ha->exchg_rt = 0;
+	strcpy( l_pro_acctent_struct_ha->spl_clt_cd, APL_NULL_STRING );
+	l_pro_acctent_struct_ha->status_ind = AE_GEN_IND_CHAR ;
+	l_pro_acctent_struct_ha->report_amt = 0;
+	l_pro_acctent_struct_ha->report_clt = 0;
+	l_pro_acctent_struct_ha->report_tax = 0;
+	l_pro_acctent_struct_ha->report_ser = 0;
+	l_pro_acctent_struct_ha->rep_exg_rt = 0;
+	strcpy( l_pro_acctent_struct_ha->deal_ident, APL_NULL_STRING );
+
+	if ( APL_FAILURE == DL_Mod_AccEntNew(	p_batch_no,
+													l_pro_acctent_struct_ha, 
+													l_debug_info_ptr ) )
+	{
+		APL_GOBACK_FAIL;
+	}
+
+	
+	
+	memset( l_pro_acctent_struct_ha, NULL, sizeof(PRO_ACCTENT_STRUCT_H) );
+
+	if ( l_round_comm < 0 )
+	{
+		l_lcy = -1 * l_round_comm;
+	}
+	else
+	{
+		l_lcy = l_round_comm;
+	}
+
+	*p_cct += l_round_comm;
+
+	l_pro_acctent_struct_ha->module_ind = 'C';
+	strcpy( l_pro_acctent_struct_ha->brnch_cd, g_mt_commonsys_params_struct_h.brnch_cd );
+	strcpy( l_pro_acctent_struct_ha->inden_num,APL_NULL_STRING);
+	strcpy( l_pro_acctent_struct_ha->client, chr_l_h_commn_client );
+	strcpy( l_pro_acctent_struct_ha->curr_cd, AE_CCYCD );	
+	l_pro_acctent_struct_ha->lcl_amount = l_lcy;
+	strcpy( l_pro_acctent_struct_ha->deal_cd, AE_COMMON_DLCD );
+	l_pro_acctent_struct_ha->db_cr_ind =  AE_CREDIT_IND ;
+	strcpy( l_pro_acctent_struct_ha->val_date, chr_l_v_sysdate );
+	strcpy( l_pro_acctent_struct_ha->description, "COMMISSIONS RECEIVED" );
+	strcpy( l_pro_acctent_struct_ha->proc_num, p_batch_no );
+	l_pro_acctent_struct_ha->rec_refer = AE_SUMMARY_IND ;
+	strcpy( l_pro_acctent_struct_ha->proc_dt, chr_l_sysdate_b );
+
+	l_pro_acctent_struct_ha->fccy_amt = 0;
+	l_pro_acctent_struct_ha->exchg_rt = 0;
+	strcpy( l_pro_acctent_struct_ha->spl_clt_cd, "653830" );
+	l_pro_acctent_struct_ha->status_ind = AE_GEN_IND_CHAR ;
+	l_pro_acctent_struct_ha->report_amt = 0;
+	l_pro_acctent_struct_ha->report_clt = 0;
+	l_pro_acctent_struct_ha->report_tax = 0;
+	l_pro_acctent_struct_ha->report_ser = 0;
+	l_pro_acctent_struct_ha->rep_exg_rt = 0;
+	strcpy( l_pro_acctent_struct_ha->deal_ident, APL_NULL_STRING );
+
+	if ( APL_FAILURE == DL_Mod_AccEntNew(	p_batch_no,
+													l_pro_acctent_struct_ha, 
+													l_debug_info_ptr ) )
+	{
+		APL_GOBACK_FAIL;
+	}
+
+	
+
+	memset( l_pro_acctent_struct_ha, NULL, sizeof(PRO_ACCTENT_STRUCT_H) );
+
+	if ( l_round_taxpay < 0 )
+	{
+		l_lcy = -1 * l_round_taxpay;
+	}
+	else
+	{
+		l_lcy = l_round_taxpay;
+	}
+
+	*p_cct += l_round_taxpay;
+
+	l_pro_acctent_struct_ha->module_ind = 'C';
+	strcpy( l_pro_acctent_struct_ha->brnch_cd, g_mt_commonsys_params_struct_h.brnch_cd );
+	strcpy( l_pro_acctent_struct_ha->inden_num,APL_NULL_STRING);
+	strcpy( l_pro_acctent_struct_ha->client, chr_l_h_tpay_client );
+	strcpy( l_pro_acctent_struct_ha->curr_cd, AE_CCYCD );	
+	l_pro_acctent_struct_ha->lcl_amount = l_lcy;
+	strcpy( l_pro_acctent_struct_ha->deal_cd, AE_TAX_DEALCD );
+	l_pro_acctent_struct_ha->db_cr_ind = AE_CREDIT_IND ;
+	strcpy( l_pro_acctent_struct_ha->val_date, chr_l_v_sysdate );
+	strcpy( l_pro_acctent_struct_ha->description, "TAX PAYABLE" );
+	strcpy( l_pro_acctent_struct_ha->proc_num, p_batch_no );
+	l_pro_acctent_struct_ha->rec_refer = AE_SUMMARY_IND ;
+	strcpy( l_pro_acctent_struct_ha->proc_dt, chr_l_sysdate_b );
+
+	l_pro_acctent_struct_ha->fccy_amt = 0;
+	l_pro_acctent_struct_ha->exchg_rt = 0;
+	strcpy( l_pro_acctent_struct_ha->spl_clt_cd, APL_NULL_STRING );
+	l_pro_acctent_struct_ha->status_ind = AE_GEN_IND_CHAR ;
+	l_pro_acctent_struct_ha->report_amt = 0;
+	l_pro_acctent_struct_ha->report_clt = 0;
+	l_pro_acctent_struct_ha->report_tax = 0;
+	l_pro_acctent_struct_ha->report_ser = 0;
+	l_pro_acctent_struct_ha->rep_exg_rt = 0;
+	strcpy( l_pro_acctent_struct_ha->deal_ident, APL_NULL_STRING );
+
+	if ( APL_FAILURE == DL_Mod_AccEntNew(	p_batch_no,
+													l_pro_acctent_struct_ha, 
+													l_debug_info_ptr ) )
+	{
+		APL_GOBACK_FAIL;
+	}
+
+	
+
+	if ( l_round_taxexp > 0 )
+	{
+		memset( l_pro_acctent_struct_ha, NULL, sizeof(PRO_ACCTENT_STRUCT_H) );
+		l_lcy = l_round_taxexp;
+
+		*p_dct += l_round_taxexp;
+		l_pro_acctent_struct_ha->module_ind = 'C';
+		strcpy( l_pro_acctent_struct_ha->brnch_cd, g_mt_commonsys_params_struct_h.brnch_cd );
+		strcpy( l_pro_acctent_struct_ha->inden_num,APL_NULL_STRING);
+		strcpy( l_pro_acctent_struct_ha->client, chr_l_h_texp_client );
+		strcpy( l_pro_acctent_struct_ha->curr_cd, AE_CCYCD );	
+		l_pro_acctent_struct_ha->lcl_amount = l_lcy;
+		strcpy( l_pro_acctent_struct_ha->deal_cd, AE_TAX_DEALCD );
+		l_pro_acctent_struct_ha->db_cr_ind =  AE_DEBIT_IND ;
+		strcpy( l_pro_acctent_struct_ha->val_date, chr_l_v_sysdate );
+		strcpy( l_pro_acctent_struct_ha->description, "TAX EXPENSE" );
+		strcpy( l_pro_acctent_struct_ha->proc_num, p_batch_no );
+		l_pro_acctent_struct_ha->rec_refer = AE_SUMMARY_IND ;
+		strcpy( l_pro_acctent_struct_ha->proc_dt, chr_l_sysdate_b );
+
+		l_pro_acctent_struct_ha->fccy_amt = 0;
+		l_pro_acctent_struct_ha->exchg_rt = 0;
+		strcpy( l_pro_acctent_struct_ha->spl_clt_cd, "652408" );
+		l_pro_acctent_struct_ha->status_ind = AE_GEN_IND_CHAR ;
+		l_pro_acctent_struct_ha->report_amt = 0;
+		l_pro_acctent_struct_ha->report_clt = 0;
+		l_pro_acctent_struct_ha->report_tax = 0;
+		l_pro_acctent_struct_ha->report_ser = 0;
+		l_pro_acctent_struct_ha->rep_exg_rt = 0;
+		strcpy( l_pro_acctent_struct_ha->deal_ident, APL_NULL_STRING );
+
+		if ( APL_FAILURE == DL_Mod_AccEntNew(	p_batch_no,
+														l_pro_acctent_struct_ha, 
+														l_debug_info_ptr ) )
+		{	
+			APL_GOBACK_FAIL;
+		}
+
+	}
+
+	APL_GOBACK_SUCCESS;
+	
+   RETURN_SUCCESS :
+
+		fprintf(	p_logfile, 
+					"Exiting DL_Rtv_OthFrmOrd with success\n");
+
+      #ifdef SYS_DEBUG
+         printf( "Leaving Function DL_Rtv_OthFrmOrd with success\n");
+		#endif
+
+		APL_FREE( l_pro_acctent_struct_ha );
+
+      return(APL_SUCCESS);
+
+   RETURN_FAILURE :
+
+		if (APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+		{
+			CO_ProcMonitor(p_logfile, 
+						"Got Errors : ", 
+						l_debug_info_ptr, 
+						p_intl_envdatastruct_h);
+			CO_FreeErrLst(l_debug_info_ptr);
+		}
+
+		fprintf(	p_logfile, 
+					"Exiting DL_Rtv_OthFrmOrd with errors\n");
+
+      #ifdef SYS_DEBUG
+         printf( "Leaving Function DL_Rtv_OthFrmOrd with errors\n");
+		#endif
+
+		APL_FREE( l_pro_acctent_struct_ha );
+
+      return(APL_FAILURE);
+}
+
+
+
+int CDBPassRevFn(	char *p_batch_no,
+						char *p_ora_rowid,
+						FILE *p_logfile,
+						char **argv,
+						int  *p_runseq,
+						double *p_dct,
+						double *p_cct, 
+						INTL_ENV_DATA_STRUCT_H *p_intl_envdatastruct_h,
+						DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	struct sqlca sqlca;
+	DL_DEALCLIENTIMG_STRUCT_H *l_dl_dealclientimg_struct_h				=NULL;
+	DL_DEALCLIENTIMG_STRUCT_I *l_dl_dealclientimg_struct_i				=NULL;
+	PRO_ACCTENT_STRUCT_H	  *l_pro_acctent_struct_ha					=NULL;
+	char	chr_l_sysdate_b[APL_DATE_LEN]								=APL_NULL_STRING;
+	char	chr_l_v_sysdate[SETL_DATE_LEN]						=APL_NULL_STRING;
+	char	chr_l_sysdatetime_A[APL_DATE_LEN]						=APL_NULL_STRING;
+	char	chr_l_h_commn_client[GL_ACCOUNT_LEN]			=APL_NULL_STRING;
+	char	chr_l_h_bnk_client[GL_ACCOUNT_LEN]				=APL_NULL_STRING;
+	char	chr_l_h_client_a[APL_CLIENT_LENGTH]						=APL_NULL_STRING;
+	char	chr_l_h_domcpbnkac[APL_CLIENT_LENGTH]					=APL_NULL_STRING;
+	char	chr_l_h_domcpac[APL_CLIENT_LENGTH]						=APL_NULL_STRING;
+	char	chr_l_h_trcode_a[APL_FLAG_LENGTH]							=APL_NULL_STRING;
+	char	chr_l_h_accgl[GL_ACCOUNT_LEN]					=APL_NULL_STRING;
+	char	chr_l_h_refno_A[APL_TXNREFNO_LEN]						=APL_NULL_STRING;
+	char	chr_l_h_moneydt_short[SETL_DATE_LEN]				=APL_NULL_STRING;
+	char	chr_l_h_domcpbnkib[GL_ACCOUNT_LEN]				=APL_NULL_STRING;
+	char	chr_l_h_exarena[EX_ARENA_LEN]							=APL_NULL_STRING;
+	char	chr_l_h_rowid[APL_ROWID_LEN]							=APL_NULL_STRING;
+	char	chr_l_h_acc_branchcode[BRANCH_CD_LEN]			=APL_NULL_STRING;
+	char	chr_l_h_domcpbnk_branchcode[BRANCH_CD_LEN]		=APL_NULL_STRING;
+	char	chr_l_h_domcpac_branchcode[BRANCH_CD_LEN]		=APL_NULL_STRING;
+	char	chr_l_h_domcpac_glaccount[GL_ACCOUNT_LEN]	=APL_NULL_STRING;
+	char	chr_l_h_domcpac_cubk[APL_FLAG_LENGTH]					=APL_NULL_STRING;
+	char	chr_l_h_trd_rowid[APL_ROWID_LEN]						=APL_NULL_STRING;
+	 
+	char  chr_l_codetype[21]                             	=APL_NULL_STRING;
+	char  chr_l_h_txncode[4]                               =APL_NULL_STRING;
+	double	chr_l_h_amount											=0;
+	double	l_h_brokercomm											=0;
+	double	l_h_custodycomm											=0;
+	double	l_h_stexcomm										=0;
+	double	l_h_oth_comm											=0;
+	double	l_RevGenCommAc										=0;
+	double	l_round_RevGenCommAc								=0;
+	double	l_RevGenBnkAc										=0;
+	double	l_lcy													=0;
+	short	l_i_account												=0;
+	short	l_i_domcpbnkac											=0;
+	short	l_i_domcpac												=0;
+	short	int_l_i_trcode												=0;
+	short	l_i_accibbs												=0;
+	short	l_i_refno												=0;
+	short	l_i_amount												=0;
+	short	l_i_brkcomm												=0;
+	short	l_i_bnkcomm												=0;
+	short	l_i_stexcomm											=0;
+	short	l_i_othcomm												=0;
+	short	l_i_moneydt_short										=0;
+	short	l_i_domcpbnkib											=0;
+	short	l_i_exarena												=0;
+	short	l_i_rowid												=0;
+	short	l_i_acc_branchcode									=0;
+	short	l_i_domcpbnk_branchcode								=0;
+	short	l_i_domcpac_branchcode								=0;
+	short	l_i_domcpac_ibbsaccount								=0;
+	short	l_i_domcpac_cubk										=0;
+	short	l_i_trd_countacc										=0;
+	short l_i_trd_accountofcode                        =0; 
+	short	l_i_trd_rowid											=0;
+	short	l_i_bnk_account										=0;
+	short	l_i_commn_account										=0;
+	short	int_l_condexists_A											=0;
+	short	l_condexists_po										=0;
+	short	l_condexists_cz										=0;
+	 
+	short l_i_txncode                                  =0;
+
+	#ifdef SYS_DEBUG
+		printf(	"Entered Function CDBPassRevFn\n" );
+	#endif
+
+	sqlca.sqlcode = 0;
+
+	
+
+	l_dl_dealclientimg_struct_h = (DL_DEALCLIENTIMG_STRUCT_H*)calloc(1,sizeof(DL_DEALCLIENTIMG_STRUCT_H));
+	APL_MALLOC_FAIL(l_dl_dealclientimg_struct_h);
+
+	l_dl_dealclientimg_struct_i = (DL_DEALCLIENTIMG_STRUCT_I*)calloc(1,sizeof(DL_DEALCLIENTIMG_STRUCT_I));
+	APL_MALLOC_FAIL(l_dl_dealclientimg_struct_i);
+
+	l_pro_acctent_struct_ha = (PRO_ACCTENT_STRUCT_H*)calloc(1,sizeof(PRO_ACCTENT_STRUCT_H));
+	APL_MALLOC_FAIL(l_pro_acctent_struct_ha);
+
+	
+
+	EXEC SQL VAR	chr_l_h_client_a					IS STRING;
+	EXEC SQL VAR 	chr_l_h_domcpbnkac				IS STRING;
+	EXEC SQL VAR 	chr_l_h_domcpac					IS STRING;
+	EXEC SQL VAR 	chr_l_h_trcode_a					IS STRING;
+	EXEC SQL VAR 	chr_l_h_accgl					IS STRING;
+	EXEC SQL VAR 	chr_l_h_refno_A					IS STRING;
+	EXEC SQL VAR 	chr_l_h_moneydt_short			IS STRING;
+	EXEC SQL VAR 	chr_l_h_domcpbnkib				IS STRING;
+	EXEC SQL VAR 	chr_l_h_exarena					IS STRING;
+	EXEC SQL VAR 	chr_l_h_rowid					IS STRING;
+	EXEC SQL VAR 	chr_l_h_acc_branchcode		IS STRING;
+	EXEC SQL VAR 	chr_l_h_domcpbnk_branchcode	IS STRING;
+	EXEC SQL VAR 	chr_l_h_domcpac_branchcode	IS STRING;
+	EXEC SQL VAR 	chr_l_h_domcpac_glaccount	IS STRING;
+	EXEC SQL VAR 	chr_l_h_domcpac_cubk			IS STRING;
+	EXEC SQL VAR 	chr_l_h_trd_rowid				IS STRING;
+	EXEC SQL VAR 	chr_l_h_commn_client			IS STRING;
+	EXEC SQL VAR 	chr_l_h_bnk_client			IS STRING;
+
+	EXEC SQL VAR l_dl_dealclientimg_struct_h->h_dl_client 		IS STRING;
+	EXEC SQL VAR l_dl_dealclientimg_struct_h->h_indentity_no			IS STRING;
+	EXEC SQL VAR l_dl_dealclientimg_struct_h->h_dealcd			IS STRING;
+	EXEC SQL VAR l_dl_dealclientimg_struct_h->h_dlt				IS STRING;
+	EXEC SQL VAR l_dl_dealclientimg_struct_h->h_setldt		IS STRING;
+	EXEC SQL VAR l_dl_dealclientimg_struct_h->h_instr_code			IS STRING;
+	EXEC SQL VAR l_dl_dealclientimg_struct_h->h_currencycode			IS STRING;
+	EXEC SQL VAR l_dl_dealclientimg_struct_h->h_domcpclt_cd			IS STRING;
+	EXEC SQL VAR l_dl_dealclientimg_struct_h->h_domcp_custodyclt		IS STRING;
+	EXEC SQL VAR l_dl_dealclientimg_struct_h->h_ex_arena			IS STRING;
+	EXEC SQL VAR l_dl_dealclientimg_struct_h->h_newdt			IS STRING;
+	EXEC SQL VAR l_dl_dealclientimg_struct_h->h_hostdate			IS STRING;
+	EXEC SQL VAR l_dl_dealclientimg_struct_h->h_moneydate			IS STRING;
+	EXEC SQL VAR l_dl_dealclientimg_struct_h->h_domcp_custodygl		IS STRING;
+	EXEC SQL VAR l_dl_dealclientimg_struct_h->h_cltibbs			IS STRING;
+	EXEC SQL VAR l_dl_dealclientimg_struct_h->h_valuedate			IS STRING;
+	EXEC SQL VAR l_dl_dealclientimg_struct_h->h_classofent		IS STRING;
+	EXEC SQL VAR l_dl_dealclientimg_struct_h->h_access_stamp	IS STRING;
+	
+	EXEC SQL VAR chr_l_codetype IS STRING;
+	EXEC SQL VAR chr_l_h_txncode IS STRING;
+
+	
+
+	EXEC SQL SELECT 	CLIENT,
+							DOMCP_CUSTODYCLT,
+							DOMESTIC_CPCLT,
+							DEAL_CD,
+							AMOUNT,
+							CLT_GL,
+							IDENTIY_NO,
+							TO_CHAR(MONEY_SETL_DT,'YYYYMMDD'),
+							BROKERCOMM,
+							CUSTODYCOMM,
+							STX_COMM,
+							OTH_COMM,
+							DOMCP_CUSTODYGL,
+							EX_ARENA,
+							ROWID
+				INTO		:chr_l_h_client_a:l_i_account,
+							:chr_l_h_domcpbnkac:l_i_domcpbnkac,
+							:chr_l_h_domcpac:l_i_domcpac,
+							:chr_l_h_trcode_a:int_l_i_trcode,
+							:chr_l_h_amount:l_i_amount,
+							:chr_l_h_accgl:l_i_accibbs,
+							:chr_l_h_refno_A:l_i_refno,
+							:chr_l_h_moneydt_short:l_i_moneydt_short,
+							:l_h_brokercomm:l_i_brkcomm,
+							:l_h_custodycomm:l_i_bnkcomm,
+							:l_h_stexcomm:l_i_stexcomm,
+							:l_h_oth_comm:l_i_othcomm,
+							:chr_l_h_domcpbnkib:l_i_domcpbnkib,
+							:chr_l_h_exarena:l_i_exarena,
+							:chr_l_h_rowid:l_i_rowid
+				FROM		DL_DEALCLIENTIMG
+				WHERE		ROWID	=	:p_ora_rowid
+				FOR UPDATE OF ACCESS_STAMP;
+
+	IS_ANY_ORA_ERROR;
+
+	if ( l_i_amount == -1 )
+	{
+		chr_l_h_amount = 0;
+	}
+
+	if ( l_i_brkcomm == -1 )
+	{
+		l_h_brokercomm = 0;
+	}
+
+	if ( l_i_bnkcomm == -1 )
+	{
+		l_h_custodycomm = 0;
+	}
+
+	if ( l_i_stexcomm == -1 )
+	{
+		l_h_stexcomm = 0;
+	} 
+
+	if ( l_i_othcomm == -1 )
+	{
+		l_h_oth_comm = 0;
+	}
+
+	
+ 
+	EXEC SQL SELECT	CLN_BRNCHCODE
+				INTO		:chr_l_h_acc_branchcode:l_i_acc_branchcode
+				FROM		MT_CLIENT
+				WHERE		CLN_CODE	=	:chr_l_h_client_a;
+
+	IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_ACCNOT_FND,
+														chr_l_h_client_a,
+														APL_NULL_STRING,
+														APL_NULL_STRING );
+
+	EXEC SQL SELECT	CLN_BRNCHCODE
+				INTO		:chr_l_h_domcpbnk_branchcode:l_i_domcpbnk_branchcode
+				FROM		MT_CLIENT
+				WHERE		CLN_CODE	=	:chr_l_h_domcpbnkac;
+
+	IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_ACCNOT_FND,
+														chr_l_h_domcpbnkac,
+														APL_NULL_STRING,
+														APL_NULL_STRING );
+
+	int_l_condexists_A = 0;
+
+	if ( APL_FAILURE == CO_Chk_CntryEnabled(	"ACC_ENTRIES",
+														"DOMCP_SETUP_CITI_ACC",
+														&int_l_condexists_A,
+														l_debug_info_ptr ) )
+	{
+		APL_GOBACK_FAIL;
+	}
+
+	if ( int_l_condexists_A == 0 )
+	{
+		EXEC SQL SELECT 	CLN_BRNCHCODE,
+								CLN_GL_ACCOUNT,
+								CLN_BRK_ALL
+					INTO		:chr_l_h_domcpac_branchcode:l_i_domcpac_branchcode,
+								:chr_l_h_domcpac_glaccount:l_i_domcpac_ibbsaccount,
+								:chr_l_h_domcpac_cubk:l_i_domcpac_cubk
+					FROM		MT_CLIENT
+					WHERE		CLN_CODE	=	:chr_l_h_domcpac;
+
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_ACCNOT_FND,
+															chr_l_h_domcpac,
+															APL_NULL_STRING,
+															APL_NULL_STRING );
+	}
+	else
+	{
+		EXEC SQL SELECT 	CLN_BRNCHCODE,
+								CLN_GL_ACCOUNT,
+								CLN_BRK_ALL
+					INTO		:chr_l_h_domcpac_branchcode:l_i_domcpac_branchcode,
+								:chr_l_h_domcpac_glaccount:l_i_domcpac_ibbsaccount,
+								:chr_l_h_domcpac_cubk:l_i_domcpac_cubk
+					FROM		MT_CLIENT
+					WHERE		CLN_CODE	=	:l_mt_core_sys_params_struct_h.custody_clt_cd;
+
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_ACCNOT_FND,
+															(char *)l_mt_core_sys_params_struct_h.custody_clt_cd,
+															APL_NULL_STRING,
+															APL_NULL_STRING );//Changes done for AIX Migration
+	}
+
+	
+
+	if ( APL_FAILURE == CO_RtvSysDt( 	chr_l_sysdate_b,
+														l_debug_info_ptr ) )
+	{
+		APL_GOBACK_FAIL;
+	}
+
+	if ( APL_FAILURE == CO_RtvSysDtTime(	chr_l_sysdatetime_A,
+															l_debug_info_ptr ) )
+	{
+		APL_GOBACK_FAIL;
+	}
+
+	if ( chr_l_h_trcode_a[0] == DEALCD_DVP || chr_l_h_trcode_a[0] == DEALCD_CR || chr_l_h_trcode_a[0] == DEALCD_RCR )
+	{
+		*p_cct -= chr_l_h_amount;
+	}
+	else
+	{
+		*p_dct -= chr_l_h_amount;
+	}
+
+	
+	
+	l_pro_acctent_struct_ha->module_ind = 'C';
+	strcpy( l_pro_acctent_struct_ha->brnch_cd, chr_l_h_acc_branchcode );
+	(*p_runseq)++;
+	sprintf( l_pro_acctent_struct_ha->inden_num,"%d",*p_runseq );
+	strcpy( l_pro_acctent_struct_ha->client, chr_l_h_accgl );
+	strcpy( l_pro_acctent_struct_ha->curr_cd, AE_CCYCD );	
+	l_pro_acctent_struct_ha->lcl_amount = (-1 * chr_l_h_amount );
+	strcpy( l_pro_acctent_struct_ha->deal_cd, AE_REV_DLCD );
+
+	strcpy( l_pro_acctent_struct_ha->val_date, chr_l_h_moneydt_short );
+
+	if ( chr_l_h_trcode_a[0] == DEALCD_DVP || chr_l_h_trcode_a[0] == DEALCD_CR || chr_l_h_trcode_a[0] == DEALCD_RCR)
+	{
+		l_pro_acctent_struct_ha->db_cr_ind = AE_CREDIT_IND ;
+	}
+	else
+	{
+		l_pro_acctent_struct_ha->db_cr_ind = AE_DEBIT_IND ;
+	}
+
+	strcpy( l_pro_acctent_struct_ha->description, chr_l_h_refno_A );
+
+	strcpy( l_pro_acctent_struct_ha->proc_num, p_batch_no );
+	l_pro_acctent_struct_ha->rec_refer = AE_NORMAL_IND ;
+	strcpy( l_pro_acctent_struct_ha->proc_dt, chr_l_sysdate_b );
+
+	l_pro_acctent_struct_ha->fccy_amt = 0;
+	l_pro_acctent_struct_ha->exchg_rt = 0;
+	strcpy( l_pro_acctent_struct_ha->spl_clt_cd, APL_NULL_STRING );
+	l_pro_acctent_struct_ha->status_ind = AE_GEN_IND_CHAR ;
+	l_pro_acctent_struct_ha->report_amt = 0;
+	l_pro_acctent_struct_ha->report_clt = 0;
+	l_pro_acctent_struct_ha->report_tax = 0;
+	l_pro_acctent_struct_ha->report_ser = 0;
+	l_pro_acctent_struct_ha->rep_exg_rt = 0;
+	strcpy( l_pro_acctent_struct_ha->deal_ident, APL_NULL_STRING );
+
+	if ( APL_FAILURE == DL_Mod_AccEntNew(	p_batch_no,
+													l_pro_acctent_struct_ha, 
+													l_debug_info_ptr ) )
+	{
+		APL_GOBACK_FAIL;
+	}
+
+	EXEC SQL SELECT 	ROWID
+				INTO		:chr_l_h_trd_rowid:l_i_trd_rowid
+				FROM		DL_DEAL
+				WHERE		CLIENT	=	:chr_l_h_client_a
+				AND		IDENTIY_NO		=	:chr_l_h_refno_A 
+				FOR UPDATE OF ACCESS_STAMP;
+
+	IS_ANY_ORA_ERROR;
+
+	
+
+	int_l_condexists_A = 0;
+	
+	if ( APL_FAILURE == CO_Chk_CntryEnabled(	"ACC_ENTRIES",
+														"PASSREV_NO_OTH_ENT",
+														&int_l_condexists_A,
+														l_debug_info_ptr ) )
+	{
+		APL_GOBACK_FAIL;
+	}
+
+	if ( 	int_l_condexists_A == 0 )
+	{
+
+		int_l_condexists_A = 0;
+	
+		if ( APL_FAILURE == CO_Chk_CntryEnabled( "ACC_ENTRIES",
+														 	"PASSREV_OTHENT_NOCHK",
+														 	&int_l_condexists_A,
+														 	l_debug_info_ptr ) )
+		{
+			APL_GOBACK_FAIL;
+		}
+
+		
+
+		if ( int_l_condexists_A > 0 || 
+			  ( chr_l_h_domcpac_cubk[0] == 'B' &&
+			  ( strcmp( chr_l_h_domcpac, l_mt_core_sys_params_struct_h.custody_clt_cd ) ||
+			  ( !strcmp( chr_l_h_domcpac, l_mt_core_sys_params_struct_h.custody_clt_cd ) && 
+					(l_i_trd_countacc == -1 || l_i_trd_accountofcode== -1) ) ) ) )
+		{
+			if ( chr_l_h_trcode_a[0] == DEALCD_DVP || chr_l_h_trcode_a[0] == DEALCD_CR || chr_l_h_trcode_a[0] == DEALCD_RCR)
+			{
+				
+
+				l_condexists_po = 0;
+	
+				if ( APL_FAILURE == CO_Chk_CntryEnabled( "ACC_ENTRIES",
+																 	"PASSREV_OTHENT_PO",
+																 	&l_condexists_po,
+																 	l_debug_info_ptr ) )
+				{
+					APL_GOBACK_FAIL;
+				}
+
+				if ( l_condexists_po == 0 )
+				{
+					*p_dct -= chr_l_h_amount;
+				}
+				else
+				{
+					if ( chr_l_h_exarena[0] == STX_EX_ARENA_IND )
+					{
+						*p_cct -= l_h_brokercomm;
+						l_RevGenCommAc -= (l_h_custodycomm + l_h_stexcomm + l_h_oth_comm);
+						l_RevGenBnkAc  += chr_l_h_amount + l_h_brokercomm + l_h_custodycomm + l_h_stexcomm + l_h_oth_comm;
+					}
+					else
+					{
+						*p_cct -= l_h_brokercomm;
+					}
+				}
+			}
+			else
+			{
+
+				
+
+				l_condexists_po = 0;
+	
+				if ( APL_FAILURE == CO_Chk_CntryEnabled( "ACC_ENTRIES",
+																 	"PASSREV_OTHENT_PO",
+																 	&l_condexists_po,
+																 	l_debug_info_ptr ) )
+				{
+					APL_GOBACK_FAIL;
+				}
+
+				if ( l_condexists_po == 0 )
+				{
+					*p_cct -= chr_l_h_amount;
+				}
+				else
+				{
+					if ( chr_l_h_exarena[0] == STX_EX_ARENA_IND )
+					{
+						*p_cct -= l_h_brokercomm;
+						l_RevGenCommAc -= (l_h_custodycomm + l_h_stexcomm + l_h_oth_comm);
+						l_RevGenBnkAc  -= chr_l_h_amount - ( l_h_brokercomm + l_h_custodycomm + l_h_stexcomm + l_h_oth_comm );
+					}
+					else
+					{
+						*p_cct -= l_h_brokercomm;
+					}
+				}
+			}
+			
+			
+
+			memset( l_pro_acctent_struct_ha, NULL, sizeof(PRO_ACCTENT_STRUCT_H) );
+	
+			l_pro_acctent_struct_ha->module_ind = 'C';
+			strcpy( l_pro_acctent_struct_ha->brnch_cd, chr_l_h_domcpac_branchcode );
+
+			(*p_runseq)++;
+			sprintf( l_pro_acctent_struct_ha->inden_num,"%d",*p_runseq );
+
+			if ( l_condexists_po > 0 )
+			{
+				strcpy( l_pro_acctent_struct_ha->client, chr_l_h_domcpac_glaccount );
+			}
+			else
+			{
+				l_condexists_cz = 0;
+	
+				if ( APL_FAILURE == CO_Chk_CntryEnabled( "ACC_ENTRIES",
+																 	"PASSREV_OTHENT_CZ",
+																 	&l_condexists_cz,
+																 	l_debug_info_ptr ) )
+				{
+					APL_GOBACK_FAIL;
+				}
+
+				if ( l_condexists_cz == 0 || 
+					  ( l_condexists_cz > 0 && 
+						 !strcmp(chr_l_h_domcpac, l_mt_core_sys_params_struct_h.custody_clt_cd ) ) )
+				{
+					strcpy( l_pro_acctent_struct_ha->client, chr_l_h_domcpbnkib );
+				}
+				else
+				{
+					if ( chr_l_h_trcode_a[0] == DEALCD_RVP || chr_l_h_trcode_a[0] == DEALCD_CD || chr_l_h_trcode_a[0] == DEALCD_DCD)
+					{
+						strcpy( l_pro_acctent_struct_ha->client, chr_l_h_domcpbnkib );
+					}
+					else
+					{
+						if ( chr_l_h_exarena[0] == STX_EX_ARENA_IND )
+						{
+							EXEC SQL SELECT 	CUSTODY_CLT 
+										INTO		:chr_l_h_bnk_client:l_i_bnk_account
+										FROM		MT_CLIENT_ENTRIES;
+
+							IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_ACCNOT_FND,
+																				"First Sundry A/C",
+																				APL_NULL_STRING,
+																				APL_NULL_STRING);
+
+							strcpy( l_pro_acctent_struct_ha->client, chr_l_h_bnk_client );
+						}
+						else
+						{
+							EXEC SQL SELECT 	COMM_CLT 
+										INTO		:chr_l_h_commn_client:l_i_commn_account
+										FROM		MT_CLIENT_ENTRIES;
+
+							IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_ACCNOT_FND,
+																				"Instrond Sundry A/C",
+																				APL_NULL_STRING,
+																				APL_NULL_STRING);
+
+							strcpy( l_pro_acctent_struct_ha->client, chr_l_h_commn_client );
+						}
+					}
+				}
+			}
+
+			strcpy( l_pro_acctent_struct_ha->curr_cd, AE_CCYCD );	
+
+			if ( l_condexists_po == 0 )
+			{
+				l_pro_acctent_struct_ha->lcl_amount = ( -1 * chr_l_h_amount );
+
+				if ( chr_l_h_trcode_a[0] == DEALCD_RVP || chr_l_h_trcode_a[0] == DEALCD_CD || chr_l_h_trcode_a[0] == DEALCD_DCD)
+				{
+					l_pro_acctent_struct_ha->db_cr_ind =  AE_CREDIT_IND ;
+				}
+				else
+				{
+					l_pro_acctent_struct_ha->db_cr_ind = AE_DEBIT_IND ;
+				}
+			}
+			else
+			{
+				l_pro_acctent_struct_ha->lcl_amount = ( -1 * l_h_brokercomm );
+				l_pro_acctent_struct_ha->db_cr_ind =  AE_CREDIT_IND ;
+			}
+
+			strcpy( l_pro_acctent_struct_ha->deal_cd, AE_REV_DLCD );
+			strcpy( l_pro_acctent_struct_ha->val_date, chr_l_h_moneydt_short );
+			strcpy( l_pro_acctent_struct_ha->description, chr_l_h_refno_A );
+
+			strcpy( l_pro_acctent_struct_ha->proc_num, p_batch_no );
+			l_pro_acctent_struct_ha->rec_refer = AE_NORMAL_IND ;
+			strcpy( l_pro_acctent_struct_ha->proc_dt, chr_l_sysdate_b );
+
+			l_pro_acctent_struct_ha->fccy_amt = 0;
+			l_pro_acctent_struct_ha->exchg_rt = 0;
+			strcpy( l_pro_acctent_struct_ha->spl_clt_cd, APL_NULL_STRING );
+			l_pro_acctent_struct_ha->status_ind = AE_GEN_IND_CHAR ;
+			l_pro_acctent_struct_ha->report_amt = 0;
+			l_pro_acctent_struct_ha->report_clt = 0;
+			l_pro_acctent_struct_ha->report_tax = 0;
+			l_pro_acctent_struct_ha->report_ser = 0;
+			l_pro_acctent_struct_ha->rep_exg_rt = 0;
+			strcpy( l_pro_acctent_struct_ha->deal_ident, APL_NULL_STRING );
+
+			if ( APL_FAILURE == DL_Mod_AccEntNew(	p_batch_no,
+															l_pro_acctent_struct_ha, 
+															l_debug_info_ptr ) )
+			{
+				APL_GOBACK_FAIL;
+			}
+
+
+			
+
+			l_condexists_po = 0;
+
+			if ( APL_FAILURE == CO_Chk_CntryEnabled( "ACC_ENTRIES",
+															 	"PASSREV_OTHENT_PO",
+															 	&l_condexists_po,
+															 	l_debug_info_ptr ) )
+			{
+				APL_GOBACK_FAIL;
+			}
+
+			if ( l_condexists_po > 0 && chr_l_h_exarena[0] == NON_STX_EX_ARENA_IND )
+			{
+				if ( chr_l_h_trcode_a[0] == DEALCD_DVP || chr_l_h_trcode_a[0] == DEALCD_CR || chr_l_h_trcode_a[0] == DEALCD_RCR)
+				{ 
+					*p_dct -= 	( 	chr_l_h_amount + 
+										l_h_brokercomm + 
+										l_h_custodycomm +
+										l_h_stexcomm +
+										l_h_oth_comm );
+
+					l_lcy =  -1 * ( 	chr_l_h_amount +
+										  	l_h_brokercomm +
+										  	l_h_custodycomm +
+										  	l_h_stexcomm +
+										  	l_h_oth_comm );
+				}
+				else
+				{
+					*p_cct -= 	chr_l_h_amount - 
+									( l_h_brokercomm + 
+									  l_h_custodycomm +
+									  l_h_stexcomm +
+									  l_h_oth_comm );
+	
+					l_lcy = -1 * ( chr_l_h_amount -
+							  			( 	l_h_brokercomm +
+							    			l_h_custodycomm +
+							    			l_h_stexcomm +
+							    			l_h_oth_comm ));
+				}
+
+				l_RevGenCommAc -= l_h_custodycomm + 
+										l_h_stexcomm + 
+										l_h_oth_comm;
+
+				
+
+				memset( l_pro_acctent_struct_ha, NULL, sizeof(PRO_ACCTENT_STRUCT_H) );
+	
+				l_pro_acctent_struct_ha->module_ind = 'C';
+				strcpy( l_pro_acctent_struct_ha->brnch_cd, chr_l_h_domcpbnk_branchcode );
+				(*p_runseq)++;
+				sprintf( l_pro_acctent_struct_ha->inden_num,"%d",*p_runseq );
+				strcpy( l_pro_acctent_struct_ha->client, chr_l_h_domcpbnkib );
+				strcpy( l_pro_acctent_struct_ha->curr_cd, AE_CCYCD );	
+				l_pro_acctent_struct_ha->lcl_amount = l_lcy;
+				if ( chr_l_h_trcode_a[0] == DEALCD_RVP || chr_l_h_trcode_a[0] == DEALCD_CD || chr_l_h_trcode_a[0] == DEALCD_DCD)
+				{
+					l_pro_acctent_struct_ha->db_cr_ind =  AE_CREDIT_IND ;
+				}
+				else
+				{
+					l_pro_acctent_struct_ha->db_cr_ind =  AE_DEBIT_IND ;
+				}
+
+				strcpy( l_pro_acctent_struct_ha->deal_cd, AE_REV_DLCD );
+
+				strcpy( l_pro_acctent_struct_ha->val_date, chr_l_h_moneydt_short );
+
+				strcpy( l_pro_acctent_struct_ha->description, chr_l_h_refno_A );
+
+				strcpy( l_pro_acctent_struct_ha->proc_num, p_batch_no );
+				l_pro_acctent_struct_ha->rec_refer = AE_NORMAL_IND ;
+				strcpy( l_pro_acctent_struct_ha->proc_dt, chr_l_sysdate_b );
+
+				l_pro_acctent_struct_ha->fccy_amt = 0;
+				l_pro_acctent_struct_ha->exchg_rt = 0;
+				strcpy( l_pro_acctent_struct_ha->spl_clt_cd, APL_NULL_STRING );
+				l_pro_acctent_struct_ha->status_ind = AE_GEN_IND_CHAR ;
+				l_pro_acctent_struct_ha->report_amt = 0;
+				l_pro_acctent_struct_ha->report_clt = 0;
+				l_pro_acctent_struct_ha->report_tax = 0;
+				l_pro_acctent_struct_ha->report_ser = 0;
+				l_pro_acctent_struct_ha->rep_exg_rt = 0;
+				strcpy( l_pro_acctent_struct_ha->deal_ident, APL_NULL_STRING );
+
+
+				if ( APL_FAILURE == DL_Mod_AccEntNew(	p_batch_no,
+																l_pro_acctent_struct_ha, 
+																l_debug_info_ptr ) )
+				{
+					APL_GOBACK_FAIL;
+				}
+
+			}
+		}
+	}
+
+	
+
+	if ( l_i_trd_rowid != -1 )
+	{	
+		EXEC SQL UPDATE DL_DEAL 
+					SET		HOST_DATE			=	NULL,
+								ACCESS_STAMP	=	:chr_l_sysdatetime_A
+					WHERE		ROWID				=	:chr_l_h_trd_rowid;
+	}
+
+	IS_ANY_ORA_ERROR;
+
+	
+
+	EXEC SQL SELECT 	*
+				INTO		:l_dl_dealclientimg_struct_h:l_dl_dealclientimg_struct_i
+				FROM		DL_DEALCLIENTIMG
+				WHERE		ROWID	=	:chr_l_h_rowid;
+
+	IS_ANY_ORA_ERROR;
+
+	l_dl_dealclientimg_struct_h->h_classofent[0] = AE_REVENTRY;
+	l_dl_dealclientimg_struct_h->h_classofent[1] = '\0';
+	sscanf( p_batch_no, "%d",  &l_dl_dealclientimg_struct_h->h_procnum );
+	strcpy( l_dl_dealclientimg_struct_h->h_valuedate, chr_l_sysdate_b );
+	strcpy( l_dl_dealclientimg_struct_h->h_access_stamp, chr_l_sysdatetime_A );
+
+	EXEC SQL INSERT INTO DL_DEALCLIENTIMG VALUES
+				( :l_dl_dealclientimg_struct_h:l_dl_dealclientimg_struct_i );
+
+	IS_ANY_ORA_ERROR;
+
+	
+
+	int_l_condexists_A = 0;
+	
+	if ( APL_FAILURE == CO_Chk_CntryEnabled(	"ACC_ENTRIES",
+														"PASS_SUMMARY_PO",
+														&int_l_condexists_A,
+														l_debug_info_ptr ) )
+	{
+		APL_GOBACK_FAIL;
+	}
+
+	if ( int_l_condexists_A > 0 )
+	{
+		if (APL_FAILURE == DL_Proc_DateFmt(	chr_l_sysdate_b,
+														chr_l_v_sysdate,
+														l_debug_info_ptr ))
+		{
+			APL_GOBACK_FAIL
+		}
+		
+		EXEC SQL SELECT 	CUSTODY_CLT,
+								COMM_CLT
+					INTO		:chr_l_h_bnk_client:l_i_bnk_account,
+								:chr_l_h_commn_client:l_i_commn_account
+					FROM 		MT_CLIENT_ENTRIES;
+
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_ACCNOT_FND,
+															"Sundry A/cs",
+															APL_NULL_STRING,
+															APL_NULL_STRING );
+		if ( l_RevGenBnkAc != 0 )
+		{
+			if ( l_RevGenBnkAc < 0 )
+			{
+				l_lcy = -1 * l_RevGenBnkAc;
+			}
+			else
+			{
+				l_lcy = l_RevGenBnkAc;
+			}
+
+			if ( l_RevGenBnkAc < 0 )
+			{
+				*p_cct -= l_lcy;
+			}
+			else
+			{
+				*p_dct -= l_lcy;
+			}
+
+			memset( l_pro_acctent_struct_ha, NULL, sizeof(PRO_ACCTENT_STRUCT_H));
+			l_pro_acctent_struct_ha->module_ind = 'C';
+			strcpy( l_pro_acctent_struct_ha->brnch_cd, g_mt_commonsys_params_struct_h.brnch_cd );
+			strcpy( l_pro_acctent_struct_ha->inden_num,APL_NULL_STRING);
+			strcpy( l_pro_acctent_struct_ha->client, chr_l_h_bnk_client );
+			strcpy( l_pro_acctent_struct_ha->curr_cd, AE_CCYCD );	
+			l_pro_acctent_struct_ha->lcl_amount = ( -1 * l_lcy) ;
+
+			 
+			int_l_condexists_A = 0;
+			if ( APL_FAILURE == CO_Chk_CntryEnabled( "ACC_ENTRIES",
+																"TXNCODE_952",
+																&int_l_condexists_A,
+																l_debug_info_ptr ) )
+			{
+				APL_GOBACK_FAIL;
+			}
+
+			if ( int_l_condexists_A > 0 )
+			{
+				
+				
+				strcpy(chr_l_codetype,"PO_ACC_TXNCODE");
+
+				EXEC SQL SELECT MAP_VAL
+				INTO :chr_l_h_txncode:l_i_txncode
+				FROM PRO_GMATCHVALUE
+				WHERE MAPTYPE = :chr_l_codetype
+				AND MAPVALUE  = :chr_l_h_exarena;
+
+				IS_ANY_ORA_ERROR
+
+				strcpy(l_pro_acctent_struct_ha->deal_cd,chr_l_h_txncode);
+
+			}
+			
+
+			if ( l_RevGenBnkAc < 0 )
+			{
+				l_pro_acctent_struct_ha->db_cr_ind =  AE_CREDIT_IND ;
+			}
+			else
+			{
+				l_pro_acctent_struct_ha->db_cr_ind =  AE_DEBIT_IND ;
+			}
+
+ 		  	 
+
+			strcpy( l_pro_acctent_struct_ha->val_date, chr_l_v_sysdate );
+			strcpy( l_pro_acctent_struct_ha->description, "REVERSAL: A/C" );
+			strcat( l_pro_acctent_struct_ha->description, chr_l_h_bnk_client );
+			strcpy( l_pro_acctent_struct_ha->proc_num, p_batch_no );
+			l_pro_acctent_struct_ha->rec_refer = AE_SUMMARY_IND ;
+			strcpy( l_pro_acctent_struct_ha->proc_dt, chr_l_sysdate_b );
+
+			l_pro_acctent_struct_ha->fccy_amt = 0;
+			l_pro_acctent_struct_ha->exchg_rt = 0;
+			strcpy( l_pro_acctent_struct_ha->spl_clt_cd, APL_NULL_STRING );
+			l_pro_acctent_struct_ha->status_ind = AE_GEN_IND_CHAR ;
+			l_pro_acctent_struct_ha->report_amt = 0;
+			l_pro_acctent_struct_ha->report_clt = 0;
+			l_pro_acctent_struct_ha->report_tax = 0;
+			l_pro_acctent_struct_ha->report_ser = 0;
+			l_pro_acctent_struct_ha->rep_exg_rt = 0;
+			strcpy( l_pro_acctent_struct_ha->deal_ident, APL_NULL_STRING );
+
+			if ( APL_FAILURE == DL_Mod_AccEntNew(	p_batch_no,
+															l_pro_acctent_struct_ha, 
+															l_debug_info_ptr ) )
+			{
+				APL_GOBACK_FAIL;
+			}
+
+		}
+
+		if ( l_RevGenCommAc != 0 )
+		{
+			CO_Round( l_RevGenCommAc, 3, &l_round_RevGenCommAc );
+			l_lcy = l_round_RevGenCommAc;
+
+			*p_cct += l_lcy;
+
+			memset( l_pro_acctent_struct_ha, NULL, sizeof(PRO_ACCTENT_STRUCT_H));
+			l_pro_acctent_struct_ha->module_ind = 'C';
+			strcpy( l_pro_acctent_struct_ha->brnch_cd, g_mt_commonsys_params_struct_h.brnch_cd );
+			strcpy( l_pro_acctent_struct_ha->inden_num,APL_NULL_STRING);
+			strcpy( l_pro_acctent_struct_ha->client, chr_l_h_commn_client );
+			strcpy( l_pro_acctent_struct_ha->curr_cd, AE_CCYCD );	
+			l_pro_acctent_struct_ha->lcl_amount = l_lcy;
+			strcpy( l_pro_acctent_struct_ha->deal_cd, AE_COMMON_DLCD );
+			l_pro_acctent_struct_ha->db_cr_ind =  AE_CREDIT_IND ;
+			strcpy( l_pro_acctent_struct_ha->val_date, chr_l_v_sysdate );
+			strcpy( l_pro_acctent_struct_ha->description, "REVERSAL OF COMMISSIONS RECEIVED" );
+			strcpy( l_pro_acctent_struct_ha->proc_num, p_batch_no );
+			l_pro_acctent_struct_ha->rec_refer = AE_SUMMARY_IND ;
+			strcpy( l_pro_acctent_struct_ha->proc_dt, chr_l_sysdate_b );
+
+			l_pro_acctent_struct_ha->fccy_amt = 0;
+			l_pro_acctent_struct_ha->exchg_rt = 0;
+			strcpy( l_pro_acctent_struct_ha->spl_clt_cd, "653830" );
+			l_pro_acctent_struct_ha->status_ind = AE_GEN_IND_CHAR ;
+			l_pro_acctent_struct_ha->report_amt = 0;
+			l_pro_acctent_struct_ha->report_clt = 0;
+			l_pro_acctent_struct_ha->report_tax = 0;
+			l_pro_acctent_struct_ha->report_ser = 0;
+			l_pro_acctent_struct_ha->rep_exg_rt = 0;
+			strcpy( l_pro_acctent_struct_ha->deal_ident, APL_NULL_STRING );
+
+			if ( APL_FAILURE == DL_Mod_AccEntNew(	p_batch_no,
+															l_pro_acctent_struct_ha, 
+															l_debug_info_ptr ) )
+			{
+				APL_GOBACK_FAIL;
+			}
+
+		}
+	}
+
+	APL_GOBACK_SUCCESS;
+	
+   RETURN_SUCCESS :
+
+		fprintf(	p_logfile, 
+					"Exiting CDBPassRevFn with success\n");
+
+      #ifdef SYS_DEBUG
+         printf( "Leaving Function CDBPassRevFn with success\n");
+		#endif
+		APL_FREE(l_dl_dealclientimg_struct_h);
+		APL_FREE(l_dl_dealclientimg_struct_i);
+		APL_FREE(l_pro_acctent_struct_ha);
+
+      return(APL_SUCCESS);
+
+   RETURN_FAILURE :
+
+		if (APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+		{
+			CO_ProcMonitor(p_logfile, 
+						"Got Errors : ", 
+						l_debug_info_ptr, 
+						p_intl_envdatastruct_h);
+			CO_FreeErrLst(l_debug_info_ptr);
+		}
+
+		fprintf(	p_logfile, 
+					"Exiting CDBPassRevFn with errors\n");
+
+      #ifdef SYS_DEBUG
+         printf( "Leaving Function CDBPassRevFn with errors\n");
+		#endif
+
+		APL_FREE(l_dl_dealclientimg_struct_h);
+		APL_FREE(l_dl_dealclientimg_struct_i);
+		APL_FREE(l_pro_acctent_struct_ha);
+
+      return(APL_FAILURE);
+}
+
+
+
+int CDBPassNewFn(	char *p_batch_no,
+						char *p_deal_rowid,
+						char p_fresh_chg_ent,
+						FILE *p_logfile,
+						char **argv,
+						int  *p_runseq,
+						double *p_dct,
+						double *p_cct, 
+						INTL_ENV_DATA_STRUCT_H *p_intl_envdatastruct_h,
+						DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	struct sqlca sqlca;
+	PRO_ACCTENT_STRUCT_H *l_pro_acctent_struct_ha 					=NULL;
+	DL_DEALCLIENTIMG_STRUCT_H *l_dl_dealclientimg_struct_h				=NULL;
+	char	chr_l_h_trd_client[APL_CLIENT_LENGTH]					=APL_NULL_STRING;
+	char	chr_l_h_trd_domcpac[APL_CLIENT_LENGTH]					=APL_NULL_STRING;
+	char	chr_l_h_trd_countacc[APL_COUNTACC_LEN]				=APL_NULL_STRING;  
+	char  chr_l_h_trd_clientofcode[APL_CLIENT_LENGTH]       =APL_NULL_STRING;
+	char	chr_l_h_trd_domcpbnkac[APL_CLIENT_LENGTH]				=APL_NULL_STRING;
+	char	chr_l_h_trd_trdt[APL_DATE_LEN]							=APL_NULL_STRING;
+	char	chr_l_h_trd_trcode[APL_FLAG_LENGTH]						=APL_NULL_STRING;
+	char	chr_l_h_trd_refno[APL_TXNREFNO_LEN]					=APL_NULL_STRING;
+	char	chr_l_h_trd_locrefno[LOC_IDENT_LEN]					=APL_NULL_STRING;
+	char	chr_l_h_trd_moneydt_short[SETL_DATE_LEN]			=APL_NULL_STRING;
+	char	chr_l_h_trd_trdfromord[APL_FLAG_LENGTH]					=APL_NULL_STRING;
+	char	chr_l_h_trd_exarena[EX_ARENA_LEN]					=APL_NULL_STRING;
+   char  chr_l_h_trd_typeoftrd[3]                         =APL_NULL_STRING;
+	char	chr_l_h_acc_cname[CNAME_LEN_A]							=APL_NULL_STRING;
+	char	chr_l_h_acc_glaccount[GL_ACCOUNT_LEN]			=APL_NULL_STRING;
+	char	chr_l_h_acc_branchcode[BRANCH_CD_LEN]			=APL_NULL_STRING;
+	char	chr_l_h_cpacc_glaccount[GL_ACCOUNT_LEN]		=APL_NULL_STRING;
+	char	chr_l_h_cpacc_branchcode[BRANCH_CD_LEN]			=APL_NULL_STRING;
+	char	chr_l_h_cpacc_cubk[APL_FLAG_LENGTH]						=APL_NULL_STRING;
+	char	chr_l_h_domcpac_glaccount[GL_ACCOUNT_LEN]	=APL_NULL_STRING;
+	char	chr_l_h_domcpac_branchcode[BRANCH_CD_LEN]		=APL_NULL_STRING;
+	char	chr_l_h_domcpac_cubk[APL_FLAG_LENGTH]					=APL_NULL_STRING;
+	char	chr_l_h_bnk_client[GL_ACCOUNT_LEN]				=APL_NULL_STRING;
+	char	chr_l_h_commn_client[GL_ACCOUNT_LEN]			=APL_NULL_STRING;
+	char	chr_l_sysdate_b[APL_DATE_LEN]								=APL_NULL_STRING;
+	char	chr_l_v_sysdate[SETL_DATE_LEN]						=APL_NULL_STRING;
+	char	chr_l_sysdatetime_A[APL_DATE_LEN]						=APL_NULL_STRING;
+   char  chr_l_h_txncode[4]											=APL_NULL_STRING;
+   char  chr_l_codetype[21]                             =APL_NULL_STRING;
+	char	chr_l_h_ccycode[4]											=APL_NULL_STRING;
+	char  chr_l_h_defccy_flg[2]										=APL_NULL_STRING;
+	char  chr_l_str_temp[50]											=APL_NULL_STRING;
+	char	chr_l_h_cashacc[GL_ACCOUNT_LEN]					=APL_NULL_STRING;
+	char	chr_l_h_glcode[4]										=APL_NULL_STRING;
+   char  chr_l_h_trd_instrcode[APL_INSTRUMENTCODE_LEN]               = APL_NULL_STRING;  
+   char  chr_l_h_bond_isin[13]                            = APL_NULL_STRING;  
+   char  chr_l_h_bond_desc[19]                            = APL_NULL_STRING;  
+	double	l_h_trd_amount										=0;
+	double	l_h_trd_brokercomm									=0;
+	double	l_h_trd_custodycomm									=0;
+	double	l_h_trd_stexcomm									=0;
+	double	l_h_trd_oth_comm									=0;
+	double	l_lcy													=0;
+	double	l_GenCommAc											=0;
+	double	l_round_GenCommAc									=0;
+	double	l_GenBnkAc											=0;
+   double   l_GenBnk1                                 =0;
+	double	l_h_exchgrt										=0;
+	int	int_l_date_diff												=0; 
+	short	int_l_multi_ccy												=0;
+	short	l_mccy_cacc_exists									=0;
+	short	l_i_trd_account										=0;
+	short	l_i_trd_domcpac										=0;
+	short	l_i_trd_countacc										=0;
+	short l_i_trd_accountofcode                        =0; 
+	short	l_i_trd_domcpbnkac									=0;
+	short	l_i_trd_trdt											=0;
+	short	l_i_trd_trcode											=0;
+	short	l_i_trd_amount											=0;
+	short	l_i_trd_refno											=0;
+	short	l_i_trd_locrefno										=0;
+	short	l_i_trd_moneydt_short								=0;
+	short	l_i_trd_trdfromord									=0;
+	short	l_i_trd_exarena										=0;
+	short	l_i_trd_brkcomm										=0;
+	short	l_i_trd_bnkcomm										=0;
+	short	l_i_trd_stexcomm										=0;
+	short	l_i_trd_othcomm										=0;
+   short l_i_trd_typeoftrd                            =0;
+	short	l_i_acc_cname											=0;
+	short	l_i_acc_ibbsaccount									=0;
+	short	l_i_acc_branchcode									=0;
+	short	l_i_cpacc_ibbsaccount								=0;
+	short	l_i_cpacc_branchcode									=0;
+	short l_i_cpacc_cubk											=0;
+	short	l_i_domcpac_ibbsaccount								=0;
+	short	l_i_domcpac_branchcode								=0;
+	short	l_i_domcpac_cubk										=0;
+	short	l_i_bnk_account										=0;
+	short	l_i_commn_account										=0;
+	short	int_l_condexists_A											=0;
+	short	l_condexists_pak										=0;
+	short	l_condexists_po										=0;
+	short	l_condexists_cz										=0;
+   short l_i_txncode                                  =0;
+	short	l_i_ccycode												=0;
+	short	l_i_exchrate											=0;
+	short	l_i_cashacc												=0;
+	short	l_i_ibbscode											=0;
+	short	l_i_trd_instr_code  									   =0;     
+	short	l_i_bond_isin   									   =0;     
+	short	l_i_bond_desc   									   =0;     
+
+
+	
+	char chr_l_h_trd_cashclient[APL_CLIENT_LENGTH]				=APL_NULL_STRING;
+	short l_i_trd_cashaccount									=0;
+	sqlca.sqlcode = 0;
+
+	
+
+	EXEC SQL VAR chr_l_h_trd_client				IS STRING;
+	EXEC SQL VAR chr_l_h_trd_domcpac				IS STRING;
+	EXEC SQL VAR chr_l_h_trd_countacc				IS STRING;
+	EXEC SQL VAR chr_l_h_trd_clientofcode     IS STRING; 
+	EXEC SQL VAR chr_l_h_trd_domcpbnkac			IS STRING;
+	EXEC SQL VAR chr_l_h_trd_trdt					IS STRING;
+	EXEC SQL VAR chr_l_h_trd_trcode				IS STRING;
+	EXEC SQL VAR chr_l_h_trd_refno					IS STRING;
+	EXEC SQL VAR chr_l_h_trd_locrefno				IS STRING;
+	EXEC SQL VAR chr_l_h_trd_moneydt_short		IS STRING;
+	EXEC SQL VAR chr_l_h_trd_trdfromord			IS STRING;
+	EXEC SQL VAR chr_l_h_trd_exarena				IS STRING;
+   EXEC SQL VAR chr_l_h_trd_typeoftrd         IS STRING;
+	EXEC SQL VAR chr_l_h_acc_cname					IS STRING;
+	EXEC SQL VAR chr_l_h_acc_glaccount			IS STRING;
+	EXEC SQL VAR chr_l_h_acc_branchcode			IS STRING;
+	EXEC SQL VAR chr_l_h_cpacc_glaccount		IS STRING;
+	EXEC SQL VAR chr_l_h_cpacc_branchcode		IS STRING;
+	EXEC SQL VAR chr_l_h_cpacc_cubk				IS STRING;
+	EXEC SQL VAR chr_l_h_domcpac_glaccount	IS STRING;
+	EXEC SQL VAR chr_l_h_domcpac_branchcode		IS STRING;
+	EXEC SQL VAR chr_l_h_domcpac_cubk				IS STRING;
+   EXEC SQL VAR chr_l_h_txncode               IS STRING;
+   EXEC SQL VAR chr_l_codetype                IS STRING;
+	EXEC SQL VAR chr_l_h_trd_cashclient       IS STRING;
+	EXEC SQL VAR chr_l_h_ccycode			      IS STRING;
+	EXEC SQL VAR chr_l_h_cashacc			      IS STRING;
+	EXEC SQL VAR chr_l_h_glcode			      IS STRING;
+	EXEC SQL VAR chr_l_h_trd_instrcode  		      IS STRING; 
+	EXEC SQL VAR chr_l_h_bond_isin   		      IS STRING; 
+	EXEC SQL VAR chr_l_h_bond_desc   		      IS STRING; 
+
+
+	EXEC SQL VAR l_dl_dealclientimg_struct_h->h_dl_client 		IS STRING;
+	EXEC SQL VAR l_dl_dealclientimg_struct_h->h_indentity_no			IS STRING;
+	EXEC SQL VAR l_dl_dealclientimg_struct_h->h_dealcd			IS STRING;
+	EXEC SQL VAR l_dl_dealclientimg_struct_h->h_dlt				IS STRING;
+	EXEC SQL VAR l_dl_dealclientimg_struct_h->h_setldt		IS STRING;
+	EXEC SQL VAR l_dl_dealclientimg_struct_h->h_instr_code			IS STRING;
+	EXEC SQL VAR l_dl_dealclientimg_struct_h->h_currencycode			IS STRING;
+	EXEC SQL VAR l_dl_dealclientimg_struct_h->h_domcpclt_cd			IS STRING;
+	EXEC SQL VAR l_dl_dealclientimg_struct_h->h_domcp_custodyclt		IS STRING;
+	EXEC SQL VAR l_dl_dealclientimg_struct_h->h_ex_arena			IS STRING;
+	EXEC SQL VAR l_dl_dealclientimg_struct_h->h_newdt			IS STRING;
+	EXEC SQL VAR l_dl_dealclientimg_struct_h->h_hostdate			IS STRING;
+	EXEC SQL VAR l_dl_dealclientimg_struct_h->h_moneydate			IS STRING;
+	EXEC SQL VAR l_dl_dealclientimg_struct_h->h_domcp_custodygl		IS STRING;
+	EXEC SQL VAR l_dl_dealclientimg_struct_h->h_cltibbs			IS STRING;
+	EXEC SQL VAR l_dl_dealclientimg_struct_h->h_valuedate			IS STRING;
+	EXEC SQL VAR l_dl_dealclientimg_struct_h->h_classofent		IS STRING;
+	EXEC SQL VAR l_dl_dealclientimg_struct_h->h_access_stamp	IS STRING;
+
+	#ifdef SYS_DEBUG
+		printf(	"Entered Function CDBPassNewFn\n" );
+	#endif
+
+	
+
+	l_pro_acctent_struct_ha = (PRO_ACCTENT_STRUCT_H*)calloc(1,sizeof(PRO_ACCTENT_STRUCT_H));
+	APL_MALLOC_FAIL(l_pro_acctent_struct_ha);
+
+	l_dl_dealclientimg_struct_h = (DL_DEALCLIENTIMG_STRUCT_H*)calloc(1,sizeof(DL_DEALCLIENTIMG_STRUCT_H));
+	APL_MALLOC_FAIL(l_dl_dealclientimg_struct_h);
+
+	
+
+	EXEC SQL SELECT 	CLIENT,
+						 	DOMESTIC_CPCLT,
+							CP_CLT,
+							CLIENTOF_CD,
+							DOMCP_CUSTODYCLT,
+							DEAL_DATE,
+							DEAL_CD,
+							AMOUNT,
+							IDENTIY_NO,
+							LCL_IDENTNO,
+							TO_CHAR(MONEY_SETL_DT,'YYYYMMDD'),
+							DEAL_FRM_ORD,
+							EX_ARENA,
+							BROKERCOMM,
+							CUSTODYCOMM,
+							STX_COMM,
+							OTH_COMM,
+                     DL_CLASS,
+							GL_CLIENT,
+							CURRENCY_CD,
+							INSTR_CODE
+				INTO		:chr_l_h_trd_client:l_i_trd_account,
+							:chr_l_h_trd_domcpac:l_i_trd_domcpac,
+							:chr_l_h_trd_countacc:l_i_trd_countacc,
+							:chr_l_h_trd_clientofcode:l_i_trd_accountofcode, 
+							:chr_l_h_trd_domcpbnkac:l_i_trd_domcpbnkac,
+							:chr_l_h_trd_trdt:l_i_trd_trdt,
+							:chr_l_h_trd_trcode:l_i_trd_trcode,
+							:l_h_trd_amount:l_i_trd_amount,
+							:chr_l_h_trd_refno:l_i_trd_refno,
+							:chr_l_h_trd_locrefno:l_i_trd_locrefno,
+							:chr_l_h_trd_moneydt_short:l_i_trd_moneydt_short,
+							:chr_l_h_trd_trdfromord:l_i_trd_trdfromord,
+							:chr_l_h_trd_exarena:l_i_trd_exarena,
+							:l_h_trd_brokercomm:l_i_trd_brkcomm,
+							:l_h_trd_custodycomm:l_i_trd_bnkcomm,
+							:l_h_trd_stexcomm:l_i_trd_stexcomm,
+							:l_h_trd_oth_comm:l_i_trd_othcomm,
+                     :chr_l_h_trd_typeoftrd:l_i_trd_typeoftrd,
+			            :chr_l_h_trd_cashclient:l_i_trd_cashaccount,
+							:chr_l_h_ccycode:l_i_ccycode,
+							:chr_l_h_trd_instrcode:l_i_trd_instr_code
+				FROM		DL_DEAL
+				WHERE		ROWID	=	:p_deal_rowid;
+
+	IS_ANY_ORA_ERROR;
+
+	if ( l_i_trd_amount == -1 )
+	{
+		l_h_trd_amount = 0;
+	}
+
+	if ( l_i_trd_brkcomm == -1 )
+	{
+		l_h_trd_brokercomm = 0;
+	}
+	
+	if ( l_i_trd_bnkcomm == -1 )
+	{
+		l_h_trd_custodycomm = 0;
+	}
+
+	if ( l_i_trd_stexcomm == -1 )
+	{
+		l_h_trd_stexcomm = 0;
+	}
+
+	if ( l_i_trd_othcomm == -1 )
+	{
+		l_h_trd_oth_comm = 0;
+	}
+
+   
+   if (!strcmp(chr_l_h_trd_typeoftrd, DEALTYPE_CORP_A) && 
+        !strncmp(chr_l_h_trd_refno, CA_BONDRD_IND, 6))
+   {
+      EXEC SQL SELECT INSTR_ISIN,
+						 	 INSTR_NAME
+					INTO   :chr_l_h_bond_isin:l_i_bond_isin,
+							 :chr_l_h_bond_desc:l_i_bond_desc
+					FROM   MT_INSTRUMENT
+					WHERE  INSTR_CODE = :chr_l_h_trd_instrcode;
+  		IS_ANY_ORA_ERROR 
+	}
+   
+
+	
+
+	EXEC SQL SELECT	CLN_NAME,
+							CLN_GL_ACCOUNT,
+							CLN_BRNCHCODE
+				INTO		:chr_l_h_acc_cname:l_i_acc_cname,
+							:chr_l_h_acc_glaccount:l_i_acc_ibbsaccount,
+							:chr_l_h_acc_branchcode:l_i_acc_branchcode
+				FROM		MT_CLIENT
+				WHERE		CLN_CODE	=	:chr_l_h_trd_client;
+
+	IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_ACCNOT_FND,
+														chr_l_h_trd_client,
+														APL_NULL_STRING,
+														APL_NULL_STRING );	
+
+	int_l_condexists_A = 0;
+
+	if ( APL_FAILURE == CO_Chk_CntryEnabled(	"ACC_ENTRIES",
+														"DOMCP_SETUP_CITI_ACC",
+														&int_l_condexists_A,
+														l_debug_info_ptr ) )
+	{
+		APL_GOBACK_FAIL;
+	}
+
+	if ( int_l_condexists_A > 0 )
+	{
+		EXEC SQL SELECT	CLN_GL_ACCOUNT,
+								CLN_BRNCHCODE,
+								CLN_BRK_ALL
+					INTO		:chr_l_h_cpacc_glaccount:l_i_cpacc_ibbsaccount,
+								:chr_l_h_cpacc_branchcode:l_i_cpacc_branchcode,
+								:chr_l_h_cpacc_cubk:l_i_cpacc_cubk
+					FROM		MT_CLIENT
+					WHERE		CLN_CODE	=	:l_mt_core_sys_params_struct_h.custody_clt_cd;
+
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_ACCNOT_FND,
+															(char *)l_mt_core_sys_params_struct_h.custody_clt_cd,
+															APL_NULL_STRING,
+															APL_NULL_STRING );//Changes done for AIX Migration	
+
+		strcpy(chr_l_h_domcpac_glaccount, chr_l_h_cpacc_glaccount );
+		strcpy(chr_l_h_domcpac_branchcode, chr_l_h_cpacc_branchcode );
+		strcpy(chr_l_h_domcpac_cubk, chr_l_h_cpacc_cubk );
+
+	}
+	else
+	{
+		EXEC SQL SELECT	CLN_GL_ACCOUNT,
+								CLN_BRNCHCODE
+					INTO		:chr_l_h_cpacc_glaccount:l_i_cpacc_ibbsaccount,
+								:chr_l_h_cpacc_branchcode:l_i_cpacc_branchcode
+					FROM		MT_CLIENT
+					WHERE		CLN_CODE	=	:chr_l_h_trd_domcpbnkac;
+
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_ACCNOT_FND,
+															chr_l_h_trd_domcpbnkac,
+															APL_NULL_STRING,
+															APL_NULL_STRING );	
+
+		if ( !strcmp(chr_l_h_trd_domcpac, l_mt_core_sys_params_struct_h.custody_clt_cd) &&
+			  ((l_i_trd_countacc != -1 )||(l_i_trd_accountofcode != -1)))
+		{
+      
+
+      	int_l_condexists_A = 0;
+      
+      	if ( APL_FAILURE == CO_Chk_CntryEnabled( "ACC_ENTRIES",
+         	                                    "PASSNEW_TRDTYPE_26",
+            	                                 &int_l_condexists_A,
+               	                              l_debug_info_ptr ) )
+      	{
+      		APL_GOBACK_FAIL
+			}
+		
+         if ( int_l_condexists_A > 0 )
+         {
+         	
+		   	EXEC SQL SELECT	CLN_GL_ACCOUNT,
+										CLN_BRNCHCODE,
+										CLN_BRK_ALL
+							INTO		:chr_l_h_domcpac_glaccount:l_i_domcpac_ibbsaccount,
+										:chr_l_h_domcpac_branchcode:l_i_domcpac_branchcode,
+										:chr_l_h_domcpac_cubk:l_i_domcpac_cubk
+							FROM		MT_CLIENT
+							WHERE		CLN_CODE	=	:chr_l_h_trd_domcpac;
+
+				IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_ACCNOT_FND,
+																chr_l_h_trd_domcpac,
+																APL_NULL_STRING,
+																APL_NULL_STRING );	
+			}
+         else
+         {
+			if (strlen(chr_l_h_trd_countacc) != 0)
+				{
+             
+            G_SYS_ACCOUNT_LEN = 10;           
+
+				EXEC SQL SELECT	CLN_GL_ACCOUNT,
+										CLN_BRNCHCODE,
+										CLN_BRK_ALL
+							INTO		:chr_l_h_domcpac_glaccount:l_i_domcpac_ibbsaccount,
+										:chr_l_h_domcpac_branchcode:l_i_domcpac_branchcode,
+										:chr_l_h_domcpac_cubk:l_i_domcpac_cubk
+							FROM		MT_CLIENT
+							WHERE		CLN_CODE	=	rtrim(SUBSTR(:chr_l_h_trd_countacc,1,:G_SYS_ACCOUNT_LEN));
+
+				IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_ACCNOT_FND,
+																	chr_l_h_trd_countacc,
+																	APL_NULL_STRING,
+																	APL_NULL_STRING );	
+            }
+            
+         else if (strlen(chr_l_h_trd_clientofcode) != 0)
+            {
+            EXEC SQL SELECT   CLN_GL_ACCOUNT,
+                              CLN_BRNCHCODE,
+                              CLN_BRK_ALL
+                     INTO     :chr_l_h_domcpac_glaccount:l_i_domcpac_ibbsaccount,
+                              :chr_l_h_domcpac_branchcode:l_i_domcpac_branchcode,
+                              :chr_l_h_domcpac_cubk:l_i_domcpac_cubk
+                     FROM     MT_CLIENT
+                     WHERE    CLN_CODE  =  :chr_l_h_trd_clientofcode;
+
+            IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET( ERR_ACCNOT_FND,
+                                                   chr_l_h_trd_clientofcode,
+                                                   APL_NULL_STRING,
+                                                   APL_NULL_STRING );
+            }
+			}
+		}
+		else
+		{
+			EXEC SQL SELECT	CLN_GL_ACCOUNT,
+									CLN_BRNCHCODE,
+									CLN_BRK_ALL
+						INTO		:chr_l_h_domcpac_glaccount:l_i_domcpac_ibbsaccount,
+									:chr_l_h_domcpac_branchcode:l_i_domcpac_branchcode,
+									:chr_l_h_domcpac_cubk:l_i_domcpac_cubk
+						FROM		MT_CLIENT
+						WHERE		CLN_CODE	=	:chr_l_h_trd_domcpac;
+
+			IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_ACCNOT_FND,
+																chr_l_h_trd_domcpac,
+																APL_NULL_STRING,
+																APL_NULL_STRING );	
+		}
+	}
+
+	
+	
+	if ( APL_FAILURE == CO_RtvSysDt(	chr_l_sysdate_b, 
+														l_debug_info_ptr ) )
+	{
+		APL_GOBACK_FAIL;
+	}
+
+	if ( APL_FAILURE == CO_RtvSysDtTime(	chr_l_sysdatetime_A, 
+															l_debug_info_ptr ) )
+	{
+		APL_GOBACK_FAIL;
+	}
+
+	if ( chr_l_h_trd_trcode[0] == DEALCD_DVP || chr_l_h_trd_trcode[0] == DEALCD_CR || chr_l_h_trd_trcode[0] == DEALCD_RCR)
+	{
+		*p_cct += l_h_trd_amount;
+	}
+	else
+	{
+		*p_dct += l_h_trd_amount;
+	}
+
+	
+
+	l_pro_acctent_struct_ha->module_ind = 'C';
+	strcpy( l_pro_acctent_struct_ha->brnch_cd, chr_l_h_acc_branchcode );
+	(*p_runseq)++;
+	sprintf( l_pro_acctent_struct_ha->inden_num,"%d",*p_runseq );
+
+
+
+	if(l_i_trd_cashaccount == -1)
+	{
+		strcpy( l_pro_acctent_struct_ha->client, chr_l_h_acc_glaccount );
+	}
+	else
+	{
+	   strcpy( l_pro_acctent_struct_ha->client, chr_l_h_trd_cashclient );
+	}	
+
+
+
+	strcpy( l_pro_acctent_struct_ha->curr_cd, AE_CCYCD );	
+	l_pro_acctent_struct_ha->lcl_amount = l_h_trd_amount;
+
+	int_l_condexists_A = 0;
+	if ( APL_FAILURE == CO_Chk_CntryEnabled( "ACC_ENTRIES",
+														"TXNCODE_952",
+														&int_l_condexists_A,
+														l_debug_info_ptr ) )
+	{
+		APL_GOBACK_FAIL;
+	}
+
+	l_condexists_pak = 0;
+	if ( APL_FAILURE == CO_Chk_CntryEnabled( "ACC_ENTRIES",
+														"TXNCODE_PAK",
+														&l_condexists_pak,
+														l_debug_info_ptr ) )
+	{
+		APL_GOBACK_FAIL;
+	}
+
+	if ( l_condexists_pak > 0 )
+	{
+		if ( chr_l_h_trd_trcode[0] == DEALCD_DVP || chr_l_h_trd_trcode[0] == DEALCD_CR || chr_l_h_trd_trcode[0] == DEALCD_RCR)
+		{
+			strcpy( l_pro_acctent_struct_ha->deal_cd, AE_CREDIT_DLCD_PK );
+		}
+		else
+		{
+			strcpy( l_pro_acctent_struct_ha->deal_cd, AE_DEBIT_DLCD_PK );
+		}
+	}
+	else if ( int_l_condexists_A == 0 )
+	{
+		if ( chr_l_h_trd_trcode[0] == DEALCD_DVP || chr_l_h_trd_trcode[0] == DEALCD_CR || chr_l_h_trd_trcode[0] == DEALCD_RCR)
+		{
+			strcpy( l_pro_acctent_struct_ha->deal_cd, AE_CREDIT_DLCD );
+		}
+		else
+		{
+			strcpy( l_pro_acctent_struct_ha->deal_cd, AE_DEBIT_DLCD );
+		}
+	}
+	else
+	{
+   	
+
+ 	   
+
+	   strcpy(chr_l_codetype,"PO_ACC_TXNCODE");
+
+	   EXEC SQL SELECT MAP_VAL 
+		INTO :chr_l_h_txncode:l_i_txncode 
+      FROM PRO_GMATCHVALUE 
+      WHERE MAPTYPE = :chr_l_codetype
+      AND MAPVALUE  = :chr_l_h_trd_exarena;
+				
+		IS_ANY_ORA_ERROR 
+
+		strcpy(l_pro_acctent_struct_ha->deal_cd,chr_l_h_txncode);
+	}
+
+	strcpy( l_pro_acctent_struct_ha->val_date, chr_l_h_trd_moneydt_short );
+
+	if ( chr_l_h_trd_trcode[0] == DEALCD_DVP || chr_l_h_trd_trcode[0] == DEALCD_CR || chr_l_h_trd_trcode[0] == DEALCD_RCR)
+	{
+		l_pro_acctent_struct_ha->db_cr_ind =  AE_CREDIT_IND ;
+	}
+	else
+	{
+		l_pro_acctent_struct_ha->db_cr_ind =  AE_DEBIT_IND ;
+	}
+
+	int_l_condexists_A = 0;
+	if ( APL_FAILURE == CO_Chk_CntryEnabled( "ACC_ENTRIES",
+														"NARRATIVE_LOCREFNO",
+														&int_l_condexists_A,
+														l_debug_info_ptr ) )
+	{
+		APL_GOBACK_FAIL;
+	}
+
+   
+   if (!strcmp(chr_l_h_trd_typeoftrd, DEALTYPE_CORP_A) &&
+        !strncmp(chr_l_h_trd_refno, CA_BONDRD_IND, 6))
+   {
+		CO_PadString(chr_l_h_bond_desc,'R',18," ",l_debug_info_ptr);
+		strcpy( l_pro_acctent_struct_ha->description, chr_l_h_bond_isin );
+		
+		strncat( l_pro_acctent_struct_ha->description, chr_l_h_bond_desc,15 );
+		strcat( l_pro_acctent_struct_ha->description, "FULL" );
+   }
+   
+   else
+   {
+		if ( int_l_condexists_A > 0 && strlen( chr_l_h_trd_locrefno ) )
+		{
+			strcpy( l_pro_acctent_struct_ha->description, chr_l_h_trd_locrefno );
+		}
+		else
+		{
+			strcpy( l_pro_acctent_struct_ha->description, chr_l_h_trd_refno );
+		}
+   }
+
+	strcpy( l_pro_acctent_struct_ha->proc_num, p_batch_no );
+	l_pro_acctent_struct_ha->rec_refer = AE_NORMAL_IND ;
+	strcpy( l_pro_acctent_struct_ha->proc_dt, chr_l_sysdate_b );
+
+	l_pro_acctent_struct_ha->fccy_amt = 0;
+	l_pro_acctent_struct_ha->exchg_rt = 0;
+
+	
+
+ 	if(APL_FAILURE == CO_Chk_CntryEnabled("SETUP_MULT_CCY","MULTI_CCY",&int_l_multi_ccy,l_debug_info_ptr))
+	  APL_GOBACK_FAIL
+
+ 	if(APL_FAILURE == CO_Chk_CntryEnabled("MULTI_CCY","GL_CLT",&l_mccy_cacc_exists,l_debug_info_ptr))
+	  APL_GOBACK_FAIL
+	if(( int_l_multi_ccy )  || ((l_mccy_cacc_exists) && (!strcmp(chr_l_h_trd_typeoftrd, DEALTYPE_CORP_A) && !strncmp(chr_l_h_trd_refno, CA_BONDRD_IND, 6)) && ((strcmp(chr_l_h_ccycode,"EUR")==0) || (strcmp(chr_l_h_ccycode,"USD")==0))))
+	{
+		strcpy(chr_l_h_defccy_flg,L_DEFCCY_FLG);
+
+		EXEC SQL SELECT EXCHGRT INTO :l_h_exchgrt:l_i_exchrate FROM MT_EXCHRATE 
+		WHERE CURRENCY_CD = :chr_l_h_ccycode and DENOM_CCY = :g_mt_commonsys_params_struct_h.dom_ccy 
+                AND RATE_DATE = (SELECT MAX(RATE_DATE) FROM MT_EXCHRATE
+                              WHERE CURRENCY_CD = :chr_l_h_ccycode
+                                AND DENOM_CCY = :g_mt_commonsys_params_struct_h.dom_ccy);
+
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_EXCHGRATE_NOTFND,
+															chr_l_h_ccycode ,
+															APL_NULL_STRING,
+															APL_NULL_STRING);
+
+		
+
+	        if(l_i_trd_cashaccount == -1)
+	        {
+		  strcpy( l_pro_acctent_struct_ha->client, chr_l_h_acc_glaccount );
+	        }
+	        else
+	        {
+	          strcpy( l_pro_acctent_struct_ha->client, chr_l_h_trd_cashclient );
+	        }	
+			
+		EXEC SQL SELECT GL_CD INTO :chr_l_h_glcode:l_i_ibbscode FROM 
+		DL_CURRENCY WHERE CURRENCY_CD = :chr_l_h_ccycode;
+
+		sprintf(chr_l_str_temp,"IBBS CODE FOR %s",chr_l_h_ccycode);
+
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_CCY_NOTFND,
+															chr_l_str_temp,
+															APL_NULL_STRING,
+															APL_NULL_STRING);
+
+		strcpy( l_pro_acctent_struct_ha->brnch_cd, g_mt_commonsys_params_struct_h.brnch_cd );
+			
+		strcpy( l_pro_acctent_struct_ha->curr_cd, chr_l_h_glcode );	
+		if ( !strcmp(chr_l_h_ccycode,g_mt_commonsys_params_struct_h.dom_ccy))
+                  {
+                    l_pro_acctent_struct_ha->fccy_amt = 0;
+		    l_pro_acctent_struct_ha->exchg_rt  = 0;
+                  }
+                else
+                  {
+                    l_pro_acctent_struct_ha->fccy_amt = l_h_trd_amount ;
+		    l_pro_acctent_struct_ha->exchg_rt  = l_h_exchgrt;
+                  }  
+		l_pro_acctent_struct_ha->lcl_amount = l_h_trd_amount * l_h_exchgrt;
+	}
+
+	
+
+
+	strcpy( l_pro_acctent_struct_ha->spl_clt_cd, APL_NULL_STRING );
+	l_pro_acctent_struct_ha->status_ind = AE_GEN_IND_CHAR ;
+	l_pro_acctent_struct_ha->report_amt = 0;
+	l_pro_acctent_struct_ha->report_clt = 0;
+	l_pro_acctent_struct_ha->report_tax = 0;
+	l_pro_acctent_struct_ha->report_ser = 0;
+	l_pro_acctent_struct_ha->rep_exg_rt = 0;
+	strcpy( l_pro_acctent_struct_ha->deal_ident, chr_l_h_trd_client );
+	strcat( l_pro_acctent_struct_ha->deal_ident, chr_l_h_trd_refno );
+
+	if ( APL_FAILURE == DL_Mod_AccEntNew(	p_batch_no,
+													l_pro_acctent_struct_ha, 
+													l_debug_info_ptr ) )
+	{
+		APL_GOBACK_FAIL;
+	}
+
+
+	
+
+	int_l_condexists_A = 0;
+	
+	if ( APL_FAILURE == CO_Chk_CntryEnabled(	"ACC_ENTRIES",
+														"PASSNEW_NO_OTH_ENT",
+														&int_l_condexists_A,
+														l_debug_info_ptr ) )
+	{
+		APL_GOBACK_FAIL;
+	}
+
+	if (  int_l_condexists_A == 0 || chr_l_h_trd_trdfromord[0] != 'Y' )
+	{
+
+		int_l_condexists_A = 0;
+	
+		if ( APL_FAILURE == CO_Chk_CntryEnabled( "ACC_ENTRIES",
+														 	"PASSNEW_OTHENT_NOCHK",
+														 	&int_l_condexists_A,
+														 	l_debug_info_ptr ) )
+		{
+			APL_GOBACK_FAIL;
+		}
+  
+      l_condexists_po = 0;
+      if ( APL_FAILURE == CO_Chk_CntryEnabled ( "ACC_ENTRIES",
+                                              "PASSNEW_TRDTYPE_26",
+                                              &l_condexists_po,
+                                              l_debug_info_ptr ) )
+     {
+ 	  	   APL_GOBACK_FAIL;
+     } 
+
+      
+
+
+
+		
+		if ( int_l_condexists_A > 0 ||
+           ( (!strcmp(chr_l_h_trd_typeoftrd,DEALTYPE_CORP_A) || !strcmp(chr_l_h_trd_typeoftrd,RTSPROCDEAL)) && chr_l_h_domcpac_cubk[0] == 'B' &&
+ !strcmp(chr_l_h_trd_domcpac, l_mt_core_sys_params_struct_h.custody_clt_cd )
+           )||
+           ( chr_l_h_domcpac_cubk[0] == 'B' &&
+           ( strcmp( chr_l_h_trd_domcpac, l_mt_core_sys_params_struct_h.custody_clt_cd ) ||
+           ( !strcmp( chr_l_h_trd_domcpac, l_mt_core_sys_params_struct_h.custody_clt_cd ) &&
+               ( l_i_trd_countacc != -1 || l_i_trd_accountofcode != -1) ) )&&(l_condexists_po == 0 || (l_condexists_po >0 && strcmp(chr_l_h_trd_typeoftrd,DEALTYPE_CORP_A)))))	
+		{
+			if ( chr_l_h_trd_trcode[0] == DEALCD_DVP || chr_l_h_trd_trcode[0] == DEALCD_CR || chr_l_h_trd_trcode[0] == DEALCD_RCR)
+			{
+
+				
+				
+				l_condexists_po = 0;
+	
+				if ( APL_FAILURE == CO_Chk_CntryEnabled( "ACC_ENTRIES",
+																 	"PASSNEW_OTHENT_PO",
+																 	&l_condexists_po,
+																 	l_debug_info_ptr ) )
+				{
+					APL_GOBACK_FAIL;
+				}
+
+				if ( l_condexists_po == 0 || chr_l_h_trd_trdfromord[0]!='Y')
+				{
+					*p_dct += l_h_trd_amount;
+				}
+				else
+				{
+					if ( chr_l_h_trd_exarena[0] == STX_EX_ARENA_IND )
+					{
+						*p_cct += l_h_trd_brokercomm;
+
+						l_GenCommAc += l_h_trd_custodycomm + l_h_trd_stexcomm + l_h_trd_oth_comm;
+						l_GenBnkAc  -= l_h_trd_amount + l_h_trd_brokercomm + l_h_trd_custodycomm + l_h_trd_stexcomm + l_h_trd_oth_comm;
+						if (chr_l_h_trd_trdfromord[0] == 'Y')
+						{
+							l_GenBnk1 -= l_h_trd_amount + l_h_trd_brokercomm + l_h_trd_custodycomm + l_h_trd_stexcomm + l_h_trd_oth_comm;
+						}
+					}
+					else
+					{
+						*p_cct += l_h_trd_brokercomm;
+					}
+				}
+			}
+			else
+			{
+
+				
+
+				l_condexists_po = 0;
+	
+				if ( APL_FAILURE == CO_Chk_CntryEnabled( "ACC_ENTRIES",
+																 	"PASSNEW_OTHENT_PO",
+																 	&l_condexists_po,
+																 	l_debug_info_ptr ) )
+				{
+					APL_GOBACK_FAIL;
+				}
+
+				if ( l_condexists_po == 0 || chr_l_h_trd_trdfromord[0] != 'Y') 
+				{
+					*p_cct += l_h_trd_amount;
+				}
+				else
+				{
+					if ( chr_l_h_trd_exarena[0] == STX_EX_ARENA_IND )
+					{
+						*p_cct += l_h_trd_brokercomm;
+
+						l_GenCommAc += l_h_trd_custodycomm + l_h_trd_stexcomm + l_h_trd_oth_comm;
+						l_GenBnkAc  += l_h_trd_amount - ( l_h_trd_brokercomm + l_h_trd_custodycomm + l_h_trd_stexcomm + l_h_trd_oth_comm );
+                  if ( chr_l_h_trd_trdfromord[0] == 'Y')
+						{
+							l_GenBnk1 += l_h_trd_amount-(l_h_trd_brokercomm + l_h_trd_custodycomm + l_h_trd_stexcomm + l_h_trd_oth_comm );
+						}
+					}
+					else
+					{
+						*p_cct += l_h_trd_brokercomm;
+					}
+				}
+			}
+			
+			
+
+			memset( l_pro_acctent_struct_ha, NULL, sizeof(PRO_ACCTENT_STRUCT_H) );
+	
+			l_pro_acctent_struct_ha->module_ind = 'C';
+
+			if ( l_condexists_po == 0 )
+			{
+				strcpy( l_pro_acctent_struct_ha->brnch_cd, chr_l_h_cpacc_branchcode );
+			}
+			else
+			{
+				strcpy( l_pro_acctent_struct_ha->brnch_cd, chr_l_h_domcpac_branchcode );
+			}
+
+			(*p_runseq)++;
+			sprintf( l_pro_acctent_struct_ha->inden_num,"%d",*p_runseq );
+
+			if ( l_condexists_po > 0 )
+			{
+				strcpy( l_pro_acctent_struct_ha->client, chr_l_h_domcpac_glaccount );
+			}
+			else
+			{
+				l_condexists_cz = 0;
+	
+				if ( APL_FAILURE == CO_Chk_CntryEnabled( "ACC_ENTRIES",
+																 	"PASSNEW_OTHENT_CZ",
+																 	&l_condexists_cz,
+																 	l_debug_info_ptr ) )
+				{
+					APL_GOBACK_FAIL;
+				}
+
+				if ( l_condexists_cz == 0 || 
+					  ( l_condexists_cz > 0 && 
+						 !strcmp(chr_l_h_trd_domcpac, l_mt_core_sys_params_struct_h.custody_clt_cd ) ) )
+				{
+					strcpy( l_pro_acctent_struct_ha->client, chr_l_h_cpacc_glaccount );
+				}
+				else
+				{
+					if ( chr_l_h_trd_exarena[0] == STX_EX_ARENA_IND )
+					{
+						if ( chr_l_h_trd_trcode[0] == DEALCD_RVP || chr_l_h_trd_trcode[0] == DEALCD_CD || chr_l_h_trd_trcode[0] == DEALCD_DCD)
+						{
+							strcpy( l_pro_acctent_struct_ha->client, chr_l_h_cpacc_glaccount );
+						}
+						else
+						{
+							EXEC SQL SELECT 	CUSTODY_CLT 
+										INTO		:chr_l_h_bnk_client:l_i_bnk_account
+										FROM		MT_CLIENT_ENTRIES;
+
+							IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_ACCNOT_FND,
+																				"First Sundry A/C",
+																				APL_NULL_STRING,
+																				APL_NULL_STRING);
+
+							strcpy( l_pro_acctent_struct_ha->client, chr_l_h_bnk_client );
+						}
+					}
+					else
+					{
+							EXEC SQL SELECT 	COMM_CLT 
+										INTO		:chr_l_h_commn_client:l_i_commn_account
+										FROM		MT_CLIENT_ENTRIES;
+
+							IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_ACCNOT_FND,
+																				"Instrond Sundry A/C",
+																				APL_NULL_STRING,
+																				APL_NULL_STRING);
+
+							strcpy( l_pro_acctent_struct_ha->client, chr_l_h_commn_client );
+					}
+				}
+			}
+
+			strcpy( l_pro_acctent_struct_ha->curr_cd, AE_CCYCD );	
+
+			if ( ( l_condexists_po == 0 ) || (chr_l_h_trd_trdfromord[0] == 'N') )
+			{
+				l_pro_acctent_struct_ha->lcl_amount = l_h_trd_amount;
+
+				if ( chr_l_h_trd_trcode[0] == DEALCD_RVP || chr_l_h_trd_trcode[0] == DEALCD_CD || chr_l_h_trd_trcode[0] == DEALCD_DCD)
+				{
+					l_pro_acctent_struct_ha->db_cr_ind =  AE_CREDIT_IND ;
+				}
+				else
+				{
+					l_pro_acctent_struct_ha->db_cr_ind =  AE_DEBIT_IND ;
+				}
+			}
+			else
+			{
+				l_pro_acctent_struct_ha->lcl_amount = l_h_trd_brokercomm;
+				l_pro_acctent_struct_ha->db_cr_ind =  AE_CREDIT_IND ;
+			}
+
+			int_l_condexists_A = 0;
+			if ( APL_FAILURE == CO_Chk_CntryEnabled( "ACC_ENTRIES",
+																"TXNCODE_952",
+																&int_l_condexists_A,
+																l_debug_info_ptr ) )
+			{
+				APL_GOBACK_FAIL;
+			}
+
+			l_condexists_pak = 0;
+			if ( APL_FAILURE == CO_Chk_CntryEnabled( "ACC_ENTRIES",
+																"TXNCODE_PAK",
+																&l_condexists_pak,
+																l_debug_info_ptr ) )
+			{
+				APL_GOBACK_FAIL;
+			}
+
+			if ( l_condexists_pak > 0 )
+			{
+				if ( chr_l_h_trd_trcode[0] == DEALCD_RVP || chr_l_h_trd_trcode[0] == DEALCD_CD || chr_l_h_trd_trcode[0] == DEALCD_DCD)
+				{
+					strcpy( l_pro_acctent_struct_ha->deal_cd, AE_CREDIT_DLCD_PK );
+				}
+				else
+				{
+					strcpy( l_pro_acctent_struct_ha->deal_cd, AE_DEBIT_DLCD_PK );
+				}
+			}
+			else if ( int_l_condexists_A == 0 )
+			{
+				if ( chr_l_h_trd_trcode[0] == DEALCD_RVP || chr_l_h_trd_trcode[0] == DEALCD_CD || chr_l_h_trd_trcode[0] == DEALCD_DCD)
+				{
+					strcpy( l_pro_acctent_struct_ha->deal_cd, AE_CREDIT_DLCD );
+				}
+				else
+				{
+					strcpy( l_pro_acctent_struct_ha->deal_cd, AE_DEBIT_DLCD );
+				}
+			}
+			else
+			{
+				
+				
+
+				strcpy(chr_l_codetype,"PO_ACC_TXNCODE");
+
+				EXEC SQL SELECT MAP_VAL 
+				INTO :chr_l_h_txncode:l_i_txncode 
+            FROM PRO_GMATCHVALUE 
+            WHERE MAPTYPE = :chr_l_codetype
+            AND MAPVALUE  = :chr_l_h_trd_exarena;
+				
+				IS_ANY_ORA_ERROR 
+
+				strcpy(l_pro_acctent_struct_ha->deal_cd,chr_l_h_txncode);
+			}
+
+			strcpy( l_pro_acctent_struct_ha->val_date, chr_l_h_trd_moneydt_short );
+
+
+			
+			if (!strcmp(chr_l_h_trd_typeoftrd, DEALTYPE_CORP_A) &&
+				  !strncmp(chr_l_h_trd_refno, CA_BONDRD_IND, 6))
+			{
+				CO_PadString(chr_l_h_bond_desc,'R',18," ",l_debug_info_ptr);
+				strcpy( l_pro_acctent_struct_ha->description, chr_l_h_bond_isin );
+				strcat( l_pro_acctent_struct_ha->description, chr_l_h_bond_desc );
+				strcat( l_pro_acctent_struct_ha->description, "FULL" );
+			}
+			
+			else
+			{
+				strcpy( l_pro_acctent_struct_ha->description, chr_l_h_trd_refno );
+			}
+
+			strcpy( l_pro_acctent_struct_ha->proc_num, p_batch_no );
+			l_pro_acctent_struct_ha->rec_refer = AE_NORMAL_IND ;
+			strcpy( l_pro_acctent_struct_ha->proc_dt, chr_l_sysdate_b );
+
+			l_pro_acctent_struct_ha->fccy_amt = 0;
+			l_pro_acctent_struct_ha->exchg_rt = 0;
+	
+	
+	
+	 
+	if(( int_l_multi_ccy )  || ((l_mccy_cacc_exists) && (!strcmp(chr_l_h_trd_typeoftrd, DEALTYPE_CORP_A) && !strncmp(chr_l_h_trd_refno, CA_BONDRD_IND, 6)) && ((strcmp(chr_l_h_ccycode,"EUR")==0) || (strcmp(chr_l_h_ccycode,"USD")==0))))
+	{
+		strcpy(chr_l_h_defccy_flg,L_DEFCCY_FLG);
+
+		EXEC SQL SELECT EXCHGRT INTO :l_h_exchgrt:l_i_exchrate FROM MT_EXCHRATE 
+		WHERE CURRENCY_CD = :chr_l_h_ccycode and DENOM_CCY = :g_mt_commonsys_params_struct_h.dom_ccy 
+                AND RATE_DATE = (SELECT MAX(RATE_DATE) FROM MT_EXCHRATE
+                              WHERE CURRENCY_CD = :chr_l_h_ccycode
+                                AND DENOM_CCY = :g_mt_commonsys_params_struct_h.dom_ccy);
+
+
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_EXCHGRATE_NOTFND,
+															chr_l_h_ccycode ,
+															APL_NULL_STRING,
+															APL_NULL_STRING);
+
+		EXEC SQL SELECT GL_ACCOUNT INTO :chr_l_h_cashacc:l_i_cashacc FROM DL_CASHCLT WHERE 
+		CLIENT =:l_mt_core_sys_params_struct_h.custody_clt_cd AND
+		CURRENCY_CD = :chr_l_h_ccycode AND ROWNUM < 2;
+
+		sprintf(chr_l_str_temp,"Cash A/c For %s For Currency %s",l_mt_core_sys_params_struct_h.custody_clt_cd,chr_l_h_ccycode);
+				
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_ACCNOT_FND,
+															chr_l_str_temp ,
+															APL_NULL_STRING,
+															APL_NULL_STRING);
+
+		EXEC SQL SELECT GL_CD INTO :chr_l_h_glcode:l_i_ibbscode FROM 
+		DL_CURRENCY WHERE CURRENCY_CD = :chr_l_h_ccycode;
+
+		sprintf(chr_l_str_temp,"IBBS CODE FOR %s",chr_l_h_ccycode);
+
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_CCY_NOTFND,
+															chr_l_str_temp,
+															APL_NULL_STRING,
+															APL_NULL_STRING);
+
+		strcpy( l_pro_acctent_struct_ha->brnch_cd, g_mt_commonsys_params_struct_h.brnch_cd );
+		strcpy( l_pro_acctent_struct_ha->client, chr_l_h_cashacc );	
+		strcpy( l_pro_acctent_struct_ha->curr_cd, chr_l_h_glcode );	
+	
+                if (!strcmp(chr_l_h_ccycode, g_mt_commonsys_params_struct_h.dom_ccy))	
+                  {
+                    l_pro_acctent_struct_ha->fccy_amt = 0 ;
+		    l_pro_acctent_struct_ha->exchg_rt  = 0 ;
+                  }
+                else
+                  {
+                    l_pro_acctent_struct_ha->fccy_amt = l_h_trd_amount ;
+		    l_pro_acctent_struct_ha->exchg_rt  = l_h_exchgrt;
+		  }
+                l_pro_acctent_struct_ha->lcl_amount = l_h_trd_amount * l_h_exchgrt;
+	}
+
+	
+
+			strcpy( l_pro_acctent_struct_ha->spl_clt_cd, APL_NULL_STRING );
+			l_pro_acctent_struct_ha->status_ind = AE_GEN_IND_CHAR ;
+			l_pro_acctent_struct_ha->report_amt = 0;
+			l_pro_acctent_struct_ha->report_clt = 0;
+			l_pro_acctent_struct_ha->report_tax = 0;
+			l_pro_acctent_struct_ha->report_ser = 0;
+			l_pro_acctent_struct_ha->rep_exg_rt = 0;
+			strcpy(l_pro_acctent_struct_ha->deal_ident, APL_NULL_STRING );
+
+	
+         if (l_pro_acctent_struct_ha->lcl_amount != 0)
+			{
+				if ( APL_FAILURE == DL_Mod_AccEntNew(	p_batch_no,
+																l_pro_acctent_struct_ha, 
+																l_debug_info_ptr ) )
+				{
+					APL_GOBACK_FAIL;
+				}
+		  }	
+
+			
+
+			l_condexists_po = 0;
+
+			if ( APL_FAILURE == CO_Chk_CntryEnabled( "ACC_ENTRIES",
+															 	"PASSNEW_OTHENT_PO",
+															 	&l_condexists_po,
+															 	l_debug_info_ptr ) )
+			{
+				APL_GOBACK_FAIL;
+			}
+
+			if ( l_condexists_po > 0 && chr_l_h_trd_exarena[0] != STX_EX_ARENA_IND && chr_l_h_trd_trdfromord[0] == 'Y' )
+			{
+				if ( chr_l_h_trd_trcode[0] == DEALCD_DVP || chr_l_h_trd_trcode[0] == DEALCD_CR || chr_l_h_trd_trcode[0] == DEALCD_RCR)
+				{ 
+					*p_dct += 	l_h_trd_amount + 
+									l_h_trd_brokercomm + 
+									l_h_trd_custodycomm +
+									l_h_trd_stexcomm +
+									l_h_trd_oth_comm;
+	
+					l_lcy = l_h_trd_amount +
+							  l_h_trd_brokercomm +
+							  l_h_trd_custodycomm +
+							  l_h_trd_stexcomm +
+							  l_h_trd_oth_comm;
+				}
+				else
+				{
+					*p_cct += 	l_h_trd_amount - 
+									( l_h_trd_brokercomm + 
+									  l_h_trd_custodycomm +
+									  l_h_trd_stexcomm +
+									  l_h_trd_oth_comm );
+	
+					l_lcy = l_h_trd_amount -
+							  ( l_h_trd_brokercomm +
+							    l_h_trd_custodycomm +
+							    l_h_trd_stexcomm +
+							    l_h_trd_oth_comm );
+				}
+
+				l_GenCommAc += l_h_trd_custodycomm + 
+									l_h_trd_stexcomm + 
+									l_h_trd_oth_comm;
+
+				
+
+				memset( l_pro_acctent_struct_ha, NULL, sizeof(PRO_ACCTENT_STRUCT_H) );
+	
+				l_pro_acctent_struct_ha->module_ind = 'C';
+				strcpy( l_pro_acctent_struct_ha->brnch_cd, chr_l_h_cpacc_branchcode );
+				(*p_runseq)++;
+				sprintf( l_pro_acctent_struct_ha->inden_num,"%d",*p_runseq );
+				strcpy( l_pro_acctent_struct_ha->client, chr_l_h_cpacc_glaccount );
+				strcpy( l_pro_acctent_struct_ha->curr_cd, AE_CCYCD );	
+				l_pro_acctent_struct_ha->lcl_amount = l_lcy;
+				if ( chr_l_h_trd_trcode[0] == DEALCD_RVP || chr_l_h_trd_trcode[0] == DEALCD_CD || chr_l_h_trd_trcode[0] == DEALCD_DCD)
+				{
+					l_pro_acctent_struct_ha->db_cr_ind =  AE_CREDIT_IND ;
+				}
+				else
+				{
+					l_pro_acctent_struct_ha->db_cr_ind =  AE_DEBIT_IND ;
+				}
+
+				
+
+ 				 
+
+				strcpy(chr_l_codetype,"PO_ACC_TXNCODE");
+
+				EXEC SQL SELECT MAP_VAL 
+				INTO :chr_l_h_txncode:l_i_txncode 
+            FROM PRO_GMATCHVALUE 
+            WHERE MAPTYPE = :chr_l_codetype
+            AND MAPVALUE  = :chr_l_h_trd_exarena;
+				
+				IS_ANY_ORA_ERROR 
+
+				strcpy(l_pro_acctent_struct_ha->deal_cd,chr_l_h_txncode);
+
+				strcpy( l_pro_acctent_struct_ha->val_date, chr_l_h_trd_moneydt_short );
+
+				strcpy( l_pro_acctent_struct_ha->description, chr_l_h_trd_refno );
+
+				strcpy( l_pro_acctent_struct_ha->proc_num, p_batch_no );
+				l_pro_acctent_struct_ha->rec_refer = AE_NORMAL_IND ;
+				strcpy( l_pro_acctent_struct_ha->proc_dt, chr_l_sysdate_b );
+
+				l_pro_acctent_struct_ha->fccy_amt = 0;
+				l_pro_acctent_struct_ha->exchg_rt = 0;
+				strcpy( l_pro_acctent_struct_ha->spl_clt_cd, APL_NULL_STRING );
+				l_pro_acctent_struct_ha->status_ind = AE_GEN_IND_CHAR ;
+				l_pro_acctent_struct_ha->report_amt = 0;
+				l_pro_acctent_struct_ha->report_clt = 0;
+				l_pro_acctent_struct_ha->report_tax = 0;
+				l_pro_acctent_struct_ha->report_ser = 0;
+				l_pro_acctent_struct_ha->rep_exg_rt = 0;
+				strcpy( l_pro_acctent_struct_ha->deal_ident, APL_NULL_STRING );
+ 		
+	
+
+				if ( l_pro_acctent_struct_ha->lcl_amount != 0)
+				{
+	
+					if ( APL_FAILURE == DL_Mod_AccEntNew(	p_batch_no,
+																	l_pro_acctent_struct_ha, 
+																	l_debug_info_ptr ) )
+					{
+						APL_GOBACK_FAIL;
+					}
+
+				}
+			}
+		}
+	}
+
+	
+
+	EXEC SQL UPDATE DL_DEAL 
+				SET 	HOST_DATE 			= 	:chr_l_sysdate_b,
+						ACCESS_STAMP	=	:chr_l_sysdatetime_A
+				WHERE	ROWID				=	:p_deal_rowid;
+
+	IS_ANY_ORA_ERROR;
+
+	
+	
+	
+
+	
+
+	int_l_condexists_A = 0;
+	
+	if ( APL_FAILURE == CO_Chk_CntryEnabled(	"ACC_ENTRIES",
+														"PASS_SUMMARY_PO",
+														&int_l_condexists_A,
+														l_debug_info_ptr ) )
+	{
+		APL_GOBACK_FAIL;
+	}
+
+	if ( int_l_condexists_A > 0 )
+	{
+		if (APL_FAILURE == DL_Proc_DateFmt(	chr_l_sysdate_b,
+														chr_l_v_sysdate,
+														l_debug_info_ptr ))
+		{
+			APL_GOBACK_FAIL
+		}
+
+		EXEC SQL SELECT 	CUSTODY_CLT,
+								COMM_CLT
+					INTO		:chr_l_h_bnk_client:l_i_bnk_account,
+								:chr_l_h_commn_client:l_i_commn_account
+					FROM 		MT_CLIENT_ENTRIES;
+
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_ACCNOT_FND,
+															"Sundry A/cs",
+															APL_NULL_STRING,
+															APL_NULL_STRING );
+
+      
+		if ( l_GenBnkAc != 0 )
+		{
+			if ( l_GenBnkAc < 0 )
+			{
+				l_lcy = -1 * l_GenBnk1;
+			}
+			else
+			{
+				l_lcy = l_GenBnk1;
+			}
+			if ( l_GenBnkAc > 0 )
+			{
+				*p_cct += l_GenBnkAc;
+			}
+			else
+			{
+				*p_dct += -1*l_GenBnkAc;
+			}
+
+			memset( l_pro_acctent_struct_ha, NULL, sizeof(PRO_ACCTENT_STRUCT_H));
+			l_pro_acctent_struct_ha->module_ind = 'C';
+			strcpy( l_pro_acctent_struct_ha->brnch_cd, g_mt_commonsys_params_struct_h.brnch_cd );
+			strcpy( l_pro_acctent_struct_ha->inden_num,APL_NULL_STRING);
+			strcpy( l_pro_acctent_struct_ha->client, chr_l_h_bnk_client );
+			strcpy( l_pro_acctent_struct_ha->curr_cd, AE_CCYCD );	
+			l_pro_acctent_struct_ha->lcl_amount = l_lcy;
+			
+
+			
+			int_l_condexists_A = 0;
+			if ( APL_FAILURE == CO_Chk_CntryEnabled( "ACC_ENTRIES",
+																"TXNCODE_952",
+																&int_l_condexists_A,
+																l_debug_info_ptr ) )
+			{
+				APL_GOBACK_FAIL;
+			}
+
+			if ( int_l_condexists_A > 0 )
+			{
+				
+
+				
+
+				strcpy(chr_l_codetype,"PO_ACC_TXNCODE");
+
+				EXEC SQL SELECT MAP_VAL
+				INTO :chr_l_h_txncode:l_i_txncode
+				FROM PRO_GMATCHVALUE
+				WHERE MAPTYPE = :chr_l_codetype
+				AND MAPVALUE  = :chr_l_h_trd_exarena;
+
+				IS_ANY_ORA_ERROR
+
+				strcpy(l_pro_acctent_struct_ha->deal_cd,chr_l_h_txncode);
+
+			} 
+
+			if ( l_GenBnkAc > 0 )
+			{
+			
+			
+	
+			 
+				
+
+            l_pro_acctent_struct_ha->db_cr_ind =  AE_CREDIT_IND;
+			}
+			else
+			{
+			
+			
+			
+				
+
+				l_pro_acctent_struct_ha->db_cr_ind = AE_DEBIT_IND ;
+			}
+
+			strcpy( l_pro_acctent_struct_ha->val_date, chr_l_v_sysdate );
+			strcpy( l_pro_acctent_struct_ha->description, "A/C" );
+			strcat( l_pro_acctent_struct_ha->description, chr_l_h_bnk_client );
+			strcpy( l_pro_acctent_struct_ha->proc_num, p_batch_no );
+			l_pro_acctent_struct_ha->rec_refer = AE_SUMMARY_IND ;
+			strcpy( l_pro_acctent_struct_ha->proc_dt, chr_l_sysdate_b );
+
+			l_pro_acctent_struct_ha->fccy_amt = 0;
+			l_pro_acctent_struct_ha->exchg_rt = 0;
+			strcpy( l_pro_acctent_struct_ha->spl_clt_cd, APL_NULL_STRING );
+			l_pro_acctent_struct_ha->status_ind = AE_GEN_IND_CHAR ;
+			l_pro_acctent_struct_ha->report_amt = 0;
+			l_pro_acctent_struct_ha->report_clt = 0;
+			l_pro_acctent_struct_ha->report_tax = 0;
+			l_pro_acctent_struct_ha->report_ser = 0;
+			l_pro_acctent_struct_ha->rep_exg_rt = 0;
+			strcpy( l_pro_acctent_struct_ha->deal_ident, APL_NULL_STRING );
+
+			if ( APL_FAILURE == DL_Mod_AccEntNew(	p_batch_no,
+															l_pro_acctent_struct_ha, 
+															l_debug_info_ptr ) )
+			{
+				APL_GOBACK_FAIL;
+			}
+
+		}
+
+		if ( l_GenCommAc != 0 )
+		{
+			CO_Round(	l_GenCommAc, 3, &l_round_GenCommAc );
+
+			if ( l_round_GenCommAc < 0 )
+			{
+				l_lcy = -1 * l_round_GenCommAc;
+			}
+			else
+			{
+				l_lcy = l_round_GenCommAc;
+			}
+
+
+        
+
+	  	     
+			*p_cct += l_round_GenCommAc;
+
+			memset( l_pro_acctent_struct_ha, NULL, sizeof(PRO_ACCTENT_STRUCT_H));
+			l_pro_acctent_struct_ha->module_ind = 'C';
+			strcpy( l_pro_acctent_struct_ha->brnch_cd, g_mt_commonsys_params_struct_h.brnch_cd );
+			strcpy( l_pro_acctent_struct_ha->inden_num,APL_NULL_STRING);
+			strcpy( l_pro_acctent_struct_ha->client, chr_l_h_commn_client );
+			strcpy( l_pro_acctent_struct_ha->curr_cd, AE_CCYCD );	
+			l_pro_acctent_struct_ha->lcl_amount = l_lcy;
+			strcpy( l_pro_acctent_struct_ha->deal_cd, AE_COMMON_DLCD );
+			l_pro_acctent_struct_ha->db_cr_ind =  AE_CREDIT_IND ;
+			strcpy( l_pro_acctent_struct_ha->val_date, chr_l_v_sysdate );
+			strcpy( l_pro_acctent_struct_ha->description, "COMMISSIONS RECEIVED" );
+			strcpy( l_pro_acctent_struct_ha->proc_num, p_batch_no );
+			l_pro_acctent_struct_ha->rec_refer = AE_SUMMARY_IND ;
+			strcpy( l_pro_acctent_struct_ha->proc_dt, chr_l_sysdate_b );
+
+			l_pro_acctent_struct_ha->fccy_amt = 0;
+			l_pro_acctent_struct_ha->exchg_rt = 0;
+			strcpy( l_pro_acctent_struct_ha->spl_clt_cd, "653830" );
+			l_pro_acctent_struct_ha->status_ind = AE_GEN_IND_CHAR ;
+			l_pro_acctent_struct_ha->report_amt = 0;
+			l_pro_acctent_struct_ha->report_clt = 0;
+			l_pro_acctent_struct_ha->report_tax = 0;
+			l_pro_acctent_struct_ha->report_ser = 0;
+			l_pro_acctent_struct_ha->rep_exg_rt = 0;
+			strcpy( l_pro_acctent_struct_ha->deal_ident, APL_NULL_STRING );
+
+			if ( APL_FAILURE == DL_Mod_AccEntNew(	p_batch_no,
+															l_pro_acctent_struct_ha, 
+															l_debug_info_ptr ) )
+			{
+				APL_GOBACK_FAIL;
+			}
+
+		}
+	}
+
+	APL_GOBACK_SUCCESS;
+
+   RETURN_SUCCESS :
+
+		fprintf(	p_logfile, 
+					"Exiting CDBPassNewFn with success\n");
+
+      #ifdef SYS_DEBUG
+         printf( "Leaving Function CDBPassNewFn with success\n");
+		#endif
+
+		APL_FREE(l_pro_acctent_struct_ha);
+		APL_FREE(l_dl_dealclientimg_struct_h);
+      return(APL_SUCCESS);
+
+   RETURN_FAILURE :
+
+		if (APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+		{
+			CO_ProcMonitor(p_logfile, 
+						"Got Errors : ", 
+						l_debug_info_ptr, 
+						p_intl_envdatastruct_h);
+			CO_FreeErrLst(l_debug_info_ptr);
+		}
+
+		fprintf(	p_logfile, 
+					"Exiting CDBPassNewFn with errors\n");
+
+      #ifdef SYS_DEBUG
+         printf( "Leaving Function CDBPassNewFn with errors\n");
+		#endif
+
+		APL_FREE(l_pro_acctent_struct_ha);
+		APL_FREE(l_dl_dealclientimg_struct_h);
+      return(APL_FAILURE);
+}
+
+
+
+int DL_Rtv_NewAccEnt(	char *p_batch_no,
+							FILE *p_logfile,
+							char **argv,
+							int  *p_runseq,
+							double *p_dct,
+							double *p_cct,
+							INTL_ENV_DATA_STRUCT_H *p_intl_envdatastruct_h,
+							DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	struct sqlca sqlca;
+	char	chr_l_h_trd_typeoftrd[DEALTYPE_LEN_A]			=	APL_NULL_STRING;
+	char	chr_l_h_trd_trcode[APL_FLAG_LENGTH]				=	APL_NULL_STRING;
+	char	chr_l_h_trd_trdfromord[APL_FLAG_LENGTH]			=	APL_NULL_STRING;
+   char  chr_l_h_trd_exarena[APL_FLAG_LENGTH]          =  APL_NULL_STRING;
+	char	chr_l_h_trd_rowid[APL_ROWID_LEN]				=	APL_NULL_STRING;
+	char	chr_l_h_restart_data[APL_RESTARTDATA_LENGTH]	=	APL_NULL_STRING;
+	char	chr_l_oth_exarena[EX_ARENA_LEN]				=	APL_NULL_STRING;
+	char	chr_l_rf[APL_FLAG_LENGTH]							=	APL_NULL_STRING;
+	char	chr_l_df[APL_FLAG_LENGTH]							=	APL_NULL_STRING;
+	char	chr_l_buf[BUFFER_LEN]								=  APL_NULL_STRING;
+	int	int_l_process_recs									=	0;
+	int	int_l_reccount										=	0;
+	short	l_i_trd_typeoftrd								=	0;
+	short	l_i_trd_trcode									=	0;
+	short	l_i_trd_trdfromord							=	0;
+   short l_i_trd_exarena                        =  0;
+	short	l_i_trd_rowid									=	0;
+	short	l_i_restart_data								=	0;
+	short	int_l_condexists_A									=	0;
+	char  chr_l_d_r_vp[APL_FLAG_LENGTH]                 =  APL_NULL_STRING;	
+	int   int_num                                    =  0;						
+	char  **temp                                 =  NULL;					
+
+	sqlca.sqlcode = 0;
+
+	
+
+	EXEC SQL VAR chr_l_h_trd_typeoftrd	IS STRING;
+	EXEC SQL VAR chr_l_h_trd_trcode		IS STRING;
+	EXEC SQL VAR chr_l_h_trd_trdfromord	IS STRING;
+   EXEC SQL VAR chr_l_h_trd_exarena     IS STRING;
+	EXEC SQL VAR chr_l_h_trd_rowid			IS STRING;
+	EXEC SQL VAR chr_l_h_restart_data		IS STRING;
+	EXEC SQL VAR chr_l_d_r_vp    			IS STRING;
+
+	#ifdef SYS_DEBUG
+		printf(	"Entered Function DL_Rtv_NewAccEnt\n" );
+	#endif
+
+	
+
+	EXEC SQL SELECT PROCESSING_STATUS 
+				INTO	:chr_l_h_restart_data:l_i_restart_data
+  				FROM 	SYS_BATCHPROC
+  				WHERE PROCESS_NAME		=	:argv[0]
+  				AND   PROC_INIT			=	:argv[1]
+  				AND   STARTDATE	=	:argv[2]
+				AND   STATUS		=	'started'
+  				FOR UPDATE OF PROCESSING_STATUS,STATUS;
+	
+  	if(APL_ZERO_RESULT_SET) 
+	{
+  		CO_ProcMonitor(	p_logfile,
+						"E:No entry in batch_in_proc",
+						NULL,
+						NULL);
+  	 	APL_GOBACK_FAIL;
+  	}
+
+ 	IS_ANY_ORA_ERROR;
+
+	chr_l_oth_exarena[0] =  OTH_EX_ARENA ;
+	chr_l_oth_exarena[1] = '\0';
+
+	chr_l_rf[0] = DEALCD_RF;
+	chr_l_rf[1] = '\0';
+
+	chr_l_df[0] = DEALCD_DF;
+	chr_l_df[1] = '\0';
+
+	
+
+  
+
+
+ 	if ( APL_FAILURE == CO_Chk_CntryEnabled( "ACC_ENTRIES",
+                                             "SEP_D_R_VP_REP",
+                                             &int_l_condexists_A,
+                                             l_debug_info_ptr ) )
+   {
+  		APL_GOBACK_FAIL;
+   }
+
+   if ( int_l_condexists_A > 0 )
+   {
+		    
+      if (APL_FAILURE == CO_SplitStr( argv[9],
+                                       '|',
+                                       &int_num,
+                                       &temp ))
+      {
+         CO_ProcMonitor(p_logfile, "Failure from StrSplitFn", NULL, NULL);
+         APL_GOBACK_FAIL
+      }
+
+		if (int_num != 2)
+      {
+         CO_ProcMonitor(p_logfile, "Improper Number of arguments", NULL, NULL);
+         CO_ProcMonitor(p_logfile, argv[0], NULL, NULL);
+         CO_ProcMonitor(p_logfile, argv[1], NULL, NULL);
+         CO_ProcMonitor(p_logfile, argv[2], NULL, NULL);
+         CO_ProcMonitor(p_logfile, argv[3], NULL, NULL);
+         CO_ProcMonitor(p_logfile, argv[4], NULL, NULL);
+         CO_ProcMonitor(p_logfile, argv[5], NULL, NULL);
+         CO_ProcMonitor(p_logfile, argv[6], NULL, NULL);
+         CO_ProcMonitor(p_logfile, argv[7], NULL, NULL);
+         CO_ProcMonitor(p_logfile, argv[8], NULL, NULL);
+         CO_ProcMonitor(p_logfile, argv[9], NULL, NULL);
+         APL_GOBACK_FAIL;
+      }
+		strcpy(chr_l_d_r_vp, temp[1]);
+		if(strcmp(chr_l_d_r_vp,APL_NULL_STRING) == 0)
+   	{
+      	APL_DATA_MISSING("Trade Code Missing",APL_NULL_STRING,APL_NULL_STRING)
+			APL_GOBACK_FAIL
+   	}
+
+
+	 	EXEC SQL DECLARE  FreshEntCurs_HU CURSOR FOR
+            SELECT   DEAL_CD,
+                     DL_CLASS,
+                     DEAL_FRM_ORD,
+                     EX_ARENA,
+                     ROWID
+            FROM     DL_DEAL
+            WHERE    HOST_DATE IS NULL
+            AND      MONEY_SETL_DT IS NOT NULL
+            AND      DEAL_CD = :chr_l_d_r_vp 
+            FOR UPDATE OF ACCESS_STAMP;
+		EXEC SQL OPEN FreshEntCurs_HU;
+   }
+	else
+	{
+		EXEC SQL DECLARE 	FreshEntCurs CURSOR FOR 
+				SELECT  	DEAL_CD,	
+						  	DL_CLASS,
+							DEAL_FRM_ORD,
+                     EX_ARENA,
+						  	ROWID
+				FROM	  	DL_DEAL
+				WHERE	  	HOST_DATE IS NULL
+				AND		MONEY_SETL_DT IS NOT NULL
+				AND		DEAL_CD NOT IN ( :chr_l_rf, :chr_l_df )
+				FOR UPDATE OF ACCESS_STAMP;
+		EXEC SQL OPEN FreshEntCurs;
+	}
+	int_l_condexists_A = 0;
+
+
+	for(int_l_reccount=0; ;int_l_reccount++)
+	{
+		
+
+		if ( int_l_process_recs == L_COMMITSIZE )
+		{
+			if ( APL_DOUBLE_EQUAL(*p_dct, *p_cct ) )
+			{
+				memset(chr_l_buf, NULL, BUFFER_LEN);
+				sprintf(chr_l_buf, "Processed %d records", int_l_reccount);
+
+				EXEC SQL UPDATE SYS_BATCHPROC
+				SET STAT_DET = :chr_l_buf
+   			WHERE PROCESS_NAME		=	:argv[0]
+   			AND   PROC_INIT			=	:argv[1]
+   			AND   STARTDATE	=	:argv[2]
+	   		AND   STATUS		=	'started';
+
+				IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_REC_NOTFND,
+																	"Batch_in_proc Rec",
+																	APL_NULL_STRING,
+																	APL_NULL_STRING )
+
+				EXEC SQL COMMIT WORK;
+				IS_ANY_ORA_ERROR;
+
+				CO_ProcMonitor(p_logfile, "Record Committed", NULL, NULL);
+			
+				EXEC SQL OPEN FreshEntCurs;
+				IS_ANY_ORA_ERROR;
+
+				int_l_process_recs = 0;
+
+ 		  		EXEC SQL SELECT PROCESSING_STATUS 
+							INTO	:chr_l_h_restart_data:l_i_restart_data
+   						FROM 	SYS_BATCHPROC
+   						WHERE PROCESS_NAME		=	:argv[0]
+   						AND   PROC_INIT			=	:argv[1]
+   						AND   STARTDATE	=	:argv[2]
+	   					AND   STATUS		=	'started'
+   						FOR UPDATE OF PROCESSING_STATUS,STATUS;
+	
+   			if(APL_ZERO_RESULT_SET) 
+				{
+      			CO_ProcMonitor(	p_logfile,
+									"E:No entry in batch_in_proc",
+									NULL,
+									NULL);
+     			 	APL_GOBACK_FAIL;
+   			}
+
+ 		  		IS_ANY_ORA_ERROR;
+			}
+
+			
+
+			
+		}	
+
+
+		if ( APL_FAILURE == CO_Chk_CntryEnabled( "ACC_ENTRIES",
+                                             "SEP_D_R_VP_REP",
+                                             &int_l_condexists_A,
+                                             l_debug_info_ptr ) )
+   	{
+      	APL_GOBACK_FAIL;
+   	}
+
+
+   	if ( int_l_condexists_A > 0 )
+   	{
+
+			EXEC SQL FETCH FreshEntCurs_HU INTO    :chr_l_h_trd_trcode:l_i_trd_trcode,
+                                          :chr_l_h_trd_typeoftrd:l_i_trd_typeoftrd,
+                                          :chr_l_h_trd_trdfromord:l_i_trd_trdfromord,
+                                          :chr_l_h_trd_exarena:l_i_trd_exarena,
+                                          :chr_l_h_trd_rowid:l_i_trd_rowid;
+		}
+		else
+		{
+			EXEC SQL FETCH FreshEntCurs INTO 	:chr_l_h_trd_trcode:l_i_trd_trcode,
+														:chr_l_h_trd_typeoftrd:l_i_trd_typeoftrd,
+														:chr_l_h_trd_trdfromord:l_i_trd_trdfromord,
+                                          :chr_l_h_trd_exarena:l_i_trd_exarena,
+														:chr_l_h_trd_rowid:l_i_trd_rowid;
+		}
+
+		IS_ANY_ORA_ERROR;
+
+		if ( APL_ZERO_RESULT_SET )
+		{
+			break;
+		}
+
+		
+
+		int_l_condexists_A = 0;
+
+		if ( APL_FAILURE == CO_Chk_CntryEnabled(	"ACC_ENTRIES",
+															"PASS_FRESH_DVP_ONLY",
+															&int_l_condexists_A,
+															l_debug_info_ptr ) )
+		{
+			APL_GOBACK_FAIL;
+		}
+
+		if ( int_l_condexists_A > 0 )
+		{
+			if ( chr_l_h_trd_trcode[0] != DEALCD_DVP )
+			{
+				continue;
+			}
+		}
+
+		int_l_condexists_A = 0;
+
+		if ( APL_FAILURE == CO_Chk_CntryEnabled(	"ACC_ENTRIES",
+															"NO_FRESH_TRDTYPE_19",
+															&int_l_condexists_A,
+															l_debug_info_ptr ) )
+		{
+			APL_GOBACK_FAIL;
+		}
+
+		if ( int_l_condexists_A > 0 )
+		{
+			if ( !strcmp(chr_l_h_trd_typeoftrd, DEALTYPE_CORP_A ) )
+			{
+				continue;
+			}
+		}
+		int_l_condexists_A = 0;
+
+		if ( APL_FAILURE == CO_Chk_CntryEnabled(	"ACC_ENTRIES",
+															"NO_FRESH_TRDTYPE_99",
+															&int_l_condexists_A,
+															l_debug_info_ptr ) )
+		{
+			APL_GOBACK_FAIL;
+		}
+
+		if ( int_l_condexists_A > 0 )
+		{
+			if ( !strcmp(chr_l_h_trd_typeoftrd, DL_BLOCK_INDENT ) )
+			{
+				continue;
+			}
+		}
+      
+
+      int_l_condexists_A = 0;
+      
+      if ( APL_FAILURE == CO_Chk_CntryEnabled( "ACC_ENTRIES",
+                                             "EXARENA_NOCHK",
+                                             &int_l_condexists_A,
+                                             l_debug_info_ptr ) )
+      {
+      	APL_GOBACK_FAIL
+		}
+		
+		if ( int_l_condexists_A == 0)
+      {
+      	if ( !strcmp(chr_l_h_trd_exarena,chr_l_oth_exarena ) )
+			{
+				continue;
+         }
+      }
+		if ( APL_FAILURE == CDBPassNewFn( 	p_batch_no,
+														chr_l_h_trd_rowid,
+														AE_NEWENTRY_IND,
+														p_logfile,
+														argv,
+														p_runseq,
+														p_dct,
+														p_cct,
+														p_intl_envdatastruct_h,
+													 	l_debug_info_ptr ) )
+		{	
+			APL_GOBACK_FAIL;
+		}
+
+		
+		int_l_condexists_A = 0;
+
+		if ( APL_FAILURE == CO_Chk_CntryEnabled(	"ACC_ENTRIES",
+															"NO_CALCOTHER",
+															&int_l_condexists_A,
+															l_debug_info_ptr ) )
+		{
+			APL_GOBACK_FAIL;
+		}
+
+		if ( chr_l_h_trd_trdfromord[0] == 'Y' && int_l_condexists_A == 0 )
+		{
+			if ( APL_FAILURE == DL_Rtv_OthFrmOrd(	p_batch_no,
+															chr_l_h_trd_rowid,
+															p_logfile,
+															argv,
+															p_runseq,
+															p_dct,
+															p_cct,
+															p_intl_envdatastruct_h,
+													 		l_debug_info_ptr ) )
+			{
+				APL_GOBACK_FAIL;
+			}
+		}
+
+		int_l_process_recs++;
+	}
+
+	if ( APL_FAILURE == CO_Chk_CntryEnabled( "ACC_ENTRIES",
+                                             "SEP_D_R_VP_REP",
+                                             &int_l_condexists_A,
+                                             l_debug_info_ptr ) )
+   {
+      APL_GOBACK_FAIL;
+   }
+
+   if ( int_l_condexists_A > 0 )
+		EXEC SQL CLOSE FreshEntCurs_HU;
+	else
+		EXEC SQL CLOSE FreshEntCurs;
+
+	APL_GOBACK_SUCCESS;
+
+   RETURN_SUCCESS :
+
+		
+
+		if ( APL_DOUBLE_EQUAL(*p_dct, *p_cct ) )
+		{
+			if ( int_l_process_recs > 0 )
+			{
+				EXEC SQL COMMIT WORK;
+				IS_ANY_ORA_ERROR;
+			}
+		}
+		else
+		{
+			CO_InsertErr( 	l_debug_info_ptr,
+									ERR_DATA_INTEGRITY,
+									"Dr/Cr.Total Mismatch",
+									APL_NULL_STRING,
+									APL_NULL_STRING,
+									__LINE__,
+									__FILE__ );
+			APL_GOBACK_FAIL;
+		}
+
+		fprintf(	p_logfile, 
+					"Exiting DL_Rtv_NewAccEnt with success\n");
+
+      #ifdef SYS_DEBUG
+         printf( "Leaving Function DL_Rtv_NewAccEnt with success\n");
+		#endif
+
+      return(APL_SUCCESS);
+
+   RETURN_FAILURE :
+
+		if (APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+		{
+			CO_ProcMonitor(p_logfile, 
+						"Got Errors : ", 
+						l_debug_info_ptr, 
+						p_intl_envdatastruct_h);
+			CO_FreeErrLst(l_debug_info_ptr);
+		}
+
+		fprintf(	p_logfile, 
+					"Exiting DL_Rtv_NewAccEnt with errors\n");
+
+      #ifdef SYS_DEBUG
+         printf( "Leaving Function DL_Rtv_NewAccEnt with errors\n");
+		#endif
+
+      return(APL_FAILURE);
+}
+
+
+
+int DL_Rtv_ChngStatus(	char *p_ora_rowid,
+							char *p_deal_rowid,
+							char *p_passrevchg_entry,
+							FILE *p_logfile,
+							INTL_ENV_DATA_STRUCT_H *p_intl_envdatastruct_h,
+							DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	struct sqlca sqlca;
+	char		chr_l_h_trcode_a[APL_FLAG_LENGTH]				=	APL_NULL_STRING;
+	char		chr_l_h_exarena[APL_FLAG_LENGTH]				=	APL_NULL_STRING;
+	char		chr_l_h_trdt_a[APL_DATE_LEN]					=	APL_NULL_STRING;
+	char		chr_l_h_settledt_a[APL_DATE_LEN]				=	APL_NULL_STRING;
+	char		chr_l_h_moneydt[APL_DATE_LEN]				=	APL_NULL_STRING;
+	char		chr_l_h_domcpbnkac[APL_CLIENT_LENGTH]		=	APL_NULL_STRING;
+	char		chr_l_h_trd_trcode[APL_FLAG_LENGTH]			=	APL_NULL_STRING;
+	char		chr_l_h_trd_exarena[APL_FLAG_LENGTH]			=	APL_NULL_STRING;
+	char		chr_l_h_trd_trdt[APL_DATE_LEN]				=	APL_NULL_STRING;
+	char		chr_l_h_trd_settledt[APL_DATE_LEN]		=	APL_NULL_STRING;
+	char		chr_l_h_trd_moneydt[APL_DATE_LEN]			=	APL_NULL_STRING;
+	char		chr_l_h_trd_domcpbnkac[APL_CLIENT_LENGTH]	=	APL_NULL_STRING;
+	char		chr_l_sysdate_b[APL_DATE_LEN]					=	APL_NULL_STRING;
+	int		int_l_date_diff									=	0;
+	double	chr_l_h_amount									=	0;
+	double	l_h_trd_amount								=	0;
+	short		int_l_i_trcode									=	0;
+	short 	l_i_exarena									=	0;
+	short		l_i_trdt										=	0;
+	short		l_i_settledt								=	0;
+	short		l_i_moneydt									=	0;
+	short		l_i_domcpbnkac								=	0;
+	short		l_i_amount									=	0;
+	short		l_i_trd_trcode								=	0;
+	short 	l_i_trd_exarena							=	0;
+	short		l_i_trd_trdt								=	0;
+	short		l_i_trd_settledt							=	0;
+	short		l_i_trd_moneydt							=	0;
+	short		l_i_trd_domcpbnkac						=	0;
+	short		l_i_trd_amount								=	0;
+
+	sqlca.sqlcode = 0;
+
+	
+
+	EXEC SQL VAR chr_l_h_trcode_a				IS STRING;
+	EXEC SQL VAR chr_l_h_exarena			IS STRING;
+	EXEC SQL VAR chr_l_h_trdt_a				IS STRING;
+	EXEC SQL VAR chr_l_h_settledt_a			IS STRING;
+	EXEC SQL VAR chr_l_h_moneydt			IS STRING;
+	EXEC SQL VAR chr_l_h_domcpbnkac		IS STRING;
+	EXEC SQL VAR chr_l_h_trd_trcode		IS STRING;
+	EXEC SQL VAR chr_l_h_trd_exarena		IS STRING;
+	EXEC SQL VAR chr_l_h_trd_trdt			IS STRING;
+	EXEC SQL VAR chr_l_h_trd_settledt		IS STRING;
+	EXEC SQL VAR chr_l_h_trd_moneydt		IS STRING;
+	EXEC SQL VAR chr_l_h_trd_domcpbnkac	IS STRING;
+
+	#ifdef SYS_DEBUG
+		printf(	"Entered Function DL_Rtv_ChngStatus\n" );
+	#endif
+
+	
+
+	EXEC SQL SELECT 	DEAL_CD,
+						 	EX_ARENA,
+						 	DEAL_DATE,
+						 	SETL_DATE,
+						 	MONEY_SETL_DT,
+						 	DOMCP_CUSTODYCLT,
+							AMOUNT
+				INTO		:chr_l_h_trcode_a:int_l_i_trcode,
+							:chr_l_h_exarena:l_i_exarena,
+							:chr_l_h_trdt_a:l_i_trdt,
+							:chr_l_h_settledt_a:l_i_settledt,
+							:chr_l_h_moneydt:l_i_moneydt,
+							:chr_l_h_domcpbnkac:l_i_domcpbnkac,
+							:chr_l_h_amount:l_i_amount
+				FROM		DL_DEALCLIENTIMG
+				WHERE		ROWID	=	:p_ora_rowid;
+
+	IS_ANY_ORA_ERROR;
+
+	if ( l_i_amount == -1 )
+	{
+		chr_l_h_amount = 0;
+	}
+ 
+	
+
+	EXEC SQL SELECT 	DEAL_CD,
+						 	EX_ARENA,
+						 	DEAL_DATE,
+						 	SETL_DATE,
+						 	MONEY_SETL_DT,
+						 	DOMCP_CUSTODYCLT,
+							AMOUNT
+				INTO		:chr_l_h_trd_trcode:l_i_trd_trcode,
+							:chr_l_h_trd_exarena:l_i_trd_exarena,
+							:chr_l_h_trd_trdt:l_i_trd_trdt,
+							:chr_l_h_trd_settledt:l_i_trd_settledt,
+							:chr_l_h_trd_moneydt:l_i_trd_moneydt,
+							:chr_l_h_trd_domcpbnkac:l_i_trd_domcpbnkac,
+							:l_h_trd_amount:l_i_trd_amount
+				FROM		DL_DEAL
+				WHERE		ROWID	=	:p_deal_rowid;
+
+	IS_ANY_ORA_ERROR;
+
+	if ( l_i_trd_amount == -1 )
+	{
+		l_h_trd_amount = 0;
+	}
+
+	
+
+	
+
+	if ( !strcmp( chr_l_h_trcode_a, chr_l_h_trd_trcode ) )
+	{
+		p_passrevchg_entry[0] =  APL_YES_FLAG;
+		p_passrevchg_entry[1] = '\0';
+	}
+
+	
+
+	else if ( chr_l_h_trcode_a[0] == DEALCD_RVP &&
+				 chr_l_h_trd_trcode[0] == DEALCD_RVP &&
+				 chr_l_h_exarena[0] == STX_EX_ARENA_IND &&
+				 chr_l_h_trd_exarena[0] == NON_STX_EX_ARENA_IND )
+	{
+		p_passrevchg_entry[0] =  APL_YES_FLAG;
+		p_passrevchg_entry[1] = '\0';
+	}
+
+	
+
+	else if ( chr_l_h_trcode_a[0] == DEALCD_RVP &&
+				 chr_l_h_trd_trcode[0] == DEALCD_RVP &&
+				 chr_l_h_exarena[0] == STX_EX_ARENA_IND &&
+				 chr_l_h_trd_exarena[0] == STX_EX_ARENA_IND )
+	{
+		if ( APL_FAILURE == CO_RtvSysDt( 	chr_l_sysdate_b,
+															l_debug_info_ptr ) )
+		{
+			APL_GOBACK_FAIL;
+		}
+
+		int_l_date_diff = 0;
+
+		if ( APL_FAILURE == CO_Pro_DateComp(	chr_l_h_trd_trdt,
+														chr_l_sysdate_b,
+														&int_l_date_diff,
+														l_debug_info_ptr ) )
+		{
+			APL_GOBACK_FAIL;
+		}	
+
+		if ( int_l_date_diff < 0 )
+		{
+			p_passrevchg_entry[0] =  APL_YES_FLAG;
+			p_passrevchg_entry[1] = '\0';
+		}
+	}
+
+	
+
+	else if ( chr_l_h_trcode_a[0] == DEALCD_RVP &&
+				 chr_l_h_trd_trcode[0] == DEALCD_RVP &&
+				 chr_l_h_exarena[0] == STX_EX_ARENA_IND &&
+				 chr_l_h_trd_exarena[0] == STX_EX_ARENA_IND &&
+				 strcmp( chr_l_h_settledt_a, chr_l_h_trd_settledt ) )
+	{
+		p_passrevchg_entry[0] =  APL_YES_FLAG;
+		p_passrevchg_entry[1] = '\0';
+	}
+
+	
+
+	else if ( !strcmp( chr_l_h_trcode_a, chr_l_h_trd_trcode ) &&
+				 !strcmp( chr_l_h_exarena, chr_l_h_trd_exarena ) &&
+				 strcmp( chr_l_h_moneydt, chr_l_h_trd_moneydt ) )
+	{
+		if (!( chr_l_h_trcode_a[0] == DEALCD_RVP &&
+				chr_l_h_exarena[0] == STX_EX_ARENA_IND &&
+				l_i_moneydt == -1 ))
+		{
+			p_passrevchg_entry[0] =  APL_YES_FLAG;
+			p_passrevchg_entry[1] = '\0';
+		}
+	}
+
+	
+
+	else if ( ( (chr_l_h_amount != l_h_trd_amount) && (l_h_trd_amount > 0) ) ||
+				 strcmp( chr_l_h_domcpbnkac, chr_l_h_trd_domcpbnkac ) )
+	{
+		p_passrevchg_entry[0] =  APL_YES_FLAG;
+		p_passrevchg_entry[1] = '\0';
+	}
+							
+	APL_GOBACK_SUCCESS;
+
+   RETURN_SUCCESS :
+
+		fprintf(	p_logfile, 
+					"Exiting DL_Rtv_ChngStatus with success\n");
+
+      #ifdef SYS_DEBUG
+         printf( "Leaving Function DL_Rtv_ChngStatus with success\n");
+		#endif
+
+      return(APL_SUCCESS);
+
+   RETURN_FAILURE :
+
+		if (APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+		{
+			CO_ProcMonitor(p_logfile, 
+						"Got Errors : ", 
+						l_debug_info_ptr, 
+						p_intl_envdatastruct_h);
+			CO_FreeErrLst(l_debug_info_ptr);
+		}
+
+		fprintf(	p_logfile, 
+					"Exiting DL_Rtv_ChngStatus with errors\n");
+
+      #ifdef SYS_DEBUG
+         printf( "Leaving Function DL_Rtv_ChngStatus with errors\n");
+		#endif
+
+      return(APL_FAILURE);
+
+}
+
+
+
+int CR_Proc_AccEnt(	char *p_batch_no,
+							FILE *p_logfile,
+							char **argv,
+							int  *p_runseq,
+							double *p_dct,
+							double *p_cct,
+							INTL_ENV_DATA_STRUCT_H *p_intl_envdatastruct_h,
+							DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	struct sqlca sqlca;
+	char		chr_l_h_client_a[APL_CLIENT_LENGTH]				=	APL_NULL_STRING;
+	char		chr_l_h_refno_A[APL_TXNREFNO_LEN]				=	APL_NULL_STRING;
+	char		chr_l_h_typeofent[APL_FLAG_LENGTH]				=	APL_NULL_STRING;
+	char		chr_l_h_rowid[APL_ROWID_LEN]					=	APL_NULL_STRING;
+	char		chr_l_h_trd_rowid[APL_ROWID_LEN]				=	APL_NULL_STRING;
+	char		chr_l_h_trd_moneydt[APL_DATE_LEN]				=	APL_NULL_STRING;
+	char		chr_l_h_trd_trcode[APL_FLAG_LENGTH]				=	APL_NULL_STRING;
+	char		chr_l_h_trd_exarena[EX_ARENA_LEN]			=	APL_NULL_STRING;
+	char		chr_l_h_trd_trade_status[RECORD_STAT_LEN]	=	APL_NULL_STRING;
+	char		chr_l_h_trd_settledt[APL_DATE_LEN]			=	APL_NULL_STRING;
+	char		chr_l_h_trd_makerdt[APL_DATE_LEN]				=	APL_NULL_STRING;
+	char		chr_l_h_trd_hostdt[APL_DATE_LEN]				=	APL_NULL_STRING;
+	char		chr_l_passrevchg_entry[APL_FLAG_LENGTH]			=	APL_NULL_STRING;
+	char		chr_l_h_restart_data[APL_RESTARTDATA_LENGTH]	=	APL_NULL_STRING;
+	char		chr_l_sysdate_b[APL_DATE_LEN]						=	APL_NULL_STRING;
+	char		chr_l_prev_client[APL_CLIENT_LENGTH]			=	APL_NULL_STRING;
+	char		chr_l_prev_refno[APL_TXNREFNO_LEN]			=	APL_NULL_STRING;
+	char		chr_l_fresh_entry									=	APL_NULL_CHAR;
+	char		chr_l_chg_entry										=	APL_NULL_CHAR;
+	double	l_h_trd_brokercomm								=	0;
+	double	l_h_trd_custodycomm								=	0;
+	double	l_h_trd_stx_comm								=	0;
+	double	l_h_trd_oth_comm								=	0;
+	double	l_h_brokercomm										=	0;
+	double	l_h_custodycomm										=	0;
+	double	l_h_stx_comm										=	0;
+	double	l_h_oth_comm										=	0;
+	int		int_l_date_diff										=	0;
+	int		int_l_process_recs									=	0;
+	short		l_i_account										=	0;
+	short		l_i_refno										=	0;
+	short		l_i_typeofent									=	0;	
+	short		l_i_rowid										=	0;
+	short		l_i_trd_rowid									=	0;
+	short		l_i_trd_moneydt								=	0;
+	short		l_i_trd_trcode									=	0;
+	short		l_i_trd_exarena								=	0;
+	short		l_i_trd_brkcomm								=	0;
+	short		l_i_trd_bnkcomm								=	0;
+	short		l_i_trd_stxcomm								=	0;
+	short		l_i_trd_othcomm								=	0;
+	short		l_i_trd_trade_status							=	0;
+	short		l_i_trd_settledt								=	0;
+	short		l_i_trd_makerdt								=	0;
+	short		l_i_trd_hostdt									=	0;
+	short		l_i_bnkcomm										=	0;
+	short		l_i_brkcomm										=	0;
+	short		l_i_stxcomm										=	0;
+	short		l_i_othcomm										=	0;
+	short		l_i_restart_data								=	0;
+	short		int_l_condexists_A									=	0;
+
+	sqlca.sqlcode = 0;
+
+	
+
+	EXEC SQL VAR	chr_l_h_client_a 			IS STRING;
+	EXEC SQL VAR	chr_l_h_refno_A 				IS STRING;
+	EXEC SQL VAR	chr_l_h_typeofent 			IS STRING;
+	EXEC SQL VAR	chr_l_h_rowid 				IS STRING;
+	EXEC SQL VAR	chr_l_h_trd_rowid 			IS STRING;
+	EXEC SQL VAR	chr_l_h_trd_moneydt 		IS STRING;
+	EXEC SQL VAR	chr_l_h_trd_trcode 		IS STRING;
+	EXEC SQL VAR	chr_l_h_trd_exarena 		IS STRING;
+	EXEC SQL VAR	chr_l_h_trd_trade_status IS STRING;
+	EXEC SQL VAR	chr_l_h_trd_settledt 		IS STRING;
+	EXEC SQL VAR	chr_l_h_trd_makerdt 		IS STRING;
+
+	#ifdef SYS_DEBUG
+		printf(	"Entered Function CR_Proc_AccEnt\n" );
+	#endif
+
+	chr_l_fresh_entry	=	AE_NEWENTRY_IND;
+	chr_l_chg_entry		=	AE_CHNG_ENTRY;
+
+	
+
+	if ( APL_FAILURE == CO_RtvSysDt( 	chr_l_sysdate_b,
+														l_debug_info_ptr ) )
+	{
+		APL_GOBACK_FAIL;
+	}
+
+	
+
+	EXEC SQL DECLARE RevChgCurs CURSOR FOR
+				SELECT 	a.CLIENT,
+							a.IDENTIY_NO,
+							a.TYPEOF_ENT,
+							a.BROKERCOMM,
+							a.CUSTODYCOMM,
+							a.STX_COMM,
+							a.OTH_COMM,
+							a.ROWID
+				FROM		DL_DEALCLIENTIMG a
+				WHERE		TYPEOF_ENT	IN ( :chr_l_fresh_entry, :chr_l_chg_entry )
+				AND		ACCESS_STAMP = ( SELECT MAX(ACCESS_STAMP)
+												FROM DL_DEALCLIENTIMG
+												WHERE	CLIENT	=	a.CLIENT
+												AND	IDENTIY_NO		=	a.IDENTIY_NO )
+				FOR UPDATE OF ACCESS_STAMP
+				ORDER BY a.TYPEOF_ENT;
+
+	EXEC SQL OPEN RevChgCurs;
+
+	IS_ANY_ORA_ERROR;
+
+	for( ; ; )
+	{
+
+		
+	
+		if ( int_l_process_recs == L_COMMITSIZE )
+		{
+			if ( APL_DOUBLE_EQUAL(*p_dct, *p_cct ) )
+			{
+				EXEC SQL COMMIT WORK;
+				IS_ANY_ORA_ERROR;
+			
+				EXEC SQL OPEN RevChgCurs;
+				IS_ANY_ORA_ERROR;
+
+				int_l_process_recs = 0;
+	
+   			EXEC SQL SELECT PROCESSING_STATUS 
+							INTO	:chr_l_h_restart_data:l_i_restart_data
+   						FROM 	SYS_BATCHPROC
+   						WHERE PROCESS_NAME		=	:argv[0]
+   						AND   PROC_INIT			=	:argv[1]
+   						AND   STARTDATE	=	:argv[2]
+   						AND   STATUS		=	'started'
+   						FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+ 		  		if(APL_ZERO_RESULT_SET) 
+				{
+      			CO_ProcMonitor(	p_logfile,
+									"E:No entry in batch_in_proc",NULL,NULL);
+     		 		APL_GOBACK_FAIL;
+   			}
+
+ 		  		IS_ANY_ORA_ERROR;
+			}	
+			else
+			{
+				CO_InsertErr( 	l_debug_info_ptr,
+										ERR_DATA_INTEGRITY,
+										"Dr/Cr.Total Mismatch",
+										APL_NULL_STRING,
+										APL_NULL_STRING,
+										__LINE__,
+										__FILE__ );
+				APL_GOBACK_FAIL;
+			}
+		}
+	
+		
+
+		EXEC SQL FETCH RevChgCurs INTO 	:chr_l_h_client_a:l_i_account,
+													:chr_l_h_refno_A:l_i_refno,
+													:chr_l_h_typeofent:l_i_typeofent,
+													:l_h_brokercomm:l_i_brkcomm,
+													:l_h_custodycomm:l_i_bnkcomm,
+													:l_h_stx_comm:l_i_stxcomm,
+													:l_h_oth_comm:l_i_othcomm,
+													:chr_l_h_rowid:l_i_rowid;
+
+		IS_ANY_ORA_ERROR;
+
+		if ( APL_ZERO_RESULT_SET )
+		{
+			break;
+		}
+
+		if ( l_i_brkcomm == -1 )
+		{
+			l_h_brokercomm = 0;
+		}
+		
+		if ( l_i_bnkcomm == -1 )
+		{
+			l_h_custodycomm = 0; 
+		}
+
+		if ( l_i_stxcomm == -1 )
+		{
+			l_h_stx_comm = 0;
+		}
+
+		if ( l_i_othcomm == -1 )
+		{
+			l_h_oth_comm = 0;
+		} 
+
+		if ( chr_l_h_typeofent[0] == AE_NEWENTRY_IND &&
+				!strcmp( chr_l_h_client_a, chr_l_prev_client ) &&
+				!strcmp(	chr_l_h_refno_A,	 chr_l_prev_refno ) )
+		{
+			continue;
+		} 
+
+		strcpy( chr_l_prev_client, APL_NULL_STRING );
+		strcpy( chr_l_prev_refno, APL_NULL_STRING );
+		strcpy( chr_l_prev_client,chr_l_h_client_a );
+		strcpy( chr_l_prev_refno, chr_l_h_refno_A );
+
+		
+
+		EXEC SQL SELECT	MONEY_SETL_DT,
+								EX_ARENA,
+								DEAL_CD,
+								DEAL_STAT,
+								SETL_DATE,
+								BROKERCOMM,
+								CUSTODYCOMM,
+								STX_COMM,
+								OTH_COMM,
+								MAKER_DT,
+								HOST_DATE,
+								ROWID
+					INTO		:chr_l_h_trd_moneydt:l_i_trd_moneydt,
+								:chr_l_h_trd_exarena:l_i_trd_exarena,
+								:chr_l_h_trd_trcode:l_i_trd_trcode,
+								:chr_l_h_trd_trade_status:l_i_trd_trade_status,
+								:chr_l_h_trd_settledt:l_i_trd_settledt,
+								:l_h_trd_brokercomm:l_i_trd_brkcomm,
+								:l_h_trd_custodycomm:l_i_trd_bnkcomm,
+								:l_h_trd_stx_comm:l_i_trd_stxcomm,
+								:l_h_trd_oth_comm:l_i_trd_othcomm,
+								:chr_l_h_trd_makerdt:l_i_trd_makerdt,
+								:chr_l_h_trd_hostdt:l_i_trd_hostdt,
+								:chr_l_h_trd_rowid:l_i_trd_rowid
+					FROM		DL_DEAL
+					WHERE		CLIENT	=	:chr_l_h_client_a
+					AND		IDENTIY_NO		=	:chr_l_h_refno_A
+					FOR UPDATE OF ACCESS_STAMP;
+
+		IS_ANY_ORA_ERROR;
+
+		if ( l_i_trd_brkcomm == -1 )
+		{
+			l_h_trd_brokercomm = 0;
+		}
+
+		if ( l_i_trd_bnkcomm == -1 )
+		{
+			l_h_trd_custodycomm = 0;
+		}
+
+		if ( l_i_trd_stxcomm == -1 )
+		{
+			l_h_trd_stx_comm = 0;
+		}
+
+		if ( l_i_trd_othcomm == -1 )
+		{
+			l_h_trd_oth_comm = 0;
+		}
+
+		if ( ( APL_ZERO_RESULT_SET ) || 
+			  ( l_i_trd_moneydt == -1 && 
+				 strcmp(chr_l_h_trd_trade_status, STATUS_DEL_UAUTH) ) )
+		{
+			if ( APL_FAILURE == CDBPassRevFn( 	p_batch_no,
+															chr_l_h_rowid,
+															p_logfile,
+															argv,
+															p_runseq,
+															p_dct,
+															p_cct,
+															p_intl_envdatastruct_h,
+														 	l_debug_info_ptr ) )
+			{
+				APL_GOBACK_FAIL;
+			}
+
+			int_l_process_recs++;
+
+			continue;
+
+		}
+		else if ( ( chr_l_h_trd_trcode[0] == DEALCD_RVP ) &&
+					 ( chr_l_h_trd_exarena[0] == STX_EX_ARENA_IND ) &&
+					 ( l_i_trd_moneydt == -1 ) )
+		{
+
+			int_l_date_diff = 0;
+
+			if ( APL_FAILURE == CO_Pro_DateComp( chr_l_h_trd_settledt,
+														 chr_l_sysdate_b,
+														 &int_l_date_diff,
+														 l_debug_info_ptr ) )
+			{
+				APL_GOBACK_FAIL;
+			}
+
+			if ( int_l_date_diff >= 0 )
+			{
+				if ( APL_FAILURE == CDBPassRevFn( 	p_batch_no,
+																chr_l_h_rowid,
+																p_logfile,
+																argv,
+																p_runseq,
+																p_dct,
+																p_cct,
+																p_intl_envdatastruct_h,
+															 	l_debug_info_ptr ) )
+				{	
+					APL_GOBACK_FAIL;
+				}
+			}
+
+			int_l_process_recs++;
+
+			continue;
+
+		}
+		else if ( ( ( ( chr_l_h_trd_trcode[0] == DEALCD_RVP ) && 
+						 chr_l_h_trd_exarena[0] == NON_STX_EX_ARENA_IND ) ||
+					    ( chr_l_h_trd_trcode[0] == DEALCD_DVP ) ) &&
+               l_i_trd_moneydt == -1 )
+		{
+			if ( APL_FAILURE == CDBPassRevFn( 	p_batch_no,
+															chr_l_h_rowid,
+															p_logfile,
+															argv,
+															p_runseq,
+															p_dct,
+															p_cct,
+															p_intl_envdatastruct_h,
+														 	l_debug_info_ptr ) )
+			{	
+				APL_GOBACK_FAIL;
+			}
+
+			int_l_process_recs++;
+
+			continue;
+		}
+		else if ( l_h_brokercomm != l_h_trd_brokercomm ||
+				 (	( l_h_custodycomm + l_h_stx_comm + l_h_oth_comm ) !=
+					( l_h_trd_custodycomm + l_h_trd_stx_comm + l_h_trd_oth_comm ) ) )
+		{
+			if ( APL_FAILURE == CO_Chk_CntryEnabled( "ACC_ENTRIES",
+																"TOTAL_COMM_CHK",
+																&int_l_condexists_A,
+																l_debug_info_ptr ) )
+			{
+				APL_GOBACK_FAIL;
+			}
+			
+			if ( int_l_condexists_A > 0 )
+			{
+				if ( l_i_trd_moneydt == -1 )
+				{
+					if ( APL_FAILURE == CDBPassRevFn( 	p_batch_no,
+																	chr_l_h_rowid,
+																	p_logfile,
+																	argv,
+																	p_runseq,
+																	p_dct,
+																	p_cct,
+																	p_intl_envdatastruct_h,
+																 	l_debug_info_ptr ) )
+					{	
+						APL_GOBACK_FAIL;
+					}
+
+					int_l_process_recs++;
+
+					continue;
+				}
+				else
+				{
+					if ( APL_FAILURE == CDBPassRevFn( 	p_batch_no,
+																	chr_l_h_rowid,
+																	p_logfile,
+																	argv,
+																	p_runseq,
+																	p_dct,
+																	p_cct,
+																	p_intl_envdatastruct_h,
+																 	l_debug_info_ptr ) )
+					{	
+						APL_GOBACK_FAIL;
+					}
+
+					if ( APL_FAILURE == CDBPassNewFn( 	p_batch_no,
+																	chr_l_h_trd_rowid,
+																	AE_CHNG_ENTRY,
+																	p_logfile,
+																	argv,
+																	p_runseq,
+																	p_dct,
+																	p_cct,
+																	p_intl_envdatastruct_h,
+																 	l_debug_info_ptr ) )
+					{	
+						APL_GOBACK_FAIL;
+					}
+
+					int_l_process_recs++;
+
+					continue;
+				}
+			}
+		}
+		else 
+		{
+			int_l_date_diff = 0;
+
+			if ( APL_FAILURE == CO_Pro_DateComp( chr_l_h_trd_makerdt,
+														 chr_l_h_trd_hostdt,
+														 &int_l_date_diff,
+														 l_debug_info_ptr ) )
+			{
+				APL_GOBACK_FAIL;
+			}
+		
+			if ( int_l_date_diff <= 0 )
+			{
+				if ( APL_FAILURE == DL_Rtv_ChngStatus(	chr_l_h_rowid,
+																chr_l_h_trd_rowid,
+																chr_l_passrevchg_entry,
+																p_logfile,
+																p_intl_envdatastruct_h,
+																l_debug_info_ptr ) )
+				{
+					APL_GOBACK_FAIL;
+				}	
+
+				if ( chr_l_passrevchg_entry[0] == APL_YES_FLAG )
+				{
+					if ( APL_FAILURE == CDBPassRevFn( 	p_batch_no,
+																	chr_l_h_rowid,
+																	p_logfile,
+																	argv,
+																	p_runseq,
+																	p_dct,
+																	p_cct,
+																	p_intl_envdatastruct_h,
+																 	l_debug_info_ptr ) )
+					{	
+						APL_GOBACK_FAIL;
+					}
+
+					if ( APL_FAILURE == CDBPassNewFn( 	p_batch_no,
+																	chr_l_h_trd_rowid,
+																	AE_CHNG_ENTRY,
+																	p_logfile,
+																	argv,
+																	p_runseq,
+																	p_dct,
+																	p_cct,
+																	p_intl_envdatastruct_h,
+																 	l_debug_info_ptr ) )
+					{	
+						APL_GOBACK_FAIL;
+					}
+
+					int_l_process_recs++;
+
+					continue;
+				}
+			}
+		}	
+	}
+
+	EXEC SQL CLOSE RevChgCurs;
+
+	APL_GOBACK_SUCCESS;
+
+   RETURN_SUCCESS :
+
+		if ( APL_DOUBLE_EQUAL(*p_dct, *p_cct ) )
+		{
+			if ( int_l_process_recs > 0 )
+			{
+				EXEC SQL COMMIT WORK;
+				IS_ANY_ORA_ERROR;
+			}
+		}	
+		else
+		{
+			CO_InsertErr( 	l_debug_info_ptr,
+									ERR_DATA_INTEGRITY,
+									"Dr/Cr.Total Mismatch",
+									APL_NULL_STRING,
+									APL_NULL_STRING,
+									__LINE__,
+									__FILE__ );
+			APL_GOBACK_FAIL;
+		}
+
+		fprintf(	p_logfile, 
+					"Exiting CR_Proc_AccEnt with success\n");
+
+      #ifdef SYS_DEBUG
+         printf( "Leaving Function CR_Proc_AccEnt with success\n");
+		#endif
+
+      return(APL_SUCCESS);
+
+   RETURN_FAILURE :
+
+		if (APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+		{
+			CO_ProcMonitor(p_logfile, 
+						"Got Errors : ", 
+						l_debug_info_ptr, 
+						p_intl_envdatastruct_h);
+			CO_FreeErrLst(l_debug_info_ptr);
+		}
+
+		fprintf(	p_logfile, 
+					"Exiting CR_Proc_AccEnt with errors\n");
+
+      #ifdef SYS_DEBUG
+         printf( "Leaving Function CR_Proc_AccEnt with errors\n");
+		#endif
+
+      return(APL_FAILURE);
+
+}
+
+
+
+int DL_Proc_AccEnt(	char **argv,
+							FILE *p_repfile,
+							FILE *p_logfile,
+							INTL_ENV_DATA_STRUCT_H *p_intl_envdatastruct_h,
+							DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	
+
+	struct sqlca sqlca;	
+	char		chr_l_buf[BUFFER_LEN]								= 	APL_NULL_STRING;
+	char		int_l_batch_no[5]									= 	APL_NULL_STRING;
+	char		chr_l_h_restart_data[APL_RESTARTDATA_LENGTH]	=	APL_NULL_STRING;
+	char		int_l_seq_num[5]									=	APL_NULL_STRING;
+	char		chr_l_sysdate_b[APL_DATE_LEN]						=	APL_NULL_STRING;
+	int		int_l_runseq_a											=	0;
+	double	l_dcredit_ind												=	0;
+	double	l_ccredit_ind												=	0;
+	short		l_i_restart_data								=	0;
+	short		l_icond											=	0;
+	
+	sqlca.sqlcode = 0;
+
+	
+
+	EXEC SQL VAR chr_l_h_restart_data IS STRING;
+	EXEC SQL VAR int_l_seq_num			IS STRING;
+
+	
+
+	#ifdef SYS_DEBUG
+		printf( "Entered Function DL_Proc_AccEnt\n"); 
+	#endif
+	
+	
+
+   EXEC SQL SELECT PROCESSING_STATUS 
+				INTO	:chr_l_h_restart_data:l_i_restart_data
+   			FROM 	SYS_BATCHPROC
+   			WHERE PROCESS_NAME		=	:argv[0]
+   			AND   PROC_INIT			=	:argv[1]
+   			AND   STARTDATE	=	:argv[2]
+   			AND   STATUS		=	'started'
+   			FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+   if(APL_ZERO_RESULT_SET) 
+	{
+      CO_ProcMonitor(	p_logfile,
+						"E:No entry in batch_in_proc",
+						NULL,
+						NULL);
+      APL_GOBACK_FAIL;
+   }
+
+   IS_ANY_ORA_ERROR;
+	
+	
+
+	
+
+	if ( APL_FAILURE == CO_Rtv_NxtBatchSeq(	'C',
+														int_l_batch_no,
+														int_l_seq_num,
+														l_debug_info_ptr ) )
+	{
+		APL_GOBACK_FAIL;
+	}
+
+	sscanf( int_l_seq_num, "%d", &int_l_runseq_a ); 
+
+	if ( APL_FAILURE == CO_RtvSysDt( chr_l_sysdate_b,
+													  l_debug_info_ptr ) )
+	{
+		APL_GOBACK_FAIL;
+	}
+
+	
+	
+	
+
+	
+
+	fprintf(	p_logfile, 
+				"Starting processing for Fresh Entries\n");
+
+	if ( APL_FAILURE == DL_Rtv_NewAccEnt(	int_l_batch_no,
+													p_logfile,
+													argv,
+													&int_l_runseq_a,
+													&l_dcredit_ind,
+													&l_ccredit_ind,
+													p_intl_envdatastruct_h,	
+													l_debug_info_ptr ) )
+	{
+		
+
+		if ( strlen(int_l_batch_no) )
+		{
+fprintf( p_logfile, 
+            "into EL_PassAccEnt\n");
+
+			if ( APL_FAILURE == EL_PassAccEnt(	"C",
+																int_l_batch_no,
+																chr_l_sysdate_b,
+																argv,
+																"R",
+																p_repfile,
+																p_logfile,
+																l_debug_info_ptr ) )
+			{
+				fprintf(	p_logfile, 
+							"Error in Generating Report\n" );
+				APL_GOBACK_FAIL;
+			}
+		}
+
+		APL_GOBACK_FAIL;
+	}
+
+	fprintf(	p_logfile, 
+				"Finished processing for Fresh Entries\n");
+
+	
+
+	if ( strlen(int_l_batch_no) )
+	{
+		if ( APL_FAILURE == EL_PassAccEnt(	"C",
+															int_l_batch_no,
+															chr_l_sysdate_b,
+															argv,
+															"R",
+															p_repfile,
+															p_logfile,
+															l_debug_info_ptr ) )
+		{
+			fprintf(	p_logfile, 
+						"Error in Generating Report\n" );
+			APL_GOBACK_FAIL;
+		}
+	}
+	else
+	{
+		fprintf(	p_logfile, 
+					"No Accounting Entries Generated\n" );
+	}
+
+	APL_GOBACK_SUCCESS;
+
+   RETURN_SUCCESS :
+
+		CO_FreeErrLst(l_debug_info_ptr);
+
+		fprintf(	p_logfile, 
+					"Exiting Accounting Entries processtion successfully\n");
+		fclose(p_logfile);
+
+      #ifdef SYS_DEBUG
+         printf( "Leaving Function DL_Proc_AccEnt with success\n");
+		#endif
+
+      return(APL_SUCCESS);
+
+   RETURN_FAILURE :
+
+		if (APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+		{
+			CO_ProcMonitor(p_logfile, 
+						"Got Errors : ", 
+						l_debug_info_ptr, 
+						p_intl_envdatastruct_h);
+			CO_FreeErrLst(l_debug_info_ptr);
+		}
+
+		fprintf(	p_logfile, 
+					"Exiting Accounting Entries processtion with errors\n");
+		fclose(p_logfile);
+
+      #ifdef SYS_DEBUG
+         printf( "Leaving Function DL_Proc_AccEnt with errors\n");
+		#endif
+
+      return(APL_FAILURE);
+
+}
+
+
+
+int main(int argc,char **argv)//Changes done for AIX Migration
+{
+	struct sqlca sqlca;
+   DEBUG_INFO_STRUCT_H *l_debug_info_ptr 				= 	NULL;
+	INTL_ENV_DATA_STRUCT_H l_intl_env_data_h;
+	FILE 	*l_finifile								=	NULL;
+	FILE 	*l_logfile    							= 	NULL;
+	FILE 	*l_repfile    							= 	NULL;
+	char	chr_l_logfile_name[PATH_LENGTH] 		= 	APL_NULL_STRING;
+   int	int_l_retval									=	0;
+   char 	chr_uname[APL_USERID_LEN] 				= 	APL_NULL_STRING;
+   char 	chr_custody_id_b[APL_USERID_LEN] 				= 	APL_NULL_STRING;
+   char 	chr_passwd[APL_PASSWD_LEN] 				= 	APL_NULL_STRING;
+	char 	chr_l_logdir[PATH_LENGTH] 				= 	APL_NULL_STRING;
+	char 	chr_l_inifile[PATH_LENGTH] 				= 	APL_NULL_STRING;
+
+   EXEC SQL VAR chr_uname IS STRING;
+   EXEC SQL VAR chr_custody_id_b IS STRING;
+   EXEC SQL VAR chr_passwd IS STRING;
+
+	sqlca.sqlcode = 0;
+
+	strcpy(chr_l_inifile,getenv("INTL_ROOT_PATH"));
+	strcat(chr_l_inifile,"intl_sun.cfg");
+
+	if ( ( l_finifile=fopen(chr_l_inifile,"r") ) == NULL)
+	{
+		APL_GOBACK_FAIL
+	}
+
+	
+
+	
+
+	APL_FETCH_DB_LOGIN_DETAILS(l_finifile, chr_custody_id_b, chr_uname, chr_passwd, APL_OUT_FILE, &l_debug_info_ptr)
+
+   EXEC SQL CONNECT :chr_uname IDENTIFIED BY :chr_passwd;
+
+   if (sqlca.sqlcode)
+   {
+      APL_GOBACK_FAIL
+   }
+   else
+   {
+		
+
+		if (APL_FAILURE == CO_Rtv_RptFileName(	"3B",
+														APL_LOGFILE_DESC,
+														100,
+														argv[5],
+														argv,
+														&l_logfile,
+														&l_debug_info_ptr ) )
+		{
+			APL_GOBACK_FAIL
+		}
+
+		
+
+		if (APL_FAILURE == CO_Rtv_RptFileName(	"CO",
+														"Accounting Entries Report File for Core Accounting",
+														100,
+														argv[5],
+														argv,
+														&l_repfile,
+														&l_debug_info_ptr ) )
+		{
+			APL_GOBACK_FAIL
+		}
+
+		
+
+		EXEC SQL COMMIT WORK;
+
+		if (sqlca.sqlcode)
+		{
+			CO_ProcMonitor(l_logfile, "Could not commit after opening chr_log file", NULL, NULL);
+			CO_Proc_RptClose(l_logfile, &l_debug_info_ptr);
+			APL_GOBACK_FAIL
+		}
+
+		
+
+		if (APL_FAILURE == CO_RtvSysParams(&l_debug_info_ptr))
+		{
+			CO_ProcMonitor(l_logfile, "Error In Getting System Parameters", NULL, NULL);
+			CO_Proc_RptClose(l_logfile, &l_debug_info_ptr);
+			APL_GOBACK_FAIL
+		}
+
+		strcpy(l_intl_env_data_h.usr, argv[3]);
+		strcpy(l_intl_env_data_h.h_mode, argv[4]);
+		strcpy(l_intl_env_data_h.processtion, argv[5]);
+		strcpy(l_intl_env_data_h.auth_req, argv[6]);
+		strcpy(l_intl_env_data_h.subprocess, argv[7]);
+		strcpy(l_intl_env_data_h.h_process, argv[8]);
+
+		
+
+		CO_ProcMonitor(l_logfile, "Calling CDBGenAccenFn", NULL, NULL);
+
+      int_l_retval = DL_Proc_AccEnt( 	argv, 
+											l_repfile, 
+											l_logfile, 
+											&l_intl_env_data_h, 
+											&l_debug_info_ptr);
+
+		CO_ProcMonitor(l_logfile, "Returned from CDBGenAccenFn", NULL, NULL);
+
+      if ( int_l_retval == APL_FAILURE )
+      {
+			CO_ProcMonitor(l_logfile, "CDBGenAccenFn returned failure; ROLLING BACK", NULL, NULL);
+			CO_Proc_RptClose(l_logfile, &l_debug_info_ptr);
+			EXEC SQL ROLLBACK WORK RELEASE;
+         APL_GOBACK_FAIL
+      }
+      else
+      {
+         EXEC SQL UPDATE SYS_BATCHPROC
+         SET  status = 'completed'
+         WHERE PROCESS_NAME=:argv[0]
+         AND   PROC_INIT=:argv[1]
+         AND   STARTDATE=:argv[2]
+         AND   STATUS='started';
+
+         EXEC SQL COMMIT WORK RELEASE;
+			CO_Proc_RptClose(l_logfile, &l_debug_info_ptr);
+         APL_GOBACK_SUCCESS
+      }
+   }
+
+	RETURN_SUCCESS : exit(0);
+	RETURN_FAILURE : exit(-1);
+
+}

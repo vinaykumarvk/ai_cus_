@@ -1,0 +1,1201 @@
+ /*
+ *   Copyright 2005 Polaris Software Lab Limited. All rights reserved.
+ *
+ *   These materials are confidential and proprietary to
+ *    Polaris Software Lab Limited and no part of these materials should
+ *    be reproduced, published, transmitted or distributed in any form or
+ *    by any means, electronic, mechanical, photocopying, recording or
+ *    otherwise, or stored in any information storage or retrieval system
+ *    of any nature nor should the materials be disclosed to third parties
+ *    or used in any other manner for which this is not authorized, without
+ *    the prior express written authorization of Polaris Software Lab Limited.
+ */
+/*********************************************************************
+ *
+ * Module Name         :      Corporate Actions
+ *
+ * File Name           :      CA_trans_Settle.pc 
+ *
+ * Description         :      Contains fns call of Settlement & Transfer Position Related to CA
+ *
+ *
+ *
+ *            Version Control Block
+ *
+ * Date        Version     Author           Description        RFS No.
+ * ---------   --------  ---------------  ------------------   ---------
+ * 06/02/2007   1.0        Chirag Ganatra	New File       HBCA_006 
+ * 24/03/2022   1.1        kotubabu N       Linux Migration    Kotak Implementation
+ *************************************************************************/
+
+
+#include "Intellect_Common.h"
+#include "CA_InterFace.h"
+#include "CO_HostStructdef.h"
+#include "DL_Interface.h"
+#include<stdlib.h>
+EXEC SQL INCLUDE SQLCA.H;
+
+#define COMMIT_FREQ_LOGAUTOEVNT 100
+#define  APL_BATCHSTATUS_LEN  16
+#define  APL_STATUS_BATCH_COMPLETED "completed"
+#define  APL_STATUS_BATCH_STARTED "started"
+#define  APL_LOWEST_CHAR   " "
+#define  APL_STATINFO_LEN  71
+
+/*Added by kotubabu for Linux Migration -Start*/
+#ifdef OS_LINUX
+FILE *l_logfile;
+FILE *l_usr_logfile;
+#else
+FILE *l_logfile = APL_OUT_FILE;
+FILE *l_usr_logfile = APL_OUT_FILE;
+#endif
+/*Added by kotubabu for Linux Migration -End*/
+/**/
+
+int Process_Confirm_To_Settle(char *p_corp_id,char *p_action,char *del_typ,INTL_ENV_DATA_STRUCT_H *p_intl_envdatastruct_h,DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+int Process_CABlock_TO_Free(char *corp_id,char *action,char *del_typ,INTL_ENV_DATA_STRUCT_H *p_intl_envdatastruct_h,DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+extern int CR_Mod_LocChg(DL_LOCNCHG_STRUCT_H *p_dl_locnchg_struct_h_a,char *p_locchgseqno,INTL_ENV_DATA_STRUCT_H *p_intl_envdatastruct_h,DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+char  chr_g_progname          [APL_BATCH_PROGNAME_LEN]   =  APL_NULL_STRING;
+char  chr_g_key               [APL_BATCH_KEY_LEN]     =  APL_NULL_STRING;
+char  chr_g_start_date        [APL_DATE_LEN]          =  APL_NULL_STRING;
+char  chr_g_status_started    [APL_BATCHSTATUS_LEN]   =  APL_NULL_STRING;
+char  chr_g_status_completed  [APL_BATCHSTATUS_LEN]   =  APL_NULL_STRING;
+
+int main(int argc,char **argv)  // AIX -Warnings Removal
+{
+	/*Added by kotubabu for Linux Migration -Start */
+	#ifdef OS_LINUX
+	l_logfile = APL_OUT_FILE; 
+	l_usr_logfile = APL_OUT_FILE; 
+	#endif
+	/*Added by kotubabu for Linux Migration -End */
+   int int_retval = 0;
+   
+	DEBUG_INFO_STRUCT_H  **l_debug_info_ptr         = (DEBUG_INFO_STRUCT_H **)NULL;
+	DEBUG_INFO_STRUCT_H *l_debug_info_struct=(DEBUG_INFO_STRUCT_H *)NULL;
+
+	l_debug_info_struct = (DEBUG_INFO_STRUCT_H *)calloc(1,sizeof(DEBUG_INFO_STRUCT_H ));
+	APL_MALLOC_FAIL(l_debug_info_struct);
+
+	l_debug_info_ptr = &l_debug_info_struct;
+
+   char l_error[4001] = APL_NULL_STRING;
+	char p_param_str[4001] = APL_NULL_STRING;	
+	INTL_ENV_DATA_STRUCT_H l_intl_env_data_h;
+   memset(&l_intl_env_data_h, NULL, sizeof(INTL_ENV_DATA_STRUCT_H)); 
+
+	
+	//l_debug_info_ptr = (DEBUG_INFO_STRUCT_H **)calloc(1,sizeof(DEBUG_INFO_STRUCT_H *));
+   if(CO_Get_DBConnect(l_debug_info_ptr) == APL_FAILURE)
+   {
+      CO_ProcMonitor(l_logfile,"CA Transfer:Failed To Connect DataBase",NULL,NULL);
+      APL_GOBACK_FAIL
+   }
+
+	APL_FUNCTION_ENTER(l_logfile)
+
+	if ( CO_Rtv_RptFileName("TS",
+            "User Log",
+            100,
+            argv[5],
+            argv,
+            &l_logfile,
+            l_debug_info_ptr) == APL_FAILURE)
+   {
+      CO_ProcMonitor(l_logfile,"CA Transfer:Failed To Create Log File",NULL,NULL);
+      APL_GOBACK_FAIL
+   }
+   sleep(1);
+
+	if ( CO_Rtv_RptFileName("FT",
+            "Failure Log",
+            100,
+            argv[5],
+            argv,
+            &l_usr_logfile,
+            l_debug_info_ptr) == APL_FAILURE)
+   {
+      CO_ProcMonitor(l_logfile,"CA Transfer:Failed To Create User Log File",NULL,NULL);
+      APL_GOBACK_FAIL
+   }
+/*Mrinal - Commit is Written so that the log will be shown in the Batch Monitor- ISKB_7719* --> Start*/
+		EXEC SQL COMMIT;
+		IS_ANY_ORA_ERROR
+/*Mrinal - Commit is Written so that the log will be shown in the Batch Monitor- ISKB_7719* --> End */
+	
+	if(BT_Status_Lock( argv[0],
+                     argv[1],
+                     argv[2],
+                     l_debug_info_ptr) == APL_FAILURE)
+   {
+      APL_GOBACK_FAIL
+   }
+	
+		strcpy(l_intl_env_data_h.usr, argv[3]);
+      strcpy(l_intl_env_data_h.h_mode, argv[4]);
+      strcpy(l_intl_env_data_h.processtion, argv[5]);
+      strcpy(l_intl_env_data_h.auth_req, argv[6]);
+      strcpy(l_intl_env_data_h.subprocess, argv[7]);
+      strcpy(l_intl_env_data_h.h_process, argv[8]);
+	
+		strcpy(p_param_str,argv[9]);
+
+		strcpy(chr_g_progname,   argv[0]);
+   	strcpy(chr_g_key,        argv[1]);
+   	strcpy(chr_g_start_date, argv[2]);
+
+		strcpy(chr_g_status_started,APL_STATUS_BATCH_STARTED);
+  		strcpy(chr_g_status_completed,APL_STATUS_BATCH_COMPLETED);
+	
+	int_retval=ReadRecord(p_param_str,&l_intl_env_data_h,l_debug_info_ptr);	
+
+	if(int_retval ==APL_FAILURE)
+	{
+   	CO_ProcMonitor(l_logfile,"Returned unsucessful\n",l_debug_info_ptr,&l_intl_env_data_h);
+                /*Retrofit from HDFC by siva.ganapathi for ISKB_2290 on 29/12/2009 START*/
+		if(BT_Status_Completed ( argv[0],
+										argv[1],
+										argv[2],
+										l_debug_info_ptr) == APL_FAILURE)
+		{
+				  APL_GOBACK_FAIL
+		}
+//		APL_GOBACK_FAIL  Commented by Chirag 09082007
+                /*Retrofit from HDFC by siva.ganapathi for ISKB_2290 on 29/12/2009 END*/
+	}
+	
+
+   CO_ProcMonitor(l_logfile,"Finished Processing\n",l_debug_info_ptr,&l_intl_env_data_h);
+	
+
+	if(BT_Status_Completed ( argv[0],
+                           argv[1],
+                           argv[2],
+                           l_debug_info_ptr) == APL_FAILURE)
+   {
+      APL_GOBACK_FAIL
+   }
+   CO_Rtv_ErrString(l_debug_info_ptr,l_error);
+   printf("|%s|\n",l_error);
+   fflush(stdout);
+
+APL_GOBACK_SUCCESS
+
+RETURN_SUCCESS:
+   EXEC SQL COMMIT;
+   CO_ProcMonitor(l_logfile,"Exiting successfully from Process_CA_Transfer",NULL,NULL);
+	fclose(l_logfile);
+	fclose(l_usr_logfile);
+   exit(0);
+RETURN_FAILURE:
+   CO_ProcMonitor(l_logfile,"CA_Transfer:Failed In Process_CA_Transfer",l_debug_info_ptr,NULL);
+   fclose(l_logfile);
+	fclose(l_usr_logfile);
+	exit(-1);
+
+
+}
+
+int ReadRecord(char *p_param_str,INTL_ENV_DATA_STRUCT_H *p_intl_envdatastruct_h,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)  // AIX -Warnings Removal
+{
+		  void  CO_Rtv_DataString(char *chr_p_str, char *p_lbl,char *p_data_value);
+		  char corp_id[20]	=	APL_NULL_STRING;
+		  char action[3] = APL_NULL_STRING;
+		  char del_typ[3] = APL_NULL_STRING;
+		  char chr_g_event_id[20] = APL_NULL_STRING;
+		  char del_deal[2] = APL_NULL_STRING;
+		  char rec_deal[2] = APL_NULL_STRING;	 	
+		  char l_caevent[3] = APL_NULL_STRING;	                /*Retrofit from HDFC by siva.ganapathi for ISKB_2290 on 29/12/2009*/
+		  int	int_num;
+		  int i;
+		  int int_ret_val;
+		  int l_count = 0;	
+		  INTL_ENV_DATA_STRUCT_H l_intl_env_struct;
+			char l_param_str[4001] = APL_NULL_STRING;
+		  char **temp;
+			EXEC SQL VAR chr_g_event_id IS STRING;
+			APL_FUNCTION_ENTER(l_logfile)
+			strcpy(l_param_str,p_param_str);
+
+		  CO_Rtv_DataString(l_param_str,"CORP_ID",(char *)corp_id);
+		  CO_Rtv_DataString(l_param_str,"CNF_SET",(char *)action);
+		  CO_Rtv_DataString(l_param_str,"LOCATION",(char *)del_typ);
+			
+			Alert("Corp ID |%s|\n",corp_id);
+			Alert("Action |%s|\n",action);
+			Alert("Deal type |%s|\n",del_typ);
+		  
+			if(strlen(corp_id) == 0)
+			{
+				CO_ProcMonitor(l_logfile,"Event ID Missing\n",NULL,NULL);
+				APL_GOBACK_FAIL
+			}
+			if(strlen(action) == 0)
+			{
+				CO_ProcMonitor(l_logfile,"Transfer Action Missing\n",NULL,NULL);
+				APL_GOBACK_FAIL
+			}
+			
+			if(strlen(del_typ) == 0)
+			{
+				CO_ProcMonitor(l_logfile,"Deal Type Missing\n",NULL,NULL);
+				APL_GOBACK_FAIL
+			}
+
+			if ( CO_RtvSysParams(l_debug_info_ptr) == APL_FAILURE)
+          APL_GOBACK_FAIL
+			
+			if(!strcmp(action,"CS"))
+			{
+				if(Process_Confirm_To_Settle(corp_id,action,del_typ,p_intl_envdatastruct_h,l_debug_info_ptr) == APL_FAILURE)
+   			{
+					 CO_ProcMonitor(l_logfile,"CA Transfer:Failed In Process_Confirm_To_Settle",l_debug_info_ptr,NULL);
+					APL_GOBACK_FAIL
+				}
+				else
+				{
+					strcpy(chr_g_event_id,corp_id);
+					Alert("Event ID is |%s|-----------Here....1\n",chr_g_event_id);
+					EXEC SQL SELECT NVL(COUNT(*),0) INTO :l_count FROM CA_GLB_SETTLMENT
+					WHERE CORP_ID = : chr_g_event_id;
+					IS_ANY_ORA_ERROR
+					if(!strcmp(del_typ,"DD"))
+					{
+							strcpy(del_deal,"Y");
+							strcpy(rec_deal,"N");
+					}
+				   else 
+				   {
+                                                         /*Retrofit from HDFC by siva.ganapathi for ISKB_2290 on 29/12/2009 START*/
+							/* Chirag chngs onsite 11102007 to mark deliver deal flag Y for event without deliver deal */
+							EXEC SQL SELECT CA_EVENT INTO :l_caevent FROM CAEVENT 
+								 WHERE CORP_ID = :chr_g_event_id;
+							IS_ANY_ORA_ERROR
+
+							if(!strcmp(l_caevent,"NS") || !strcmp(l_caevent,"RT") || !strcmp(l_caevent,"BO") || !strcmp(l_caevent,"SD"))
+								strcpy(del_deal,"Y");
+							else
+							strcpy(del_deal,"N");
+							strcpy(rec_deal,"Y");
+							/* Chirag chngs onsite 11102007 to mark deliver deal flag Y for event without deliver deal */
+                                                        /*Retrofit from HDFC by siva.ganapathi for ISKB_2290 on 29/12/2009 END*/
+				   }
+					Alert("Count for Event Id in CA_GLB_SETTLMENT is |%d|\n",l_count);
+					if(l_count == 0)
+					{
+							 EXEC SQL INSERT INTO CA_GLB_SETTLMENT VALUES(:chr_g_event_id,:del_deal,:rec_deal,'N','N');
+							 IS_ANY_ORA_ERROR
+							 Alert("Event Id |%s| is added in CA_GLB_SETTLMENT\n",chr_g_event_id); 
+					}
+					else
+					{
+							if(!strcmp(del_typ,"RD"))
+							{
+									EXEC SQL UPDATE CA_GLB_SETTLMENT SET CONF_SET_REC =: rec_deal
+									WHERE CORP_ID =: chr_g_event_id;
+
+									IS_ANY_ORA_ERROR
+									Alert("Event Id |%s| is updated for Receive Deal in CA_GLB_SETTLMENT\n",chr_g_event_id); 
+							}
+							else	
+							{
+									EXEC SQL UPDATE CA_GLB_SETTLMENT SET CONF_SET_DEL =: del_deal
+									WHERE CORP_ID =: chr_g_event_id;
+
+									IS_ANY_ORA_ERROR
+									Alert("Event Id |%s| is updated for Deliver Deal in CA_GLB_SETTLMENT\n",chr_g_event_id); 
+							}
+					}
+				}
+			}
+		
+			if(!strcmp(action,"BF") && !strcmp(del_typ,"RD"))
+         {
+            if(Process_CABlock_TO_Free(corp_id,action,del_typ,p_intl_envdatastruct_h,l_debug_info_ptr) == APL_FAILURE)
+            {
+                CO_ProcMonitor(l_logfile,"CA Transfer:Failed In Process_CABlock_TO_Free",l_debug_info_ptr,NULL);
+					 APL_GOBACK_FAIL
+            }
+            else
+            {
+               strcpy(chr_g_event_id,corp_id);
+               Alert("Event ID is |%s|-----------Here....2\n",chr_g_event_id);
+               EXEC SQL UPDATE CA_GLB_SETTLMENT 
+					SET BLK_FREE_REC = 'Y',
+						 BLK_FREE_DEL = 'Y'
+					WHERE CORP_ID =: chr_g_event_id;
+
+               IS_ANY_ORA_ERROR
+					Alert("Event Id |%s| is updated in CA_GLB_SETTLMENT\n",chr_g_event_id);
+            }
+         }	
+		  
+APL_GOBACK_SUCCESS // AIX - Warnings removal	
+
+RETURN_SUCCESS:
+   APL_FUNCTION_RET_SUCCESS(APL_OUT_FILE)
+
+RETURN_FAILURE:
+   APL_FUNCTION_RET_FAILURE(APL_OUT_FILE)
+
+
+}
+
+int Process_Confirm_To_Settle(char *p_corp_id,char *p_action,char *del_typ,INTL_ENV_DATA_STRUCT_H *p_intl_envdatastruct_h,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	int int_result = 0;
+	int int_reslt = 0;
+	int int_counter = 0;
+	int int_failcnt = 0;
+	int l_count = 0;
+	char chr_sys_access_stamp[APL_DATE_LEN] = APL_NULL_STRING;
+	char l_seq_no[16] = APL_NULL_STRING;
+	short i_seq_no = 0;
+	char l_crp_id[20] = APL_NULL_STRING;
+	
+	char  chr_h_restart_data[APL_RESTARTDATA_LENGTH] = APL_NULL_STRING;
+   char  chr_h_batch_in_proc_rowid[APL_ROWID_LEN] = APL_NULL_STRING;
+   char  chr_h_batch_in_proc_status[APL_BATCHSTATUS_LEN] = APL_NULL_STRING;
+   char  rowid[APL_ROWID_LEN] =  APL_NULL_STRING;
+	char  chr_h_stat_info[APL_STATINFO_LEN] = APL_NULL_STRING;
+   short int_i_batch_in_proc_rowid = 0;
+   short i_restart_info =0;
+
+	short i_crp_id = 0;
+	struct sqlca sqlca; 
+	DL_DEAL_SSTDET_STRUCT_H *l_dl_deal_sstdet_struct_h;
+
+	SYS_DL_DEAL_STRUCT_H *l_sys_dl_deal_struct_h;
+	SYS_DL_DEAL_STRUCT_I *l_sys_dl_deal_struct_i;
+	MT_INSTRUMENT_STRUCT_H  *l_mt_instrument_struct_h;
+	MT_CLIENT_STRUCT_H      *l_mt_client_struct_h;
+      
+	l_dl_deal_sstdet_struct_h =  (DL_DEAL_SSTDET_STRUCT_H *)calloc(1,sizeof(DL_DEAL_SSTDET_STRUCT_H));
+	APL_MALLOC_FAIL(l_dl_deal_sstdet_struct_h)
+	l_sys_dl_deal_struct_h = (SYS_DL_DEAL_STRUCT_H *)calloc(1,sizeof(SYS_DL_DEAL_STRUCT_H));
+	APL_MALLOC_FAIL(l_sys_dl_deal_struct_h)
+	l_sys_dl_deal_struct_i = (SYS_DL_DEAL_STRUCT_I *)calloc(1,sizeof(SYS_DL_DEAL_STRUCT_I));
+	APL_MALLOC_FAIL(l_sys_dl_deal_struct_i)
+	l_mt_instrument_struct_h = (MT_INSTRUMENT_STRUCT_H *)calloc(1,sizeof(MT_INSTRUMENT_STRUCT_H));
+	APL_MALLOC_FAIL(l_mt_instrument_struct_h)
+	l_mt_client_struct_h = (MT_CLIENT_STRUCT_H *)calloc(1,sizeof(MT_CLIENT_STRUCT_H));	
+	APL_MALLOC_FAIL(l_mt_client_struct_h)
+	/*
+	memset(&l_dl_deal_sstdet_struct_h,NULL,sizeof(l_dl_deal_sstdet_struct_h));
+	memset(&l_sys_dl_deal_struct_h,NULL,sizeof(l_sys_dl_deal_struct_h));
+	memset(&l_sys_dl_deal_struct_i,NULL,sizeof(l_sys_dl_deal_struct_i));
+	memset(&l_mt_instrument_struct_h,NULL,sizeof(l_mt_instrument_struct_h));
+	memset(&l_mt_client_struct_h,NULL,sizeof(l_mt_client_struct_h));
+	*/	
+
+	APL_FUNCTION_ENTER(l_logfile)
+	APL_FUNCTION_ENTER(l_usr_logfile)
+	EXEC SQL SELECT   ROWID,
+                     PROCESSING_STATUS
+            INTO  :chr_h_batch_in_proc_rowid :int_i_batch_in_proc_rowid,
+                  :chr_h_restart_data :i_restart_info
+   FROM SYS_BATCHPROC
+   WHERE PROCESS_NAME   =  :chr_g_progname
+   AND STARTDATE     = :chr_g_start_date
+   AND   PROC_INIT         = :chr_g_key
+   AND STATUS        = :chr_g_status_started
+            FOR UPDATE OF  PROCESSING_STATUS ,
+                           STATUS;
+
+   
+   IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"BATCH_IN_PROC",chr_g_progname,chr_g_key)
+
+   if (i_restart_info == -1)
+   {
+      strcpy(chr_h_restart_data,APL_LOWEST_CHAR);
+   }
+	 /*Retrofit from HDFC by siva.ganapathi for ISKB_2290 on 29/12/2009 START*/
+	/* Commented By Harvinder Singh - Log_269 - Date 25th Feb, 2008 -- Start	
+	EXEC SQL SELECT NVL(COUNT(*),0) INTO :l_count
+	FROM CA_GLB_SETTLMENT
+	WHERE CORP_ID =: p_corp_id
+	AND CONF_SET_DEL = 'Y'
+	AND CONF_SET_REC = 'Y';
+	fprintf(l_logfile,"sqlca.sqlcode1 |%d| \n",sqlca.sqlcode);
+	 fflush(l_logfile);
+	IS_ANY_ORA_ERROR
+	
+	if(l_count > 0)
+	{
+		fprintf(l_logfile,"Settlement process already completed for Event ID |%s|\n",p_corp_id);	
+		 fflush(l_logfile);
+		Alert("Settlement process already completed for Event ID |%s|\n",p_corp_id);
+		APL_GOBACK_FAIL
+	}
+	else if(!strcmp(del_typ,"DD"))
+	{
+			  EXEC SQL SELECT NVL(COUNT(*),0) INTO :l_count
+						 FROM CA_GLB_SETTLMENT
+						 WHERE CORP_ID =: p_corp_id
+						 AND CONF_SET_DEL = 'Y'
+						 AND CONF_SET_REC = 'N';
+			  fprintf(l_logfile,"sqlca.sqlcode2 |%d| \n",sqlca.sqlcode);
+			   fflush(l_logfile);
+			  IS_ANY_ORA_ERROR
+			 if(l_count > 0)
+			 {
+						fprintf(l_logfile,"Settlement process already completed for Deliver Deals for Event ID |%s|\n",p_corp_id);	
+						 fflush(l_logfile);
+						Alert("Settlement process already completed for Event ID |%s|\n",p_corp_id);
+						APL_GOBACK_FAIL
+			 }
+
+	}
+	else if(!strcmp(del_typ,"RD"))
+	{
+			  EXEC SQL SELECT NVL(COUNT(*),0) INTO :l_count
+						 FROM CA_GLB_SETTLMENT
+						 WHERE CORP_ID =: p_corp_id
+						 AND CONF_SET_DEL = 'N'
+						 AND CONF_SET_REC = 'Y';
+			  fprintf(l_logfile,"sqlca.sqlcode3 |%d| \n",sqlca.sqlcode);
+			   fflush(l_logfile);
+			  IS_ANY_ORA_ERROR
+			 if(l_count > 0)
+			 {
+						fprintf(l_logfile,"Settlement process already completed for Receive Deals for Event ID |%s|\n",p_corp_id);
+                        fflush(l_logfile);						
+						Alert("Settlement process already completed for Event ID |%s|\n",p_corp_id);
+						APL_GOBACK_FAIL
+			 }
+
+	}
+	 By Harvinder Singh - Log_269 - Date 25th Feb, 2008 -- End */	
+         /*Retrofit from HDFC by siva.ganapathi for ISKB_2290 on 29/12/2009 END*/
+
+	EXEC SQL DECLARE sel_deal_cur CURSOR FOR
+	SELECT * 
+	FROM DL_DEAL D
+	WHERE D.INFORMATON =: p_corp_id
+	AND (D.DEAL_CD = DECODE(:del_typ,'RD','2','DD','1') OR D.DEAL_CD = DECODE(:del_typ,'RD','4','DD','1'))
+	AND D.DEAL_STAT = 'CC'
+	ORDER BY D.CLIENT;
+
+	IS_ANY_ORA_ERROR
+
+
+   EXEC SQL OPEN sel_deal_cur;
+   IS_ANY_ORA_ERROR
+	
+	if(CO_RtvSysDtTime(chr_sys_access_stamp,l_debug_info_ptr) !=APL_SUCCESS)
+   {
+      APL_GOBACK_FAIL
+   }
+	fprintf(l_logfile," Processing for Event ID |%s|\n",p_corp_id);
+	 fflush(l_logfile);
+	fprintf(l_usr_logfile," Processing for Event ID |%s|\n",p_corp_id);
+	 fflush(l_logfile);
+	 
+	for(;;)
+	{
+		EXEC SQL FETCH sel_deal_cur INTO :l_sys_dl_deal_struct_h:l_sys_dl_deal_struct_i;
+      Alert("sqlca.sqlcode4 |%d| \n",sqlca.sqlcode);
+		IS_ANY_ORA_ERROR
+
+      if(sqlca.sqlcode == 1403)
+		break;
+		int_counter++;
+		printf(" Processing for Client1 |%s|\n",l_sys_dl_deal_struct_h->h_dl_client);
+		 fflush(stdout);
+		
+		if ( CA_ChkInstrument(l_sys_dl_deal_struct_h->h_instr_code,
+            l_mt_instrument_struct_h,
+            &int_result,
+            l_debug_info_ptr) == APL_FAILURE)
+		 {
+         CO_ProcMonitor(l_logfile,"Returned from CA_ChkInstrument() with Failure\n",l_debug_info_ptr,p_intl_envdatastruct_h);
+       }
+		
+		if ( int_result == ERR_INSTR_NOTFND )
+		{
+         fprintf(l_logfile,"Instrument |%s| not found\n",l_sys_dl_deal_struct_h->h_instr_code);
+		 fflush(l_logfile);
+			fprintf(l_usr_logfile,"Instrument |%s| not found\n",l_sys_dl_deal_struct_h->h_instr_code);
+			fflush(l_logfile);
+			fprintf(l_logfile,"Exiting unsucessfully from process.....1\n");
+			fflush(l_logfile);
+			fprintf(l_usr_logfile,"Exiting unsucessfully from process.....1\n");
+			fflush(l_usr_logfile);
+			APL_GOBACK_FAIL
+      }
+
+		if ( int_result == ERR_UNAUTH_INSTR )
+		{
+         fprintf(l_logfile,"Instrument |%s| not Authorised \n",l_sys_dl_deal_struct_h->h_instr_code);
+		 fflush(l_logfile);
+      	fprintf(l_logfile,"Exiting unsucessfully from process.....1\n");
+		fflush(l_logfile);
+			fprintf(l_usr_logfile,"Instrument |%s| not Authorised\n",l_sys_dl_deal_struct_h->h_instr_code);
+			fflush(l_usr_logfile);
+			fprintf(l_usr_logfile,"Exiting unsucessfully from process.....1\n");
+			fflush(l_usr_logfile);
+			APL_GOBACK_FAIL
+		}
+		
+		Alert("Instrument1 we got is |%s| \n",l_sys_dl_deal_struct_h->h_instr_code);
+		
+
+//Changed function name by Swapnil for Freezed client for Isolve no ISKB_2188 Start
+
+if(strcmp(l_sys_dl_deal_struct_h->h_classofdl,"19")==0)
+{
+	if ( CA_ChkAcc_CA(l_sys_dl_deal_struct_h->h_dl_client,
+            l_mt_client_struct_h,
+            &int_result,
+            l_debug_info_ptr) == APL_FAILURE)
+      {
+         CO_ProcMonitor(l_logfile,"Returned from CA_ChkAcc_CA() with Failure\n",l_debug_info_ptr,p_intl_envdatastruct_h);
+			int_reslt = 1;
+			CO_FreeErrLst(l_debug_info_ptr);
+		}
+}
+else{
+		if ( CA_ChkAcc(l_sys_dl_deal_struct_h->h_dl_client,
+            l_mt_client_struct_h,
+            &int_result,
+            l_debug_info_ptr) == APL_FAILURE)
+      {
+         CO_ProcMonitor(l_logfile,"Returned from CA_ChkAcc() with Failure\n",l_debug_info_ptr,p_intl_envdatastruct_h);
+			int_reslt = 1;
+			CO_FreeErrLst(l_debug_info_ptr);
+		}
+    } 
+  //Changed function condtion  by Swapnil for Freezed client for Isolve no ISKB_2188 End		
+  		if ( int_result == ERR_ACCNOT_FND )
+      {
+         fprintf(l_logfile,"Client |%s| Not Found\n",l_sys_dl_deal_struct_h->h_dl_client);
+		 fflush(l_logfile);
+         fprintf(l_usr_logfile,"Client |%s| Not Found\n",l_sys_dl_deal_struct_h->h_dl_client);
+		 fflush(l_usr_logfile);
+			int_reslt = 1;
+			int_failcnt++;
+         CO_FreeErrLst(l_debug_info_ptr);
+			continue;
+      }
+	
+      if ( int_result == ERR_ACCOUNT_UNAUTH )
+      {
+         fprintf(l_logfile,"Client1 |%s| Not Authorised\n",l_sys_dl_deal_struct_h->h_dl_client);
+		 fflush(l_logfile);
+			fprintf(l_usr_logfile,"Client123 |%s| Not Authorised\n",l_sys_dl_deal_struct_h->h_dl_client);
+			fflush(l_usr_logfile);
+         int_reslt = 1;
+			int_failcnt++;
+         CO_FreeErrLst(l_debug_info_ptr);
+			continue;
+      }
+ 
+		fprintf(l_logfile," Processing for Client2 |%s|\n",l_sys_dl_deal_struct_h->h_dl_client);
+		fflush(l_logfile);
+		printf("Client2 |%s|\n",l_sys_dl_deal_struct_h->h_dl_client);
+        fflush(stdout);		
+		
+	
+		/* Populating Settlement Structure */
+		
+		strcpy(l_dl_deal_sstdet_struct_h->h_dl_client,l_sys_dl_deal_struct_h->h_dl_client);
+
+		strcpy(l_dl_deal_sstdet_struct_h->h_indentity_no,l_sys_dl_deal_struct_h->h_indentity_no);
+
+		fprintf(l_logfile," Deal Ref No. is |%s|\n",l_dl_deal_sstdet_struct_h->h_indentity_no);
+		
+		strcpy(l_dl_deal_sstdet_struct_h->h_instrdate,chr_sys_access_stamp);
+	
+		strcpy(l_dl_deal_sstdet_struct_h->h_moneydate,"");
+
+		strcpy(l_dl_deal_sstdet_struct_h->h_access_stamp,l_sys_dl_deal_struct_h->h_access_stamp);
+
+		l_dl_deal_sstdet_struct_h->h_brokercomm = 0;
+		l_dl_deal_sstdet_struct_h->h_pendregquantity = 0;
+		l_dl_deal_sstdet_struct_h->h_marktrfquantity = 0;
+		l_dl_deal_sstdet_struct_h->h_rec_int_000 = 0;
+		l_dl_deal_sstdet_struct_h->h_mcomplquantity = 0;
+		l_dl_deal_sstdet_struct_h->h_delta_000 = 0;
+		l_dl_deal_sstdet_struct_h->h_delta_001 = 0;
+		l_dl_deal_sstdet_struct_h->h_delta_002 = 0;
+		l_dl_deal_sstdet_struct_h->h_newamount = 0;
+		strcpy(l_dl_deal_sstdet_struct_h->h_ispart_,"N");
+		/*
+		strcpy(l_dl_deal_sstdet_struct_h->h_newindentity_no,"CTS_");
+		
+		EXEC SQL SELECT CA_TRANS_SETTLE.NEXTVAL INTO :l_seq_no:i_seq_no from DUAL;
+      IS_ANY_ORA_ERROR
+		
+		strcat(l_dl_deal_sstdet_struct_h->h_newindentity_no,l_seq_no);
+		*/	
+		l_dl_deal_sstdet_struct_h->h_newquantity = l_sys_dl_deal_struct_h->h_qty;
+
+		/*Retrofit from HDFC by siva.ganapathi for ISKB_2290 on 29/12/2009 START*/
+		/* Changes by Yogesh For HDFC Prod Issue - IPO Bidding Issue - Start */
+		/* l_dl_deal_sstdet_struct_h->h_pr = l_sys_dl_deal_struct_h->h_amt;*/
+
+		l_dl_deal_sstdet_struct_h->h_pr = l_sys_dl_deal_struct_h->h_pr;
+		/* Changes by Yogesh For HDFC Prod Issue - IPO Bidding Issue - End */
+                /*Retrofit from HDFC by siva.ganapathi for ISKB_2290 on 29/12/2009 END*/
+
+		fprintf(l_logfile," Qty is |%lf|\n",l_dl_deal_sstdet_struct_h->h_newquantity);
+		 fflush(l_logfile);
+		strcpy(l_dl_deal_sstdet_struct_h->h_sel_forreg,"");
+/* Calling Settlement Function */	
+		if(APL_FAILURE == DL_Proc_DLSetlSing(l_dl_deal_sstdet_struct_h,
+										APL_NULL_STRING,
+										p_intl_envdatastruct_h,
+										l_debug_info_ptr))
+		{
+				  CO_ProcMonitor(l_logfile,"Returned from DL_Proc_DLSetlSing() with Failure\n",
+										l_debug_info_ptr,p_intl_envdatastruct_h);
+				 int_reslt = 1;
+				 int_failcnt++;				 
+				 fprintf(l_usr_logfile,"Fail to process Client |%s|\n",l_sys_dl_deal_struct_h->h_dl_client);
+				 fflush(l_usr_logfile);
+				 CO_FreeErrLst(l_debug_info_ptr);
+		}
+		else
+		{
+			fprintf(l_logfile,"Successfully process Client |%s| Qty |%lf| Deal Ref No |%s| \n",l_sys_dl_deal_struct_h->h_dl_client,l_sys_dl_deal_struct_h->h_qty,l_sys_dl_deal_struct_h->h_indentity_no);
+			 fflush(l_logfile);
+			 if (  (int_counter%COMMIT_FREQ_LOGAUTOEVNT) == 0  )
+			 {
+				  fprintf(l_logfile,"Processed %d Records",int_counter);
+				  fflush(l_logfile);
+				  sprintf(chr_h_stat_info,"Processed %d Records",int_counter);
+				  EXEC SQL UPDATE   SYS_BATCHPROC
+						 SET STATUS   = :chr_g_status_started,
+						 PROCESSING_STATUS = :chr_h_restart_data,
+						 STAT_DET     = :chr_h_stat_info
+						 WHERE ROWID  = :chr_h_batch_in_proc_rowid;
+
+				  IS_ANY_ORA_ERROR;
+
+				  EXEC SQL COMMIT WORK;
+				  IS_ANY_ORA_ERROR
+				  CO_ProcMonitor(l_logfile,"RECORD COMMITTED \n",NULL,NULL);
+
+				  EXEC SQL SELECT   ROWID,
+										  PROCESSING_STATUS
+							  INTO  :chr_h_batch_in_proc_rowid,
+									  :chr_h_restart_data :i_restart_info
+				  FROM SYS_BATCHPROC
+				  WHERE ROWID = :chr_h_batch_in_proc_rowid
+							  FOR UPDATE OF  PROCESSING_STATUS ,
+												  STATUS;
+
+				  IS_ANY_ORA_ERROR;
+
+				  EXEC SQL OPEN sel_deal_cur;
+
+				  IS_ANY_ORA_ERROR;
+			}			
+	  }
+
+		 fprintf(l_logfile,"- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - \n");
+		 fflush(l_logfile);
+
+	 }
+			  sprintf(chr_h_stat_info,"All Records Processed");
+			  EXEC SQL UPDATE SYS_BATCHPROC
+					 SET STATUS = :chr_g_status_completed,
+						  PROCESSING_STATUS = NULL,
+						  STAT_DET    = :chr_h_stat_info
+					 WHERE ROWID = :chr_h_batch_in_proc_rowid;
+
+			  IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"BATCH_IN_PROC",chr_g_progname,chr_g_key)
+
+			  if(int_counter == 0)
+			  {
+				  fprintf(l_logfile,"No Records found for Event ID 1|%s|\n",p_corp_id);
+				  fflush(l_logfile);
+				  Alert("No Records found for Event ID1 |%s|\n",p_corp_id);
+				  APL_GOBACK_FAIL
+			  }
+
+			  fprintf(l_logfile,"************************************************************************************\n");
+			  fflush(l_logfile);
+			  fprintf(l_logfile,"Total number of records : |%d|\n",int_counter);
+			  fflush(l_logfile);
+			  fprintf(l_logfile,"Total record failed : |%d|\n",int_failcnt);
+			  fflush(l_logfile);
+			  fprintf(l_logfile,"************************************************************************************\n");
+			  fflush(l_logfile);
+			  fprintf(l_usr_logfile,"************************************************************************************\n");
+			  fflush(l_usr_logfile);
+			  fprintf(l_usr_logfile,"Total record failed : |%d|\n",int_failcnt);
+			  fflush(l_usr_logfile);
+			  fprintf(l_usr_logfile,"************************************************************************************\n");
+			  fflush(l_usr_logfile);
+			 
+			  if(int_reslt == 1)
+				  APL_GOBACK_FAIL
+
+		  APL_GOBACK_SUCCESS
+		  RETURN_SUCCESS:
+		  {
+			  free(l_dl_deal_sstdet_struct_h);
+			  free(l_sys_dl_deal_struct_h);
+			  free(l_sys_dl_deal_struct_i);
+			  free(l_mt_instrument_struct_h);
+			  free(l_mt_client_struct_h);
+			  APL_FUNCTION_RET_SUCCESS(APL_OUT_FILE)
+		  }
+		  RETURN_FAILURE:
+		  {
+			  free(l_dl_deal_sstdet_struct_h);
+			  free(l_sys_dl_deal_struct_h);
+			  free(l_sys_dl_deal_struct_i);
+			  free(l_mt_instrument_struct_h);
+			  free(l_mt_client_struct_h);
+			  APL_FUNCTION_RET_FAILURE(APL_OUT_FILE)
+
+		  }
+		  }
+
+		  int Process_CABlock_TO_Free(char *p_corp_id,char *p_action,char *del_typ,INTL_ENV_DATA_STRUCT_H *p_intl_envdatastruct_h,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+		  {
+			  int int_result = 0;
+			  int int_reslt = 0;
+			  int int_counter = 0;
+			  int int_failcnt = 0;
+			  char chr_sys_access_stamp[APL_DATE_LEN] = APL_NULL_STRING;
+			  char l_seq_no[16] = APL_NULL_STRING;
+			  short i_seq_no = 0;
+			  char l_corp_id[20] = APL_NULL_STRING;
+			  short i_corp_id = 0;
+			  struct sqlca sqlca;
+			  char p_locchgseqno[17] = APL_NULL_STRING;
+			  char l_locchgseqno[17] = APL_NULL_STRING;
+			  char user[15] = APL_NULL_STRING;
+			  char chr_g_event_id[20] = APL_NULL_STRING;
+			  char chr_g_cln_cd[11] = APL_NULL_STRING;
+			  char chr_g_identiy_no[17] = APL_NULL_STRING;
+			  char  chr_h_stat_info[APL_STATINFO_LEN]= APL_NULL_STRING;
+			  char  chr_h_restart_data[APL_RESTARTDATA_LENGTH] = APL_NULL_STRING;
+			  char  chr_h_batch_in_proc_rowid[APL_ROWID_LEN] = APL_NULL_STRING;
+			  char  chr_h_batch_in_proc_status[APL_BATCHSTATUS_LEN] = APL_NULL_STRING;
+			  char  rowid[APL_ROWID_LEN] =  APL_NULL_STRING;
+
+			  short int_i_batch_in_proc_rowid = 0;
+			  short i_restart_info =0;
+			  
+			  EXEC SQL VAR chr_g_event_id IS STRING;
+			  EXEC SQL VAR chr_g_cln_cd IS STRING;
+			  EXEC SQL VAR chr_g_identiy_no IS STRING;
+			  
+			  DL_LOCNCHG_STRUCT_H *p_dl_locnchg_struct_h_a;
+			  SYS_DL_DEAL_STRUCT_H *l_sys_dl_deal_struct_h;
+			  SYS_DL_DEAL_STRUCT_I *l_sys_dl_deal_struct_i;
+			  MT_INSTRUMENT_STRUCT_H  *l_mt_instrument_struct_h;
+			  MT_CLIENT_STRUCT_H      *l_mt_client_struct_h;
+
+			  p_dl_locnchg_struct_h_a =  (DL_LOCNCHG_STRUCT_H *)calloc(1,sizeof(DL_LOCNCHG_STRUCT_H));
+			  APL_MALLOC_FAIL(p_dl_locnchg_struct_h_a)
+			  l_sys_dl_deal_struct_h = (SYS_DL_DEAL_STRUCT_H *)calloc(1,sizeof(SYS_DL_DEAL_STRUCT_H));
+			  APL_MALLOC_FAIL(l_sys_dl_deal_struct_h)
+			  l_sys_dl_deal_struct_i = (SYS_DL_DEAL_STRUCT_I *)calloc(1,sizeof(SYS_DL_DEAL_STRUCT_I));
+			  APL_MALLOC_FAIL(l_sys_dl_deal_struct_i)
+			  l_mt_instrument_struct_h = (MT_INSTRUMENT_STRUCT_H *)calloc(1,sizeof(MT_INSTRUMENT_STRUCT_H));
+			  APL_MALLOC_FAIL(l_mt_instrument_struct_h)
+			  l_mt_client_struct_h = (MT_CLIENT_STRUCT_H *)calloc(1,sizeof(MT_CLIENT_STRUCT_H));
+			  APL_MALLOC_FAIL(l_mt_client_struct_h)	
+
+
+			  APL_FUNCTION_ENTER(l_logfile)
+			  APL_FUNCTION_ENTER(l_usr_logfile)
+
+			  EXEC SQL SELECT   ROWID,
+									  PROCESSING_STATUS
+						  INTO  :chr_h_batch_in_proc_rowid :int_i_batch_in_proc_rowid,
+								  :chr_h_restart_data :i_restart_info
+			  FROM SYS_BATCHPROC
+			  WHERE PROCESS_NAME   =  :chr_g_progname
+			  AND STARTDATE     = :chr_g_start_date
+			  AND   PROC_INIT         = :chr_g_key
+			  AND STATUS        = :chr_g_status_started
+						  FOR UPDATE OF  PROCESSING_STATUS ,
+											  STATUS;
+
+			  IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"BATCH_IN_PROC",chr_g_progname,chr_g_key)
+
+			  if (i_restart_info == -1)
+			  {
+				  strcpy(chr_h_restart_data,APL_LOWEST_CHAR);
+			  }
+
+			 /*Code was commented by siva.ganapathi for ISKB_2290 on 31/12/2009 -- started*/
+			 /* EXEC SQL SELECT CORP_ID INTO :l_corp_id:i_corp_id
+			  FROM CA_GLB_SETTLMENT
+			  WHERE CORP_ID =:p_corp_id;
+			  fprintf(l_logfile,"sqlca.sqlcode6 |%d| \n",sqlca.sqlcode);
+			  fflush(l_logfile);
+			  IS_ANY_ORA_ERROR
+			  if (APL_ZERO_RESULT_SET)
+			  {
+				  fprintf(l_logfile,"Settlement is pending for Event ID |%s| \n",p_corp_id);
+				  fflush(l_logfile);
+				  Alert("Settlement is pending for Event ID |%s| \n",p_corp_id);
+				  APL_GOBACK_FAIL
+			  }*/
+			  /*Code was commented by siva.ganapathi for ISKB_2290 on 31/12/2009 -- Ended*/
+
+			  /*Retrofit from HDFC by siva.ganapathi for ISKB_2290 on 29/12/2009 START*/
+			  /* Commented By Harvinder Singh - Log_269 - Date 28Feb08 - Start	
+			  EXEC SQL SELECT CORP_ID INTO :l_corp_id:i_corp_id
+			  FROM CA_GLB_SETTLMENT
+			  WHERE CORP_ID =:p_corp_id
+			  AND BLK_FREE_REC = 'Y';
+			  fprintf(l_logfile,"sqlca.sqlcode7 |%d| \n",sqlca.sqlcode);
+			  fflush(l_logfile);
+			  IS_ANY_ORA_ERROR
+			  if(sqlca.sqlcode == 0)
+			  {
+				  fprintf(l_logfile,"Block movement already done for Event ID |%s| \n",p_corp_id);
+				  fflush(l_logfile);
+				  Alert("Block movement already done for Event ID |%s| \n",p_corp_id);
+				  APL_GOBACK_FAIL
+			  }	
+			  Commented By Harvinder Singh - Log_269 - Date 28Feb08 - End	*/
+			  /*Retrofit from HDFC by siva.ganapathi for ISKB_2290 on 29/12/2009 END*/
+/* Changes made for ISKB_7719 By Hardik --  Retro from HDFC*/
+	strcpy(chr_g_cln_cd, " "); 
+			  Alert("Event ID |%s| found proceeding for movement CABL To FREE \n",p_corp_id);
+			  fprintf(l_logfile,"Event ID |%s| found proceeding for movement CABL To FREE \n",p_corp_id);
+			  fflush(l_logfile);
+
+			 /*  EXEC SQL DECLARE sel_deal_bf_cur CURSOR FOR
+			  SELECT *
+			  FROM DL_DEAL D
+			  WHERE D.INFORMATON =:p_corp_id
+			  AND (D.DEAL_CD = 2 OR D.DEAL_CD = 4)
+			  AND (D.DEAL_STAT = 'CS' OR D.DEAL_STAT = 'SS')
+			  AND D.INFORMATON||D.CLIENT||D.IDENTIY_NO NOT IN 
+			  (SELECT C.CORP_ID||C.CLN_CODE||C.IDENTIY_NO 
+				FROM CA_GLB_BLKFREE C
+				WHERE C.CORP_ID =:p_corp_id)
+			  ORDER BY D.CLIENT; */
+/* Commented and Rewritten -- Changes made for ISKB_7719 By Hardik --  Retro from HDFC*/
+
+			  EXEC SQL DECLARE sel_deal_bf_cur CURSOR FOR
+			  SELECT *
+			  FROM DL_DEAL D
+			  WHERE D.INFORMATON =: p_corp_id
+			  AND (D.DEAL_CD = 2 OR D.DEAL_CD = 4)
+			  AND (D.DEAL_STAT = 'CS' OR D.DEAL_STAT = 'SS')
+			  AND D.INFORMATON||D.CLIENT||D.IDENTIY_NO NOT IN 
+			  (SELECT C.CORP_ID||C.CLN_CODE||C.IDENTIY_NO 
+				FROM CA_GLB_BLKFREE C
+				WHERE C.CORP_ID =: p_corp_id)
+				AND CLIENT > :chr_g_cln_cd
+			  ORDER BY D.CLIENT;
+			  IS_ANY_ORA_ERROR
+
+
+			  EXEC SQL OPEN sel_deal_bf_cur;
+			  IS_ANY_ORA_ERROR
+
+			  if(CO_RtvSysDtTime(chr_sys_access_stamp,l_debug_info_ptr) !=APL_SUCCESS)
+			  {
+				  APL_GOBACK_FAIL
+			  }
+			  fprintf(l_logfile," Processing for Event ID |%s|\n",p_corp_id);
+			  fflush(l_logfile);
+			  strcpy(user,p_intl_envdatastruct_h->usr);
+			  for(;;)
+			  {
+				  EXEC SQL FETCH sel_deal_bf_cur INTO :l_sys_dl_deal_struct_h:l_sys_dl_deal_struct_i;
+				  Alert("sqlca.sqlcode |%d| \n",sqlca.sqlcode);
+				  IS_ANY_ORA_ERROR
+
+				  if(sqlca.sqlcode == 1403)
+				  break;
+				  int_counter++;
+				  printf(" Processing for Client3 |%s|\n",l_sys_dl_deal_struct_h->h_dl_client);
+				  fflush(l_logfile);
+				  /* Changes made for ISKB_7719 By Hardik --  Retro from HDFC*/
+			  strcpy(chr_g_cln_cd,l_sys_dl_deal_struct_h->h_dl_client);
+				  if ( CA_ChkInstrument(l_sys_dl_deal_struct_h->h_instr_code,
+						  l_mt_instrument_struct_h,
+						  &int_result,
+						  l_debug_info_ptr) == APL_FAILURE)
+					{
+					  CO_ProcMonitor(l_logfile,"Returned from CA_ChkInstrument() with Failure\n",l_debug_info_ptr,p_intl_envdatastruct_h);
+					}
+
+				  if ( int_result == ERR_INSTR_NOTFND )
+				  {
+					  fprintf(l_logfile,"Instrment |%s| Not Found\n",l_sys_dl_deal_struct_h->h_instr_code);
+					  fflush(l_logfile);
+					  fprintf(l_logfile,"Exiting unsucessfully from process.....2\n");
+					  fflush(l_logfile);
+					  fprintf(l_usr_logfile,"Instrument |%s| not found\n",l_sys_dl_deal_struct_h->h_instr_code);
+					  fflush(l_usr_logfile);
+					  fprintf(l_usr_logfile,"Exiting unsucessfully from process.....1\n");
+					  fflush(l_usr_logfile);
+					  APL_GOBACK_FAIL
+				  }
+				  if ( int_result == ERR_UNAUTH_INSTR )
+				  {
+					  fprintf(l_logfile,"Instrument |%s| Not Authorised\n",l_sys_dl_deal_struct_h->h_instr_code);
+					  fflush(l_logfile);
+					  fprintf(l_logfile,"Exiting unsucessfully from process.....2\n");
+					  fflush(l_logfile);
+					  fprintf(l_usr_logfile,"Instrument |%s| Not Authorised\n",l_sys_dl_deal_struct_h->h_instr_code);
+					  fflush(l_usr_logfile);
+					  fprintf(l_usr_logfile,"Exiting unsucessfully from process.....1\n");
+					  fflush(l_usr_logfile);
+					  APL_GOBACK_FAIL
+				  }
+
+				  Alert("Instrument2 we got is |%s| \n",l_sys_dl_deal_struct_h->h_instr_code);
+
+				
+				  //Changed function name by Swapnil for Freezed client for Isolve no ISKB_2188 Start
+
+									if(strcmp(l_sys_dl_deal_struct_h->h_classofdl,"19")==0)
+									{
+											if ( CA_ChkAcc_CA(l_sys_dl_deal_struct_h->h_dl_client,
+												l_mt_client_struct_h,
+												&int_result,
+												l_debug_info_ptr) == APL_FAILURE)
+										  {
+											 CO_ProcMonitor(l_logfile,"Returned from CA_ChkAcc_CA() with Failure\n",l_debug_info_ptr,p_intl_envdatastruct_h);
+												int_reslt = 1;
+												CO_FreeErrLst(l_debug_info_ptr);
+											}
+									}
+									else{
+				  if ( CA_ChkAcc(l_sys_dl_deal_struct_h->h_dl_client,
+						  l_mt_client_struct_h,
+						  &int_result,
+						  l_debug_info_ptr) == APL_FAILURE)
+				  {
+											        CO_ProcMonitor(l_logfile,"Returned from CA_ChkAcc() with Failure\n",l_debug_info_ptr,p_intl_envdatastruct_h);
+					  int_reslt = 1;
+					  CO_FreeErrLst(l_debug_info_ptr);
+				  }
+										} 
+                    //Changed function condtion  by Swapnil for Freezed client for Isolve no ISKB_2188 End	
+				  
+
+				  if ( int_result == ERR_ACCNOT_FND )
+				  {
+					  fprintf(l_logfile,"Client |%s| Not Found\n",l_sys_dl_deal_struct_h->h_dl_client);
+					  fflush(l_logfile);
+					  fprintf(l_usr_logfile,"Client |%s| Not Found\n",l_sys_dl_deal_struct_h->h_dl_client);
+					  fflush(l_usr_logfile);
+					  int_reslt = 1;
+					  int_failcnt++;
+					  CO_FreeErrLst(l_debug_info_ptr);
+					  continue;
+				  }      
+				  
+				  if ( int_result == ERR_ACCOUNT_UNAUTH )
+				  {
+					  fprintf(l_logfile,"Client23345 |%s| Not Authorised\n",l_sys_dl_deal_struct_h->h_dl_client);
+					  fflush(l_logfile);
+					  fprintf(l_usr_logfile,"Client2345 |%s| Not Authorised\n",l_sys_dl_deal_struct_h->h_dl_client);
+					  fflush(l_usr_logfile);
+					  int_reslt = 1;
+					  int_failcnt++;
+					  CO_FreeErrLst(l_debug_info_ptr);
+					  continue;
+				  }
+
+				  fprintf(l_logfile," Processing for Client4 |%s|\n",l_sys_dl_deal_struct_h->h_dl_client);
+				  fflush(l_logfile);
+				  printf("Client1 |%s|\n",l_sys_dl_deal_struct_h->h_dl_client);
+				  fflush(stdout);
+
+				  /* Populating Location Change Structure */
+				  
+				  strcpy(p_dl_locnchg_struct_h_a->h_dl_client,l_sys_dl_deal_struct_h->h_dl_client);
+				  strcpy(p_dl_locnchg_struct_h_a->h_instr_code,l_sys_dl_deal_struct_h->h_instr_code);
+				  strcpy(p_dl_locnchg_struct_h_a->h_dlt,l_sys_dl_deal_struct_h->h_dlt);
+				  strcpy(p_dl_locnchg_struct_h_a->h_setldt,l_sys_dl_deal_struct_h->h_setldt);
+				  strcpy(p_dl_locnchg_struct_h_a->h_infos,"CA Globle Block Movement");
+				  strcpy(p_dl_locnchg_struct_h_a->h_frm_loc,l_sys_dl_deal_struct_h->h_loccode);
+				  strcpy(p_dl_locnchg_struct_h_a->h_to_location,l_sys_dl_deal_struct_h->h_loccode);
+				  strcpy(p_dl_locnchg_struct_h_a->h_sendmsg_ind,"N");
+				  strcpy(p_dl_locnchg_struct_h_a->h_billable_flag,"N");
+				  strcpy(p_dl_locnchg_struct_h_a->h_newdt,chr_sys_access_stamp);
+				  strcpy(p_dl_locnchg_struct_h_a->h_setl,"Y");
+				  strcpy(p_dl_locnchg_struct_h_a->h_frm_type,"C");
+				  strcpy(p_dl_locnchg_struct_h_a->h_to_type,"F");
+				  strcpy(p_dl_locnchg_struct_h_a->h_change,"B");
+				  p_dl_locnchg_struct_h_a->h_qty = l_sys_dl_deal_struct_h->h_qty;
+				  strcpy(p_intl_envdatastruct_h->h_mode,APL_FUNC_INPUT);
+				  strcpy(p_intl_envdatastruct_h->usr,user);
+				  fprintf(l_logfile," Qty moving from CABL to FREE : |%lf|\n",l_sys_dl_deal_struct_h->h_qty);	
+				  fflush(l_logfile);
+				  fprintf(l_logfile," Qty moving from Location : |%s| \n",p_dl_locnchg_struct_h_a->h_frm_loc);
+				  fflush(l_logfile);
+				  strcpy(p_locchgseqno,"TS_");
+
+				  EXEC SQL SELECT CA_TRANS_SETTLE.NEXTVAL INTO :l_seq_no:i_seq_no from DUAL;
+				  IS_ANY_ORA_ERROR
+
+				  strcat(p_locchgseqno,l_seq_no);
+
+				  if(CR_Mod_LocChg(p_dl_locnchg_struct_h_a,p_locchgseqno,p_intl_envdatastruct_h,l_debug_info_ptr) == APL_FAILURE) //AIX -Warning Removal
+				  {	
+					  CO_ProcMonitor(l_logfile,"Returned from CR_Mod_LocChg() with Failure\n",l_debug_info_ptr,p_intl_envdatastruct_h);
+					  int_reslt = 1;
+					  CO_FreeErrLst(l_debug_info_ptr);
+				  }		
+				  else
+				  {
+					  fprintf(l_logfile," Proceeding for Authorization of Client |%s| having Ref No |%s|\n",l_sys_dl_deal_struct_h->h_dl_client,p_locchgseqno);
+					  fflush(l_logfile);
+					  
+					  strcpy(p_intl_envdatastruct_h->h_mode,APL_FUNC_AUTHORISE);
+					  strcpy(p_intl_envdatastruct_h->usr,"SYSTEM");
+
+					  if(CR_Mod_LocChg(p_dl_locnchg_struct_h_a,p_locchgseqno,p_intl_envdatastruct_h,l_debug_info_ptr) == APL_FAILURE) //AIX -Warning Removal
+					  {
+						  CO_ProcMonitor(l_logfile,"Returned from CR_Mod_LocChg() with Failure\n",l_debug_info_ptr,p_intl_envdatastruct_h);
+						  int_reslt = 1;
+						  int_failcnt++;
+						  CO_FreeErrLst(l_debug_info_ptr);
+						  
+						  strcpy(l_locchgseqno,p_dl_locnchg_struct_h_a->h_sequenceno);
+						  
+						  EXEC SQL DELETE FROM DL_LOCNCHG
+						  WHERE IDEN_NO =:l_locchgseqno;
+						  IS_ANY_ORA_ERROR
+						  fprintf(l_usr_logfile," Fail to process Client |%s| \n",l_sys_dl_deal_struct_h->h_dl_client);
+						  fflush(l_usr_logfile);
+							Alert("\n sqlca.sqlcode |%d| ", sqlca.sqlcode);
+						  Alert("Row deleted with iden_no |%s|\n",p_dl_locnchg_struct_h_a->h_sequenceno);
+						  /*Mrinal - Changes to display proper information in the logs - ISKB_7719* --> Start*/
+						  fprintf(l_logfile,"\n Block Movement for the above processed clients is ROLLBACK.\n");
+						  fflush(l_logfile);
+						  /*Mrinal - Changes to display proper information in the logs - ISKB_7719* --> End*/
+						/*Changes made for ISKB_7719 By Hardik --  Retro from HDFC Start*/
+                                EXEC SQL ROLLBACK WORK;
+				IS_ANY_ORA_ERROR
+
+   				EXEC SQL OPEN sel_deal_bf_cur;
+   				IS_ANY_ORA_ERROR
+						Alert("\nsqlca.sqlcode |%d| ", sqlca.sqlcode);
+						/* Changes made for ISKB_7719 By Hardik --  Retro from HDFC END*/
+			}
+			else
+			{
+				strcpy(chr_g_event_id,p_corp_id);
+   			strcpy(chr_g_cln_cd,l_sys_dl_deal_struct_h->h_dl_client);
+   			strcpy(chr_g_identiy_no,l_sys_dl_deal_struct_h->h_indentity_no);
+				
+				EXEC SQL INSERT INTO CA_GLB_BLKFREE VALUES(:chr_g_event_id,:chr_g_cln_cd,:chr_g_identiy_no);
+				IS_ANY_ORA_ERROR
+				
+				fprintf(l_logfile,"Successfully moved position from CABL To FREE for Client |%s|\n",p_dl_locnchg_struct_h_a->h_dl_client);
+				fflush(l_logfile);
+			}
+		}
+		
+		fprintf(l_logfile,"--------------------------------------------------------------------\n");
+		memset(p_dl_locnchg_struct_h_a,NULL,sizeof(DL_LOCNCHG_STRUCT_H));
+		
+		if (  (int_counter%COMMIT_FREQ_LOGAUTOEVNT) == 0  )
+      {
+         fprintf(l_logfile,"Processed %d Records",int_counter);
+		 fflush(l_logfile);
+			sprintf(chr_h_stat_info,"Processed %d Records",int_counter);
+
+         EXEC SQL UPDATE   SYS_BATCHPROC
+              SET STATUS   = :chr_g_status_started,
+              PROCESSING_STATUS = :chr_h_restart_data,
+              STAT_DET     = :chr_h_stat_info
+              WHERE ROWID  = :chr_h_batch_in_proc_rowid;
+
+         IS_ANY_ORA_ERROR;
+
+         EXEC SQL COMMIT WORK;
+         IS_ANY_ORA_ERROR
+         CO_ProcMonitor(l_logfile,"RECORD COMMITTED \n",NULL,NULL);
+
+         EXEC SQL SELECT   ROWID,
+                           PROCESSING_STATUS
+                  INTO  :chr_h_batch_in_proc_rowid,
+                        :chr_h_restart_data :i_restart_info
+         FROM SYS_BATCHPROC
+         WHERE ROWID = :chr_h_batch_in_proc_rowid
+                  FOR UPDATE OF  PROCESSING_STATUS ,
+                                 STATUS;
+
+         IS_ANY_ORA_ERROR;
+
+         EXEC SQL OPEN sel_deal_cur;
+
+         IS_ANY_ORA_ERROR;
+      }
+      
+   }
+	
+	/* Changes made for ISKB_7719 By Hardik --  Retro from HDFC */
+	EXEC SQL CLOSE sel_deal_bf_cur;
+	sprintf(chr_h_stat_info,"All Records Processed");
+   EXEC SQL UPDATE SYS_BATCHPROC
+        SET STATUS = :chr_g_status_completed,
+            PROCESSING_STATUS = NULL,
+            STAT_DET    = :chr_h_stat_info
+        WHERE ROWID = :chr_h_batch_in_proc_rowid;
+
+   IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"BATCH_IN_PROC",chr_g_progname,chr_g_key)
+
+	if(int_counter == 0)
+	{
+		fprintf(l_logfile,"No Records found for Event ID2 |%s|\n",p_corp_id);
+		fflush(l_logfile);
+      Alert("No Records found for Event ID2 |%s|\n",p_corp_id);
+      APL_GOBACK_FAIL
+	}
+
+	fprintf(l_logfile,"************************************************************************************\n");
+	fflush(l_logfile);
+   fprintf(l_logfile,"Total number of records : |%d|\n",int_counter);
+   fflush(l_logfile);
+   fprintf(l_logfile,"Total record failed : |%d|\n",int_failcnt);
+   fflush(l_logfile);
+   fprintf(l_logfile,"************************************************************************************\n");
+   fflush(l_logfile);
+   fprintf(l_usr_logfile,"************************************************************************************\n");
+   fflush(l_usr_logfile);
+   fprintf(l_usr_logfile,"Total record failed : |%d|\n",int_failcnt);
+   fflush(l_usr_logfile);
+   fprintf(l_usr_logfile,"************************************************************************************\n");
+   fflush(l_usr_logfile);
+   
+   
+	if(int_reslt == 1)
+		APL_GOBACK_FAIL
+
+APL_GOBACK_SUCCESS
+RETURN_SUCCESS:
+{
+   free(p_dl_locnchg_struct_h_a);
+   free(l_sys_dl_deal_struct_h);
+   free(l_sys_dl_deal_struct_i);
+   free(l_mt_instrument_struct_h);
+   free(l_mt_client_struct_h);
+   APL_FUNCTION_RET_SUCCESS(APL_OUT_FILE)
+}
+RETURN_FAILURE:
+{
+   free(p_dl_locnchg_struct_h_a);
+   free(l_sys_dl_deal_struct_h);
+   free(l_sys_dl_deal_struct_i);
+   free(l_mt_instrument_struct_h);
+   free(l_mt_client_struct_h);
+   APL_FUNCTION_RET_FAILURE(APL_OUT_FILE)
+
+}
+}

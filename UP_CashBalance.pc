@@ -1,0 +1,244 @@
+
+
+
+
+
+
+
+
+#include "CO_HostStructdef.h"
+EXEC SQL INCLUDE SQLCA.H;
+
+#define CASH_BAL_LEN   			17
+#define CASH_BAL_LINELEN   	80
+#define PROC_SIZE				5
+
+
+
+int CR_Proc_CshBalUpload(	FILE *p_fpbalfile, 
+							FILE *p_flogfile,
+							DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	
+
+	struct sqlca sqlca;	
+	char		chr_l_buf[BUFFER_LEN]				= APL_NULL_STRING;
+	char		chr_l_line[CASH_BAL_LINELEN]	= APL_NULL_STRING;
+	char		chr_l_glacc[PROC_SIZE][APL_CLIENT_LENGTH]	;
+	char		chr_l_str_cshbal[PROC_SIZE][CASH_BAL_LEN]	;
+	double	l_cshbal[PROC_SIZE];
+
+	int		int_l_error_flag  	= APL_SUCCESS;
+	int		int_l_count		  	= 0;
+	int		i					= 0;
+
+	sqlca.sqlcode = 0;
+
+	
+
+	CO_ProcMonitor(	p_flogfile, 
+					"Entered Function CR_Proc_CshBalUpload\n",
+					NULL,
+					NULL);
+	memset( chr_l_buf, NULL, BUFFER_LEN );
+
+	
+
+	if (NULL == p_fpbalfile)
+	{
+		APL_DATA_MISSING("CshBal File Ptr.", APL_NULL_STRING, APL_NULL_STRING);
+		APL_GOBACK_FAIL
+	}
+
+	
+
+	
+
+	EXEC SQL DELETE FROM DL_CASHBAL;
+
+	IS_ANY_ORA_ERROR
+
+	
+
+	
+
+	for ( i=0; i<PROC_SIZE; i++ )
+	{
+		strcpy( chr_l_glacc[i], APL_NULL_STRING );
+		strcpy( chr_l_str_cshbal[i], APL_NULL_STRING );
+		l_cshbal[i] = 0;
+	}
+
+	while (!feof(p_fpbalfile))
+	{
+		fscanf(p_fpbalfile, "%s", chr_l_line);
+		strncpy(chr_l_glacc[int_l_count], chr_l_line, APL_CLIENT_LENGTH - 1);
+		chr_l_glacc[int_l_count][APL_CLIENT_LENGTH-1] = '\0';
+		strncpy(chr_l_str_cshbal[int_l_count], chr_l_line+10, CASH_BAL_LEN - 1);
+		chr_l_str_cshbal[int_l_count][CASH_BAL_LEN-1] = '\0';
+		l_cshbal[int_l_count] = atof(chr_l_str_cshbal[int_l_count]);
+
+		if (++int_l_count == PROC_SIZE)
+		{
+			EXEC SQL INSERT INTO DL_CASHBAL VALUES (:chr_l_glacc, :l_cshbal);
+			IS_ANY_ORA_ERROR
+			int_l_count = 0;
+
+			for ( i=0; i<PROC_SIZE; i++ )
+			{
+				strcpy( chr_l_glacc[i], APL_NULL_STRING );
+				strcpy( chr_l_str_cshbal[i], APL_NULL_STRING );
+				l_cshbal[i] = 0;
+			}
+
+		}
+	}
+
+	int_l_count--;
+	if (int_l_count > 0)
+	{
+		for (i=0;i<int_l_count;i++)
+		{
+			EXEC SQL INSERT INTO DL_CASHBAL VALUES (:chr_l_glacc[i], :l_cshbal[i]);
+			IS_ANY_ORA_ERROR
+		}
+	}
+
+	
+	
+	APL_GOBACK_SUCCESS
+
+   RETURN_SUCCESS :
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(	p_flogfile, 
+							"Leaving Function CR_Proc_CshBalUpload with success\n",
+							NULL,
+							NULL);
+		}
+      return(APL_SUCCESS);
+
+   RETURN_FAILURE :
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(	p_flogfile, 
+							"Leaving Function CR_Proc_CshBalUpload with errors\n",
+							NULL,
+							NULL);
+		}
+      return(APL_FAILURE);
+
+}
+
+
+
+//main(int argc, char **argv)
+int main(int argc,char **argv)//Changes done for AIX Migration
+{
+	struct sqlca sqlca;
+	DEBUG_INFO_STRUCT_H 	*l_debug_info_ptr 					= NULL;
+
+	int   			int_l_retval 						= 0;
+
+	FILE  			*l_pfile 						= NULL;
+	FILE  			*l_finifile 					= NULL;
+	FILE				*l_flogfile 					= NULL;
+
+	char				chr_l_logdir[PATH_LENGTH]		= APL_NULL_STRING;
+	char				chr_l_logname[PATH_LENGTH]		= APL_NULL_STRING;
+	char				chr_l_file[PATH_LENGTH]			= APL_NULL_STRING;
+	char				chr_l_inifile[PATH_LENGTH]		= APL_NULL_STRING;
+	char				usr[APL_USERID_LEN]			= APL_NULL_STRING;
+	char				chr_custody_id_b[APL_USERID_LEN]		= APL_NULL_STRING;
+	char				chr_pwd[APL_PASSWD_LEN]			= APL_NULL_STRING;
+
+	EXEC SQL VAR usr IS STRING;
+	EXEC SQL VAR chr_custody_id_b IS STRING;
+	EXEC SQL VAR chr_pwd IS STRING;
+
+	sqlca.sqlcode = 0;
+
+   strcpy(chr_l_inifile,getenv("INTL_ROOT_PATH"));
+   strcat(chr_l_inifile,"intl_sun.cfg");
+
+   if ( ( l_finifile=fopen(chr_l_inifile,"r") ) == NULL)
+   {
+      exit(-1);
+   }
+
+	
+
+	
+
+	APL_FETCH_DB_LOGIN_DETAILS(l_finifile, chr_custody_id_b, usr, chr_pwd, APL_OUT_FILE, &l_debug_info_ptr)
+
+	EXEC SQL CONNECT :usr IDENTIFIED BY :chr_pwd ;
+
+	if (sqlca.sqlcode)
+	{
+		APL_GOBACK_FAIL
+	}
+	else
+	{
+		
+
+		if (APL_FAILURE == CO_Rtv_RptFileName(	"3Z",
+														APL_LOGFILE_DESC,
+														100,
+														argv[5],
+														argv,
+														&l_flogfile,
+														&l_debug_info_ptr ) )
+		{
+			APL_GOBACK_FAIL
+		}
+
+		
+
+		EXEC SQL COMMIT WORK;
+
+		if (sqlca.sqlcode)
+		{
+			CO_ProcMonitor(l_flogfile, "Could not commit after opening chr_log file", NULL, NULL);
+			CO_Proc_RptClose(l_flogfile, &l_debug_info_ptr);
+			APL_GOBACK_FAIL
+		}
+
+		l_pfile = fopen(argv[9], "r");
+		int_l_retval = CR_Proc_CshBalUpload(l_pfile, l_flogfile, &l_debug_info_ptr);
+		fclose(l_pfile);
+	}
+
+	if (APL_SUCCESS == int_l_retval)
+	{
+      EXEC SQL UPDATE SYS_BATCHPROC
+      SET  status = 'completed'
+      WHERE PROCESS_NAME=:argv[0]
+      AND   PROC_INIT=:argv[1]
+      AND   STARTDATE=:argv[2]
+      AND   STATUS='started';
+
+		EXEC SQL COMMIT WORK RELEASE;
+		if (sqlca.sqlcode) 
+		{
+			CO_Proc_RptClose(l_flogfile, &l_debug_info_ptr);
+			APL_GOBACK_FAIL
+		}
+
+		CO_ProcMonitor(l_flogfile, "Finished upload successfully ", NULL, NULL);
+		CO_Proc_RptClose(l_flogfile, &l_debug_info_ptr);
+		APL_GOBACK_SUCCESS
+	}
+	else
+	{
+		CO_ProcMonitor(l_flogfile, "Could not upload successfully : Rolling Back", &l_debug_info_ptr, NULL);
+		CO_Proc_RptClose(l_flogfile, &l_debug_info_ptr);
+		EXEC SQL ROLLBACK WORK RELEASE;
+		APL_GOBACK_FAIL
+	}
+
+	RETURN_SUCCESS : exit(0);
+   RETURN_FAILURE : exit(-1);
+	
+}

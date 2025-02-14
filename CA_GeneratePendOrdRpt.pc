@@ -1,0 +1,241 @@
+/*
+ *    COPYRIGHT NOTICE
+ *
+ *   Copyright 2005 Polaris Software Lab Limited. All rights reserved.
+ *
+ *   These materials are confidential and proprietary to
+ *    Polaris Software Lab Limited and no part of these materials should
+ *    be reproduced, published, transmitted or distributed in any form or
+ *    by any means, electronic, mechanical, photocopying, recording or
+ *    otherwise, or stored in any information storage or retrieval system
+ *    of any nature nor should the materials be disclosed to third parties
+ *    or used in any other manner for which this is not authorized, without
+ *    the prior express written authorization of Polaris Software Lab Limited.
+ */
+/*********************************************************************
+ *
+ * Module Name         :      Corporate Actions
+ *
+ * File Name           :      CA_GeneratePendOrdRpt.pc
+ *
+ * Description         :      Contains Functions Related to Pending Ord Rpts
+ *
+ *
+ *
+ *            Version Control Block
+ *
+ * Date        Version     Author           Description        RFS No.
+ * ---------   --------  ---------------  ------------------   ---------
+ * 18/01/2006   1.2        Smita Bhat        New File          Base Version
+ * 08/02/2006	 1.3			Smita Bhat		Chgs related to Col	HDFCCA Base Version
+ * 													Names
+ *************************************************************************/
+#include "CR_Common.h"
+#include "CA_Common.h"
+
+EXEC SQL INCLUDE SQLCA.H;
+#define  RTV_SYSTEM_DATA
+#define  FORMATED_DATERR_LEN 12
+#define  PAGE_WIDTH 100
+#define  PAGE_INFO_LEN 10
+#define  MAX_LINES_PAGE 24
+
+extern MT_INSTRUMENT_STRUCT_H   l_mt_instrument_struct_h; /*Changed Variable Name - CA Base Version - Smita*/
+
+ 
+
+int CA_Rpt_PndOrdHdr(FILE * pnd_ord_rept_file,
+						 FILE * p_flogfile,
+						 const PEND_ORD_RPT_STRUCT_H * p_pend_ord_rpt_struct_h,
+						 char * chr_format_sys_date,
+						 char * chr_format_pay_date) 
+{
+
+	static int int_page_no=1;
+	static int int_no_spaces_one=0;
+	static int int_no_spaces_two=0;
+	unsigned int i =0;
+	char chr_first_line[PAGE_WIDTH] = APL_NULL_STRING;
+	static	char chr_fmt [PAGE_WIDTH] = APL_NULL_STRING;
+	char chr_page_info[PAGE_INFO_LEN] = APL_NULL_STRING; 
+	char chr_title[PAGE_WIDTH] = APL_NULL_STRING;
+	char chr_field_format[PAGE_WIDTH] = APL_NULL_STRING;
+	char chr_instrcode_header[PAGE_WIDTH] = APL_NULL_STRING;
+
+
+	fprintf(pnd_ord_rept_file,"\n");
+	fprintf(pnd_ord_rept_file,"\n");
+
+	
+	for ( i=0; i< PAGE_WIDTH ; i++ ) fprintf(pnd_ord_rept_file,"-");
+	fprintf(pnd_ord_rept_file,"\n");
+
+	
+	if ( !strlen(chr_fmt) )
+	{
+		int_no_spaces_one = ceil( (PAGE_WIDTH - strlen(g_mt_commonsys_params_struct_h.ca_identname))
+							 / 2 ) - FORMATED_DATERR_LEN;
+		int_no_spaces_two = PAGE_WIDTH - FORMATED_DATERR_LEN - int_no_spaces_one - strlen(g_mt_commonsys_params_struct_h.ca_identname) - PAGE_INFO_LEN  ;
+
+		sprintf(chr_fmt,"%%s%%%ds%%s%%%ds%%s\n",int_no_spaces_one,int_no_spaces_two);
+	}
+		sprintf(chr_title,"%18sPending Orders Upto Pay Date : %s due to Stock Split %s %18s\n"," ",chr_format_pay_date,chr_format_sys_date," ");
+		sprintf(chr_field_format,"%s%19s%s%6s%s%17s%s%12s%s\n","Customer"," ","Account"," ","Order-Ref"," ","Qty"," ","O/D");
+		sprintf(chr_instrcode_header,"%s\n","Instrurity");
+
+	sprintf(chr_page_info,"Page : %3d",int_page_no);
+
+	fprintf(pnd_ord_rept_file,chr_fmt,chr_format_sys_date," ",g_mt_commonsys_params_struct_h.ca_identname," ",chr_page_info);
+
+	fprintf(pnd_ord_rept_file,"%37s%s%38s\n\n"," ","PENDING ORDERS REPORT"," ");
+
+	fprintf(pnd_ord_rept_file,"%s%s%s\n"," ",chr_title," ");  // AIX -Warnings Reaoval
+	
+	for ( i=0; i< PAGE_WIDTH ; i++ ) fprintf(pnd_ord_rept_file,"-");
+	fprintf(pnd_ord_rept_file,"\n");
+
+	fprintf(pnd_ord_rept_file,chr_instrcode_header);
+	fprintf(pnd_ord_rept_file,chr_field_format);
+	for ( i=0; i< PAGE_WIDTH ; i++ ) fprintf(pnd_ord_rept_file,"-");
+	fprintf(pnd_ord_rept_file,"\n");
+
+
+	int_page_no = int_page_no + 1;
+
+	return APL_SUCCESS;	
+}
+
+int CA_Rpt_GenPendOrders(
+                       char *p_instr_code,
+                       char *chr_p_ca_id,      
+                       char *p_pay_date, 
+                       char *p_sys_date, 
+	                    FILE * pnd_ord_rept_file,
+	                    FILE * p_flogfile,
+                       INTL_ENV_DATA_STRUCT_H *p_intlenv_data_struct_h,
+                       DEBUG_INFO_STRUCT_H **l_debug_info_ptr   
+						 )
+{
+	struct sqlca sqlca;
+	PEND_ORD_RPT_STRUCT_H l_pend_ord_rpt_struct_h;
+	PEND_ORD_RPT_STRUCT_I l_pend_ord_rpt_struct_i;
+	int int_cur_line_nbr=0;
+	int i=0;
+	char chr_format_pay_date[FORMATED_DATERR_LEN+1] = APL_NULL_STRING;
+	char chr_format_sys_date[FORMATED_DATERR_LEN+1] = APL_NULL_STRING;
+	char	chr_data_format[PAGE_WIDTH] = APL_NULL_STRING;
+	char chr_instrcode_text[PAGE_WIDTH] = APL_NULL_STRING;
+
+	EXEC SQL VAR p_instr_code 	is STRING;
+	EXEC SQL VAR chr_p_ca_id 	is STRING;
+	EXEC SQL VAR l_pend_ord_rpt_struct_h.h_dl_client 	is STRING;
+	EXEC SQL VAR l_pend_ord_rpt_struct_h.h_instr_code  	is STRING;
+	EXEC SQL VAR l_pend_ord_rpt_struct_h.h_clnt_clr_name		is STRING;
+	EXEC SQL VAR l_pend_ord_rpt_struct_h.h_instr_name		is STRING;
+
+	EXEC SQL DECLARE Pnd_Ord_Rept_Cur CURSOR FOR
+	SELECT OR_ORDERDETAILS.client,
+			 SUBSTR(MT_CLIENT.cln_name,1,30),
+			 MT_INSTRUMENT.instr_code,
+			 SUBSTR(MT_INSTRUMENT.instr_name,1,30),
+			 OR_ORDERDETAILS.ORD_REFNO,
+			 OR_ORDERDETAILS.ORD_QTY,	
+			 OR_ORDERDETAILS.EXEC_QTY,	
+			 TO_CHAR(TO_DATE(OR_ORDERDETAILS.ORD_DATE),'MON DD, YYYY')
+	FROM   OR_ORDERDETAILS,MT_INSTRUMENT,MT_CLIENT,CAENTITLEMENT
+	WHERE 
+			OR_ORDERDETAILS.instr_code  = :p_instr_code
+	AND	MT_INSTRUMENT.instr_code  = :p_instr_code
+	AND	CAENTITLEMENT.corp_id = :chr_p_ca_id
+	AND	CAENTITLEMENT.STATUS NOT IN ('RV','DL') /*Smita - changed Col Name - HDFCCA Base Ver*/
+	AND	OR_ORDERDETAILS.client = CAENTITLEMENT.client
+	AND	MT_CLIENT.cln_code = CAENTITLEMENT.client
+	AND	NVL(OR_ORDERDETAILS.EXEC_QTY,0) < OR_ORDERDETAILS.ORD_QTY	
+	AND	OR_ORDERDETAILS.ORD_STAT NOT IN ('C_STS_DELUNAUTH','C_STS_DELAUTH','C_STS_CANCUNAUTH','C_STS_CANCAUTH')
+	AND	( OR_ORDERDETAILS.EXP_DATE is NULL OR
+				(OR_ORDERDETAILS.EXP_DATE is NOT NULL and OR_ORDERDETAILS.EXP_DATE >= :p_sys_date)
+			)
+	AND	trunc(OR_ORDERDETAILS.ORD_DATE,'DD') < :p_pay_date
+	AND  	MT_INSTRUMENT.STATUS='AA'
+	AND  ( (MT_INSTRUMENT.NEW_MAKER IS NULL and MT_INSTRUMENT.NEW_CHECKER IS NULL) OR
+	      (MT_INSTRUMENT.NEW_MAKER IS NOT  NULL and MT_INSTRUMENT.NEW_CHECKER IS NOT NULL) 
+		  )
+	ORDER BY OR_ORDERDETAILS.client,OR_ORDERDETAILS.ORD_REFNO;
+
+	EXEC SQL SELECT TO_CHAR(TO_DATE(:p_pay_date),'MON DD, YYYY')
+	INTO :chr_format_pay_date
+	FROM DUAL;
+
+	EXEC SQL SELECT TO_CHAR(TO_DATE(:p_sys_date),'MON DD, YYYY')
+	INTO :chr_format_sys_date
+	FROM DUAL;
+
+	
+		EXEC SQL OPEN Pnd_Ord_Rept_Cur;
+
+	CA_Rpt_PndOrdHdr(pnd_ord_rept_file,p_flogfile,&l_pend_ord_rpt_struct_h,chr_format_sys_date,chr_format_pay_date); 
+				int_cur_line_nbr = 11;
+
+		sprintf(chr_instrcode_text,"\n%s%5s%s\n",l_mt_instrument_struct_h.h_instr_code," ",l_mt_instrument_struct_h.h_instr_name);
+		fprintf(pnd_ord_rept_file,chr_instrcode_text);
+
+
+	
+	for (;;)
+	{
+		memset(&l_pend_ord_rpt_struct_h,NULL,sizeof(PEND_ORD_RPT_STRUCT_H) );
+		memset(&l_pend_ord_rpt_struct_i,NULL,sizeof(PEND_ORD_RPT_STRUCT_I) );
+		strcpy(chr_data_format,APL_NULL_STRING);
+	
+		EXEC SQL FETCH Pnd_Ord_Rept_Cur
+		INTO  :l_pend_ord_rpt_struct_h:l_pend_ord_rpt_struct_i;
+
+		IS_ANY_ORA_ERROR
+
+		if ( sqlca.sqlerrd[2] == 0 ) 
+		{
+			for ( i=0; i< PAGE_WIDTH ; i++ ) fprintf(pnd_ord_rept_file,"-");
+			fprintf(pnd_ord_rept_file,"\n");
+			fprintf(pnd_ord_rept_file,"%42sNO PENDING ORDERS%42s\n"," "," ");  // AIX -Warnings Reaoval
+			for ( i=0; i< PAGE_WIDTH ; i++ ) fprintf(pnd_ord_rept_file,"-");
+			fprintf(pnd_ord_rept_file,"\n");
+			fprintf(pnd_ord_rept_file,"\f");
+		}	
+
+		IS_ANY_ORA_ERROR_CURSOR
+	
+		CO_NewLine(l_pend_ord_rpt_struct_h.h_instr_name);
+		CO_NewLine(l_pend_ord_rpt_struct_h.h_clnt_clr_name);
+
+		sprintf(chr_data_format, "%-15s%10s%-8s%5s%-16s%5s%15f%5s%-8s%10s\n",l_pend_ord_rpt_struct_h.h_clnt_clr_name," ",l_pend_ord_rpt_struct_h.h_dl_client," ",l_pend_ord_rpt_struct_h.h_orderindentity_no," ",l_pend_ord_rpt_struct_h.h_orderquantity," ",l_pend_ord_rpt_struct_h.h_orderdate," ");
+
+		fprintf(pnd_ord_rept_file,chr_data_format);
+
+		int_cur_line_nbr = int_cur_line_nbr + 1;
+
+		if ( int_cur_line_nbr >= MAX_LINES_PAGE -3 )
+		{
+			fprintf(pnd_ord_rept_file,"\n");
+			for ( i=0; i< PAGE_WIDTH ; i++ ) fprintf(pnd_ord_rept_file,"-");
+			fprintf(pnd_ord_rept_file,"\f");
+			CA_Rpt_PndOrdHdr(pnd_ord_rept_file,p_flogfile,&l_pend_ord_rpt_struct_h,chr_format_sys_date,chr_format_pay_date); 
+			int_cur_line_nbr =11;
+		}
+	}
+
+	
+   APL_GOBACK_SUCCESS
+ 
+   RETURN_SUCCESS:
+	{
+		return(APL_SUCCESS);
+	}
+   RETURN_FAILURE:
+   {
+		CO_ProcMonitor(p_flogfile,NULL,l_debug_info_ptr,NULL);
+		CO_FreeErrLst(l_debug_info_ptr);
+   	return(APL_FAILURE);
+	}
+
+}
+

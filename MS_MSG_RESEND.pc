@@ -1,0 +1,497 @@
+/*
+ *    COPYRIGHT NOTICE
+ *
+ *   Copyright 2005 Polaris Software Lab Limited. All rights reserved.
+ *
+ *   These materials are confidential and proprietary to
+ *    Polaris Software Lab Limited and no part of these materials should
+ *    be reproduced, published, transmitted or distributed in any form or
+ *    by any means, electronic, mechanical, photocopying, recording or
+ *    otherwise, or stored in any information storage or retrieval system
+ *    of any nature nor should the materials be disclosed to third parties
+ *    or used in any other manner for which this is not authorized, without
+ *    the prior express written authorization of Polaris Software Lab Limited.
+ */
+
+/*********************************************************************
+ *
+ * Module Name         :      MSG RESENDING
+ *
+ * File Name           :      MS_MSG_RESEND.pc
+ *
+ * Description         :      This module updates the status of the msg in MS_MSGLOG table.
+ *			      which is then picked up by the MS_Transmitter.
+ *
+ *
+ *            Version Control Block
+ *
+ * Date        Version     Author           Description        RFS No.
+ * ---------   --------  ---------------  ------------------   ---------
+ * 03/07/2008	1.0       Santosh Saggam    MSG RESEND         REF_00_00
+ * 30/03/2022    1.1      kotubabu          Linux Migration    Kotak Implementation
+ *************************************************************************/
+
+
+
+#include<stdio_64.h>
+#include "Intellect_Common.h"
+#include "Intellect_Interface.h"
+#include "DL_Interface.h"
+#include "BT_Common.h"
+#include "CR_Common.h"
+#include "Intellect_Error.h"
+#include "CO_IndStructdef.h"
+#include "MS_Swift.h"
+
+
+#define MSG_STATUS_RESEND 'G'
+#define MSG_STATUS_PENDING 'P'
+
+EXEC SQL INCLUDE SQLCA.H;
+
+	/* Added by kotubabu for Linux Migration -Start*/
+    #ifdef OS_LINUX
+FILE *l_logfile = (FILE *)NULL;
+    #else
+    FILE *l_logfile = APL_OUT_FILE;
+    #endif
+   /* Added by kotubabu for Linux Migration-End*/
+char  chr_sys_access_stamp[APL_DATE_LEN] = APL_NULL_STRING;
+
+/* Had to redefine the msglog struct as per db, as the struct in MS_Swift is not what it is in db and changing the existing structure may lead to unforseen errors */
+typedef struct {
+ char client[11];
+ char message_ind[61];
+ char swift_msg_no[7];
+ char maker[15];
+ char maker_dt[APL_DATE_LEN];
+ char status_ind[2];
+ char msg_in_out_ind[2];
+ char msg[31];
+ char contact_details[201];
+ char contact_details1[201];
+ char baseid[7];
+ char message_class[2];
+ char swift_msg_ident[17];
+ char checker[15];
+ char checker_dt[APL_DATE_LEN];
+ char access_stamp[APL_DATE_LEN];
+ } imsglog;
+typedef struct {
+ short client;
+ short message_ind;
+ short swift_msg_no;
+ short maker;
+ short maker_dt;
+ short status_ind;
+ short msg_in_out_ind;
+ short msg;
+ short contact_details;
+ short contact_details1;
+ short baseid;
+ short message_class;
+ short swift_msg_ident;
+ short checker;
+ short checker_dt;
+ short access_stamp;
+ } l_ms_msglog_i_struct;
+
+int MS_ProcAuditLog(imsglog *messageStruct, 
+		    INTL_ENV_DATA_STRUCT_H* p_intl_envdatastruct_h, 
+		    DEBUG_INFO_STRUCT_H **l_debug_info_ptr) 
+/*
+int MS_ProcAuditLog(MS_MSGLOG_STRUCT *messageStruct, 
+		    INTL_ENV_DATA_STRUCT_H* p_intl_envdatastruct_h, 
+		    DEBUG_INFO_STRUCT_H **l_debug_info_ptr) 
+*/
+{
+	/* Audit Log */
+	char  chr_l_audit_data[4000] = APL_NULL_STRING;
+        char  chr_h_param_str_temp[4000] = APL_NULL_STRING;
+	char  chr_l_str_temp[100] = APL_NULL_STRING;
+        char  chr_l_data_key[4000] = APL_NULL_STRING;
+        char  chr_h_entity_name[100] = APL_NULL_STRING;
+        char  chr_h_comments[400] = APL_NULL_STRING; 
+
+        EXEC SQL VAR chr_l_audit_data IS STRING;
+        EXEC SQL VAR chr_h_param_str_temp IS STRING;
+        EXEC SQL VAR chr_l_data_key IS STRING;
+        EXEC SQL VAR chr_h_entity_name IS STRING;
+        EXEC SQL VAR chr_h_comments IS STRING;
+
+        strcpy(chr_l_audit_data,APL_NULL_STRING);
+	strcpy(chr_h_param_str_temp,APL_NULL_STRING);
+	strcpy(chr_l_str_temp,APL_NULL_STRING);
+        strcpy(chr_l_data_key,APL_NULL_STRING);
+        strcpy(chr_h_entity_name,APL_NULL_STRING);
+        strcpy(chr_h_comments,APL_NULL_STRING);
+	/* Audit Log */
+
+		/* Added by kotubabu for Linux Migration -Start*/
+   #ifdef OS_LINUX
+     l_logfile=APL_OUT_FILE;
+   #else
+	APL_FUNCTION_ENTER(l_logfile)
+   #endif
+   /* Added by kotubabu for Linux Migration -END*/
+
+	strcpy(chr_h_entity_name, p_intl_envdatastruct_h->processtion);
+	sprintf(chr_h_param_str_temp,"%cCLIENT%c%s%cMSG%c%s%cSTATUS%c%s%c",
+				     	DATA_FIELD_SEPRTR, DATA_VALUE_SEPRTR, messageStruct->client,
+					DATA_FIELD_SEPRTR, DATA_VALUE_SEPRTR, messageStruct->msg,
+					DATA_FIELD_SEPRTR, DATA_VALUE_SEPRTR, messageStruct->status_ind,
+					DATA_FIELD_SEPRTR);
+
+	if(!strcmp(p_intl_envdatastruct_h->h_mode, "RES"))
+	{
+		sprintf(chr_l_str_temp, "MAKER%c%s%cMAKER_DT%c%s%cCHECKER%c%s%cCHECKER_DT%c%s%c",
+					DATA_VALUE_SEPRTR, p_intl_envdatastruct_h->usr, DATA_FIELD_SEPRTR, 
+					DATA_VALUE_SEPRTR, chr_sys_access_stamp, DATA_FIELD_SEPRTR, 
+					DATA_VALUE_SEPRTR, APL_NULL_STRING, DATA_FIELD_SEPRTR, 
+					DATA_VALUE_SEPRTR, APL_NULL_STRING,DATA_FIELD_SEPRTR);
+	}
+	else
+	{
+		sprintf(chr_l_str_temp, "MAKER%c%s%cMAKER_DT%c%s%cCHECKER%c%s%cCHECKER_DT%c%s%c",
+					DATA_VALUE_SEPRTR, messageStruct->maker, DATA_FIELD_SEPRTR, 
+					DATA_VALUE_SEPRTR, messageStruct->maker_dt, DATA_FIELD_SEPRTR, 
+					DATA_VALUE_SEPRTR, p_intl_envdatastruct_h->usr, DATA_FIELD_SEPRTR, 
+					DATA_VALUE_SEPRTR, chr_sys_access_stamp, DATA_FIELD_SEPRTR);
+	}
+
+	strcat(chr_h_param_str_temp, chr_l_str_temp);
+
+	APL_IF_DEBUG
+		fprintf(l_logfile,"paramstring = %s\n", chr_h_param_str_temp);
+
+	if(APL_FAILURE == CO_PopulateAuditString(chr_h_entity_name,chr_h_param_str_temp,chr_l_audit_data, chr_l_data_key))
+		APL_GOBACK_FAIL
+
+	fprintf(l_logfile, "Audit Data = %s\nData Key = %s\n", chr_l_audit_data, chr_l_data_key);
+
+	if((strcmp(chr_l_audit_data,APL_NULL_STRING)!=0) && (strcmp(chr_l_data_key,APL_NULL_STRING) != 0))
+	{
+		if(!strcmp(p_intl_envdatastruct_h->h_mode, "RES"))
+			strcpy(chr_h_comments, "RESEND REQUEST");
+		else if(!strcmp(p_intl_envdatastruct_h->h_mode, "DEL"))
+			strcpy(chr_h_comments, "CANCEL RESEND REQUEST");
+		else if(!strcmp(p_intl_envdatastruct_h->h_mode, "MAK") ||
+			!strcmp(p_intl_envdatastruct_h->h_mode, "SPF") ||
+			!strcmp(p_intl_envdatastruct_h->h_mode, "ALL") || 
+			!strcmp(p_intl_envdatastruct_h->h_mode, "AUT"))
+			strcpy(chr_h_comments,"AUTHORIZE RESEND REQUEST");
+		else 
+			strcpy(chr_h_comments,"UNDEFINED MODE");
+
+		if (CO_Upd_AudLog_Chk_SysOnline(p_intl_envdatastruct_h,
+								chr_l_audit_data,
+								chr_l_data_key,
+								chr_h_comments,
+								l_debug_info_ptr) == APL_FAILURE)
+                {
+			APL_IF_DEBUG
+				fprintf(l_logfile, "\nCO_Upd_AudLog_Chk_SysOnline failed for %s", messageStruct->msg);
+			APL_GOBACK_FAIL
+                }
+	}
+
+RETURN_SUCCESS :
+	APL_FUNCTION_RET_SUCCESS(l_logfile)
+
+RETURN_FAILURE :
+	APL_FUNCTION_RET_FAILURE(l_logfile)
+}
+
+main(int argc,char **argv)
+{	
+	 DEBUG_INFO_STRUCT_H **l_debug_info_ptr = (DEBUG_INFO_STRUCT_H **) NULL;
+	 l_debug_info_ptr = (DEBUG_INFO_STRUCT_H **)calloc(1,sizeof(DEBUG_INFO_STRUCT_H *)); 
+	 
+	
+	 INTL_ENV_DATA_STRUCT_H *p_intl_envdatastruct_h;
+	 p_intl_envdatastruct_h =(INTL_ENV_DATA_STRUCT_H *) calloc(1,sizeof(INTL_ENV_DATA_STRUCT_H));
+	 memset(p_intl_envdatastruct_h,NULL,sizeof(INTL_ENV_DATA_STRUCT_H));
+	 APL_MALLOC_FAIL(p_intl_envdatastruct_h);
+
+	 
+ 	 short int_ret_val = 0;
+	 int l_int_num = 0;
+	 int l_flag = 0;
+
+	 char  **temp = ( char **)NULL;
+	 char	query[2000] = APL_NULL_STRING;
+	 char	tmpquery[2000] = APL_NULL_STRING;
+ 	 char	instring[2000] = APL_NULL_STRING;
+	 VARCHAR sqlstmt[300];
+
+	 char l_mode[10] = APL_NULL_STRING;
+	 char chr_h_rowid_a[APL_ROWID_LEN];	 
+	 int i = 0;
+
+	 EXEC SQL VAR instring IS STRING;
+/*
+ 	 MS_MSGLOG_STRUCT   *messageStruct = NULL;
+	 MS_MSGLOG_I_STRUCT *indicator     = NULL;
+
+	 messageStruct = (MS_MSGLOG_STRUCT *) calloc(1, sizeof(MS_MSGLOG_STRUCT));
+	 APL_MALLOC_FAIL(messageStruct);
+
+	 indicator = (MS_MSGLOG_I_STRUCT *) calloc(1, sizeof(MS_MSGLOG_I_STRUCT));
+	 APL_MALLOC_FAIL(indicator);
+*/
+	 imsglog   *messageStruct = NULL; 
+	 l_ms_msglog_i_struct *indicator = NULL;
+
+	 messageStruct = (imsglog *) calloc(1, sizeof(imsglog));
+	 APL_MALLOC_FAIL(messageStruct);
+
+	 indicator = (l_ms_msglog_i_struct *) calloc(1, sizeof(l_ms_msglog_i_struct));
+	 APL_MALLOC_FAIL(indicator);
+
+	 EXEC SQL VAR messageStruct->client IS STRING;
+         EXEC SQL VAR messageStruct->message_ind IS STRING;
+         EXEC SQL VAR messageStruct->swift_msg_no IS STRING;
+         EXEC SQL VAR messageStruct->maker IS STRING;
+         EXEC SQL VAR messageStruct->maker_dt IS STRING;
+         EXEC SQL VAR messageStruct->status_ind IS STRING;
+         EXEC SQL VAR messageStruct->msg_in_out_ind IS STRING;
+         EXEC SQL VAR messageStruct->msg IS STRING;
+         EXEC SQL VAR messageStruct->contact_details IS STRING;
+         EXEC SQL VAR messageStruct->contact_details1 IS STRING;
+         EXEC SQL VAR messageStruct->baseid IS STRING;
+         EXEC SQL VAR messageStruct->message_class IS STRING;
+         EXEC SQL VAR messageStruct->checker IS STRING;
+         EXEC SQL VAR messageStruct->checker_dt IS STRING;
+         EXEC SQL VAR messageStruct->access_stamp IS STRING;
+         EXEC SQL VAR chr_h_rowid_a IS STRING;
+
+	INTL_ENV_DATA_STRUCT_H *p_intlenv_data_struct_h =  (INTL_ENV_DATA_STRUCT_H *)NULL;
+	DEBUG_INFO_STRUCT_H *l_debuginfo = (DEBUG_INFO_STRUCT_H *)NULL;
+
+	p_intlenv_data_struct_h =  (INTL_ENV_DATA_STRUCT_H *)calloc(1,sizeof(INTL_ENV_DATA_STRUCT_H));
+        APL_MALLOC_FAIL(p_intlenv_data_struct_h);
+        memset(p_intlenv_data_struct_h,NULL,sizeof(INTL_ENV_DATA_STRUCT_H));
+
+	strcpy(l_mode,argv[4]);
+
+	/* Fill the ENV struct as you already have all the details in the argv */
+	strcpy(p_intlenv_data_struct_h->usr, argv[3]);
+	strcpy(p_intlenv_data_struct_h->h_mode, argv[4]);
+	strcpy(p_intlenv_data_struct_h->processtion, argv[1]);
+
+	if ( ( (l_debug_info_ptr) = (DEBUG_INFO_STRUCT_H **)calloc(1,sizeof(DEBUG_INFO_STRUCT_H *)) ) == NULL )
+		APL_GOBACK_FAIL ;
+     			
+
+	if(CO_Get_DBConnect(l_debug_info_ptr) == APL_FAILURE)
+	{
+		APL_GOBACK_FAIL
+	}
+
+	if (CO_RtvSysParams(l_debug_info_ptr) == APL_FAILURE)
+        {
+                printf("\nReturned unsuccessfully from CO_RtvSysParams processtion\n");
+                APL_GOBACK_FAIL
+        }
+
+	if (CO_Rtv_RptFileName( "MS_MSG_RESEND_",
+				APL_LOGFILE_DESC,
+				100,
+				argv[5],
+				argv,
+				&l_logfile,
+				l_debug_info_ptr )  == APL_FAILURE) 
+		{
+			CO_ProcMonitor(l_logfile, "Failure from CO_Rtv_RptFileName :", l_debug_info_ptr, NULL);
+			APL_GOBACK_FAIL
+		} 
+	APL_IF_DEBUG
+	{
+	 fprintf(l_logfile,"argc  |%d|\n",argc); 	 
+	 fprintf(l_logfile,"ENV 0 |%s|\n",argv[0]); 	 
+ 	 fprintf(l_logfile,"ENV 1 |%s|\n",argv[1]); 	 
+ 	 fprintf(l_logfile,"ENV 2 |%s|\n",argv[2]); 
+	 fprintf(l_logfile,"ENV 3 |%s|\n",argv[3]); 
+	 fprintf(l_logfile,"ENV 4 |%s|\n",argv[4]); 
+	 fprintf(l_logfile,"ENV 5 |%s|\n",argv[5]); 
+	 fprintf(l_logfile,"ENV 6 |%s|\n",argv[6]); 
+	 fprintf(l_logfile,"ENV 7 |%s|\n",argv[7]); 
+	 fprintf(l_logfile,"ENV 8 |%s|\n",argv[8]); 
+	 fprintf(l_logfile,"MODE  |%s|\n",l_mode);
+	}
+
+printf("PID of MS_NSG_RESEND %d \t PPID = %d\n", getpid(), getppid());
+/*
+fprintf(l_logfile, "Santoshs - msgsend sleeping.. for 60 Seconds\n");
+fflush(l_logfile);
+sleep(60);
+*/
+
+	if(BT_Status_Update(argv[0],
+				argv[1],
+				argv[2],
+				APL_STARTED_STATUS,
+				l_debug_info_ptr) ==APL_FAILURE)
+	{
+		APL_GOBACK_FAIL
+	}
+
+
+	if(APL_FAILURE == CO_SplitStr(argv[9],
+				'|',
+				&l_int_num,&temp))
+	{
+		CO_ProcMonitor(l_logfile, "Failure from StrSplitFn", l_debug_info_ptr, NULL);
+		APL_GOBACK_FAIL
+
+	}
+	APL_IF_DEBUG
+	fprintf(l_logfile,"\n no of arguments are |%d|", l_int_num);
+	
+	strcpy(instring, "('");
+	for(i=0; i<l_int_num; i++)
+	{
+		strcat(instring,temp[i]);
+		if(i != l_int_num-1)
+			strcat(instring,"','");
+	}
+	strcat(instring, "')");
+
+	sprintf(sqlstmt.arr,"SELECT A.*, A.ROWID FROM MS_MSGLOG A WHERE A.MSG IN %s",instring);
+	sqlstmt.len = strlen((char *) sqlstmt.arr);
+
+	APL_IF_DEBUG
+		fprintf(l_logfile, "\nsqlstmt = %s\n", sqlstmt.arr);
+
+	EXEC SQL PREPARE S FROM :sqlstmt;
+	IS_ANY_ORA_ERROR
+
+	EXEC SQL DECLARE msgCursor CURSOR FOR S;
+	IS_ANY_ORA_ERROR
+
+	EXEC SQL OPEN msgCursor;
+	IS_ANY_ORA_ERROR
+	
+	i=0;
+	while(1)
+	{
+
+		i++;
+		if(CO_RtvSysDtTime(chr_sys_access_stamp,l_debug_info_ptr) !=APL_SUCCESS)
+	        {
+	                APL_GOBACK_FAIL
+	        }
+
+                EXEC SQL FETCH msgCursor INTO :messageStruct :indicator,:chr_h_rowid_a;
+		if(APL_ZERO_RESULT_SET)
+		{
+			EXEC SQL CLOSE msgCursor;
+                	break;
+		}
+		IS_ANY_ORA_ERROR
+		APL_IF_DEBUG
+		{
+			fprintf(l_logfile,"\n%d# MSG |%s| MODE |%s|\n", i, messageStruct->msg, l_mode );
+		}
+
+		if(MS_ProcAuditLog(messageStruct, p_intlenv_data_struct_h, l_debug_info_ptr) == APL_FAILURE)
+			APL_GOBACK_FAIL
+
+		if(!strcmp(l_mode, APL_FUNC_RESET))
+		{
+			sprintf(query,"UPDATE MS_MSGLOG SET STATUS='G',MAKER='%s',MAKER_DT='%s',CHECKER=NULL,CHECKER_DT=NULL,ACCESS_STAMP=NULL WHERE MSG='%s' AND ROWID='%s'",
+				p_intlenv_data_struct_h->usr, 
+				chr_sys_access_stamp, 
+				messageStruct->msg, 
+				chr_h_rowid_a);
+		}
+		else if(!strcmp(l_mode, APL_FUNC_DELETE)) 
+		{
+			/* Setting the Status back to what it was originally. The logic is same as in MS_Trans.pc */
+			if(strcmp(l_mt_message_sys_params_struct_h.ccs_int_ind,"Y"))
+			{
+				sprintf(query,"UPDATE MS_MSGLOG SET STATUS='T'");
+			}
+			else
+			{
+				if(!strcmp(messageStruct->message_class, "B") || !strcmp(messageStruct->message_class,"I"))
+				{
+					sprintf(query,"UPDATE MS_MSGLOG SET STATUS='M'");
+				}
+				else
+				{
+					sprintf(query,"UPDATE MS_MSGLOG SET STATUS='A'");
+				}
+			}
+			sprintf(tmpquery, ",CHECKER='%s',CHECKER_DT='%s',ACCESS_STAMP='%s' WHERE STATUS='G' AND MSG='%s' AND ROWID='%s'",
+				p_intlenv_data_struct_h->usr,
+                                chr_sys_access_stamp,
+                                chr_sys_access_stamp,
+                                messageStruct->msg,
+                                chr_h_rowid_a);
+
+			strcat(query,tmpquery);
+		}
+		else if(!strcmp(l_mode, APL_FUNC_AUTHORISE) ||
+			!strcmp(l_mode, "SPF") ||
+	   		!strcmp(l_mode, "MAK") ||
+	   		!strcmp(l_mode, "ALL"))
+		{
+			sprintf(query,"UPDATE MS_MSGLOG SET STATUS='P',CHECKER='%s',CHECKER_DT='%s',ACCESS_STAMP='%s' WHERE STATUS='G' AND MAKER<>'%s' AND MSG='%s' AND ROWID='%s'",
+					p_intlenv_data_struct_h->usr, 
+					chr_sys_access_stamp,
+					chr_sys_access_stamp,
+					p_intlenv_data_struct_h->usr,
+					messageStruct->msg,
+					chr_h_rowid_a);
+		}
+		else
+		{
+			fprintf(l_logfile,"Invalid Mode %s for %s\n", l_mode, messageStruct->msg);
+		}
+
+		if(strlen(query) && strlen(l_mode) && strlen(argv[9]))
+		{
+			/* Commented By Sana fprintf(l_logfile, "query = %s\n",query);*/
+			printf("query = %s\n",query);
+			EXEC SQL EXECUTE IMMEDIATE :query;
+ 	                fprintf(l_logfile, "sqlcode=|%d| sqlerrd[2]=|%d|\n",sqlca.sqlcode, sqlca.sqlerrd[2]);
+       	  	        IS_ANY_ORA_ERROR
+		}
+	}
+	EXEC SQL CLOSE msgCursor;
+
+RETURN_SUCCESS :
+	{
+		CO_ProcMonitor(l_logfile, "SUCCESS IN MAIN", l_debug_info_ptr, NULL);
+		CO_Proc_RptClose(l_logfile, l_debug_info_ptr);
+
+		if(BT_Status_Completed(argv[0], argv[1], argv[2], l_debug_info_ptr) == APL_FAILURE )
+			APL_GOBACK_FAIL
+
+		EXEC SQL COMMIT WORK;
+		IS_ANY_ORA_ERROR
+
+		free(p_intlenv_data_struct_h);
+		free(l_debug_info_ptr);
+		free(messageStruct);
+		free(indicator);
+		exit(0);
+	}
+RETURN_FAILURE :
+	{
+		CO_ProcMonitor(l_logfile, "FAILURE IN MAIN", l_debug_info_ptr, NULL);
+		CO_Proc_RptClose(l_logfile, l_debug_info_ptr);
+
+		if(BT_Status_Update(argv[0], argv[1], argv[2],"Failed", l_debug_info_ptr) == APL_FAILURE)
+			APL_GOBACK_FAIL
+
+		EXEC SQL ROLLBACK;
+
+		free(p_intlenv_data_struct_h);
+		free(l_debug_info_ptr);
+		free(messageStruct);
+		free(indicator);
+		exit(-1);
+	}
+}

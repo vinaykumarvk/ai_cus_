@@ -1,0 +1,1276 @@
+
+
+
+
+
+
+#include	<CO_HostStructdef.h>
+
+#define	SFE_FEEDFILE_LEN		274
+#define 	INSTRU_SEDOL_LEN			11
+#define	COMP_NAME_LENGTH			36
+#define	INSTRU_STX_LEN				4
+#define 	INSTRU_LIST_PRICE_LEN	16
+#define	FIELD_SEPARATOR		""
+#define 	TEMP_BUFF_LEN				200
+#define	INSTRU_GROUP_LEN			4
+#define	INSTRUDESC_LEN				41
+#define	CLT_DET_LEN			36
+#define	GFCID_LEN				11
+#define	INSTRU_FEED_NAME			"smacsec.dat"
+#define	SAFEK_FEED_NAME		"Accounts.mth"
+#define	BROKER_FEED_NAME		"brokers.dat"
+
+EXEC SQL INCLUDE sqlca;
+
+//main(int argc, char **argv)
+int main(int argc,char **argv)//Changes done for AIX Migration
+{
+	INTL_ENV_DATA_STRUCT_H	l_intl_envdata_struct_h;
+	struct sqlca			sqlca;	
+	DEBUG_INFO_STRUCT_H			**l_debug_info_ptr									=	NULL;
+	DEBUG_INFO_STRUCT_H			*l_debug_info_struct								=	NULL;
+	FILE 						*l_ptr_logfile									=	NULL;
+	FILE						*l_ptr_inifile									=	NULL;
+	char						chr_l_logfile_name[PATH_LENGTH]				=	APL_NULL_STRING;	
+	char						chr_uname[APL_USERID_LEN]						=	APL_NULL_STRING;
+	char						chr_custody_id_q[APL_USERID_LEN]						=	APL_NULL_STRING;
+	char						chr_passwd[APL_PASSWD_LEN]						=	APL_NULL_STRING;
+	char						chr_l_inifile_name[PATH_LENGTH]				=	APL_NULL_STRING;	
+	char						chr_l_buf[TEMP_BUFF_LEN]								=	APL_NULL_STRING;
+	char						chr_l_batch_status[APL_BTCH_STATUS_LEN]		=	APL_NULL_STRING;
+	char						chr_l_status_started[APL_BTCH_STATUS_LEN]	=	APL_NULL_STRING;
+	char                 chr_l_progname[APL_BATCH_PROGNAME_LEN]		=	APL_NULL_STRING;
+	char                 chr_l_key[APL_BATCH_KEY_LEN]					=	APL_NULL_STRING;
+	int						int_retval											=	0;
+
+	
+	char						chr_l_instr_feed_file[20]							=	APL_NULL_STRING;
+	char						chr_l_brk_feed_file[20]							=	APL_NULL_STRING;	
+
+	EXEC SQL VAR chr_uname	IS STRING;
+	EXEC SQL VAR chr_custody_id_q	IS STRING;
+	EXEC SQL VAR chr_passwd	IS STRING;
+
+	
+	memset(&l_intl_envdata_struct_h, NULL, sizeof(INTL_ENV_DATA_STRUCT_H));
+	strcpy(l_intl_envdata_struct_h.usr, argv[3]);
+	strcpy(l_intl_envdata_struct_h.h_mode, argv[4]);
+	strcpy(l_intl_envdata_struct_h.processtion, argv[5]);
+	strcpy(l_intl_envdata_struct_h.auth_req, argv[6]);
+	strcpy(l_intl_envdata_struct_h.subprocess, argv[7]);
+	strcpy(l_intl_envdata_struct_h.h_process, argv[8]);
+	
+	
+	sqlca.sqlcode = 0;
+	l_debug_info_ptr = &l_debug_info_struct;
+
+	EXEC SQL VAR chr_l_status_started IS STRING;
+	
+	strcpy(chr_l_status_started, APL_STARTED_STATUS);
+	strcpy(chr_l_progname, argv[0]);
+	strcpy(chr_l_key, argv[1]);
+
+	
+	strcpy(chr_l_inifile_name, getenv("INTL_ROOT_PATH"));
+	strcat(chr_l_inifile_name, "intl_sun.cfg");	
+	if( NULL == (l_ptr_inifile = fopen(chr_l_inifile_name, "r")))
+	{
+		APL_GOBACK_FAIL
+	}
+
+	
+	APL_FETCH_DB_LOGIN_DETAILS(l_ptr_inifile, chr_custody_id_q, chr_uname, chr_passwd, APL_OUT_FILE, l_debug_info_ptr);
+	
+	
+	EXEC SQL CONNECT :chr_uname IDENTIFIED BY :chr_passwd;
+	if(sqlca.sqlcode)
+	{
+		APL_GOBACK_FAIL
+	}
+
+	
+	if(APL_FAILURE == CO_Rtv_RptFileName("3s", APL_LOGFILE_DESC, 100, argv[5], argv, &l_ptr_logfile, l_debug_info_ptr))
+	{
+		EXEC SQL ROLLBACK WORK RELEASE;
+		APL_GOBACK_FAIL;
+	}
+
+	
+
+	
+	EXEC SQL COMMIT WORK;
+	if(sqlca.sqlcode)
+	{
+		CO_Proc_RptClose(l_ptr_logfile, l_debug_info_ptr);
+		EXEC SQL ROLLBACK WORK RELEASE;
+		APL_GOBACK_FAIL
+	}
+	
+	
+	memset(chr_l_buf, APL_NULL_CHAR, TEMP_BUFF_LEN);
+	sprintf(chr_l_buf, "Log h_file has been created with the prefix 3s. \n");
+	CO_ProcMonitor(l_ptr_logfile, chr_l_buf, NULL, &l_intl_envdata_struct_h);
+	CO_ProcMonitor(l_ptr_logfile, "Daily Account and Instrurity Feed from SMAC to SFE has been started successfully. \n", NULL, &l_intl_envdata_struct_h);
+
+	
+	if(APL_FAILURE == CO_RtvSysParams(l_debug_info_ptr))
+	{
+		APL_GOBACK_FAIL
+	}
+
+	
+	int_retval = CO_Pro_LocRec(argv, l_ptr_logfile, l_debug_info_ptr);
+	if(APL_SUCCESS != int_retval)
+	{
+		CO_ProcMonitor(l_ptr_logfile, "Unable to lock BATCH_IN_PROC record	-	Rollback done. \n", NULL, &l_intl_envdata_struct_h);
+		CO_Proc_RptClose(l_ptr_logfile, l_debug_info_ptr);
+		EXEC SQL ROLLBACK WORK RELEASE;
+		APL_GOBACK_FAIL
+	}
+
+	
+	strcpy(chr_l_instr_feed_file,"SEC");
+	strcat(chr_l_instr_feed_file,g_mt_commonsys_params_struct_h.nation_code);
+	strcat(chr_l_instr_feed_file,".DAT");
+	strcpy(chr_l_brk_feed_file,"BRKR");
+	strcat(chr_l_brk_feed_file,g_mt_commonsys_params_struct_h.nation_code);
+	strcat(chr_l_brk_feed_file,".DAT");
+	
+
+	
+	
+	int_retval = EOD_Proc_SFEFile(argv, l_ptr_logfile, chr_l_instr_feed_file, chr_l_brk_feed_file, &l_intl_envdata_struct_h, l_debug_info_ptr); 
+	if(APL_SUCCESS == int_retval)
+	{
+		if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+		{
+			
+			CO_ProcMonitor(l_ptr_logfile, APL_NULL_STRING, l_debug_info_ptr, &l_intl_envdata_struct_h);
+			CO_FreeErrLst(l_debug_info_ptr);
+		}
+		
+		strcpy(chr_l_batch_status, APL_COMPLETED_STATUS);
+		
+		APL_GOBACK_SUCCESS
+	}
+	else
+	{
+		if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+		{
+			
+			CO_ProcMonitor(l_ptr_logfile, APL_NULL_STRING, l_debug_info_ptr, &l_intl_envdata_struct_h);
+			CO_FreeErrLst(l_debug_info_ptr);
+		}	
+
+		strcpy(chr_l_batch_status, APL_STARTED_STATUS);
+
+		APL_GOBACK_FAIL
+	}
+
+	APL_GOBACK_SUCCESS
+	
+	RETURN_SUCCESS:
+	{
+		EXEC SQL UPDATE SYS_BATCHPROC
+			SET STATUS = :chr_l_batch_status
+			WHERE PROCESS_NAME = RTRIM(:argv[0])
+				AND PROC_INIT = RTRIM(:argv[1])
+				AND STARTDATE = :argv[2]
+				AND USR = RTRIM(:argv[3])
+				AND STATUS = RTRIM(:chr_l_status_started);
+
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND, "BATCH_IN_PROC", chr_l_progname, chr_l_key);
+		
+		EXEC SQL COMMIT;
+
+		IS_ANY_ORA_ERROR
+
+		CO_ProcMonitor(l_ptr_logfile, "Daily Account and Instrurity Feed from SMAC to SFE is completed successfully \n", NULL, NULL);
+		CO_Proc_RptClose(l_ptr_logfile,l_debug_info_ptr);	
+		fclose(l_ptr_inifile);
+
+		exit(0);
+	}
+	
+	RETURN_FAILURE:
+	{
+		EXEC SQL COMMIT;
+
+		if(sqlca.sqlcode != 0)
+		{
+			memset(chr_l_buf, APL_NULL_CHAR, TEMP_BUFF_LEN);
+			sprintf(chr_l_buf, " Could not commit the record. Error Ocuured %d \n", sqlca.sqlcode);
+			CO_ProcMonitor(l_ptr_logfile, chr_l_buf, NULL, NULL);
+		}
+		CO_ProcMonitor(l_ptr_logfile, "Daily Account and Instrurity Feed from SMAC to SFE is completed with failure \n", NULL, NULL);
+		CO_Proc_RptClose(l_ptr_logfile,l_debug_info_ptr);	
+		fclose(l_ptr_inifile);
+		exit(-1);
+	}
+
+}
+
+
+
+int EOD_Proc_SFEFile(char **argv, FILE *p_ptr_logfile, char *p_instr_feed_file, char *p_brk_feed_file, INTL_ENV_DATA_STRUCT_H *p_intl_env_data_struct_h_e, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	struct sqlca			sqlca;
+	FILE						*l_safekacc_feed_file							=	NULL;
+	FILE						*l_brkacc_feed_file								=	NULL;
+	FILE						*l_ptr_inifile										=	NULL;
+	char						chr_l_instr_feed_file_name[PATH_LENGTH]			=	APL_NULL_STRING;
+	char						chr_l_safekacc_feed_file_name[PATH_LENGTH]		=	APL_NULL_STRING;
+	char						chr_l_brkacc_feed_file_name[PATH_LENGTH]		=	APL_NULL_STRING;
+	char						chr_l_inifile_name[PATH_LENGTH]					=	APL_NULL_STRING;
+	char						chr_l_handoff_dir_name[PATH_LENGTH]				=	APL_NULL_STRING;
+	char						chr_l_buf[TEMP_BUFF_LEN]									=	APL_NULL_STRING;
+	int						int_retval												=	0;
+
+	CO_ProcMonitor(p_ptr_logfile, " Entered the processtion EOD_Proc_SFEFile. \n", NULL, p_intl_env_data_struct_h_e);
+	
+	
+	sqlca.sqlcode = 0;
+	
+	
+	strcpy(chr_l_inifile_name, getenv("INTL_ROOT_PATH"));
+	strcat(chr_l_inifile_name, "intl_sun.cfg");	
+	if( NULL == (l_ptr_inifile = fopen(chr_l_inifile_name, "r")))
+	{
+		APL_GOBACK_FAIL
+	}
+	
+	
+	if(APL_SUCCESS != CO_ReadToken(l_ptr_inifile, "INTL_EI_SFE_FEEDFILE", chr_l_handoff_dir_name, l_debug_info_ptr))
+	{
+		APL_GOBACK_FAIL
+	}
+	memset(chr_l_buf, APL_NULL_CHAR, TEMP_BUFF_LEN);
+	sprintf(chr_l_buf, "The chr_path where the feed files are created is %s \n", chr_l_handoff_dir_name);
+	CO_ProcMonitor(p_ptr_logfile, chr_l_buf, NULL, p_intl_env_data_struct_h_e);
+
+	
+	strcpy(chr_l_instr_feed_file_name, chr_l_handoff_dir_name);
+
+	strcat(chr_l_instr_feed_file_name, "smacsec.tmp");
+
+	strcpy(chr_l_safekacc_feed_file_name, chr_l_handoff_dir_name);
+
+	strcat(chr_l_safekacc_feed_file_name, "accounts.tmp");
+
+	strcpy(chr_l_brkacc_feed_file_name, chr_l_handoff_dir_name);
+
+	strcat(chr_l_brkacc_feed_file_name, "brokers.tmp");
+
+	
+	printf("\n\ndir|%s| sec fl name|%s|argv 2|%s|\n",chr_l_handoff_dir_name,chr_l_instr_feed_file_name,argv[2]);
+	int_retval = EOD_Proc_InstrSFEFile(chr_l_handoff_dir_name, chr_l_instr_feed_file_name, argv[2], p_ptr_logfile, p_instr_feed_file, p_intl_env_data_struct_h_e, l_debug_info_ptr);
+	if(APL_SUCCESS != int_retval)
+	{
+		APL_GOBACK_FAIL
+	}
+
+	
+	int_retval = EOD_Proc_BrkAccSFEFile(chr_l_handoff_dir_name, chr_l_safekacc_feed_file_name, chr_l_brkacc_feed_file_name,  argv[2], p_ptr_logfile, p_brk_feed_file, p_intl_env_data_struct_h_e, l_debug_info_ptr);
+	if(APL_SUCCESS != int_retval)
+	{
+		APL_GOBACK_FAIL
+	}
+
+	CO_ProcMonitor(p_ptr_logfile, "Moving Instrurity temporary h_file to final h_file. \n", NULL, p_intl_env_data_struct_h_e);
+	memset(chr_l_buf, APL_NULL_CHAR, TEMP_BUFF_LEN);
+
+		
+	
+	sprintf( chr_l_buf, "%s %s %s%s", "mv -f ", chr_l_instr_feed_file_name, chr_l_handoff_dir_name, p_instr_feed_file);
+	CO_ProcMonitor(p_ptr_logfile, chr_l_buf, NULL, p_intl_env_data_struct_h_e);
+	system(chr_l_buf);
+
+	CO_ProcMonitor(p_ptr_logfile, "Moving Safekeeping temporary h_file to final h_file. \n", NULL, p_intl_env_data_struct_h_e);
+	memset(chr_l_buf, APL_NULL_CHAR, TEMP_BUFF_LEN);
+	sprintf(chr_l_buf, "%s %s %s%s", "mv -f ", chr_l_safekacc_feed_file_name, chr_l_handoff_dir_name, SAFEK_FEED_NAME);
+	CO_ProcMonitor(p_ptr_logfile, chr_l_buf, NULL, p_intl_env_data_struct_h_e);
+	system(chr_l_buf);
+
+	CO_ProcMonitor(p_ptr_logfile, "Moving Broker temporary h_file to final h_file. \n", NULL, p_intl_env_data_struct_h_e);
+	memset(chr_l_buf, APL_NULL_CHAR, TEMP_BUFF_LEN);
+	
+	
+	sprintf(chr_l_buf, "%s %s %s%s", "mv -f ", chr_l_brkacc_feed_file_name, chr_l_handoff_dir_name, p_brk_feed_file);
+	CO_ProcMonitor(p_ptr_logfile, chr_l_buf, NULL, p_intl_env_data_struct_h_e);
+	system(chr_l_buf);
+
+   APL_GOBACK_SUCCESS
+
+   RETURN_SUCCESS :
+   {
+		fclose(l_ptr_inifile);
+      CO_ProcMonitor(p_ptr_logfile, "Leaving Function EOD_Proc_SFEFile successfully \n", NULL, p_intl_env_data_struct_h_e);
+      return(APL_SUCCESS);
+   }
+
+   RETURN_FAILURE :
+   {
+		fclose(l_ptr_inifile);
+      CO_ProcMonitor(p_ptr_logfile, "Leaving Function EOD_Proc_SFEFile with failure. \n", NULL, p_intl_env_data_struct_h_e);
+      return(APL_FAILURE);
+   }
+}
+
+
+
+int EOD_Proc_InstrSFEFile(char *p_dir_path, char *p_file_name, char *p_rep_date, FILE *p_ptr_logfile, char *p_instr_feed_file, INTL_ENV_DATA_STRUCT_H *p_intl_env_data_struct_h_e, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	FILE                 *chr_l_instr_feed_file                          =  NULL;
+	char                 chr_l_buf[TEMP_BUFF_LEN]                         =  APL_NULL_STRING;
+	char                 chr_l_instr_sedol[INSTRU_SEDOL_LEN]                =  APL_NULL_STRING;
+	char                 chr_l_isin[APL_ISIN_LEN]                      =  APL_NULL_STRING;
+	char                 chr_l_comp_name[COMP_NAME_LENGTH]                =  APL_NULL_STRING;
+	char                 chr_l_instr_group[INSTRU_GROUP_LEN]                =  APL_NULL_STRING;
+	char                 chr_l_instr_list_price_str[INSTRU_LIST_PRICE_LEN]  =  APL_NULL_STRING;
+	double               l_instr_list_cost                          =  0.0;
+	char                 chr_l_instr_list_price_ccy[APL_CCYCODE_LEN]     =  APL_NULL_STRING;
+	char                 chr_l_instr_stx[INSTRU_STX_LEN]                    =  APL_NULL_STRING;
+	char                 chr_l_feed_line[SFE_FEEDFILE_LEN]           	=  APL_NULL_STRING;
+	char						chr_l_instr_name[INSTRUDESC_LEN]							=	APL_NULL_STRING;
+	char						chr_l_buf1[TEMP_BUFF_LEN]								=	APL_NULL_STRING;
+	char						chr_l_statusus[3]									=	APL_NULL_STRING;
+	int                  int_retval                                    =  0;
+	int						int_l_instr_cursor_open									=	0;
+	int						int_l_instr_count											=	0;
+	INTL_REPT_STRUCT_H        *l_intl_rept_struct_h                         =  NULL;
+	MT_INSTRUMENT_STRUCT_H   l_mt_instrument_struct_hc;
+	MT_INSTRUMENT_STRUCT_I   l_mt_instrument_struct_id;
+	printf("\np_dir_path|%s|\np_file_name|%s|\np_rep_date|%s|\np_instr_feed_file|%s|\n",p_dir_path,p_file_name,p_rep_date,p_instr_feed_file);
+	fflush(stdout);
+
+	CO_ProcMonitor(p_ptr_logfile, " Entered the processtion EOD_Proc_InstrSFEFile. \n", NULL, p_intl_env_data_struct_h_e);
+
+	l_intl_rept_struct_h = (INTL_REPT_STRUCT_H *)calloc(1, sizeof(INTL_REPT_STRUCT_H));
+   APL_MALLOC_FAIL(l_intl_rept_struct_h);
+
+   memset(l_intl_rept_struct_h, NULL, sizeof(INTL_REPT_STRUCT_H));
+   memset(&l_mt_instrument_struct_hc, NULL, sizeof(MT_INSTRUMENT_STRUCT_H));
+	EXEC SQL VAR l_mt_instrument_struct_hc.h_instr_code   IS STRING;
+   EXEC SQL VAR l_mt_instrument_struct_hc.h_instr_isin     IS STRING;
+   EXEC SQL VAR l_mt_instrument_struct_hc.h_ca_name   IS STRING;/*veda*/
+   EXEC SQL VAR l_mt_instrument_struct_hc.h_instr_type     IS STRING;/*veda*/
+   EXEC SQL VAR l_mt_instrument_struct_hc.h_currency_cd     IS STRING;/*veda*/
+   EXEC SQL VAR chr_l_instr_stx                 IS STRING;
+
+	 
+   if(NULL == (chr_l_instr_feed_file = fopen(p_file_name, "w")))
+   {
+      APL_GOBACK_FAIL
+   }
+
+	memset(chr_l_buf, APL_NULL_CHAR, TEMP_BUFF_LEN);
+   sprintf(chr_l_buf, "Instrurity feed h_file is opened for writing at   %s \n", p_file_name);
+   CO_ProcMonitor(p_ptr_logfile, chr_l_buf, NULL, p_intl_env_data_struct_h_e);
+
+   
+	
+   
+   strcpy(l_intl_rept_struct_h->report_name, p_instr_feed_file);
+   strcpy(l_intl_rept_struct_h->report_desc, "Instrurity Feed File to SFE");
+   strcpy(l_intl_rept_struct_h->report_date, p_rep_date);
+   l_intl_rept_struct_h->report_width = 139;
+   strcpy(l_intl_rept_struct_h->task_desc, p_intl_env_data_struct_h_e->processtion);
+   strcpy(l_intl_rept_struct_h->fe_be_ind, APL_BE_IND);
+   strcpy(l_intl_rept_struct_h->usr, p_intl_env_data_struct_h_e->usr);
+		printf("reached here 0 \n");
+   int_retval = CO_Proc_RptInsNew(l_intl_rept_struct_h, "INTL_EI_SFE_FEEDFILE", l_debug_info_ptr);
+   if(APL_SUCCESS != int_retval)
+   {
+      APL_GOBACK_FAIL
+   }
+
+	
+	strcpy(chr_l_statusus, APL_STS_AUTH);
+
+	
+   EXEC SQL DECLARE InstrCursor CURSOR FOR
+      SELECT * FROM MT_INSTRUMENT
+		WHERE STATUS = :chr_l_statusus
+      ORDER BY INSTR_CODE;
+	IS_ANY_ORA_ERROR
+
+   
+   EXEC SQL OPEN InstrCursor;
+
+   IS_ANY_ORA_ERROR
+
+	int_l_instr_cursor_open = 1;
+   
+   for(;;)
+   {
+		printf("reached here a \n");
+      memset(chr_l_feed_line, APL_NULL_CHAR, SFE_FEEDFILE_LEN);
+      memset(&l_mt_instrument_struct_hc, NULL, sizeof(MT_INSTRUMENT_STRUCT_H));
+
+      
+      EXEC SQL FETCH InstrCursor INTO :l_mt_instrument_struct_hc:l_mt_instrument_struct_id;
+
+      IS_ANY_ORA_ERROR
+
+      
+      if(APL_ZERO_RESULT_SET)
+      {
+         break;
+      }
+		printf("reached here b \n");
+  
+		
+		int_l_instr_count++;
+
+		memset(chr_l_buf, APL_NULL_CHAR, TEMP_BUFF_LEN);
+   	sprintf(chr_l_buf, " :%s: ", l_mt_instrument_struct_hc.h_instr_code);
+   	CO_ProcMonitor(p_ptr_logfile, chr_l_buf, NULL, NULL);
+		printf("reached here c \n");
+
+      memset(chr_l_buf, APL_NULL_CHAR, TEMP_BUFF_LEN);
+
+      
+      memset(chr_l_instr_sedol, APL_NULL_CHAR, INSTRU_SEDOL_LEN);
+      strcpy(chr_l_instr_sedol, l_mt_instrument_struct_hc.h_instr_code);
+		printf("reached here 1 \n");
+      if(APL_SUCCESS !=  CO_PadString(&chr_l_instr_sedol, 'R', INSTRU_SEDOL_LEN - 1 , " ", l_debug_info_ptr))
+      {
+         APL_GOBACK_FAIL
+      }
+		printf("reached here 2 \n");
+      strcpy(chr_l_feed_line, chr_l_instr_sedol);
+
+      
+      memset(chr_l_isin, APL_NULL_CHAR, APL_ISIN_LEN);
+      strcpy(chr_l_isin, l_mt_instrument_struct_hc.h_instr_isin);
+		printf("reached here 3 \n");
+      if((APL_ISIN_LEN - 1) > strlen(l_mt_instrument_struct_hc.h_instr_isin))
+      {
+			printf("reached here 4 \n");
+         if(APL_SUCCESS != CO_PadString(&chr_l_isin, 'R', APL_ISIN_LEN - 1, " ", l_debug_info_ptr))
+         {
+            APL_GOBACK_FAIL
+         }
+      }
+      strcat(chr_l_feed_line, FIELD_SEPARATOR);
+      strcat(chr_l_feed_line, chr_l_isin);
+		printf("\n\nl_feed_line|%s|\n",chr_l_feed_line); 
+		printf("reached here 4 \n");
+
+		
+      memset(chr_l_comp_name, APL_NULL_CHAR, COMP_NAME_LENGTH);
+      memset(chr_l_buf, APL_NULL_CHAR, TEMP_BUFF_LEN);
+      memset(chr_l_buf1, APL_NULL_CHAR, TEMP_BUFF_LEN);
+      strcpy(chr_l_buf, l_mt_instrument_struct_hc.h_ca_name);/*veda*/
+      	
+		printf("l_buf 1|%s|\n",chr_l_buf);
+		fflush(stdout);
+      if(APL_SUCCESS != CO_RemoveNewLine(chr_l_buf, l_debug_info_ptr))
+      {
+         CO_ProcMonitor(p_ptr_logfile, "Error in removing Carriage return and h_line feed", l_debug_info_ptr, NULL);
+         APL_GOBACK_FAIL
+      }
+		printf("l_buf 2 |%s|\n",chr_l_buf);
+		fflush(stdout);
+		sprintf(chr_l_buf1, "%%%ds", (COMP_NAME_LENGTH - 1));
+		if(0 == strlen(chr_l_buf))
+		{
+			sprintf(chr_l_buf, chr_l_buf1, " ");
+		}
+      else if((COMP_NAME_LENGTH - 1) > strlen(chr_l_buf))
+      {
+			printf("reached here 5 \n");
+         if(APL_SUCCESS != CO_PadString(&chr_l_buf, 'R', COMP_NAME_LENGTH - 1, " ", l_debug_info_ptr))
+         {
+            APL_GOBACK_FAIL
+         }
+      }
+      else if((COMP_NAME_LENGTH - 1) < strlen(chr_l_buf))
+      {
+         strncpy(chr_l_buf, chr_l_buf, COMP_NAME_LENGTH - 1 );
+         chr_l_buf[COMP_NAME_LENGTH - 1] = APL_NULL_CHAR;
+      }
+		printf("reached here 6 \n");
+      strcpy(chr_l_comp_name, chr_l_buf);
+      strcat(chr_l_feed_line, FIELD_SEPARATOR);
+      strcat(chr_l_feed_line, chr_l_comp_name);
+		printf("\n\nl_feed_line|%s|\n",chr_l_feed_line); 
+
+		
+		memset(chr_l_instr_name, APL_NULL_CHAR, INSTRUDESC_LEN);
+		memset(chr_l_buf, APL_NULL_CHAR, TEMP_BUFF_LEN);
+      strcpy(chr_l_buf, l_mt_instrument_struct_hc.h_instr_name);
+			
+      if(APL_SUCCESS != CO_RemoveNewLine(chr_l_buf, l_debug_info_ptr))
+      {
+         CO_ProcMonitor(p_ptr_logfile, "Error in removing Carriage return and h_line feed", l_debug_info_ptr, NULL);
+         APL_GOBACK_FAIL
+      }
+      if((INSTRUDESC_LEN - 1) > strlen(chr_l_buf))
+      {
+         if(APL_SUCCESS != CO_PadString(&chr_l_buf, 'R', INSTRUDESC_LEN - 1, " ", l_debug_info_ptr))
+         {
+            APL_GOBACK_FAIL
+         }
+      }
+      else if((INSTRUDESC_LEN - 1) < strlen(chr_l_buf))
+      {
+         strncpy(chr_l_buf, chr_l_buf, INSTRUDESC_LEN - 1);
+         chr_l_buf[INSTRUDESC_LEN - 1] = APL_NULL_CHAR;
+      }
+      strcpy(chr_l_instr_name, chr_l_buf);
+      strcat(chr_l_feed_line, FIELD_SEPARATOR);
+		printf("\n\nl_feed_line|%s|\n",chr_l_feed_line); 
+      strcat(chr_l_feed_line, chr_l_instr_name);
+		printf("\n\nl_feed_line|%s|\n",chr_l_feed_line); 
+
+      
+      memset(chr_l_instr_group, APL_NULL_CHAR, INSTRU_GROUP_LEN);
+      strcpy(chr_l_instr_group, l_mt_instrument_struct_hc.h_instr_type);/*veda*/
+		if((INSTRU_GROUP_LEN - 1) > strlen(l_mt_instrument_struct_hc.h_instr_type))/*veda*/
+      {
+         if(APL_SUCCESS != CO_PadString(&chr_l_instr_group, 'R', INSTRU_GROUP_LEN - 1, " ", l_debug_info_ptr))
+         {
+            APL_GOBACK_FAIL
+         }
+      }
+      strcat(chr_l_feed_line, FIELD_SEPARATOR);
+      strcat(chr_l_feed_line, chr_l_instr_group);
+		printf("\n\nl_feed_line|%s|\n",chr_l_feed_line); 
+
+		
+      memset(chr_l_instr_list_price_str, APL_NULL_CHAR, INSTRU_LIST_PRICE_LEN);
+		memset(chr_l_buf, APL_NULL_CHAR, TEMP_BUFF_LEN);
+      l_instr_list_cost = 0.0;
+
+			
+      strcat(chr_l_feed_line, FIELD_SEPARATOR);
+		memset(chr_l_instr_list_price_str, '0', INSTRU_LIST_PRICE_LEN - 1);
+      strcat(chr_l_feed_line, chr_l_instr_list_price_str);
+		printf("\n\nl_feed_line|%s|\n",chr_l_feed_line); 
+
+      
+      memset(chr_l_instr_list_price_ccy, APL_NULL_CHAR, APL_CCYCODE_LEN);
+		strcpy(chr_l_instr_list_price_ccy, l_mt_instrument_struct_hc.h_currency_cd);/*veda*/
+      if((APL_CCYCODE_LEN - 1) > strlen(l_mt_instrument_struct_hc.h_currency_cd))/*veda*/
+      {
+         if(APL_SUCCESS != CO_PadString(&chr_l_instr_list_price_ccy, 'R', APL_CCYCODE_LEN - 1, " ", l_debug_info_ptr))
+         {
+            APL_GOBACK_FAIL
+         }
+      }
+      strcat(chr_l_feed_line, FIELD_SEPARATOR);
+      strcat(chr_l_feed_line, chr_l_instr_list_price_ccy);
+		printf("\n\nl_feed_line|%s|\n",chr_l_feed_line); 
+
+      
+      strcat(chr_l_feed_line, FIELD_SEPARATOR);
+      memset(chr_l_buf, APL_NULL_CHAR, TEMP_BUFF_LEN);
+      sprintf(chr_l_buf, "%2s", " ");
+      strcat(chr_l_feed_line, chr_l_buf);
+		printf("\n\nl_feed_line|%s|\n",chr_l_feed_line); 
+
+      
+      memset(chr_l_instr_stx, APL_NULL_CHAR, INSTRU_STX_LEN);
+      strcpy(chr_l_instr_stx, g_mt_commonsys_params_struct_h.nation_code);
+      strcat(chr_l_instr_stx, "X"); 
+      if((INSTRU_STX_LEN - 1) > strlen(chr_l_instr_stx))
+      {
+         if(APL_SUCCESS != CO_PadString(&chr_l_instr_stx, APL_NULL_CHAR, 'R', INSTRU_STX_LEN - 1, " ", l_debug_info_ptr))
+         {
+            APL_GOBACK_FAIL
+         }
+      }    
+      strcat(chr_l_feed_line, FIELD_SEPARATOR);
+      strcat(chr_l_feed_line, chr_l_instr_stx);
+		printf("\n\nl_feed_line|%s|\n",chr_l_feed_line); 
+
+		
+      strcat(chr_l_feed_line, FIELD_SEPARATOR);
+      memset(chr_l_buf, APL_NULL_CHAR, TEMP_BUFF_LEN);
+      sprintf(chr_l_buf, "%14s", " ");
+      strcat(chr_l_feed_line, chr_l_buf);
+
+      
+      strcat(chr_l_feed_line, FIELD_SEPARATOR);
+      strcat(chr_l_feed_line, " ");
+		printf("\n\nl_feed_line|%s|\n",chr_l_feed_line); 
+
+      
+      fprintf(chr_l_instr_feed_file, "%s", chr_l_feed_line);
+
+      
+      fprintf(chr_l_instr_feed_file, "\r");
+
+      
+      fprintf(chr_l_instr_feed_file, "\n");
+		
+   }
+
+	CO_ProcMonitor(p_ptr_logfile, "\n***************************** ", NULL, NULL);
+	memset(chr_l_buf, APL_NULL_CHAR, TEMP_BUFF_LEN);
+	sprintf(chr_l_buf, "Number of Instrurities are :%d: ", int_l_instr_count);
+	CO_ProcMonitor(p_ptr_logfile, chr_l_buf, NULL, p_intl_env_data_struct_h_e);
+	CO_ProcMonitor(p_ptr_logfile, "***************************** \n", NULL, NULL);
+
+   APL_GOBACK_SUCCESS
+
+   RETURN_SUCCESS :
+   {
+		
+		fclose(chr_l_instr_feed_file);
+	
+		
+		if(int_l_instr_cursor_open)
+		{
+			EXEC SQL CLOSE InstrCursor;
+		}
+
+      CO_ProcMonitor(p_ptr_logfile, "Leaving Function EOD_Proc_InstrSFEFile successfully \n", NULL, p_intl_env_data_struct_h_e);
+      return(APL_SUCCESS);
+   }
+
+   RETURN_FAILURE :
+   {
+		
+		fclose(chr_l_instr_feed_file);
+	
+		
+		if(int_l_instr_cursor_open)
+		{
+			EXEC SQL CLOSE InstrCursor;
+		}
+
+      CO_ProcMonitor(p_ptr_logfile, "Leaving Function EOD_Proc_InstrSFEFile with failure. \n", NULL, p_intl_env_data_struct_h_e);
+      return(APL_FAILURE);
+   }
+	
+}
+
+
+
+
+int EOD_Proc_BrkAccSFEFile(char *p_dir_path, char *p_sfk_file_name, char *p_brk_file_name, char *p_rep_date, FILE *p_ptr_logfile, char *p_brk_feed_file, INTL_ENV_DATA_STRUCT_H *p_intl_env_data_struct_h_e, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	FILE                 *l_safekacc_feed_file					=  NULL;
+	FILE						*l_brkacc_feed_file						=	NULL;
+	char                 chr_l_buf[TEMP_BUFF_LEN]       				=  APL_NULL_STRING;
+	char						chr_l_safek_feed_line[SFE_FEEDFILE_LEN]	=	APL_NULL_STRING;
+	char						chr_l_cpysfk_feed_line[SFE_FEEDFILE_LEN+5]	=	APL_NULL_STRING;
+	char						chr_l_brk_feed_line[SFE_FEEDFILE_LEN]		=	APL_NULL_STRING;
+	char						chr_l_client_a[APL_CLIENT_LENGTH]				=	APL_NULL_STRING;
+	char						chr_l_client1[APL_CLIENT_LENGTH]				=	APL_NULL_STRING;
+	char						chr_l_client2[APL_CLIENT_LENGTH]				=	APL_NULL_STRING;
+	char						chr_h_mstacc_desc[CNAME_LEN_A]				=	APL_NULL_STRING;
+	char						chr_l_mstacc_desc[CLT_DET_LEN]			=	APL_NULL_STRING;
+	char						chr_l_acc_desc[CLT_DET_LEN]				=	APL_NULL_STRING;
+	char						chr_l_acc_currency[APL_CCYCODE_LEN]		=	APL_NULL_STRING;
+	char						chr_l_mstacc_a[APL_CLIENT_LENGTH]				=	APL_NULL_STRING;
+	char						chr_l_gfcid[GFCID_LEN]						=	APL_NULL_STRING;
+	char						chr_l_biccode[APL_BIC_CODE_LEN]			=	APL_NULL_STRING;
+	char						chr_l_country_code[APL_CTRY_CODE_LEN]	=	APL_NULL_STRING;
+	char						chr_l_brk_desc[CNAME_LEN_A]					=	APL_NULL_STRING;
+	char						chr_l_acc_status[3]							=	APL_NULL_STRING;
+   char                 chr_mainfuncarea[APL_MAINFUNCAREA_LEN]   = APL_NULL_STRING;
+   char                 chr_l_condident[APL_CONDID_LEN]            = APL_NULL_STRING;
+   char                 chr_l_new_client[APL_CLIENT_LENGTH]         = APL_NULL_STRING;
+   char                 chr_l_substr_client[APL_CLIENT_LENGTH]      = APL_NULL_STRING;
+	int                  int_retval                  				=  0;
+	int						int_l_acc_cursor_open							=	0;
+	int						int_l_safek_count								=	0;
+	int						int_l_brk_count									=	0;
+   int                  int_cnt                                 =  0;
+   int                  i                                   =  0;
+   short                int_l_exist_a                             =  0;
+	short						i_mstacc_desc								=	0;
+	short						i_mstclt										=	0;
+	INTL_REPT_STRUCT_H        *l_intl_rept_struct_ha           				=  NULL;
+	MT_CLIENT_STRUCT_H   	l_mt_client_struct_ha_a;
+	MT_CLIENT_STRUCT_I   	l_mt_client_struct_ib;
+
+	CO_ProcMonitor(p_ptr_logfile, " Entered the processtion EOD_Proc_BrkAccSFEFile. \n", NULL, p_intl_env_data_struct_h_e);
+
+	l_intl_rept_struct_ha = (INTL_REPT_STRUCT_H *)calloc(1, sizeof(INTL_REPT_STRUCT_H));
+   APL_MALLOC_FAIL(l_intl_rept_struct_ha);
+
+	
+   memset(l_intl_rept_struct_ha, NULL, sizeof(INTL_REPT_STRUCT_H));
+	sqlca.sqlcode = 0;
+	EXEC SQL VAR l_mt_client_struct_ha_a.h_dl_client 	IS STRING;
+	EXEC SQL VAR l_mt_client_struct_ha_a.h_clnt_clr_name		IS STRING;
+	EXEC SQL VAR l_mt_client_struct_ha_a.h_mstclt		IS STRING;
+	EXEC SQL VAR l_mt_client_struct_ha_a.h_currencycode	IS	STRING;
+	EXEC SQL VAR l_mt_client_struct_ha_a.h_uniq_gcustody_id		IS STRING;
+	EXEC SQL VAR l_mt_client_struct_ha_a.h_clt_brk_all		IS STRING;
+
+	
+	if(NULL == (l_safekacc_feed_file = fopen(p_sfk_file_name, "w")))
+	{
+		APL_GOBACK_FAIL
+	}
+
+	memset(chr_l_buf, APL_NULL_CHAR, TEMP_BUFF_LEN);
+   memset(chr_mainfuncarea, APL_NULL_CHAR, APL_MAINFUNCAREA_LEN);
+   memset(chr_l_condident, APL_NULL_CHAR, APL_CONDID_LEN);
+	sprintf(chr_l_buf, "Safekeeping Account feed h_file is opened for writing at   %s \n", p_sfk_file_name);
+	CO_ProcMonitor(p_ptr_logfile, chr_l_buf, NULL, p_intl_env_data_struct_h_e);
+
+	
+	strcpy(l_intl_rept_struct_ha->report_name, SAFEK_FEED_NAME);
+	strcpy(l_intl_rept_struct_ha->report_desc, "SafekAcc Feed File to SFE");
+	strcpy(l_intl_rept_struct_ha->report_date, p_rep_date);
+	l_intl_rept_struct_ha->report_width = 250;
+	strcpy(l_intl_rept_struct_ha->task_desc, p_intl_env_data_struct_h_e->processtion);
+	strcpy(l_intl_rept_struct_ha->fe_be_ind, APL_BE_IND);
+	strcpy(l_intl_rept_struct_ha->usr, p_intl_env_data_struct_h_e->usr);
+		printf("reached here sssss \n");
+	if(APL_FAILURE == CO_Proc_RptInsNew(l_intl_rept_struct_ha, "INTL_EI_SFE_FEEDFILE", l_debug_info_ptr))
+	{
+		APL_GOBACK_FAIL
+	}
+	
+	
+	if(NULL == (l_brkacc_feed_file = fopen(p_brk_file_name, "w")))
+	{
+		APL_GOBACK_FAIL
+	}
+	memset(chr_l_buf, APL_NULL_CHAR, TEMP_BUFF_LEN);
+	sprintf(chr_l_buf, "Broker Account feed h_file is opened for writing at   %s \n", p_brk_file_name);
+	CO_ProcMonitor(p_ptr_logfile, chr_l_buf, NULL, p_intl_env_data_struct_h_e);
+
+	
+	memset(l_intl_rept_struct_ha, NULL, sizeof(INTL_REPT_STRUCT_H));
+	
+	
+	strcpy(l_intl_rept_struct_ha->report_name, p_brk_feed_file);
+	strcpy(l_intl_rept_struct_ha->report_desc, "BrokerAcc Feed File to SFE");
+	strcpy(l_intl_rept_struct_ha->report_date, p_rep_date);
+	l_intl_rept_struct_ha->report_width = 90;
+	strcpy(l_intl_rept_struct_ha->task_desc, p_intl_env_data_struct_h_e->processtion);
+	strcpy(l_intl_rept_struct_ha->fe_be_ind, APL_BE_IND);
+	strcpy(l_intl_rept_struct_ha->usr, p_intl_env_data_struct_h_e->usr);
+		printf("reached here pppppppp \n");
+	if(APL_FAILURE == CO_Proc_RptInsNew(l_intl_rept_struct_ha, "INTL_EI_SFE_FEEDFILE", l_debug_info_ptr))
+	{
+		APL_GOBACK_FAIL
+	}
+
+	
+	strcpy(chr_l_acc_status, APL_STS_AUTH);
+       
+                        strcpy(chr_mainfuncarea, "ORDERPROC_INCMSG");
+                        strcpy(chr_l_condident, "ACCT_LEN_PROCESS");
+
+                        if ( APL_FAILURE == CO_Chk_CntryEnabled(chr_mainfuncarea,
+                                                              chr_l_condident,
+                                                              &int_l_exist_a, l_debug_info_ptr) )
+                        {
+                           fprintf(p_ptr_logfile,"Failed in CO_Chk_CntryEnabled for ACCT_LEN_PROCESS\n");
+                           APL_GOBACK_FAIL
+                        }
+
+
+	
+	EXEC SQL DECLARE AccCursor CURSOR FOR
+		SELECT * FROM MT_CLIENT
+		WHERE STATUS = :chr_l_acc_status
+		ORDER BY CLN_CODE;
+		
+	EXEC SQL OPEN AccCursor;
+
+	IS_ANY_ORA_ERROR;
+
+	int_l_acc_cursor_open = 1;	
+
+	for(;;)
+	{
+		memset(chr_l_safek_feed_line, APL_NULL_CHAR, SFE_FEEDFILE_LEN);
+		memset(chr_l_cpysfk_feed_line, APL_NULL_CHAR, SFE_FEEDFILE_LEN+5);
+		memset(chr_l_brk_feed_line, APL_NULL_CHAR, SFE_FEEDFILE_LEN);
+		memset(&l_mt_client_struct_ha_a, NULL, sizeof(MT_CLIENT_STRUCT_H));
+	
+		EXEC SQL FETCH AccCursor INTO :l_mt_client_struct_ha_a:l_mt_client_struct_ib;
+	
+		IS_ANY_ORA_ERROR
+	
+		if(APL_ZERO_RESULT_SET)
+			break;
+	
+		memset(chr_l_buf, APL_NULL_CHAR, TEMP_BUFF_LEN);
+   	sprintf(chr_l_buf, " :%s: ", l_mt_client_struct_ha_a.h_dl_client);
+   	CO_ProcMonitor(p_ptr_logfile, chr_l_buf, NULL, NULL);
+
+		if(APL_CUBK_BROKER == l_mt_client_struct_ha_a.h_clt_brk_all[0] )
+		{
+
+			
+			int_l_brk_count++;
+
+			
+			memset(chr_l_client_a, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+			strcpy(chr_l_client_a, l_mt_client_struct_ha_a.h_dl_client);
+			if((APL_CLIENT_LENGTH - 1) > strlen(l_mt_client_struct_ha_a.h_dl_client))
+			{
+				if(APL_SUCCESS != CO_PadString(&chr_l_client_a, 'R', APL_CLIENT_LENGTH - 1, " ", l_debug_info_ptr))
+				{
+					APL_GOBACK_FAIL
+				}
+			}	
+			strcpy(chr_l_brk_feed_line, chr_l_client_a);
+
+			
+			memset(chr_l_brk_desc, APL_NULL_CHAR, CNAME_LEN_A);
+			strcpy(chr_l_brk_desc, l_mt_client_struct_ha_a.h_clnt_clr_name);
+				
+			if(APL_SUCCESS != CO_RemoveNewLine(chr_l_brk_desc, l_debug_info_ptr))
+			{
+				CO_ProcMonitor(p_ptr_logfile, "Error in removing Carriage Return and Line Feed", l_debug_info_ptr, NULL);
+				APL_GOBACK_FAIL
+			}
+			if((CNAME_LEN_A - 1) > strlen(chr_l_brk_desc))
+			{
+				if(APL_SUCCESS != CO_PadString(&chr_l_brk_desc, 'R', (CNAME_LEN_A - 1), " ", l_debug_info_ptr))
+				{
+					APL_GOBACK_FAIL
+				}
+			}
+			strcat(chr_l_brk_feed_line, FIELD_SEPARATOR);
+			strcat(chr_l_brk_feed_line, chr_l_brk_desc);
+
+			
+			memset(chr_l_biccode, APL_NULL_CHAR, APL_BIC_CODE_LEN);
+			memset(chr_l_buf, APL_NULL_CHAR, TEMP_BUFF_LEN);
+			strcpy(chr_l_biccode, l_mt_client_struct_ha_a.brk_cd);
+			sprintf(chr_l_buf, "%%%ds", (APL_BIC_CODE_LEN - 1));
+			if(0 == strlen(l_mt_client_struct_ha_a.brk_cd))
+			{
+				sprintf(chr_l_biccode, chr_l_buf, " ");
+			}
+			else if((APL_BIC_CODE_LEN - 1) > strlen(l_mt_client_struct_ha_a.brk_cd))
+			{
+				if(APL_SUCCESS != CO_PadString(&chr_l_biccode, 'R', APL_BIC_CODE_LEN - 1, " ", l_debug_info_ptr))
+				{
+					APL_GOBACK_FAIL
+				}
+			}
+			strcat(chr_l_brk_feed_line, FIELD_SEPARATOR);
+			strcat(chr_l_brk_feed_line, chr_l_biccode);
+
+			
+			memset(chr_l_country_code, APL_NULL_CHAR, APL_CTRY_CODE_LEN);
+			strcpy(chr_l_country_code, g_mt_commonsys_params_struct_h.nation_code);
+			if((APL_CTRY_CODE_LEN - 1) > strlen(g_mt_commonsys_params_struct_h.nation_code))
+			{
+				if(APL_SUCCESS != CO_PadString(&chr_l_country_code, 'R', APL_CTRY_CODE_LEN - 1, " ", l_debug_info_ptr))
+				{
+					APL_GOBACK_FAIL
+				}
+			}
+			strcat(chr_l_brk_feed_line, FIELD_SEPARATOR);
+			strcat(chr_l_brk_feed_line, chr_l_country_code);
+
+			
+			fprintf(l_brkacc_feed_file, "%s", chr_l_brk_feed_line);
+
+			
+      	fprintf(l_brkacc_feed_file, "\r");
+
+      	
+      	fprintf(l_brkacc_feed_file, "\n");
+
+		}
+		else
+		{
+			
+			int_l_safek_count++;
+
+			
+			memset(chr_l_client_a, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+			strcpy(chr_l_client_a, l_mt_client_struct_ha_a.h_dl_client);
+			if((APL_CLIENT_LENGTH - 1) > strlen(l_mt_client_struct_ha_a.h_dl_client))
+			{
+				if(APL_SUCCESS != CO_PadString(&chr_l_client_a, 'R', APL_CLIENT_LENGTH - 1, " ", l_debug_info_ptr))
+				{
+					APL_GOBACK_FAIL
+				}
+			}
+			strcpy(chr_l_safek_feed_line, chr_l_client_a);
+
+			
+			memset(chr_l_mstacc_desc, APL_NULL_CHAR, CLT_DET_LEN);
+			memset(chr_h_mstacc_desc, APL_NULL_CHAR, CNAME_LEN_A);
+			memset(chr_l_buf, APL_NULL_CHAR, TEMP_BUFF_LEN);
+
+			EXEC SQL SELECT CLN_NAME 
+				INTO :chr_h_mstacc_desc:i_mstacc_desc
+				FROM MT_CLIENT
+				WHERE CLN_CODE = :l_mt_client_struct_ha_a.h_mstclt;
+
+			IS_ANY_ORA_ERROR
+		
+			strcpy(chr_l_buf, chr_h_mstacc_desc);
+				
+			if(APL_SUCCESS != CO_RemoveNewLine(chr_l_buf, l_debug_info_ptr))
+			{
+				CO_ProcMonitor(p_ptr_logfile, "Error in removing Carriage Return and Line Feed", l_debug_info_ptr, NULL);
+				APL_GOBACK_FAIL
+			}
+			if((CLT_DET_LEN - 1) > strlen(chr_l_buf))
+			{
+				if(APL_SUCCESS != CO_PadString(&chr_l_buf, 'R', CLT_DET_LEN - 1, " ", l_debug_info_ptr))
+				{
+					APL_GOBACK_FAIL
+				}
+			}
+			else if((CLT_DET_LEN - 1) < strlen(chr_l_buf))
+			{
+				strncpy(chr_l_buf, chr_l_buf, CLT_DET_LEN - 1 );
+				chr_l_buf[CLT_DET_LEN - 1] = APL_NULL_CHAR;
+			}
+			strcpy(chr_l_mstacc_desc, chr_l_buf);
+			strcat(chr_l_safek_feed_line, FIELD_SEPARATOR);
+			strcat(chr_l_safek_feed_line, chr_l_mstacc_desc);
+         strcpy(chr_l_cpysfk_feed_line, FIELD_SEPARATOR);
+         strcat(chr_l_cpysfk_feed_line, chr_l_mstacc_desc);
+
+			
+			memset(chr_l_acc_desc, APL_NULL_CHAR, CLT_DET_LEN);
+			memset(chr_l_buf, APL_NULL_CHAR, TEMP_BUFF_LEN);
+			strcpy(chr_l_buf, l_mt_client_struct_ha_a.h_clnt_clr_name);
+				
+			if(APL_SUCCESS != CO_RemoveNewLine(chr_l_buf, l_debug_info_ptr))
+			{
+				CO_ProcMonitor(p_ptr_logfile, "Error in removing Carriage Return and Line Feed", l_debug_info_ptr, NULL);
+				APL_GOBACK_FAIL
+			}
+			if((CLT_DET_LEN - 1) > strlen(chr_l_buf))
+			{
+				if(APL_SUCCESS != CO_PadString(&chr_l_buf, 'R', CLT_DET_LEN - 1, " ", l_debug_info_ptr))
+				{
+					APL_GOBACK_FAIL
+				}
+			}
+			else if((CLT_DET_LEN - 1) < strlen(chr_l_buf))
+			{
+				strncpy(chr_l_buf, chr_l_buf, CLT_DET_LEN - 1);
+				chr_l_buf[CLT_DET_LEN - 1] = APL_NULL_CHAR;
+			}
+			strcpy(chr_l_acc_desc, chr_l_buf);
+			strcat(chr_l_safek_feed_line, FIELD_SEPARATOR);
+			strcat(chr_l_safek_feed_line, chr_l_acc_desc);
+         strcat(chr_l_cpysfk_feed_line, FIELD_SEPARATOR);
+         strcat(chr_l_cpysfk_feed_line, chr_l_acc_desc);
+
+			
+			strcat(chr_l_safek_feed_line, FIELD_SEPARATOR);
+         strcat(chr_l_cpysfk_feed_line, FIELD_SEPARATOR);
+
+			memset(chr_l_buf, APL_NULL_CHAR, TEMP_BUFF_LEN);
+			sprintf(chr_l_buf, "%s", " ");
+			strcat(chr_l_safek_feed_line, chr_l_buf);
+         strcat(chr_l_cpysfk_feed_line, chr_l_buf);
+
+			
+			memset(chr_l_acc_currency, APL_NULL_CHAR, APL_CCYCODE_LEN);
+			strcpy(chr_l_acc_currency, l_mt_client_struct_ha_a.h_currencycode);
+			if((APL_CCYCODE_LEN - 1) > strlen(l_mt_client_struct_ha_a.h_currencycode))
+			{
+				if(APL_SUCCESS != CO_PadString(&chr_l_acc_currency, 'R', APL_CCYCODE_LEN - 1, " ", l_debug_info_ptr))
+				{
+					APL_GOBACK_FAIL
+				}
+			}
+			strcat(chr_l_safek_feed_line, FIELD_SEPARATOR);
+         strcat(chr_l_cpysfk_feed_line, FIELD_SEPARATOR);
+			strcat(chr_l_safek_feed_line, chr_l_acc_currency);
+         strcat(chr_l_cpysfk_feed_line, chr_l_acc_currency);
+
+			
+			memset(chr_l_mstacc_a, APL_NULL_CHAR, APL_CLIENT_LENGTH);
+			strcpy(chr_l_mstacc_a, l_mt_client_struct_ha_a.h_mstclt);
+			if((APL_CLIENT_LENGTH - 1)> strlen(l_mt_client_struct_ha_a.h_mstclt))
+			{
+				if(APL_SUCCESS != CO_PadString(&chr_l_mstacc_a, 'R', APL_CLIENT_LENGTH - 1, " ", l_debug_info_ptr))
+				{
+					APL_GOBACK_FAIL
+				}
+			}
+			strcat(chr_l_safek_feed_line, FIELD_SEPARATOR);
+			strcat(chr_l_safek_feed_line, chr_l_mstacc_a);
+	      strcat(chr_l_cpysfk_feed_line, FIELD_SEPARATOR);
+         strcat(chr_l_cpysfk_feed_line, chr_l_mstacc_a);	
+			
+			strcat(chr_l_safek_feed_line, FIELD_SEPARATOR);
+         strcat(chr_l_cpysfk_feed_line, FIELD_SEPARATOR);
+			memset(chr_l_buf, APL_NULL_CHAR, TEMP_BUFF_LEN);
+			sprintf(chr_l_buf, "%3s", " ");
+			strcat(chr_l_safek_feed_line, chr_l_buf);
+         strcat(chr_l_cpysfk_feed_line,chr_l_buf);
+			
+			strcat(chr_l_safek_feed_line, FIELD_SEPARATOR);
+         strcat(chr_l_cpysfk_feed_line, FIELD_SEPARATOR);
+			memset(chr_l_buf, APL_NULL_CHAR, TEMP_BUFF_LEN);
+			sprintf(chr_l_buf, "%8s", " ");
+			strcat(chr_l_safek_feed_line, chr_l_buf);
+          strcat(chr_l_cpysfk_feed_line, chr_l_buf);
+			
+			strcat(chr_l_safek_feed_line, FIELD_SEPARATOR);
+         strcat(chr_l_cpysfk_feed_line, FIELD_SEPARATOR);
+			memset(chr_l_buf, APL_NULL_CHAR, TEMP_BUFF_LEN);
+			sprintf(chr_l_buf, "%11s", " ");
+			strcat(chr_l_safek_feed_line, chr_l_buf);
+         strcat(chr_l_cpysfk_feed_line, chr_l_buf);
+			
+			memset(chr_l_gfcid, APL_NULL_CHAR, GFCID_LEN);
+			memset(chr_l_buf, APL_NULL_CHAR, TEMP_BUFF_LEN);
+			sprintf(chr_l_buf, "%%%ds", GFCID_LEN - 1);
+			if(0 == strlen(l_mt_client_struct_ha_a.h_uniq_gcustody_id))
+			{
+				sprintf(chr_l_gfcid, chr_l_buf, " ");
+			}
+			else if((GFCID_LEN - 1) > strlen(l_mt_client_struct_ha_a.h_uniq_gcustody_id))
+			{
+				strcpy(chr_l_gfcid, l_mt_client_struct_ha_a.h_uniq_gcustody_id);
+				if(APL_SUCCESS != CO_PadString(&chr_l_gfcid, 'R', GFCID_LEN - 1, " ", l_debug_info_ptr))
+				{
+					APL_GOBACK_FAIL
+				}
+			}
+			else if((GFCID_LEN - 1) < strlen(l_mt_client_struct_ha_a.h_uniq_gcustody_id))
+			{
+				strncpy(chr_l_gfcid, l_mt_client_struct_ha_a.h_uniq_gcustody_id, GFCID_LEN - 1);
+				chr_l_gfcid[GFCID_LEN - 1] = APL_NULL_CHAR;
+			}
+			else
+			{
+				strcpy(chr_l_gfcid, l_mt_client_struct_ha_a.h_uniq_gcustody_id);
+			}
+			strcat(chr_l_safek_feed_line, FIELD_SEPARATOR);
+         strcat(chr_l_cpysfk_feed_line, FIELD_SEPARATOR);
+			strcat(chr_l_safek_feed_line, chr_l_gfcid);
+         strcat(chr_l_cpysfk_feed_line, chr_l_gfcid);
+			
+			strcat(chr_l_safek_feed_line, FIELD_SEPARATOR);
+         strcat(chr_l_cpysfk_feed_line, FIELD_SEPARATOR);
+			memset(chr_l_buf, APL_NULL_CHAR, TEMP_BUFF_LEN);
+			sprintf(chr_l_buf, "%10s", " ");
+			strcat(chr_l_safek_feed_line, chr_l_buf);
+			strcat(chr_l_cpysfk_feed_line, chr_l_buf);
+		
+			
+			strcat(chr_l_safek_feed_line, FIELD_SEPARATOR);
+         strcat(chr_l_cpysfk_feed_line, FIELD_SEPARATOR);
+			memset(chr_l_buf, APL_NULL_CHAR, TEMP_BUFF_LEN);
+			sprintf(chr_l_buf, "%3s", " ");
+			strcat(chr_l_safek_feed_line, chr_l_buf);
+         strcat(chr_l_cpysfk_feed_line, chr_l_buf);
+
+			
+			strcat(chr_l_safek_feed_line, FIELD_SEPARATOR);
+         strcat(chr_l_cpysfk_feed_line, FIELD_SEPARATOR);
+			memset(chr_l_buf, APL_NULL_CHAR, TEMP_BUFF_LEN);
+			sprintf(chr_l_buf, "%3s", " ");
+			strcat(chr_l_safek_feed_line, chr_l_buf);
+         strcat(chr_l_cpysfk_feed_line, chr_l_buf);
+
+			
+			strcat(chr_l_safek_feed_line, FIELD_SEPARATOR);
+         strcat(chr_l_cpysfk_feed_line, FIELD_SEPARATOR);
+			memset(chr_l_buf, APL_NULL_CHAR, TEMP_BUFF_LEN); 
+			sprintf(chr_l_buf, "%3s", " ");
+			strcat(chr_l_safek_feed_line, chr_l_buf);
+         strcat(chr_l_cpysfk_feed_line, chr_l_buf);
+
+			
+			strcat(chr_l_safek_feed_line, FIELD_SEPARATOR);
+         strcat(chr_l_cpysfk_feed_line, FIELD_SEPARATOR);
+			memset(chr_l_buf, APL_NULL_CHAR, TEMP_BUFF_LEN);
+			sprintf(chr_l_buf, "%32s", " ");
+			strcat(chr_l_safek_feed_line, chr_l_buf);
+         strcat(chr_l_cpysfk_feed_line, chr_l_buf);
+
+			
+			strcat(chr_l_safek_feed_line, FIELD_SEPARATOR);
+         strcat(chr_l_cpysfk_feed_line, FIELD_SEPARATOR);
+      	memset(chr_l_buf, APL_NULL_CHAR, TEMP_BUFF_LEN);
+      	sprintf(chr_l_buf, "%s", " ");
+      	strcat(chr_l_safek_feed_line, chr_l_buf);
+         strcat(chr_l_cpysfk_feed_line, chr_l_buf);
+
+			
+			strcat(chr_l_safek_feed_line, FIELD_SEPARATOR);
+         strcat(chr_l_cpysfk_feed_line, FIELD_SEPARATOR);
+      	memset(chr_l_buf, APL_NULL_CHAR, TEMP_BUFF_LEN);
+      	sprintf(chr_l_buf, "%s", " ");
+      	strcat(chr_l_safek_feed_line, chr_l_buf);
+         strcat(chr_l_cpysfk_feed_line, chr_l_buf);
+
+			
+			strcat(chr_l_safek_feed_line, FIELD_SEPARATOR);
+         strcat(chr_l_cpysfk_feed_line, FIELD_SEPARATOR);
+      	memset(chr_l_buf, APL_NULL_CHAR, TEMP_BUFF_LEN); 
+      	sprintf(chr_l_buf, "%3s", " ");
+      	strcat(chr_l_safek_feed_line, chr_l_buf);
+         strcat(chr_l_cpysfk_feed_line, chr_l_buf);
+
+			
+			strcat(chr_l_safek_feed_line, FIELD_SEPARATOR);
+         strcat(chr_l_cpysfk_feed_line, FIELD_SEPARATOR);
+      	memset(chr_l_buf, APL_NULL_CHAR, TEMP_BUFF_LEN); 
+      	sprintf(chr_l_buf, "%10s", " ");
+      	strcat(chr_l_safek_feed_line, chr_l_buf);
+         strcat(chr_l_cpysfk_feed_line, chr_l_buf);
+
+			
+			strcat(chr_l_safek_feed_line, FIELD_SEPARATOR);
+         strcat(chr_l_cpysfk_feed_line, FIELD_SEPARATOR);
+      	memset(chr_l_buf, APL_NULL_CHAR, TEMP_BUFF_LEN); 
+      	sprintf(chr_l_buf, "%10s", " ");
+      	strcat(chr_l_safek_feed_line, chr_l_buf);
+         strcat(chr_l_cpysfk_feed_line, chr_l_buf);
+
+			
+			strcat(chr_l_safek_feed_line, FIELD_SEPARATOR);
+         strcat(chr_l_cpysfk_feed_line, FIELD_SEPARATOR);
+      	memset(chr_l_buf, APL_NULL_CHAR, TEMP_BUFF_LEN);
+      	sprintf(chr_l_buf, "%s", " ");
+      	strcat(chr_l_safek_feed_line, chr_l_buf);
+         strcat(chr_l_cpysfk_feed_line, chr_l_buf);
+
+			
+			strcat(chr_l_safek_feed_line, FIELD_SEPARATOR);
+         strcat(chr_l_cpysfk_feed_line, FIELD_SEPARATOR);
+      	memset(chr_l_buf, APL_NULL_CHAR, TEMP_BUFF_LEN);
+      	sprintf(chr_l_buf, "%45s", " ");
+      	strcat(chr_l_safek_feed_line, chr_l_buf);
+         strcat(chr_l_cpysfk_feed_line, chr_l_buf);
+
+			
+			strcat(chr_l_safek_feed_line, FIELD_SEPARATOR);
+         strcat(chr_l_cpysfk_feed_line, FIELD_SEPARATOR);
+      	memset(chr_l_buf, APL_NULL_CHAR, TEMP_BUFF_LEN);
+      	sprintf(chr_l_buf, "%s", " ");
+      	strcat(chr_l_safek_feed_line, chr_l_buf);
+         strcat(chr_l_cpysfk_feed_line, chr_l_buf);
+
+			
+			fprintf(l_safekacc_feed_file, "%s", chr_l_safek_feed_line);
+	
+			
+      	fprintf(l_safekacc_feed_file, "\r");
+
+      	
+      	fprintf(l_safekacc_feed_file, "\n");
+
+        
+        if ((int_l_exist_a)&&(strlen( chr_l_client_a ) ==10 )&& ( chr_l_client_a[6] == '-' ))
+           {
+		        memset(chr_l_safek_feed_line, APL_NULL_CHAR, SFE_FEEDFILE_LEN);
+              memset (chr_l_new_client,APL_NULL_CHAR,APL_CLIENT_LENGTH);
+              memset(chr_l_substr_client,APL_NULL_CHAR,APL_CLIENT_LENGTH);
+              i = 0 ;
+              for ( i = 0; i < 6 ; i++ )
+                 {
+                  chr_l_new_client[i] = chr_l_client_a[i];
+                 }
+              strcat(chr_l_new_client," ");
+              chr_l_substr_client[0] = chr_l_client_a[7] ;
+              chr_l_substr_client[1] = chr_l_client_a[8] ;
+              chr_l_substr_client[2] = chr_l_client_a[9] ;
+              chr_l_substr_client[3] = APL_NULL_CHAR ;
+              strcat(chr_l_new_client,chr_l_substr_client);
+              strcpy( chr_l_client1, chr_l_new_client);
+              if((APL_CLIENT_LENGTH - 1) > strlen(chr_l_client1))
+                 {
+                  if(APL_SUCCESS != CO_PadString(&chr_l_client1, 'R', APL_CLIENT_LENGTH - 1, " ", l_debug_info_ptr))
+                     {
+                       APL_GOBACK_FAIL
+                     }
+                 }
+              strcpy(chr_l_safek_feed_line, chr_l_client1);
+              strcat(chr_l_safek_feed_line,chr_l_cpysfk_feed_line);
+              fprintf(l_safekacc_feed_file, "%s", chr_l_safek_feed_line);
+              fprintf(l_safekacc_feed_file, "\r");
+              fprintf(l_safekacc_feed_file, "\n");
+ 
+		        memset(chr_l_safek_feed_line, APL_NULL_CHAR, SFE_FEEDFILE_LEN);
+              memset (chr_l_new_client,APL_NULL_CHAR,APL_CLIENT_LENGTH);
+              memset(chr_l_substr_client,APL_NULL_CHAR,APL_CLIENT_LENGTH);
+
+              i = 0 ;
+              for ( i = 0; i < 6 ; i++ )
+                 {
+                  chr_l_new_client[i] = chr_l_client_a[i];
+                 }
+              chr_l_substr_client[0] = chr_l_client_a[7] ;
+              chr_l_substr_client[1] = chr_l_client_a[8] ;
+              chr_l_substr_client[2] = chr_l_client_a[9] ;
+              chr_l_substr_client[3] = APL_NULL_CHAR ;
+              strcat(chr_l_new_client,chr_l_substr_client);
+              strcpy( chr_l_client2, chr_l_new_client);
+              if((APL_CLIENT_LENGTH - 1) > strlen(chr_l_client2))
+                 {
+                  if(APL_SUCCESS != CO_PadString(&chr_l_client2, 'R', APL_CLIENT_LENGTH - 1, " ", l_debug_info_ptr))
+                     {
+                       APL_GOBACK_FAIL
+                     }
+                 }
+              strcpy(chr_l_safek_feed_line, chr_l_client2); 
+              strcat(chr_l_safek_feed_line,chr_l_cpysfk_feed_line);
+              fprintf(l_safekacc_feed_file, "%s", chr_l_safek_feed_line);
+              fprintf(l_safekacc_feed_file, "\r");
+              fprintf(l_safekacc_feed_file, "\n");
+           }
+        
+		}
+
+	}
+
+	CO_ProcMonitor(p_ptr_logfile, "\n***************************** ", NULL, NULL);
+	memset(chr_l_buf, APL_NULL_CHAR, TEMP_BUFF_LEN);
+	sprintf(chr_l_buf, "Number of Safekeeping Accounts are :%d: ", int_l_safek_count);
+	CO_ProcMonitor(p_ptr_logfile, chr_l_buf, NULL, p_intl_env_data_struct_h_e);
+	CO_ProcMonitor(p_ptr_logfile, "***************************** \n", NULL, NULL);
+
+	CO_ProcMonitor(p_ptr_logfile, "\n***************************** ", NULL, NULL);
+	memset(chr_l_buf, APL_NULL_CHAR, TEMP_BUFF_LEN);
+	sprintf(chr_l_buf, "Number of Broker Accounts are :%d: ", int_l_brk_count);
+	CO_ProcMonitor(p_ptr_logfile, chr_l_buf, NULL, p_intl_env_data_struct_h_e);
+	CO_ProcMonitor(p_ptr_logfile, "***************************** \n", NULL, NULL);
+
+   APL_GOBACK_SUCCESS
+
+   RETURN_SUCCESS :
+   {
+		
+      fclose(l_safekacc_feed_file);
+		fclose(l_brkacc_feed_file);
+   
+      
+      if(int_l_acc_cursor_open)
+      {
+         EXEC SQL CLOSE AccCursor;
+      }
+
+      CO_ProcMonitor(p_ptr_logfile, "Leaving Function EOD_Proc_BrkAccSFEFile successfully \n", NULL, p_intl_env_data_struct_h_e);
+      return(APL_SUCCESS);
+   }
+
+   RETURN_FAILURE :
+   {
+		
+      fclose(l_safekacc_feed_file);
+		fclose(l_brkacc_feed_file);
+   
+      
+      if(int_l_acc_cursor_open)
+      {
+         EXEC SQL CLOSE AccCursor;
+      }
+
+      CO_ProcMonitor(p_ptr_logfile, "Leaving Function EOD_Proc_BrkAccSFEFile with failure. \n", NULL, p_intl_env_data_struct_h_e);
+      return(APL_FAILURE);
+   }
+	
+}

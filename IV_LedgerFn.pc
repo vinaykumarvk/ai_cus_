@@ -1,0 +1,484 @@
+
+
+
+
+
+#include "stdio_64.h"
+#include <string.h> 
+#include <stdlib.h> 
+#include "IV_Control_A.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+
+
+int IV_Rtv_IVLEDGERMaxSeqNum(IV_LEDGER_STRUCT *p_iv_ledger_struct, char *p_rowid, 
+			    int *int_p_retstat, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	
+
+	char chr_l_buffer1[BUFFER_LEN];
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+		char chr_h_rowid[APL_ROWID_LEN];
+		EXEC SQL VAR chr_h_rowid IS STRING;
+
+		int int_h_maxseqnum = 0;
+
+		IV_LEDGER_STRUCT l_iv_ledger_structa;
+		EXEC SQL VAR l_iv_ledger_structa.client IS STRING;
+		EXEC SQL VAR l_iv_ledger_structa.dateof_doc IS STRING;
+		EXEC SQL VAR l_iv_ledger_structa.b_ccycd IS STRING;
+
+		I_IV_LEDGER_STRUCT l_i_iv_ledger_struct = {0, 0, 0, 0, 0, 0, 0, 0, 0};
+		short int int_i_rowid = 0, int_i_maxseqnum = 0;
+		struct sqlca sqlca;
+
+	EXEC SQL END DECLARE SECTION;
+
+	#ifdef APL_THREADS
+		APL_SET_CONTEXT
+		EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	l_iv_ledger_structa = *p_iv_ledger_struct;
+
+	if ( !strlen(l_iv_ledger_structa.client) )
+	{
+		APL_DATA_MISSING("Account", APL_NULL_STRING, APL_NULL_STRING)
+	}
+
+	if ( l_iv_ledger_structa.class_ind == 'C' )
+	{
+		
+
+		int_h_maxseqnum = 0;
+		memset(chr_h_rowid, APL_NULL_CHAR, APL_ROWID_LEN);
+
+		EXEC SQL SELECT ROWID, INDEN_NUM
+			 INTO :chr_h_rowid INDICATOR :int_i_rowid, 
+			      :int_h_maxseqnum INDICATOR :int_i_maxseqnum
+			 FROM IV_LEDGER
+			 WHERE ((CLIENT = :l_iv_ledger_structa.client) AND
+				(CLASS_IND = 'C') AND
+				(INDEN_NUM = 
+					(SELECT NVL( MAX(INDEN_NUM), 0 )
+					 FROM IV_LEDGER
+					 WHERE ((CLIENT = :l_iv_ledger_structa.client) 
+						 AND
+						(CLASS_IND = 'C') AND
+						(OUT_STAND_AMT >= 0.0)))
+				));
+
+		if ( sqlca.sqlcode < 0 )
+		{
+			char chr_l_buffer[KEY_LENGTH];
+
+			memset(chr_l_buffer, APL_NULL_CHAR, KEY_LENGTH);
+
+			ltoa_r(sqlca.sqlcode, chr_l_buffer, KEY_LENGTH - 1);
+
+			*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+			CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, chr_l_buffer, 
+				       APL_NULL_STRING, APL_NULL_STRING, 
+				       __LINE__, __FILE__);
+
+			APL_GOBACK_FAIL
+		}
+		else if ( sqlca.sqlcode == 1403 )
+		{
+			*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+
+			strcpy(p_rowid, " ");
+
+			l_iv_ledger_structa.inden_num = 0;
+
+			*p_iv_ledger_struct = l_iv_ledger_structa;
+
+			APL_GOBACK_FAIL
+		}
+
+		strcpy(p_rowid, chr_h_rowid);
+
+		l_iv_ledger_structa.inden_num = int_h_maxseqnum;
+
+		*p_iv_ledger_struct = l_iv_ledger_structa;
+
+		APL_GOBACK_SUCCESS
+	}
+	else if ( l_iv_ledger_structa.class_ind == 'B' )
+	{
+		if ( !strlen(l_iv_ledger_structa.dateof_doc) )
+		{
+			APL_DATA_MISSING("Ledger Date", APL_NULL_STRING, 
+					 APL_NULL_STRING)
+		}
+
+		memset(chr_l_buffer1, APL_NULL_CHAR, BUFFER_LEN);
+		sprintf(chr_l_buffer1, "%ld", l_iv_ledger_structa.service_cd);
+
+		if ( !strlen(chr_l_buffer1) )
+		{
+			APL_DATA_MISSING("Service Code", APL_NULL_STRING, 
+					 APL_NULL_STRING)
+		}
+
+		
+
+		int_h_maxseqnum = 0;
+
+		EXEC SQL SELECT NVL( MAX(INDEN_NUM), 0 )
+			 INTO :int_h_maxseqnum INDICATOR :int_i_maxseqnum
+			 FROM IV_LEDGER
+			 WHERE ((DATEOF_DOC = :l_iv_ledger_structa.dateof_doc) AND
+				(CLIENT = :l_iv_ledger_structa.client) AND
+				(SERVICE_CD = :l_iv_ledger_structa.service_cd));
+
+		if ( sqlca.sqlcode < 0 )
+		{
+			char chr_l_buffer[KEY_LENGTH];
+
+			memset(chr_l_buffer, APL_NULL_CHAR, KEY_LENGTH);
+
+			ltoa_r(sqlca.sqlcode, chr_l_buffer, KEY_LENGTH - 1);
+
+			*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+			CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, chr_l_buffer, 
+				       APL_NULL_STRING, APL_NULL_STRING, 
+				       __LINE__, __FILE__);
+
+			APL_GOBACK_FAIL
+		}
+
+		l_iv_ledger_structa.inden_num = int_h_maxseqnum;
+
+		EXEC SQL SELECT NVL( SUM(OUT_STAND_AMT), 0.0 )
+			 INTO :l_iv_ledger_structa.run_balance 
+			       INDICATOR :l_i_iv_ledger_struct.i_run_balance
+			 FROM IV_LEDGER
+			 WHERE ((CLIENT = :l_iv_ledger_structa.client) AND
+				(SERVICE_CD = :l_iv_ledger_structa.service_cd));
+
+		if ( sqlca.sqlcode < 0 )
+		{
+			char chr_l_buffer[KEY_LENGTH];
+
+			memset(chr_l_buffer, APL_NULL_CHAR, KEY_LENGTH);
+
+			ltoa_r(sqlca.sqlcode, chr_l_buffer, KEY_LENGTH - 1);
+
+			*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+			CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, 
+				       chr_l_buffer, APL_NULL_STRING, 
+				       APL_NULL_STRING, __LINE__, __FILE__);
+
+			APL_GOBACK_FAIL
+		}
+
+		if ( !int_h_maxseqnum )
+		{
+			*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+
+			APL_GOBACK_FAIL
+		}
+		else
+		{
+			*int_p_retstat = IV_SUCCESS;
+
+			APL_GOBACK_SUCCESS
+		}
+
+	} 
+
+	RETURN_SUCCESS:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of \
+IV_Rtv_IVLEDGERMaxSeqNum().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_SUCCESS;
+
+	RETURN_FAILURE:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of\
+ IV_Rtv_IVLEDGERMaxSeqNum().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_FAILURE;
+}
+
+
+
+int IV_Rtv_IVLEDGERSameDocDt(IV_LEDGER_STRUCT *p_iv_ledger_struct, char *p_rowid, 
+			    int *int_p_retstat, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+		char chr_h_rowid[APL_ROWID_LEN];
+		EXEC SQL VAR chr_h_rowid IS STRING;
+
+		IV_LEDGER_STRUCT l_iv_ledger_structa;
+		EXEC SQL VAR l_iv_ledger_structa.client IS STRING;
+		EXEC SQL VAR l_iv_ledger_structa.dateof_doc IS STRING;
+		EXEC SQL VAR l_iv_ledger_structa.b_ccycd IS STRING;
+
+		short int int_i_rowid = 0;
+		I_IV_LEDGER_STRUCT l_i_iv_ledger_struct = {0, 0, 0, 0, 0, 0, 0, 0, 0};
+		struct sqlca sqlca;
+
+	EXEC SQL END DECLARE SECTION;
+
+	#ifdef APL_THREADS
+		APL_SET_CONTEXT
+		EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	l_iv_ledger_structa = *p_iv_ledger_struct;
+
+	EXEC SQL SELECT ROWID, SERVICE_AMT, OUT_STAND_AMT
+		 INTO :chr_h_rowid INDICATOR :int_i_rowid, 
+		      :l_iv_ledger_structa.service_amt INDICATOR :l_i_iv_ledger_struct.i_srv_amount, 
+		      :l_iv_ledger_structa.out_stand_amt INDICATOR :l_i_iv_ledger_struct.i_os_amount
+		 FROM IV_LEDGER
+		 WHERE ((DATEOF_DOC = :l_iv_ledger_structa.dateof_doc) AND
+			(CLIENT = :l_iv_ledger_structa.client) AND
+			(SERVICE_CD = :l_iv_ledger_structa.service_cd) AND
+			(INDEN_NUM = :l_iv_ledger_structa.inden_num) AND
+			(CLASS_IND = 'B'));
+
+	if ( !sqlca.sqlcode )
+	{
+		*p_iv_ledger_struct = l_iv_ledger_structa;
+
+		strcpy(p_rowid, chr_h_rowid);
+
+		*int_p_retstat = IV_SUCCESS;
+
+		APL_GOBACK_SUCCESS
+	}
+
+	if ( sqlca.sqlcode == 1403 )
+	{
+		*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+	}
+	else if ( sqlca.sqlcode < 0 )
+	{
+		char chr_l_buffer[KEY_LENGTH];
+
+		memset(chr_l_buffer, APL_NULL_CHAR, KEY_LENGTH);
+
+		ltoa_r(sqlca.sqlcode, chr_l_buffer, KEY_LENGTH - 1);
+
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+		CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, chr_l_buffer, 
+			       APL_NULL_STRING, APL_NULL_STRING, 
+			       __LINE__, __FILE__);
+	}
+
+	l_iv_ledger_structa.out_stand_amt = 0.0;
+	l_iv_ledger_structa.service_amt = 0.0;
+	strcpy(p_rowid, " ");
+
+	*p_iv_ledger_struct = l_iv_ledger_structa;
+
+	APL_GOBACK_FAIL
+
+	RETURN_SUCCESS:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of \
+IV_Rtv_IVLEDGERSameDocDt().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_SUCCESS;
+
+	RETURN_FAILURE:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of\
+ IV_Rtv_IVLEDGERSameDocDt().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_FAILURE;
+}
+
+
+
+int IV_Mod_IVLEDGERNew(IV_LEDGER_STRUCT *p_iv_ledger_struct, int *int_p_retstat, 
+		   DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	
+
+	char chr_l_buffer1[BUFFER_LEN], chr_l_buffer2[BUFFER_LEN];
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+		IV_LEDGER_STRUCT l_iv_ledger_structa;
+		EXEC SQL VAR l_iv_ledger_structa.client IS STRING;
+		EXEC SQL VAR l_iv_ledger_structa.dateof_doc IS STRING;
+		EXEC SQL VAR l_iv_ledger_structa.b_ccycd IS STRING;
+
+		I_IV_LEDGER_STRUCT l_i_iv_ledger_struct = {0, 0, 0, 0, 0, 0, 0, 0, 0};
+		struct sqlca sqlca;
+
+	EXEC SQL END DECLARE SECTION;
+
+	#ifdef APL_THREADS
+		APL_SET_CONTEXT
+		EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	l_iv_ledger_structa = *p_iv_ledger_struct;
+
+	EXEC SQL INSERT INTO IV_LEDGER
+		 VALUES ( :l_iv_ledger_structa INDICATOR :l_i_iv_ledger_struct );
+
+	*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+	memset(chr_l_buffer1, APL_NULL_CHAR, BUFFER_LEN);
+	memset(chr_l_buffer2, APL_NULL_CHAR, BUFFER_LEN);
+
+	sprintf(chr_l_buffer1, "%ld", l_iv_ledger_structa.service_cd);
+	sprintf(chr_l_buffer2, "%c", l_iv_ledger_structa.class_ind);
+
+	IS_ANY_ORA_ERROR_AND_DUPLICATE(ERR_REC_LEDGER_EXIST, l_iv_ledger_structa.client, 
+					  chr_l_buffer1, chr_l_buffer2)
+
+	*int_p_retstat = IV_SUCCESS;
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of \
+IV_Mod_IVLEDGERNew().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_SUCCESS;
+
+	RETURN_FAILURE:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of\
+ IV_Mod_IVLEDGERNew().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_FAILURE;
+}
+
+
+
+int IV_Mod_IVLEDGERAmt(IV_LEDGER_STRUCT *p_iv_ledger_struct, char *p_rowid, 
+		       int *int_p_retstat, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+		char chr_h_rowid[APL_ROWID_LEN];
+		EXEC SQL VAR chr_h_rowid IS STRING;
+
+		IV_LEDGER_STRUCT l_iv_ledger_structa;
+		EXEC SQL VAR l_iv_ledger_structa.client IS STRING;
+		EXEC SQL VAR l_iv_ledger_structa.dateof_doc IS STRING;
+		EXEC SQL VAR l_iv_ledger_structa.b_ccycd IS STRING;
+
+		I_IV_LEDGER_STRUCT l_i_iv_ledger_struct = {0, 0, 0, 0, 0, 0, 0, 0, 0};
+		struct sqlca sqlca;
+
+	EXEC SQL END DECLARE SECTION;
+
+	#ifdef APL_THREADS
+		APL_SET_CONTEXT
+		EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	l_iv_ledger_structa = *p_iv_ledger_struct;
+
+	strcpy(chr_h_rowid, p_rowid);
+
+	if ( l_iv_ledger_structa.class_ind == 'B' )
+	{
+		EXEC SQL UPDATE IV_LEDGER
+			 SET SERVICE_AMT = :l_iv_ledger_structa.service_amt 
+					INDICATOR :l_i_iv_ledger_struct.i_srv_amount, 
+			     OUT_STAND_AMT =  :l_iv_ledger_structa.out_stand_amt
+					INDICATOR :l_i_iv_ledger_struct.i_os_amount, 
+			     RUN_BALANCE = :l_iv_ledger_structa.run_balance
+					INDICATOR :l_i_iv_ledger_struct.i_run_balance
+			 WHERE ( ROWID = :chr_h_rowid );
+	}
+	else if ( l_iv_ledger_structa.class_ind == 'P' )
+	{
+		EXEC SQL UPDATE IV_LEDGER
+			 SET OUT_STAND_AMT = :l_iv_ledger_structa.out_stand_amt 
+				       INDICATOR :l_i_iv_ledger_struct.i_os_amount
+			 WHERE ( ROWID = :chr_h_rowid );
+	}
+	else if ( l_iv_ledger_structa.class_ind == 'C' )
+	{
+		EXEC SQL UPDATE IV_LEDGER
+			 SET OUT_STAND_AMT = 0.0, 
+			     RUN_BALANCE = 0.0
+			 WHERE ( ROWID = :chr_h_rowid );
+	}
+
+	if ( !sqlca.sqlcode )
+	{
+		*int_p_retstat = IV_SUCCESS;
+
+		APL_GOBACK_SUCCESS
+	}
+	else
+	{
+		char chr_l_buffer[KEY_LENGTH];
+
+		memset(chr_l_buffer, APL_NULL_CHAR, KEY_LENGTH);
+
+		ltoa_r(sqlca.sqlcode, chr_l_buffer, KEY_LENGTH - 1);
+
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+		CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, chr_l_buffer, 
+			       APL_NULL_STRING, APL_NULL_STRING, 
+			       __LINE__, __FILE__);
+
+		APL_GOBACK_FAIL
+	}
+
+	RETURN_SUCCESS:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting successfully out of \
+IV_Mod_IVLEDGERAmt().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_SUCCESS;
+
+	RETURN_FAILURE:
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of\
+ IV_Mod_IVLEDGERAmt().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+		}
+
+		return APL_FAILURE;
+}

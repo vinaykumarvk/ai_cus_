@@ -1,0 +1,835 @@
+/*
+ *    COPYRIGHT NOTICE
+ *
+ *   Copyright 2005 Polaris Software Lab Limited. All rights reserved.
+ *
+ *    These materials are confidential and proprietary to
+ *    Polaris Software Lab Limited and no part of these materials should
+ *    be reproduced, published, transmitted or distributed in any form or
+ *    by any means, electronic, mechanical, photocopying, recording or
+ *    otherwise, or stored in any information storage or retrieval system
+ *    of any nature nor should the materials be disclosed to third parties
+ *    or used in any other manner for which this is not authorized, without
+ *    the prior express written authorization of Polaris Software Lab Limited.
+ */
+/***********************************************************************************
+ *
+ * Module Name         :  Maintenence
+ *
+ * File Name           :  Daemon_Web.pc
+ *
+ * Description         :  New Daemon for all WIM modules							
+ *
+ *
+ *            Version Control Block
+ *
+ * Date        Version         Author          Description        RFS No.
+ * ---------   --------  ---------------  -------------------    ----------
+ *27/03/2007      1.0          Kalyan 			New File
+ *21/12/2011      1.1          Naren V      Program is modified
+ *                                          to get the DB login
+ *                                          details in preceden
+ *                                          ce order first from
+ *                                          config file, and if
+ *                                          unavailable,   then
+ *                                          a  decrypted  value
+ *                                          from  an  encrypted
+ *                                          file by calling the
+ *                                          remote application.
+ *
+***********************************************************************************/
+
+#include "stdio_64.h"
+#include "WI_Interface.h" 
+#include "Intellect_Interface.h"
+#include <unistd.h>
+
+#define S_RESTART 10
+#define S_START 11
+#define S_CANNOT_EXECUTE 12
+#define S_CONFLICT 13
+#define S_PREDECESSOR 14
+
+EXEC SQL INCLUDE SQLCA;
+
+
+char                 	chr_db_id[APL_USERID_LEN];
+char                 	chr_db_pwd[100];
+DEBUG_INFO_STRUCT_H 	**l_debug_info_ptr ;
+DEBUG_INFO_STRUCT_H     *l_debug_info_struct_h_tmp=NULL; 
+
+char dbdesc[] = "custody";
+
+main(int argc,char **argv)
+{
+
+	
+   	int   	CO_Rtv_EnvStruct(INTL_ENV_DATA_STRUCT_H *p_intlenv_data_struct_h,char *p_env_str);
+   	int   	CO_Rtv_ErrStruct(char *p_error_desc,DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+		int   CO_Rtv_Error(DEBUG_INFO_STRUCT_H **l_debug_info_ptr,char *p_error_desc);
+
+	int 	Batch_Proc_MarkSuccessProcess(char *p_ora_rowid,char *p_return_value);
+	int 	Proc_MarkFailProcess(char *p_ora_rowid, DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+	int 	Proc_MarkFailProcess_WithEnv(char *p_ora_rowid, INTL_ENV_DATA_STRUCT_H *p_intlenv_data_struct_h,DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+	int 	Proc_MarkFailProcess_Batch(char *p_ora_rowid, char *p_error_desc);
+        /*Added by amitk for Web module on 06-03-2007*/
+        int 	Populate_WEB_DEAL(WI_DEAL_STRUCT_H *p_wi_deal_struct_h,char *chr_p_param_str);
+        /*Added by amitk for Web module on 06-03-2007*/
+
+	/* JC - RFS_CA_020 -- Start */
+        int 	Populate_CA_INSTRUCTION(CA_INSTRUCTION_STRUCT_H *p_ca_instruction_struct_h,char * p_param_data);
+        /* JC - RFS_CA_020 -- End */
+	
+	// By Harvinder Singh RFS NO - RFS_CMM_001 Date 12/04/2007 - Start
+	int Populate_WEB_MANUAL_MSG(WI_WEB_MANUAL_MSG_STRUCT_H *p_web_manual_msg_struct_h,char * p_param_data);
+	// By Harvinder Singh RFS NO - RFS_CMM_001 Date 12/04/2007 - End
+
+	
+	EXEC SQL BEGIN DECLARE SECTION;
+	char	h_ora_rowid[APL_ROWID_LEN];
+	char 	chr_h_param_str[8001] = APL_NULL_STRING;
+	char 	chr_h_error_str[4000] = APL_NULL_STRING;
+	char 	chr_h_env_str[2000] = APL_NULL_STRING;
+	char 	chr_h_func_name[100] = APL_NULL_STRING;
+	char 	chr_h_func_key[100] = APL_NULL_STRING;
+	char 	chr_l_return_value[4000] = APL_NULL_STRING;
+	char 	*chr_h_error_desc;
+	char 	*chr_l_audit_data = APL_NULL_STRING;
+	char 	chr_l_data_key[100] = APL_NULL_STRING;
+	char 	p_comments[100] = APL_NULL_STRING;
+	char  	chr_h_entity_name[100] = APL_NULL_STRING;
+	char  	chr_h_param_str_temp[8001] = APL_NULL_STRING; // Changed from 4000 to 8001 by Kalyan for ISKB-488
+	char 	chr_h_entity_mode[11] = APL_NULL_STRING;
+	char	l_chr_h_param_str_temp1[4001] = APL_NULL_STRING; // Added by Kalyan for ISKB-488
+
+	char    l_data_fld_sep_str[2] = APL_NULL_STRING;
+
+	short 	i_func_param_str=0;
+	short   i_ora_rowid=0;
+	short   i_func_name=0;
+	short   i_proc_data1=0;   // Added by Kalyan for ISKB-488
+	short   i_func_key=0;
+	short   i_env_str=0;
+	short   i_proc_data=0;
+	short   i_error_str=0;
+	short   i_h_entity_mode=0;
+	int 	int_l_funcreturnstate =0;
+	int	l_int_ChkSysOnline = 1;
+
+	/* Rohit Addition of process id for batch */
+	int     int_proc_id = 0;
+	char  chr_proc_id[5] = APL_NULL_STRING;
+
+	EXEC SQL VAR h_ora_rowid IS STRING;
+	EXEC SQL VAR chr_h_error_desc IS STRING;
+	EXEC SQL VAR chr_h_param_str IS STRING;
+	EXEC SQL VAR l_chr_h_param_str_temp1 IS STRING;  // Added by Kalyan for ISKB-488
+	EXEC SQL VAR chr_h_error_str IS STRING;
+	EXEC SQL VAR chr_h_env_str IS STRING;
+	EXEC SQL VAR chr_h_func_name IS STRING;
+	EXEC SQL VAR chr_h_func_key IS STRING;
+	EXEC SQL VAR chr_h_entity_mode IS STRING;
+	
+	EXEC SQL END DECLARE SECTION;
+	
+	struct sqlca sqlca;
+
+	short int_ret_val	=	0;
+
+
+	int l_sleep_microseconds = 0; 
+	int l_sleep_seconds=0;
+
+	FILE *chr_finifile;
+	/* Increased the size of User Ids for Web Intellect Encryption - Decryption Changes - Naren V */
+	char chr_inifile[PATH_LENGTH], chr_l_uname[APL_USERID_LEN+20],chr_l_passwd[APL_PASSWD_LEN],chr_custody_id_b[APL_USERID_LEN],chr_buffer[KEY_LENGTH];
+	char chr_cust_uname[APL_USERID_LEN+20], chr_cust_passwd[APL_PASSWD_LEN];
+	DEBUG_INFO_STRUCT_H *l_debuginfo = (DEBUG_INFO_STRUCT_H *)NULL;
+	INTL_ENV_DATA_STRUCT_H l_intl_env_data_h;
+	INTL_ENV_DATA_STRUCT_H *p_intlenv_data_struct_h;
+	WI_DEAL_STRUCT_H *l_wi_deal_struct_h; /*Added by amitk for Web module on 06-03-2007*/
+	CA_INSTRUCTION_STRUCT_H *l_ca_instruction_struct_h = (CA_INSTRUCTION_STRUCT_H *)NULL; /* JC - RFS_CA_020 */
+
+	// By Harvinder Singh RFS NO - RFS_CMM_001 Date 12/04/2007 - Start
+	WI_WEB_MANUAL_MSG_STRUCT_H *l_web_manual_msg_struct_h;
+	// By Harvinder Singh RFS NO - RFS_CMM_001 Date 12/04/2007 - End
+
+        WI_DEAL_PMS_STRUCT_H *l_wi_deal_pms_struct_h; // PMS CHANGE
+
+	memset(chr_inifile,APL_NULL_CHAR,PATH_LENGTH);
+	memset(chr_buffer,APL_NULL_CHAR,KEY_LENGTH);
+	memset(chr_l_uname,APL_NULL_CHAR,40);
+	memset(chr_l_passwd,APL_NULL_CHAR,40);
+	memset(chr_h_func_name,APL_NULL_CHAR, 100); 
+
+   	p_intlenv_data_struct_h =  (INTL_ENV_DATA_STRUCT_H *)calloc(1,sizeof(INTL_ENV_DATA_STRUCT_H));
+   	APL_MALLOC_FAIL(p_intlenv_data_struct_h);
+   	memset(p_intlenv_data_struct_h,NULL,sizeof(INTL_ENV_DATA_STRUCT_H));
+
+
+	if ( ( l_debug_info_struct_h_tmp = (DEBUG_INFO_STRUCT_H *)calloc(1,sizeof(DEBUG_INFO_STRUCT_H)) ) == NULL )
+			 APL_GOBACK_FAIL ;
+
+	if ( ( (l_debug_info_ptr) = (DEBUG_INFO_STRUCT_H **)calloc(1,sizeof(DEBUG_INFO_STRUCT_H *)) ) == NULL )	
+			 APL_GOBACK_FAIL ;
+	
+
+	if ( argc != 2)
+	{
+		printf("\n Invalid sleep time for daemon ... \n ");
+		APL_GOBACK_FAIL
+	}
+	else
+	{
+		printf("\n ******************  Server Started With Sleep Time :%s:****************\n",argv[1]);
+		sscanf(argv[1],"%d.%d",&l_sleep_seconds,&l_sleep_microseconds);
+	   l_sleep_microseconds = l_sleep_microseconds * 10000;	
+	}
+
+	strcpy(chr_inifile,getenv("INTL_ROOT_PATH"));
+	strcat(chr_inifile,"/intl_sun.cfg");
+	if ( (chr_finifile = fopen(chr_inifile,"r") ) == NULL)
+	        APL_GOBACK_FAIL;
+
+   	//APL_FETCH_DB_LOGIN_DETAILS(chr_finifile, chr_custody_id_b, chr_l_uname, chr_l_passwd , APL_OUT_FILE , &l_debuginfo)
+
+        /* if ( CO_ReadToken(chr_finifile,"WEB_INTL_DB_USR",chr_l_uname,l_debug_info_ptr) == APL_FAILURE)
+        {
+                printf("KS --- Could not find DB username \n EXITING \n ");
+                exit(1);
+        }
+        if ( CO_ReadToken(chr_finifile,"WEB_INTL_DB_PWD",chr_l_passwd,l_debug_info_ptr) == APL_FAILURE)
+        {
+                printf("KS --- Could not find DB password \n EXITING \n ");
+                exit(1);
+        }
+
+        if ( CO_ReadToken(chr_finifile,"INTL_DB_USR",chr_cust_uname,l_debug_info_ptr) == APL_FAILURE)
+        {
+                printf("KS --- Could not find Cust DB username \n EXITING \n ");
+                exit(1);
+        }
+        if ( CO_ReadToken(chr_finifile,"INTL_DB_PWD",chr_cust_passwd,l_debug_info_ptr) == APL_FAILURE)
+        {
+                printf("KS --- Could not find Cust DB password \n EXITING \n ");
+                exit(1);
+        } *** Commented for Web Intellect Encryption - Decryption Changes **** Naren V */
+
+        
+	/** Web Intellect Encryption - Decryption Changes - Start - Naren V **/
+
+	/* Calling Web Custody Login Details */
+	APL_FETCH_DB_LOGIN_DETAILS(chr_finifile, "W", chr_l_uname, chr_l_passwd , APL_OUT_FILE , &l_debuginfo)
+	if ( !strlen(chr_l_uname) )
+	   {
+		CO_ProcMonitor(APL_OUT_FILE,"\n Could not find Web Int DB username \n EXITING \n FAILED IN Daemon_Web",NULL,NULL);
+		exit(1);
+        }
+
+	if ( !strlen(chr_l_passwd) )
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"\n Could not find Web Int DB password \n EXITING \n FAILED IN Daemon_Web",NULL,NULL);
+		exit(1);
+	}
+
+	/* Calling Int Custody Login Details */
+	APL_FETCH_DB_LOGIN_DETAILS(chr_finifile, "I", chr_cust_uname, chr_cust_passwd , APL_OUT_FILE , &l_debuginfo)
+	if ( !strlen(chr_cust_uname) )
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"\n Could not find Int Custody DB username \n EXITING \n FAILED IN Daemon_Web",NULL,NULL);
+		exit(1);
+	}
+
+	if ( !strlen(chr_cust_passwd) )
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"\n Could not find Int Custody DB password \n EXITING \n FAILED IN Daemon_Web",NULL,NULL);
+		exit(1);
+	}
+	/** Web Intellect Encryption - Decryption Changes - End   - Naren V **/
+   
+   
+   	EXEC SQL CONNECT :chr_l_uname IDENTIFIED BY :chr_l_passwd;
+   	if(sqlca.sqlcode != 0)                                 
+   	{
+     		ltoa_r(sqlca.sqlcode,chr_buffer,KEY_LENGTH-1);
+     		CO_InsertErr(&l_debuginfo,DB_ERR_NO,chr_buffer,
+                 APL_NULL_STRING,APL_NULL_STRING,
+                 __LINE__,__FILE__);
+     		APL_GOBACK_FAIL
+
+   	}
+	
+	if ( CO_RtvSysParams(l_debug_info_ptr) == APL_FAILURE)
+	{
+		printf("\nReturned unsuccessfully from CO_RtvSysParams processtion\n");
+		APL_GOBACK_FAIL
+	}
+	  printf("\n Done with Calling get sys params .. ");	
+	  fflush(stdout); /* Web Intellect Encryption - Decryption Changes - Naren V */
+	IF_COND_EXISTS("DUAL_WEBCON","AUTODLTRNSFR")
+	{
+		printf("KS -- Dual Connection Condition exists .. Connecting to Web....\n");
+	  	fflush(stdout); /* Web Intellect Encryption - Decryption Changes - Naren V */
+
+		EXEC SQL AT :dbdesc CONNECT :chr_cust_uname IDENTIFIED BY :chr_cust_passwd;
+	   	if(sqlca.sqlcode != 0)                                 
+   		{
+     			ltoa_r(sqlca.sqlcode,chr_buffer,KEY_LENGTH-1);
+     			CO_InsertErr(&l_debuginfo,DB_ERR_NO,chr_buffer,
+       	       		   APL_NULL_STRING,APL_NULL_STRING,
+       		          __LINE__,__FILE__);
+     			APL_GOBACK_FAIL
+
+   		}
+		/* printf("KS -- Daemon started with Connections to [%s] and [%s]\n",chr_l_uname,chr_cust_uname); * Commented for Web Intellect Encryption - Decryption Changes - Naren V */
+
+		/* Web Intellect Encryption - Decryption Changes - Start - Naren V */
+		printf("Daemon started with Connections to Web Custody and Int Custody \n");
+	  	fflush(stdout);
+		/* Web Intellect Encryption - Decryption Changes - End   - Naren V */
+	}
+	else
+	{
+		/* printf("KS -- Daemon started with Connection to [%s] \n",chr_l_uname); */
+
+		/* Web Intellect Encryption - Decryption Changes - Start - Naren V */
+		printf("Daemon started with Connection to Web Custody \n");
+	  	fflush(stdout);
+		/* Web Intellect Encryption - Decryption Changes - End   - Naren V */
+	}
+	
+	//printf("KS -- Daemon started with Connections to [%s] and [%s]\n",chr_l_uname,chr_cust_uname);
+/*
+	if ( CO_RtvSysParams(l_debug_info_ptr) == APL_FAILURE)
+	{
+		printf("\nReturned unsuccessfully from CO_RtvSysParams processtion\n");
+		APL_GOBACK_FAIL
+	}
+	  printf("\n Done with Calling get sys params .. ");	
+*/
+	printf("Updating pro_daemon_status ");
+	fflush(stdout);
+	EXEC SQL UPDATE PRO_DAEMON_STATUS SET STATUS = 1 where PROC_NAME = 'Daemon_Web';
+	IS_ANY_ORA_ERROR;
+	printf("Sqlca code is |%d|",sqlca.sqlcode);
+	sprintf(l_data_fld_sep_str,"%c",DATA_FIELD_SEPRTR);
+	strcat(l_data_fld_sep_str,APL_NULL_STRING);
+	
+	while(1)
+	{
+      		if(l_sleep_seconds != 0)
+      		{
+         		sleep(l_sleep_seconds);
+      		}
+      		usleep(l_sleep_microseconds);
+
+		strcpy(h_ora_rowid,APL_NULL_STRING);	
+		i_ora_rowid = -1;
+		memset(chr_h_param_str,APL_NULL_CHAR,sizeof(chr_h_param_str));  // Added by Kalyan for ISKB-488
+		memset(l_chr_h_param_str_temp1,APL_NULL_CHAR,sizeof(l_chr_h_param_str_temp1));   // Added by Kalyan for ISKB-488
+		strcpy(chr_h_error_str,APL_NULL_STRING);
+		strcpy(chr_h_env_str,APL_NULL_STRING);
+		strcpy(chr_h_func_name,APL_NULL_STRING);
+		strcpy(chr_h_func_key,APL_NULL_STRING);
+		strcpy(chr_l_return_value,APL_NULL_STRING);
+
+		i_func_name=0;
+		i_proc_data1=0;   // Added by Kalyan for ISKB-488
+		i_func_key=0;
+		i_env_str=0;
+		i_proc_data=0;
+		i_error_str=0;
+
+		EXEC SQL SELECT ROWID INTO :h_ora_rowid:i_ora_rowid from PRO_REQUEST_WEB where 
+		REQUEST_SEQ = (SELECT MIN(REQUEST_SEQ) FROM PRO_REQUEST_WEB WHERE STATUS = '0') and rownum < 2 FOR UPDATE NOWAIT;		
+		
+		if (sqlca.sqlcode == -54)
+		{
+			continue;
+		}
+
+		IS_ANY_ORA_ERROR
+
+		if (sqlca.sqlcode == 1403)
+		{
+			EXEC SQL COMMIT;
+			IS_ANY_ORA_ERROR;
+			continue;
+		}
+
+		printf("ROW ID SELECTED [%s],[%d]\n",h_ora_rowid,i_ora_rowid);
+	
+		sqlca.sqlcode=0;
+
+		EXEC SQL UPDATE PRO_REQUEST_WEB SET STATUS = '1' where ROWID=:h_ora_rowid;
+		printf("ORA ------- [%d]\n",sqlca.sqlcode);
+		IS_ANY_ORA_ERROR
+		EXEC SQL COMMIT;
+		IS_ANY_ORA_ERROR
+
+		
+		EXEC SQL SELECT PROC_NAME, PROC_NAME, ENVIRON_DATA, PROC_DATA,PROC_DATA1, ERROR_DET,ENTITY_MODE INTO :chr_h_func_name:i_func_name,:chr_h_func_key:i_func_key,:chr_h_env_str:i_env_str,:chr_h_param_str:i_proc_data,l_chr_h_param_str_temp1:i_proc_data1,:chr_h_error_str:i_error_str ,:chr_h_entity_mode:i_h_entity_mode from PRO_REQUEST_WEB where ROWID=:h_ora_rowid FOR UPDATE NOWAIT;
+
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"PRO_REQUEST_WEB","FATAL ERR","ROWID");
+		strcat(chr_h_param_str,l_chr_h_param_str_temp1); // Added by Kalyan for ISKB-488
+		strcat(chr_h_env_str,l_data_fld_sep_str);
+		strcat(chr_h_error_str,l_data_fld_sep_str);
+		strcat(chr_h_param_str,l_data_fld_sep_str); // Kalyan
+
+	   	p_intlenv_data_struct_h =  (INTL_ENV_DATA_STRUCT_H *)calloc(1,sizeof(INTL_ENV_DATA_STRUCT_H));
+	   	APL_MALLOC_FAIL_LOC_A(p_intlenv_data_struct_h);
+	   	memset(p_intlenv_data_struct_h,NULL,sizeof(INTL_ENV_DATA_STRUCT_H));
+
+		int_ret_val = CO_Rtv_EnvStruct(p_intlenv_data_struct_h,chr_h_env_str);
+
+		if (strlen(chr_h_error_str) != 0)
+			int_ret_val = CO_Rtv_ErrStruct(chr_h_error_str,l_debug_info_ptr);
+
+		chr_h_error_desc =  (char *)calloc(4000,sizeof(char));
+		APL_MALLOC_FAIL_LOC_A(chr_h_error_desc);
+
+  		memset(chr_h_error_desc,NULL,sizeof(char));
+
+                strcpy(chr_l_data_key,chr_h_func_name);
+		if(!strcmp(chr_h_entity_mode, "BAT"))
+		{
+
+			printf("ENTERED  BAT ...........HOORAY>>>>>>>>>>>>\n");
+
+			INTL_WARNING
+			printf("\n sending|%s|%s| \n", chr_h_func_name,chr_h_param_str );
+	      		int_ret_val = CO_ReStartProg(
+	                                         chr_h_func_name,
+	                                         chr_h_func_key,
+	                                         chr_h_param_str,
+	                                        &int_l_funcreturnstate,
+														 &int_proc_id,
+	                                         l_debug_info_ptr,
+	                                         p_intlenv_data_struct_h);
+	
+			if(int_ret_val == APL_FAILURE)
+			{
+					strcpy(chr_h_error_desc,"Returned from CO_ReStartProg with Failure");
+					CO_ProcMonitor(APL_OUT_FILE,chr_h_error_desc,NULL,p_intlenv_data_struct_h);
+					int_ret_val = Proc_MarkFailProcess_Batch(h_ora_rowid, chr_h_error_desc); 
+			}
+			else
+			{
+				printf("Rohit Success Proc ID: |%d|",int_proc_id);
+				strcpy(chr_l_return_value,l_data_fld_sep_str);
+				strcat(chr_l_return_value,"PROCESS");
+				sprintf(chr_proc_id,"%d",int_proc_id);
+				strcat(chr_l_return_value,chr_proc_id);
+
+				CO_ProcMonitor(APL_OUT_FILE,"Returned from CO_ReStartProg with Success\n",NULL,p_intlenv_data_struct_h);
+	
+	            		if(int_l_funcreturnstate != S_START)
+	            		{
+	               			if(int_l_funcreturnstate == S_CANNOT_EXECUTE)
+	               			{
+	                  			strcpy(chr_h_error_desc,"A copy of program still running");
+	               			}
+	               			else if(int_l_funcreturnstate == S_CONFLICT)
+	               			{
+	                  			strcpy(chr_h_error_desc,"Conflict program running");
+	               			}
+	               			else if(int_l_funcreturnstate == S_PREDECESSOR)
+	               			{
+	                  			strcpy(chr_h_error_desc,"PRE_PROCESS not executed as yet");
+	               			}
+	               			else if(int_l_funcreturnstate == S_RESTART)
+	               			{
+	                  			strcpy(chr_h_error_desc,"Successfully Re-Started execution");
+	               			}
+	               			else
+	               			{
+	                 			sprintf(chr_h_error_desc,"Some Error during execution int_l_funcreturnstate is :%d:",int_l_funcreturnstate);
+						strcat(chr_h_error_desc,"\0");  //AIX-Warnings Removal
+	               			}
+					CO_ProcMonitor(APL_OUT_FILE,chr_h_error_desc,NULL,p_intlenv_data_struct_h);
+						
+					int_ret_val = Batch_Proc_MarkSuccessProcess(h_ora_rowid,chr_l_return_value);
+	            		}
+	            		else if(int_l_funcreturnstate == S_START)
+	            		{
+					int_ret_val = Batch_Proc_MarkSuccessProcess(h_ora_rowid,chr_l_return_value);
+					CO_ProcMonitor(APL_OUT_FILE,"Successfully Started execution",NULL,p_intlenv_data_struct_h);
+	            		}
+			}
+			S_NON_DCE_ERASE_DUMMY_WARNING;
+		}
+		else
+		{
+			printf("ENTERED  WRAPPER ...........HOORAY>>>>>>>>>>>>\n");
+			/*  Call Wrapper Functions here */
+                        /*Added by amitk for Web module on 06-03-2007*/
+          if (strcmp(chr_h_func_name,"wrp_wi_deal") == 0)
+          {
+
+
+         INTL_WARNING
+         l_wi_deal_struct_h =  (WI_DEAL_STRUCT_H *)calloc(1,sizeof(WI_DEAL_STRUCT_H));
+         APL_MALLOC_FAIL_LOC_A(l_wi_deal_struct_h);
+         memset(l_wi_deal_struct_h,NULL,sizeof(WI_DEAL_STRUCT_H));
+
+
+         printf("\n Calling DL_Proc_WEBPopulate now...\n");
+         int_ret_val = Populate_WEB_DEAL(l_wi_deal_struct_h,chr_h_param_str);
+         CO_ProcMonitor(APL_OUT_FILE,"Now calling WI_DEAL_FUN\n",NULL,p_intlenv_data_struct_h);
+
+	 //S_NON_DCE_ERASE_DUMMY_WARNING; // Kalyan
+
+         if((WI_DEAL_FUN(l_wi_deal_struct_h,
+                               p_intlenv_data_struct_h,
+                               l_debug_info_ptr) == APL_SUCCESS) && (CHECK_EXISTANCE_OF_ERROR))
+         {
+           CO_ProcMonitor(APL_OUT_FILE,"Returned from WI_DEAL_FUN Successfully\n",NULL,p_intlenv_data_struct_h);
+           int_ret_val = Batch_Proc_MarkSuccessProcess(h_ora_rowid,chr_l_return_value);
+         }
+         else
+         {
+            CO_ProcMonitor(APL_OUT_FILE,"Returned from WI_DEAL_FUN Failure\n",NULL,p_intlenv_data_struct_h);
+            int_ret_val = Proc_MarkFailProcess_WithEnv(h_ora_rowid, p_intlenv_data_struct_h, l_debug_info_ptr);
+         }
+         APL_FREE(l_wi_deal_struct_h);
+
+
+      }
+        /*Added by amitk for Web module on 06-03-2007*/
+
+	/* JC - RFS_CA_020 -- Start */
+        else if (strcmp(chr_h_func_name,"wrp_A_cainstruct_wiFn") == 0)
+        {
+                INTL_WARNING
+                l_ca_instruction_struct_h=(CA_INSTRUCTION_STRUCT_H *)calloc(1,sizeof(CA_INSTRUCTION_STRUCT_H));
+                APL_MALLOC_FAIL_LOC_A(l_ca_instruction_struct_h);
+                memset(l_ca_instruction_struct_h,NULL,sizeof(CA_INSTRUCTION_STRUCT_H));
+
+                int_ret_val = Populate_CA_INSTRUCTION(l_ca_instruction_struct_h,chr_h_param_str);
+                CO_ProcMonitor(chr_finifile,"Now calling CA_ModInstruct_Detail\n",NULL,p_intlenv_data_struct_h);
+
+                if ((CA_ModInstruct_Detail(l_ca_instruction_struct_h,
+                                          p_intlenv_data_struct_h,
+                                          l_debug_info_ptr) == APL_SUCCESS) && (CHECK_EXISTANCE_OF_ERROR))
+                {
+                        CO_ProcMonitor(chr_finifile,"Returned from CA_ModInstruct_Detail Successfully\n",NULL,p_intlenv_data_struct_h);
+                        int_ret_val = Batch_Proc_MarkSuccessProcess(h_ora_rowid,chr_l_return_value);
+                }
+                else
+                {
+                        CO_ProcMonitor(chr_finifile,"Returned from CA_ModInstruct_Detail Failure\n",NULL,p_intlenv_data_struct_h);
+                }
+                APL_FREE(l_ca_instruction_struct_h);
+        }
+        /* JC - RFS_CA_020 -- End */
+
+	// By Harvinder Singh RFS NO - RFS_CMM_001 Date 12/04/2007 - Start
+        else if (strcmp(chr_h_func_name,"wrp_Web_Manual_Msg") == 0)
+        {
+                INTL_WARNING
+                l_web_manual_msg_struct_h=(WI_WEB_MANUAL_MSG_STRUCT_H *)calloc(1,sizeof(WI_WEB_MANUAL_MSG_STRUCT_H));
+                APL_MALLOC_FAIL_LOC_A(l_web_manual_msg_struct_h);
+                memset(l_web_manual_msg_struct_h,NULL,sizeof(WI_WEB_MANUAL_MSG_STRUCT_H));
+
+                int_ret_val = Populate_WEB_MANUAL_MSG(l_web_manual_msg_struct_h,chr_h_param_str);
+                CO_ProcMonitor(chr_finifile,"Now calling WI_MOD_WEB_MANUAL_MSG \n",NULL,p_intlenv_data_struct_h);
+
+                if ((WI_ModDb_WEB_MANUAL_MSG(l_web_manual_msg_struct_h,
+                                          p_intlenv_data_struct_h,
+                                          l_debug_info_ptr) == APL_SUCCESS) && (CHECK_EXISTANCE_OF_ERROR))
+                {
+                        CO_ProcMonitor(chr_finifile,"Returned from WI_MOD_WEB_MANUAL_MSG Successfully\n",NULL,p_intlenv_data_struct_h);
+			/*changes done by kalyan-swamy for Issue No:584 */
+			sprintf(chr_l_return_value,"|%d",l_web_manual_msg_struct_h->h_serial_no);
+                        int_ret_val = Batch_Proc_MarkSuccessProcess(h_ora_rowid,chr_l_return_value);
+                }
+                else
+                {
+                        CO_ProcMonitor(chr_finifile,"Returned from WI_MOD_WEB_MANUAL_MSG Failure\n",NULL,p_intlenv_data_struct_h);
+                }
+                APL_FREE(l_web_manual_msg_struct_h);
+        }
+	// By Harvinder Singh RFS NO - RFS_CMM_001 Date 12/04/2007 - End 
+        // Following Wrapper Added For PMS Upload  - Start
+        else if (strcmp(chr_h_func_name,"wrp_pms_deal") == 0)
+          {
+           printf("\n chr_h_param_str :[%s]",chr_h_param_str);
+
+         INTL_WARNING
+         l_wi_deal_pms_struct_h =  (WI_DEAL_PMS_STRUCT_H *)calloc(1,sizeof(WI_DEAL_PMS_STRUCT_H));
+         APL_MALLOC_FAIL_LOC_A(l_wi_deal_pms_struct_h);
+         memset(l_wi_deal_pms_struct_h,NULL,sizeof(WI_DEAL_PMS_STRUCT_H));
+
+         printf("\n Calling Populate_WEB_PMS_DEAL now...\n");
+         int_ret_val = Populate_WEB_PMS_DEAL(l_wi_deal_pms_struct_h,chr_h_param_str);
+         CO_ProcMonitor(APL_OUT_FILE,"Now calling WI_DEAL_PMS_FUN\n",NULL,p_intlenv_data_struct_h);
+
+         if((WI_DEAL_PMS_FUN(l_wi_deal_pms_struct_h,
+                               p_intlenv_data_struct_h,
+                               l_debug_info_ptr) == APL_SUCCESS) && (CHECK_EXISTANCE_OF_ERROR))
+         {
+           CO_ProcMonitor(APL_OUT_FILE,"Returned from WI_DEAL_FUN Successfully\n",NULL,p_intlenv_data_struct_h);
+           int_ret_val = Batch_Proc_MarkSuccessProcess(h_ora_rowid,chr_l_return_value);
+         }
+         else
+         {
+            CO_ProcMonitor(APL_OUT_FILE,"Returned from WI_DEAL_FUN Failure\n",NULL,p_intlenv_data_struct_h);
+            int_ret_val = Proc_MarkFailProcess_WithEnv(h_ora_rowid, p_intlenv_data_struct_h, l_debug_info_ptr);
+         }
+         APL_FREE(l_wi_deal_pms_struct_h);
+      }
+        // Following Wrapper Added For PMS Upload  - End
+
+
+
+			else if (strcmp(chr_h_func_name,"  XYZ WRAPPPER >>>") == 0)
+			{
+				/* add your wrapper code here */
+
+			}
+
+			else
+			{
+				INTL_WARNING
+         			int_ret_val = CO_InsertErr(l_debug_info_ptr,
+                                    FUNC_NF,
+                                    APL_NULL_STRING,
+                                    APL_NULL_STRING,
+                                    APL_NULL_STRING,
+                                    __LINE__,
+                                    __FILE__);
+         			int_ret_val = Proc_MarkFailProcess_WithEnv(h_ora_rowid,p_intlenv_data_struct_h, l_debug_info_ptr);
+      			}
+			
+		}
+		free(p_intlenv_data_struct_h);	
+		free(chr_h_error_desc);
+		CO_FreeErrLst(l_debug_info_ptr);
+	}
+
+   	APL_GOBACK_SUCCESS;
+
+RETURN_SUCCESS:
+
+   EXEC SQL COMMIT ;
+        CO_ProcMonitor(APL_OUT_FILE,"Exiting successfully  out of Batch Daemon\n",NULL,NULL);
+        fclose(chr_finifile);
+        exit(0);
+
+RETURN_FAILURE:
+   EXEC SQL ROLLBACK;
+        CO_ProcMonitor(APL_OUT_FILE,"Exiting unsuccesfully out of Batch Daemon\n",l_debug_info_ptr,NULL);
+        fclose(chr_finifile);
+        exit(-1);
+}
+
+int Batch_Proc_MarkSuccessProcess(char *p_ora_rowid,char *p_return_value)
+{
+	short int_ret_val  =  0;
+
+	EXEC SQL UPDATE PRO_REQUEST_WEB set STATUS = '2',ERROR_DET='SUCCESS'||:p_return_value
+	where rowid=:p_ora_rowid;
+	IS_ANY_ORA_ERROR;
+
+	EXEC SQL COMMIT ;
+	IS_ANY_ORA_ERROR;
+
+	int_ret_val = APL_SUCCESS;
+	S_NON_DCE_ERASE_DUMMY_WARNING;
+
+
+RETURN_SUCCESS :
+	return(APL_SUCCESS);
+
+RETURN_FAILURE :
+	return(APL_FAILURE);
+}
+
+int Proc_MarkFailProcess_Batch(char *p_ora_rowid, char *p_error_desc)
+{
+	short int_ret_val  =  0;
+
+	char chr_l_error_desc[4000];
+	EXEC SQL ROLLBACK ;
+	IS_ANY_ORA_ERROR;
+
+	int_ret_val = APL_FAILURE;
+
+	S_NON_DCE_ERASE_DUMMY_WARNING;
+
+	memset(chr_l_error_desc,NULL,sizeof(char));
+
+	strcpy(chr_l_error_desc,APL_NULL_STRING);
+
+	sprintf(chr_l_error_desc,"%d%c%d%c%s%c%s%c%s%c%s%c%d%c%d%c%d%c%s%c%c",ERROR,ERR_FLD_SEP,12,ERR_FLD_SEP,APL_NULL_STRING,ERR_FLD_SEP,APL_NULL_STRING,ERR_FLD_SEP,APL_NULL_STRING,ERR_FLD_SEP,"Daemon_Web.pc",ERR_FLD_SEP,__LINE__,ERR_FLD_SEP,3,ERR_FLD_SEP,0,ERR_FLD_SEP,p_error_desc,ERR_FLD_SEP,ERR_REC_SEP);	
+
+	EXEC SQL update  PRO_REQUEST_WEB set STATUS = '3',ERROR_DET=:chr_l_error_desc
+	where rowid=:p_ora_rowid;
+
+
+
+	IS_ANY_ORA_ERROR;
+
+	EXEC SQL COMMIT;
+	IS_ANY_ORA_ERROR;
+
+	strcpy(chr_l_error_desc,APL_NULL_STRING);
+
+	S_NON_DCE_ERASE_DUMMY_WARNING;
+
+RETURN_SUCCESS :
+	return(APL_SUCCESS);
+
+RETURN_FAILURE :
+	return(APL_FAILURE);
+}
+int Proc_MarkFailProcess(char *p_ora_rowid,  DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+        char chr_h_error_desc[4000] = APL_NULL_STRING;
+
+	EXEC SQL ROLLBACK ;
+	IS_ANY_ORA_ERROR;
+	
+   	//S_NON_DCE_ERASE_DUMMY_WARNING;
+
+   	memset(chr_h_error_desc,APL_NULL_CHAR,4000);
+/*
+		if (strcmp(p_intlenv_data_struct_h->subprocess,"GFU") == 0)
+		{
+   		if(CO_Rtv_Error( l_debug_info_ptr, chr_h_error_desc) == 1)
+        {
+                CO_ProcMonitor(APL_OUT_FILE,"Exiting unsuccesfully out of CO_Rtv_Error",NULL,NULL);
+        }
+		}
+		else
+		{
+   		if(CO_Rtv_ErrString( l_debug_info_ptr, chr_h_error_desc) == 1)
+        {
+                CO_ProcMonitor(APL_OUT_FILE,"Exiting unsuccesfully out of CO_Rtv_ErrString",NULL,NULL);
+        }
+		}
+*/
+/*
+   	if(CO_Rtv_ErrString( l_debug_info_ptr, chr_h_error_desc) == 1)
+        {
+                CO_ProcMonitor(APL_OUT_FILE,"Exiting unsuccesfully out of CO_Rtv_ErrString",NULL,NULL);
+        }
+   	if(CO_Rtv_Error( l_debug_info_ptr, chr_h_error_desc) == 1)
+        {
+                CO_ProcMonitor(APL_OUT_FILE,"Exiting unsuccesfully out of CO_Rtv_Error",NULL,NULL);
+        }
+*/
+   		if(CO_Rtv_ErrString( l_debug_info_ptr, chr_h_error_desc) == 1)
+        {
+                CO_ProcMonitor(APL_OUT_FILE,"Exiting unsuccesfully out of CO_Rtv_ErrString",NULL,NULL);
+        }
+        CO_ProcMonitor(APL_OUT_FILE,"Error From Daemon WEB",NULL,NULL);
+        CO_ProcMonitor(APL_OUT_FILE,chr_h_error_desc,NULL,NULL);
+
+   	if(strlen(chr_h_error_desc)  >       0)
+   	{
+      		EXEC SQL UPDATE PRO_REQUEST_WEB
+                      	SET 
+				STATUS = '3',
+                                ERROR_DET = :chr_h_error_desc
+                      WHERE 
+				ROWID = :p_ora_rowid;
+   	}
+   	else
+   	{
+      		EXEC SQL UPDATE  PRO_REQUEST_WEB
+                	SET     
+				STATUS = '2',
+                                ERROR_DET = 'SUCCESS'
+                        WHERE 
+				ROWID = :p_ora_rowid;
+   	}
+   	IS_ANY_ORA_ERROR;
+
+   	EXEC SQL COMMIT;
+   	IS_ANY_ORA_ERROR;
+
+   	strcpy(chr_h_error_desc,APL_NULL_STRING);
+	//free(chr_h_error_desc);
+
+   	S_NON_DCE_ERASE_DUMMY_WARNING;
+
+RETURN_SUCCESS :
+	return(APL_SUCCESS);
+
+RETURN_FAILURE :
+	return(APL_FAILURE);
+}
+
+int Proc_MarkFailProcess_WithEnv(char *p_ora_rowid, INTL_ENV_DATA_STRUCT_H *p_intlenv_data_struct_h, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+        char chr_h_error_desc[4000] = APL_NULL_STRING;
+
+	EXEC SQL ROLLBACK ;
+	IS_ANY_ORA_ERROR;
+	
+   	//S_NON_DCE_ERASE_DUMMY_WARNING;
+
+   	memset(chr_h_error_desc,APL_NULL_CHAR,4000);
+		if (strcmp(p_intlenv_data_struct_h->subprocess,"GFU") == 0)
+		{
+   		if(CO_Rtv_Error( l_debug_info_ptr, chr_h_error_desc) == 1)
+        {
+                CO_ProcMonitor(APL_OUT_FILE,"Exiting unsuccesfully out of CO_Rtv_Error",NULL,NULL);
+        }
+		}
+		else
+		{
+   		if(CO_Rtv_ErrString( l_debug_info_ptr, chr_h_error_desc) == 1)
+        {
+                CO_ProcMonitor(APL_OUT_FILE,"Exiting unsuccesfully out of CO_Rtv_ErrString",NULL,NULL);
+        }
+		}
+/*
+   	if(CO_Rtv_ErrString( l_debug_info_ptr, chr_h_error_desc) == 1)
+        {
+                CO_ProcMonitor(APL_OUT_FILE,"Exiting unsuccesfully out of CO_Rtv_ErrString",NULL,NULL);
+        }
+   	if(CO_Rtv_Error( l_debug_info_ptr, chr_h_error_desc) == 1)
+        {
+                CO_ProcMonitor(APL_OUT_FILE,"Exiting unsuccesfully out of CO_Rtv_Error",NULL,NULL);
+        }
+*/
+        CO_ProcMonitor(APL_OUT_FILE,"Error From Daemon WEB",NULL,NULL);
+        CO_ProcMonitor(APL_OUT_FILE,chr_h_error_desc,NULL,NULL);
+
+   	if(strlen(chr_h_error_desc)  >       0)
+   	{
+      		EXEC SQL UPDATE PRO_REQUEST_WEB
+                      	SET 
+				STATUS = '3',
+                                ERROR_DET = :chr_h_error_desc
+                      WHERE 
+				ROWID = :p_ora_rowid;
+   	}
+   	else
+   	{
+      		EXEC SQL UPDATE  PRO_REQUEST_WEB
+                	SET     
+				STATUS = '2',
+                                ERROR_DET = 'SUCCESS'
+                        WHERE 
+				ROWID = :p_ora_rowid;
+   	}
+   	IS_ANY_ORA_ERROR;
+
+   	EXEC SQL COMMIT;
+   	IS_ANY_ORA_ERROR;
+
+   	strcpy(chr_h_error_desc,APL_NULL_STRING);
+	//free(chr_h_error_desc);
+
+   	S_NON_DCE_ERASE_DUMMY_WARNING;
+
+RETURN_SUCCESS :
+	return(APL_SUCCESS);
+
+RETURN_FAILURE :
+	return(APL_FAILURE);
+}
+

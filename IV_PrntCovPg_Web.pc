@@ -1,0 +1,408 @@
+
+
+
+#include "IV_Control_A.h"
+EXEC SQL INCLUDE SQLCA.H;
+
+#define STYLE "<STYLE> .heading {  font-family: Arial, Helvetica, sans-serif; font-size: 10pt; font-weight: bold; color: #000000}td{font-family:Arial, Helvetica, sans-serif; font-size:9pt; color:000000;}th{font-family:MS Sans Serif,Arial; font-size:9pt; color:ffffff; background:#a3a3a3; font-weight:bold;}.ez1{background:#e8eff9;; color: #000090; font-family: Arial, Helvetica, sans-serif; font-size: 9pt; font-weight: normal; text-decoration: none}.ez3{background:########; color: #000090; font-family: Arial, Helvetica, sans-serif; font-size: 9pt; font-weight: bold; text-decoration: none}.ez4{background:#e8eff9; color: #000090; font-family: Arial, Helvetica, sans-serif; font-size: 9pt; font-weight: bold; text-decoration: none text-align: center}.ez5{background:#e8eff9;; color: #FFFFFF font-family: Arial, Helvetica, sans-serif; font-size: 11pt; font-weight: bold; text-decoration: none text-align: center}.ez8{background:#e8eff9; color: #000090; font-family: Arial, Helvetica, sans-serif; font-size: 8pt; font-weight: bold; text-decoration: none}.hot{background:#ffeeef; font-family: Arial, Helvetica, sans-serif; font-size: 9pt; color: #aa1133; font-weight: bold;}.hot1{background:#fffef0; color:#000090; font-family: Arial, Helvetica, sans-serif; font-size: 9pt; font-weight: normal; text-decoration: none}.normal{font-family: Arial, Helvetica, sans-serif; font-size: 11pt; color: #000000}.ez8{background:#e8eff9;; color: #000090; font-family: Arial, Helvetica, sans-serif; font-size: 8pt; font-weight: bold; text-decoration: none}.ez9{color: #000090; font-family: Arial, Helvetica, sans-serif; font-size: 8pt; font-weight: bold; text-decoration: none}.ez10{color: #000090; font-family: Arial, Helvetica, sans-serif; font-size: 10pt; font-weight: bold; text-decoration: none}.ez11{font-family: Arial, Helvetica, sans-serif; font-size: 8pt; font-weight: bold; text-decoration: none}.hot2{font-family: Arial, Helvetica, sans-serif; font-size: 10pt; color: #aa1133; font-weight: bold;}</STYLE>"
+
+int IV_Proc_PrnCovPgWeb(	 FILE *bill,
+						 FILE *fl_techlog,	
+						 FILE *fl_userlog,	
+						 char *chr_p_billdt,
+						 char *chr_p_client,
+						 SYS_IVCONTROLPARAM_STRUCT l_sys_ivcntl_param_struct,
+	   				 IV_CLIENTSETUP_STRUCT l_iv_clt_setup_struct,			
+		 				 char p_mastsub,
+						 DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+ 
+
+double p_totcomm=0,p_totcust=0,p_tottran=0,p_tototh=0 ;
+int int_retval=0;
+int int_currpos= 0;
+char chr_l_buf[BUFFER_LEN];
+double p_tot_portf =0;
+double l_totamount=0.0;
+double h_subtotamount=0.0;
+double h_subminimumfee=0.0;
+double dbl_h_subothfee=0.0;
+double l_minimumfee=0.0;
+double l_minimumfee_set=0.0;
+double l_cmamount=0.0;
+double l_maximumfee=0.0;/* Bageshri for max fee adj */
+
+char chr_h_subacc[11]=APL_NULL_STRING;
+char chr_h_minacc[11]=APL_NULL_STRING;
+char chr_l_billmonth[12];
+char chr_l_billyear[6];
+char chr_l_blccycode[4];
+char chr_l_h_corporate_addr[321];
+char chr_l_cname[66];
+char **chr_l_tmpaddr  = NULL;
+int  number_a = 0;
+int int_l_lines = 0;
+int int_nlength = 0;
+int int_icount;
+int int_jcount;
+char chr_t_billdt[11];
+char chr_l_cname1[66];
+char chr_new[66];
+char chr_prev[1];
+int int_l_fetch_cnt=0;
+int int_retstat =0;
+char chr_f_amt[20], chr_f_amt1[20];		
+double roundedamount=0.0;		
+char chr_l_amtstr[30];		
+char chr_l_footnote[241];
+char chr_l_temp_footer1[241]               =  APL_NULL_STRING;
+char *chr_l_temp_footer2                   =  NULL;
+char chr_l_line_footer[241]         =  APL_NULL_STRING;
+int int_l_len_footer                       =  0;
+int int_l_lines_footer                     =  0;
+int int_l_counter                          =  0;
+char **chr_l_tmpfoot  = NULL;
+
+		APL_IF_DEBUG
+		{
+			memset(chr_l_buf,NULL,BUFFER_LEN);
+			sprintf(chr_l_buf,"The billdt is %s",chr_p_billdt);	
+			CO_ProcMonitor(APL_OUT_FILE,chr_l_buf,NULL,NULL);
+
+			memset(chr_l_buf,NULL,BUFFER_LEN);
+			sprintf(chr_l_buf,"The client is  %s",chr_p_client);	
+			CO_ProcMonitor(APL_OUT_FILE,chr_l_buf,NULL,NULL);
+
+			memset(chr_l_buf,NULL,BUFFER_LEN);
+			sprintf(chr_l_buf,"The MastSub is %c",p_mastsub);	
+			CO_ProcMonitor(APL_OUT_FILE,chr_l_buf,NULL,NULL);
+		}
+
+	memset(chr_l_footnote, APL_NULL_CHAR, 241);
+	EXEC SQL VAR chr_h_subacc IS STRING;
+   EXEC SQL VAR chr_l_blccycode IS STRING;
+
+   
+	EXEC SQL SELECT REPLACE(REPLACE(ca_address,CHR(13),'|') ,CHR(10),'|') || '|' 
+	INTO :chr_l_h_corporate_addr
+	FROM MT_COMMON_SYS_PARAMS;
+
+
+	IS_ANY_ORA_ERROR
+
+	if (APL_FAILURE == CO_SplitStr( chr_l_h_corporate_addr,'|',&number_a, &chr_l_tmpaddr))
+   {
+	fprintf(fl_userlog,"Failure  while splitting %s \n",chr_l_h_corporate_addr);
+	APL_GOBACK_FAIL
+	}
+	int_l_lines = number_a/2;
+	int_l_lines = int_l_lines+1;
+	fprintf(bill,"<HTML><HEAD><META http-equiv='Content-Type' content='text/html; charset=UTF-16'></META>\n");
+	fprintf(bill,"%s",STYLE);
+	fprintf(bill,"</HEAD><BODY>");
+         //AIX - Warnings Removal
+	fprintf(bill,"<TABLE id='Table3' borderColor='#000000' cellSpacing='0' cellPadding='1' width='100%%' border='1'><tr><td borderColor='#ffffff' border='1'>&nbsp;</td><td borderColor='#ffffff' border='1'></BR><TABLE cellSpacing='0' cellPadding='0' width='100%%' border='0' ><TR><TD class=\'hot\' width='25%%'><img src=\"C:\\Kotak_Logo.gif\" width=\"180\" height=\"80\" ALIGN=\"LEFT\"></TD><TD class=\'hot\' width='5%%'>&nbsp;</TD><td class=\'hot\' width=\'70%%\' align='left'>%s",g_mt_commonsys_params_struct_h.ca_identname);
+       
+	
+
+   int_currpos=7;
+
+   for (int_nlength=0;int_nlength<=number_a;)
+   {
+      fprintf(bill,"<BR>%s",chr_l_tmpaddr[int_nlength]);
+      int_currpos++;
+      fprintf(fl_userlog,"The chr_value of int_nlength in the loop is: %d\n",int_nlength);
+      int_nlength = int_nlength +2;
+   }
+   int_currpos=int_currpos+2;
+
+   strncpy(chr_t_billdt,chr_p_billdt,10);
+   chr_t_billdt[10] = '\0';
+	fprintf(bill,"</td></tr></TABLE></BR>");
+	fprintf(bill,"<TABLE id='Table3' borderColor='#000000' cellSpacing='0' cellPadding='1' width='100%%' border=\'0\'><tr><td class=\'ez4\'> INVOICE FOR GLOBAL TRANSACTION SERVICES %s %s </td><td class=\'ez4\' align=\"RIGHT\" >Statement Date :  %s</td></tr></table></BR>",chr_l_billmonth,chr_l_billyear,chr_t_billdt);
+	
+   int_currpos=int_currpos+1;
+
+   if ( APL_FAILURE == IV_Rtv_GetCnameWeb(chr_p_client, chr_l_cname, &int_retstat,
+											 l_debug_info_ptr) )
+   {
+		fprintf(stderr, "Cannot get Corporate Name for %s\n", chr_p_client);
+		APL_GOBACK_FAIL
+	}
+    int_nlength = strlen(chr_l_cname);
+    for (int_icount=0,int_jcount=0;int_icount<=int_nlength;)
+     {
+       if (chr_l_cname[int_icount] == ' ' )
+        {
+          if (chr_prev[0] != ' ')
+           {
+             chr_new[int_jcount]=chr_l_cname[int_icount];
+             int_jcount=int_jcount+1;
+           }
+           chr_prev[0] = chr_l_cname[int_icount];
+           chr_prev[1] = '\0';
+        }
+        else
+        {
+           chr_new[int_jcount] = chr_l_cname[int_icount];
+           chr_prev[0] = 'u';
+           chr_prev[1] = '\0';
+           int_jcount=int_jcount+1;
+        }
+        int_icount= int_icount+1;
+      }
+    sprintf(chr_l_cname1,"%s",chr_new);
+    int_currpos++;
+	 EXEC SQL SELECT to_char(to_date(:chr_p_billdt),'MONTH'), to_char(to_date(:chr_p_billdt),'yyyy') 
+    				INTO :chr_l_billmonth,:chr_l_billyear FROM DUAL ;
+
+	 IS_ANY_ORA_ERROR
+    EXEC SQL SELECT NVL(SUM(COMM_AMT+NIL_FEES_ADJ+MINIMUMFEE_ADJ+MAXIMUM_FEE_ADJ),0) 
+               INTO :l_totamount
+               FROM IV_SERVICE_CHRG
+              	WHERE CLIENT =:chr_p_client 
+               AND DATEOF_BILLING  = :chr_p_billdt
+               AND CONS_FLAG = :p_mastsub ;
+ 
+	 IS_ANY_ORA_ERROR
+   
+	EXEC SQL SELECT NVL(COMM_AMT,0) into :l_minimumfee
+	FROM IV_SERVICE_CHRG
+   WHERE CLIENT  = :chr_p_client
+	AND DATEOF_BILLING  = :chr_p_billdt
+   AND CONS_FLAG = :p_mastsub
+   AND SERVICE_CD='99998';
+	IS_ANY_ORA_ERROR
+		
+   /* Bageshri for max fee adj */
+	EXEC SQL SELECT NVL(COMM_AMT,0) into :l_maximumfee
+	FROM IV_SERVICE_CHRG
+	WHERE CLIENT  = :chr_p_client
+	AND DATEOF_BILLING  = :chr_p_billdt
+	AND CONS_FLAG = :p_mastsub
+	AND SERVICE_CD='99995';
+	IS_ANY_ORA_ERROR
+    
+	EXEC SQL SELECT B_CCYCD,NVL(minimumfee,0) INTO :chr_l_blccycode ,:l_minimumfee_set
+    FROM IV_CLIENTSETUP
+    WHERE CLIENT = :chr_p_client;
+
+    IS_ANY_ORA_ERROR
+	 
+	int_retstat = IV_Proc_Round(&l_totamount, l_iv_clt_setup_struct.fees_ccy, chr_f_amt, l_debug_info_ptr);
+	 if (int_retstat ==1)
+	 {
+      roundedamount = 0.0;
+		memset(chr_l_amtstr, APL_NULL_CHAR, 30);
+		sscanf(chr_f_amt, "%lf", &roundedamount);
+		CO_Rtv_FormatAmtCcy(roundedamount, chr_l_amtstr, 'Y', 'Y', l_iv_clt_setup_struct.fees_ccy,l_debug_info_ptr);
+	  	strcpy(chr_f_amt, chr_l_amtstr + 10);
+	  	
+		printf("\n 203  |%s|%s| \n" , chr_f_amt, chr_l_amtstr + 10);
+
+		CO_Trim(chr_f_amt,' ','L',chr_f_amt1,l_debug_info_ptr);
+	 }
+	 else
+		APL_GOBACK_FAIL
+    
+	 
+    fprintf(bill,"\n<table class='normal' cellSpacing='0' cellPadding='0' width='100%%' border='0'>\n<tr><td>DEAR SIR/MADAM</td></TR>\n<TR><td>PLEASE BE ADVISED THAT GLOBAL TRANSACTION SERVICE FEES TO THE AMOUNT OF <B> %s %s</B></td></TR>",chr_l_blccycode,chr_f_amt1);
+    fprintf(bill,"\n<TR><td>ARE NOW DUE</td></tr>\n</TABLE>\n<BR>");
+
+    int_currpos=int_currpos+7;
+
+     
+    EXEC SQL DECLARE subacctot CURSOR FOR
+           SELECT A.CLIENT, NVL(SUM(A.COMM_AMT+A.NIL_FEES_ADJ+A.MINIMUMFEE_ADJ+A.MAXIMUM_FEE_ADJ),0)
+               FROM IV_SERVICE_CHRG A, IV_CLIENTSETUP B
+              WHERE DECODE(:p_mastsub,'C',A.MASTER_CLT,A.CLIENT)=:chr_p_client
+                AND A.CLIENT = B.CLIENT
+					 AND A.DATEOF_BILLING  = :chr_p_billdt
+                AND A.CONS_FLAG = 'I'
+					 AND B.SEND_TO_MASTER_IND = DECODE(:p_mastsub,'C','M','S')
+                GROUP BY A.CLIENT
+             UNION
+			 SELECT A.CLIENT, NVL(SUM(A.COMM_AMT+A.NIL_FEES_ADJ+A.MINIMUMFEE_ADJ+A.MAXIMUM_FEE_ADJ),0)
+               FROM IV_SERVICE_CHRG A, IV_CLIENTSETUP B
+              WHERE A.CLIENT=:chr_p_client
+                AND A.CLIENT = B.CLIENT
+					 AND A.DATEOF_BILLING  = :chr_p_billdt
+                AND A.CONS_FLAG = 'I'
+                AND :p_mastsub ='C'
+					 AND B.SEND_TO_MASTER_IND = 'S'
+                GROUP BY A.CLIENT
+           ORDER BY 1;
+                         
+    EXEC SQL OPEN subacctot;
+
+	 if (sqlca.sqlcode < 0)
+    {
+			fprintf(fl_userlog,"Encountered DB Error: %d : %s\n",sqlca.sqlcode,sqlca.sqlerrm.sqlerrmc);
+			APL_GOBACK_FAIL
+    }
+
+	 IS_ANY_ORA_ERROR
+
+		 fprintf(bill,"<table class='normal' cellSpacing='0' cellPadding='0' width='100%%' border='0'>");
+	 
+	 for (;;)
+	 {
+        memset(chr_h_subacc, APL_NULL_CHAR,11);
+
+		  EXEC SQL FETCH subacctot INTO
+		  :chr_h_subacc, h_subtotamount;
+
+		  if(sqlca.sqlcode == 1403)
+			  break;
+
+		  int_l_fetch_cnt ++;
+
+		  if(int_l_fetch_cnt == 1) 
+	     {  
+			 fprintf(bill,"<tr><td class=\'ez4\'>ACCOUNT NO</td><td class=\'ez4\'>ACCOUNT NAME</td>");
+		    fprintf(bill,"<td class=\'ez4\'>CURRENCY</td><td class=\'ez4\'>AMOUNT</td></tr>");
+		  }
+	
+				EXEC SQL SELECT SUBSTR(a.CLN_NAME,1,35),B_CCYCD 
+							INTO :chr_l_cname, :chr_l_blccycode 
+               		FROM MT_CLIENT a,IV_CLIENTSETUP b
+              			WHERE a.CLN_CODE = :chr_h_subacc
+							  AND a.CLN_CODE = b.CLIENT;
+
+    		IS_ANY_ORA_ERROR
+
+	 		int_retstat = IV_Proc_Round(&h_subtotamount, l_iv_clt_setup_struct.fees_ccy, chr_f_amt, l_debug_info_ptr);
+	 		if (int_retstat ==1)
+	 		{
+      		roundedamount = 0.0;
+				memset(chr_l_amtstr, APL_NULL_CHAR, 30);
+				sscanf(chr_f_amt, "%lf", &roundedamount);
+				CO_Rtv_FormatAmtCcy(roundedamount, chr_l_amtstr, 'Y', 'Y', l_iv_clt_setup_struct.fees_ccy,l_debug_info_ptr);
+	 		}
+			else
+				APL_GOBACK_FAIL
+			
+			 
+	   	
+			printf("The chr_value of totamt is %lf\n",l_totamount);
+			printf("The chr_value of subtotamt is %lf\n",h_subtotamount);
+			printf("The chr_value of client is (%s)\n",chr_p_client);
+			printf("The chr_value of subaccount is (%s)\n",chr_h_subacc);
+			
+			
+			if (strcmp(chr_h_subacc,chr_p_client)==0)
+			{
+					EXEC SQL SELECT NVL(A.COMM_AMT,0) into :h_subminimumfee
+               FROM IV_SERVICE_CHRG A, IV_CLIENTSETUP B
+              	WHERE A.CLIENT=:chr_p_client
+               AND A.CLIENT = B.CLIENT
+					AND A.DATEOF_BILLING  = :chr_p_billdt
+               AND A.CONS_FLAG = 'I'
+					AND B.SEND_TO_MASTER_IND = 'S'
+					AND A.SERVICE_CD='99998';
+					IS_ANY_ORA_ERROR
+					
+					EXEC SQL SELECT NVL(SUM(A.COMM_AMT),0) into :dbl_h_subothfee
+               FROM IV_SERVICE_CHRG A, IV_CLIENTSETUP B
+              	WHERE A.CLIENT=:chr_p_client
+               AND A.CLIENT = B.CLIENT
+					AND A.DATEOF_BILLING  = :chr_p_billdt
+               AND A.CONS_FLAG = 'I'
+					AND B.SEND_TO_MASTER_IND = 'S'
+					AND A.SERVICE_CD!='99998'
+					GROUP BY A.CLIENT;
+					IS_ANY_ORA_ERROR
+					if (h_subtotamount==h_subminimumfee)
+					{		
+						CO_Rtv_FormatAmtCcy(0.0, chr_l_amtstr, 'Y', 'Y', l_iv_clt_setup_struct.fees_ccy,l_debug_info_ptr);
+					}	
+					else
+					{
+	 					int_retstat = IV_Proc_Round(&dbl_h_subothfee, l_iv_clt_setup_struct.fees_ccy, chr_f_amt, l_debug_info_ptr);
+	 					if (int_retstat ==1)
+	 					{
+      					roundedamount = 0.0;
+							memset(chr_l_amtstr, APL_NULL_CHAR, 30);
+							sscanf(chr_f_amt, "%lf", &roundedamount);
+							CO_Rtv_FormatAmtCcy(roundedamount, chr_l_amtstr, 'Y', 'Y', l_iv_clt_setup_struct.fees_ccy,l_debug_info_ptr);
+	 					}
+						else
+						APL_GOBACK_FAIL
+					
+					}	
+		    }
+
+
+        fprintf(bill,"\n<tr><td>%s</td><td>%35s</td><td>%s</td><td>%s</td></tr>",chr_h_subacc,chr_l_cname,chr_l_blccycode,chr_l_amtstr);
+		  int_currpos++;
+    }
+
+	 EXEC SQL CLOSE subacctot;
+	 int_retstat = IV_Proc_Round(&l_minimumfee, l_iv_clt_setup_struct.fees_ccy, chr_f_amt, l_debug_info_ptr);
+	 if (int_retstat ==1)
+	 {
+    	roundedamount = 0.0;
+		memset(chr_l_amtstr, APL_NULL_CHAR, 30);
+		sscanf(chr_f_amt, "%lf", &roundedamount);
+		CO_Rtv_FormatAmtCcy(roundedamount, chr_l_amtstr, 'Y', 'Y', l_iv_clt_setup_struct.fees_ccy,l_debug_info_ptr);
+	 }
+	else
+	APL_GOBACK_FAIL
+	if(l_minimumfee > 0)
+	{
+		fprintf(bill,"\n<tr><td>&nbsp;</td><td>MINIMUM FEE ADJUSTMENTS </td><td>%3s</td><td>%s</td></tr>",l_iv_clt_setup_struct.b_ccycd,chr_l_amtstr);
+	}  
+	
+   /* Bageshri for max fee adj */	
+	int_retstat = IV_Proc_Round(&l_maximumfee, l_iv_clt_setup_struct.fees_ccy, chr_f_amt, l_debug_info_ptr);
+	if (int_retstat ==1)
+	{
+		roundedamount = 0.0;
+		memset(chr_l_amtstr, APL_NULL_CHAR, 30);
+		sscanf(chr_f_amt, "%lf", &roundedamount);
+		CO_Rtv_FormatAmtCcy(roundedamount, chr_l_amtstr, 'Y', 'Y', l_iv_clt_setup_struct.fees_ccy,l_debug_info_ptr);
+	}
+	else
+		APL_GOBACK_FAIL
+			printf("\n **********  max fee ********** |%lf| ",l_maximumfee);
+	if(l_maximumfee < 0)
+	{
+		fprintf(bill,"\n<tr><td>&nbsp;</td><td>MAXIMUM FEE ADJUSTMENTS </td><td>%3s</td><td>%s</td></tr>",l_iv_clt_setup_struct.b_ccycd,chr_l_amtstr);
+	}
+	/****************************/
+	fprintf(bill,"\n</table>\n<BR>");
+    int_currpos++;
+
+	 if ( strlen(l_iv_clt_setup_struct.information) )
+	 {
+/*** Subu Commenetd Below line for AIX Migration ***/
+/* Since the logic used to write this code was on assumption that CHR(13) character on every end of line. */
+		/* EXEC SQL SELECT REPLACE(REPLACE(information, CHR(13),'<BR>') ,CHR(10),'<BR>') || '<BR>' as information */
+		EXEC SQL SELECT REPLACE(REPLACE(information, CHR(13),'|') ,CHR(10),'|') || '|' as information
+		into :chr_l_footnote
+		from IV_CLIENTSETUP where client = :l_iv_clt_setup_struct.client;
+
+
+		IS_ANY_ORA_ERROR
+		fprintf(bill,"\n<table class='normal' cellSpacing='0' cellPadding='0' width='100%%' border='0'><tr><td>%s</td></tr></table><br>",chr_l_footnote);
+
+
+   }
+	 fprintf(bill,"\n<table class='normal' cellSpacing='0' cellPadding='0' width='100%%' border='0'>");
+	 fprintf(bill,"\n<tr><td>SHOULD YOU HAVE ANY QUERIES REGARDING THIS INVOICE, PLEASE DO NOT HESITATE TO CONTACT</td></tr>");
+	 fprintf(bill,"\n<tr><td>GLOBAL TRANSACTION SERVICES BILLING UNIT %s</td></tr>\n</table><BR><BR>",g_mt_commonsys_params_struct_h.ca_identname);
+	 fprintf(bill,"\n<table class='normal' cellSpacing='0' cellPadding='0' width='95%%' border='0'>\n<tr><td>NO SIGNATURE NECESSARY</td></tr>\n<tr><td>SYSTEM INVOICE</td></tr>\n</table>\n<BR>");
+	fflush(bill);
+
+
+	{
+
+			RETURN_SUCCESS:
+               return(APL_SUCCESS);
+
+        RETURN_FAILURE:
+
+						CO_ProcMonitor(APL_OUT_FILE,"Exiting out of IV_Proc_Prnbills UnSuccessfully\n",NULL,NULL);
+                return (APL_FAILURE);
+   }
+}

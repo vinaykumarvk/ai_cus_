@@ -1,0 +1,494 @@
+
+
+
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+
+
+
+
+
+#include "CO_HostStructdef.h"
+EXEC SQL INCLUDE SQLCA;
+
+
+
+
+
+int CR_Chk_CanCCYDel( char          *p_ccycode,
+                    DEBUG_INFO_STRUCT_H  **l_debug_info_ptr
+                  )
+{
+
+  
+
+
+	struct sqlca    sqlca;
+   int           	 int_p_ccyexist =0;
+
+
+   #ifdef APL_THREADS
+		APL_SET_CONTEXT
+		EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+
+	sqlca.sqlcode =0;
+
+
+   APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Entering processtion CDBCanDelCcyFn",NULL,NULL);
+	}
+
+
+
+
+   if(!strlen(p_ccycode))
+	{
+	   APL_DATA_MISSING("Currency", APL_NULL_STRING, APL_NULL_STRING)
+   	APL_GOBACK_FAIL
+	}
+
+
+
+	
+	if(!strcmp(p_ccycode,g_mt_commonsys_params_struct_h.dom_ccy))
+	{
+		CO_InsertErr(
+							l_debug_info_ptr,
+							ERR_CANTDEL_DOMCCY,  
+									
+							APL_NULL_STRING,
+         				APL_NULL_STRING,
+         				APL_NULL_STRING,
+         				__LINE__,
+         				__FILE__
+         				);
+	}
+
+	if(!strcmp(p_ccycode,"USD"))
+	{
+		CO_InsertErr(
+							l_debug_info_ptr,
+							ERR_CCY_CANTDEL_USD,  
+									
+							APL_NULL_STRING,
+         				APL_NULL_STRING,
+         				APL_NULL_STRING,
+         				__LINE__,
+         				__FILE__
+         				);
+	}
+
+	if(g_mt_commonsys_params_struct_h.bill_module_ind[0] == 'Y')
+	{
+			if(!strcmp(p_ccycode,l_invoice_systemparam_struct_h.b_ccy))
+			{
+				CO_InsertErr(
+							l_debug_info_ptr,
+							ERR_DFLT_BILLCCY_CANT_DELETE,    
+							APL_NULL_STRING,
+         				APL_NULL_STRING,
+         				APL_NULL_STRING,
+         				__LINE__,
+         				__FILE__
+         				);
+			}
+	}
+
+
+
+
+   EXEC SQL SELECT NVL(COUNT(*),0) INTO :int_p_ccyexist
+         FROM MT_CLIENT
+         WHERE CLN_CURRENCY =:p_ccycode;
+
+   IS_ANY_ORA_ERROR
+
+
+   if (int_p_ccyexist != 0)
+   {
+      CO_InsertErr(
+                     l_debug_info_ptr,
+                     ERR_CANTDEL_CCYINUSE,
+                           
+                     "CLIENT",
+                     APL_NULL_STRING,
+                     APL_NULL_STRING,
+                     __LINE__,
+                     __FILE__
+                     );
+   }
+
+
+
+
+
+   EXEC SQL SELECT NVL(COUNT(*),0) INTO :int_p_ccyexist
+         FROM MT_INSTRUMENT
+         WHERE CURRENCY_CD =:p_ccycode;
+
+   IS_ANY_ORA_ERROR
+
+   if (int_p_ccyexist != 0)
+   {
+      CO_InsertErr(
+                     l_debug_info_ptr,
+                     ERR_CANTDEL_CCYINUSE,
+                           
+                     "INSTRUMENT",
+                     APL_NULL_STRING,
+                     APL_NULL_STRING,
+                     __LINE__,
+                     __FILE__
+                     );
+   }
+
+
+
+
+
+   EXEC SQL SELECT NVL(COUNT(*),0) INTO :int_p_ccyexist
+         FROM IV_CLIENTSETUP
+         WHERE B_CCYCD =:p_ccycode;
+
+   IS_ANY_ORA_ERROR
+
+   if (int_p_ccyexist != 0)
+   {
+      CO_InsertErr(
+                     l_debug_info_ptr,
+                     ERR_CANTDEL_CCYINUSE,
+                           
+                     "CUST BILLING PARAM",
+                     APL_NULL_STRING,
+                     APL_NULL_STRING,
+                     __LINE__,
+                     __FILE__
+                     );
+   }
+
+
+
+
+
+   if(APL_FAILURE == CO_ChkErr(*l_debug_info_ptr)) APL_GOBACK_SUCCESS
+   else APL_GOBACK_FAIL;
+
+
+   RETURN_SUCCESS :
+   {
+   	APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE,"Exiting processtion CR_Chk_CanCCYDel successfully",NULL,NULL);
+		}
+      return(APL_SUCCESS);
+   }
+
+
+   RETURN_FAILURE :
+   {
+   	APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE,"Exiting processtion CR_Chk_CanCCYDel with failure",NULL,NULL);
+		}
+      return(APL_FAILURE);
+   }
+
+}
+
+
+
+
+
+int CR_Mod_DBCcy( DL_CURRENCY_STRUCT_H   *p_dl_currency_struct_h,
+                 INTL_ENV_DATA_STRUCT_H   *p_intl_env_data_struct_h_e,
+                 DEBUG_INFO_STRUCT_H         **l_debug_info_ptr
+               )
+{
+
+  
+
+	struct sqlca         sqlca;
+
+	DL_CURRENCY_STRUCT_I   *l_dl_currency_struct_ia = NULL;
+
+	char   chr_access_stamp_time[APL_DATE_LEN] = APL_NULL_STRING;
+	char   chr_acc_stamp_compare[APL_DATE_LEN] = APL_NULL_STRING;
+
+
+   #ifdef APL_THREADS
+		APL_SET_CONTEXT
+		EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+						 
+
+ 	sqlca.sqlcode = 0;
+
+
+	l_dl_currency_struct_ia = (DL_CURRENCY_STRUCT_I *)calloc(1,sizeof(DL_CURRENCY_STRUCT_I));
+
+
+   APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Entering processtion CDBUpdCcyFn",NULL,p_intl_env_data_struct_h_e);
+	}
+
+
+
+
+
+	if(CO_RtvSysDtTime(chr_access_stamp_time, l_debug_info_ptr) != APL_SUCCESS)
+	{
+		APL_GOBACK_FAIL
+	}
+
+
+   if(!strcmp(p_intl_env_data_struct_h_e->h_mode,APL_FUNC_INPUT))
+   {
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE,"Entering Input h_mode of Function CDBUpdCcyFn",NULL,p_intl_env_data_struct_h_e);
+		}
+
+
+  		strcpy(p_dl_currency_struct_h->h_access_stamp, chr_access_stamp_time);
+		strcpy(p_dl_currency_struct_h->h_maker, p_intl_env_data_struct_h_e->usr); 
+		strcpy(p_dl_currency_struct_h->h_maker_dt, chr_access_stamp_time);
+
+
+		l_dl_currency_struct_ia->i_currencycode = 0;
+		l_dl_currency_struct_ia->i_ccydetail = 0;
+		l_dl_currency_struct_ia->i_dec_len = 0;
+		l_dl_currency_struct_ia->i_gl_cd = 0;
+		l_dl_currency_struct_ia->i_maker = 0;
+		l_dl_currency_struct_ia->i_maker_dt = 0;
+		l_dl_currency_struct_ia->i_access_stamp = 0;
+
+
+  		EXEC SQL INSERT INTO DL_CURRENCY
+			VALUES  (:p_dl_currency_struct_h:l_dl_currency_struct_ia);
+
+		IS_ANY_ORA_ERROR_AND_DUPLICATE(
+													ERR_CCY_EXISTS,
+														
+													APL_NULL_STRING,
+													APL_NULL_STRING,
+													APL_NULL_STRING
+													)
+	}
+
+
+   if(!strcmp(p_intl_env_data_struct_h_e->h_mode,APL_FUNC_MODIFY))
+   {
+
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE,"Entering Modify h_mode of Function CDBUpdCcyFn",NULL,p_intl_env_data_struct_h_e);
+		}
+
+   		EXEC SQL SELECT ACCESS_STAMP
+        		INTO :chr_acc_stamp_compare
+        		FROM DL_CURRENCY
+            WHERE CURRENCY_CD =:p_dl_currency_struct_h->h_currencycode;
+
+			IS_ANY_ORA_ERROR
+
+
+   		if(!strcmp(p_dl_currency_struct_h->h_access_stamp,chr_acc_stamp_compare))
+      	{
+		  		strcpy(p_dl_currency_struct_h->h_access_stamp, chr_access_stamp_time);
+		  		strcpy(p_dl_currency_struct_h->h_maker_dt, chr_access_stamp_time);
+
+
+      		l_dl_currency_struct_ia->i_currencycode = 0;
+      		l_dl_currency_struct_ia->i_ccydetail = 0;
+      		l_dl_currency_struct_ia->i_dec_len = 0;
+      		l_dl_currency_struct_ia->i_gl_cd = 0;
+      		l_dl_currency_struct_ia->i_maker = 0;
+      		l_dl_currency_struct_ia->i_maker_dt = 0;
+      		l_dl_currency_struct_ia->i_access_stamp = 0;
+
+
+      		EXEC SQL UPDATE DL_CURRENCY SET
+ 					CURRENCY_DESC = :p_dl_currency_struct_h->h_ccydetail:l_dl_currency_struct_ia->i_ccydetail,
+ 					DEC_LEN = :p_dl_currency_struct_h->h_dec_len:l_dl_currency_struct_ia->i_dec_len,
+					GL_CD = :p_dl_currency_struct_h->h_gl_cd:l_dl_currency_struct_ia->i_gl_cd,
+ 					MAKER = :p_intl_env_data_struct_h_e->usr:l_dl_currency_struct_ia->i_maker,
+ 					MAKER_DT = :p_dl_currency_struct_h->h_maker_dt:l_dl_currency_struct_ia->i_maker_dt,
+ 					ACCESS_STAMP = :p_dl_currency_struct_h->h_access_stamp:l_dl_currency_struct_ia->i_access_stamp
+						WHERE CURRENCY_CD = :p_dl_currency_struct_h->h_currencycode;
+
+
+				IS_ANY_ORA_ERROR
+			}
+
+			else
+			{
+				CO_InsertErr(
+									l_debug_info_ptr,
+          						ERR_ACCESSSTAMP_CHGD,      
+          						APL_NULL_STRING,
+          						APL_NULL_STRING,
+          						APL_NULL_STRING,
+          						__LINE__,
+          						__FILE__
+         						);
+
+            APL_GOBACK_FAIL
+			}
+	} 
+
+
+   if(!strcmp(p_intl_env_data_struct_h_e->h_mode, APL_FUNC_DELETE))
+   {
+
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE,"Entering Delete h_mode of Function CDBUpdCcyFn",NULL,p_intl_env_data_struct_h_e);
+		}
+
+         EXEC SQL SELECT ACCESS_STAMP
+            INTO :chr_acc_stamp_compare
+            FROM DL_CURRENCY
+            WHERE CURRENCY_CD =:p_dl_currency_struct_h->h_currencycode;
+
+			IS_ANY_ORA_ERROR
+
+
+         if(!strcmp(p_dl_currency_struct_h->h_access_stamp,chr_acc_stamp_compare))
+         {
+				
+
+
+				EXEC SQL DELETE MT_EXCHRATE
+				WHERE CURRENCY_CD = :p_dl_currency_struct_h->h_currencycode;
+
+				IS_ANY_ORA_ERROR
+
+            EXEC SQL DELETE DL_CURRENCY
+					WHERE CURRENCY_CD = :p_dl_currency_struct_h->h_currencycode; 
+
+            IS_ANY_ORA_ERROR
+         }
+
+         else
+         {
+            CO_InsertErr(
+                           l_debug_info_ptr,
+                           ERR_ACCESSSTAMP_CHGD,
+                                
+                           APL_NULL_STRING,
+                           APL_NULL_STRING,
+                           APL_NULL_STRING,
+                           __LINE__,
+                           __FILE__
+                           );
+
+            APL_GOBACK_FAIL
+         }
+   }
+
+
+
+
+
+	if(APL_FAILURE == CO_ChkErr(*l_debug_info_ptr)) APL_GOBACK_SUCCESS
+	else APL_GOBACK_FAIL
+
+
+   RETURN_SUCCESS :
+   {
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE,"Exiting processtion CR_Mod_DBCcy successfully",NULL,p_intl_env_data_struct_h_e);
+		}
+		APL_FREE(l_dl_currency_struct_ia);
+      return(APL_SUCCESS);
+   }
+
+   RETURN_FAILURE :
+   {
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE,"Exiting processtion CR_Mod_DBCcy with failure",NULL,p_intl_env_data_struct_h_e);
+		}
+		APL_FREE(l_dl_currency_struct_ia);
+      return(APL_FAILURE);
+   }
+
+}
+
+
+
+int CR_Rtv_ExgRtAccStamp(	char *p_cltst,
+							DEBUG_INFO_STRUCT_H **l_debug_info_ptr )
+{
+	struct sqlca sqlca;
+	char chr_l_h_accst[APL_DATE_LEN]	= APL_NULL_STRING;
+	short	l_i_accst = 0;
+
+   #ifdef APL_THREADS
+		APL_SET_CONTEXT
+		EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+						 
+	sqlca.sqlcode = 0;
+
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Entered processtion CDBGetExrDetFn",NULL,NULL);
+	}
+
+	EXEC SQL SELECT access_stamp
+	INTO :chr_l_h_accst:l_i_accst
+	FROM MT_EXCHRATE
+	WHERE currency_cd = :g_mt_commonsys_params_struct_h.dom_ccy
+	AND DENOM_CCY = :g_mt_commonsys_params_struct_h.dom_ccy ;
+
+	IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_REC_NOTFND,
+														"Exch Rate",
+														"for Domestic Ccy",
+														APL_NULL_STRING )
+
+	strcpy(p_cltst, chr_l_h_accst);
+	APL_GOBACK_SUCCESS
+
+   RETURN_SUCCESS :
+   {
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE,"Exiting processtion CR_Rtv_ExgRtAccStamp successfully",NULL,NULL);
+		}
+      return(APL_SUCCESS);
+   }
+
+   RETURN_FAILURE :
+   {
+
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE,"Exiting processtion CR_Rtv_ExgRtAccStamp with failure",NULL,NULL);
+		}
+      return(APL_FAILURE);
+   }
+
+}
+

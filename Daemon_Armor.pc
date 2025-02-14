@@ -1,0 +1,443 @@
+/*
+ *    COPYRIGHT NOTICE
+ *
+ *   Copyright 2005 Polaris Software Lab Limited. All rights reserved.
+ *
+ *   These materials are confidential and proprietary to
+ *    Polaris Software Lab Limited and no part of these materials should
+ *    be reproduced, published, transmitted or distributed in any form or
+ *    by any means, electronic, mechanical, photocopying, recording or
+ *    otherwise, or stored in any information storage or retrieval system
+ *    of any nature nor should the materials be disclosed to third parties
+ *    or used in any other manner for which this is not authorized, without
+ *    the prior express written authorization of Polaris Software Lab Limited.
+ */
+/*********************************************************************
+ *
+ * Module Name         : Utility
+ *
+ * File Name           : Daemon_Armor.pc
+ *
+ * Description         : This Daemon Armor fetches the new clients that were added from
+ * 			 AQueue,Inserts them into table "BCIF_DATA" and then creates an
+ *			 input file with the details of the new clients and Forks the 
+ *			 Armor Exe Which adds the users to the armor's database.
+ *
+ *
+ *
+ *            Version Control Block
+ *
+ * Date        Version       Author                  Description
+ * ---------   --------  ---------------      ---------------------------
+ * 29/03/2007  1.0     Kalyan Chakravarthy    Create New Clients in Armor 
+ *
+ *********************************************************************/
+
+#include "stdio_64.h"
+#include "MS_Swift.h" 
+#include "DL_Interface.h" 
+#include <unistd.h>
+#include <signal.h>
+#include <wait.h>
+
+EXEC SQL INCLUDE SQLCA;
+
+#define IS_ANY_ORA_ERROR \
+			if (sqlca.sqlcode < 0)\
+			{\
+				sqlca.sqlerrm.sqlerrmc[APL_ORA_MSG_LENGTH] = '\0';\
+				printf("Error Occurred -- [%s] \n",sqlca.sqlerrm.sqlerrmc);\
+				goto RETURN_FAILURE;\
+			}
+
+
+main(int argc,char **argv)
+{
+
+	
+	EXEC SQL BEGIN DECLARE SECTION;
+
+	char	l_data_fld_sep_str[2] = APL_NULL_STRING;
+
+	EXEC SQL VAR l_data_fld_sep_str IS STRING;
+	
+	
+
+	short int_ret_val	=	0;
+
+	int l_bcifcount;
+	char l_date[10];
+	char l_time[10];
+	char l_rowid[20];
+	char l_bcifid[20];
+	char l_firstname[36];
+
+	char inputfilepath[100];
+	char l_Upld_FileName[100]=APL_NULL_STRING;
+	char tracefilepath[100];
+	char l_trace_FileName[100];
+
+	char l_arstr[200]; // Check for Appropropriate length */
+	char l_cluster[21]="ADMCLUS";
+	char l_groups[21]="CA-MAKER";
+	char l_dbase[51]="ICUSTODY-DEV";
+	char l_exp[11];
+	char l_utype[3]="02";
+	char l_lang[6]="EN";
+	char l_expi[4];
+
+	EXEC SQL VAR l_date IS STRING;
+	EXEC SQL VAR l_rowid IS STRING;
+	EXEC SQL VAR l_time IS STRING;
+	EXEC SQL VAR l_bcifid IS STRING;
+	EXEC SQL VAR l_firstname IS STRING;
+	EXEC SQL VAR l_Upld_FileName IS STRING;
+	EXEC SQL VAR l_arstr IS STRING;
+	EXEC SQL VAR l_cluster IS STRING;
+	EXEC SQL VAR l_groups IS STRING;
+	EXEC SQL VAR l_dbase IS STRING;
+	EXEC SQL VAR l_exp IS STRING;
+	EXEC SQL VAR l_utype IS STRING;
+	EXEC SQL VAR l_lang IS STRING;
+
+	short i_bcifid;
+	short i_firstname;
+
+	EXEC SQL END DECLARE SECTION;
+
+	int l_sleep_microseconds = 0; 
+	int l_sleep_seconds=0;
+
+	FILE    *Arm_fp;
+
+	FILE 	*chr_finifile;
+	char 	chr_inifile[PATH_LENGTH],
+		chr_l_uname[APL_USERID_LEN],
+		chr_l_passwd[APL_PASSWD_LEN],
+		chr_custody_id_b[APL_USERID_LEN];
+	//char	l_Upld_FileName[100];
+	
+	memset(chr_inifile,APL_NULL_CHAR,250);
+	memset(chr_l_uname,APL_NULL_CHAR,40);
+	memset(chr_l_passwd,APL_NULL_CHAR,40); 
+
+
+
+	if ( argc != 2)
+	{
+		printf("\n Invalid sleep time for daemon ... \n ");
+		goto RETURN_FAILURE;
+	}
+	else
+	{
+		printf("\n ******************  Server Started With Sleep Time :%s:****************\n",argv[1]);
+		sscanf(argv[1],"%d.%d",&l_sleep_seconds,&l_sleep_microseconds);
+	   	l_sleep_microseconds = l_sleep_microseconds * 10000;	
+	}
+
+	fflush(stdout);
+
+	strcpy(chr_inifile,getenv("INTL_ROOT_PATH"));
+	strcat(chr_inifile,"/intl_sun.cfg");
+	if ( (chr_finifile = fopen(chr_inifile,"r") ) == NULL)
+	        goto RETURN_FAILURE;
+	//APL_FETCH_DB_LOGIN_DETAILS(chr_finifile, chr_custody_id_b, chr_l_uname, chr_l_passwd , APL_OUT_FILE , &l_debuginfo)
+   	
+
+        if ( CO_ReadToken(chr_finifile,"INTL_DB_USR",chr_l_uname,NULL) == APL_FAILURE)
+        {
+                printf("Returned Failure From CO_ReadToken-- INTL_DB_USR not found ");
+                goto RETURN_FAILURE;
+        }
+        if ( CO_ReadToken(chr_finifile,"INTL_DB_PWD",chr_l_passwd,NULL) == APL_FAILURE)
+        {
+                printf("Returned Failure From CO_ReadToken-- INTL_DB_PWD not found ");
+                goto RETURN_FAILURE;
+        }
+   
+        //printf("User Name %s \nPassword %s\n" , chr_l_uname,chr_l_passwd);
+        printf("User Name selected is .....[%s] \n" , chr_l_uname);
+
+        if ( CO_ReadToken(chr_finifile,"INTL_CUST_EXP",l_expi,NULL) == APL_FAILURE)
+        {
+                printf("Returned Failure From CO_ReadToken-- INTL_CUST_EXP not found ");
+                goto RETURN_FAILURE;
+        }
+	printf("Expiry Fetched is -- [%s] \n",l_expi);
+	
+        if ( CO_ReadToken(chr_finifile,"ARMOR_OUT_PATH",tracefilepath,NULL) == APL_FAILURE)
+        {
+                printf("Returned Failure From CO_ReadToken-- INTL_LOG_PATH not found ");
+                goto RETURN_FAILURE;
+        }
+	printf("Log File Path Fetched is -- [%s] \n",l_expi);
+	
+        if ( CO_ReadToken(chr_finifile,"ARMOR_OUT_PATH",inputfilepath,NULL) == APL_FAILURE)
+        {
+                printf("Returned Failure From CO_ReadToken-- INTL_UPL_PATH not found ");
+                goto RETURN_FAILURE;
+        }
+	printf("Input File Path Fetched is -- [%s] \n",l_expi);
+	
+        if ( CO_ReadToken(chr_finifile,"INTL_CLUSTER",l_cluster,NULL) == APL_FAILURE)
+        {
+                printf("Returned Failure From CO_ReadToken-- INTL_CLUSTER not found ");
+                goto RETURN_FAILURE;
+        }
+	printf("CLUSTER Fetched is -- [%s] \n",l_cluster);
+   
+        if ( CO_ReadToken(chr_finifile,"INTL_GROUPS",l_groups,NULL) == APL_FAILURE)
+        {
+                printf("Returned Failure From CO_ReadToken-- INTL_GROUPS not found ");
+                goto RETURN_FAILURE;
+        }
+	printf("Armor Groups Fetched is -- [%s] \n",l_groups);
+
+        if ( CO_ReadToken(chr_finifile,"INTL_DBASE",l_dbase,NULL) == APL_FAILURE)
+        {
+                printf("Returned Failure From CO_ReadToken-- INTL_DBASE not found ");
+                goto RETURN_FAILURE;
+        }
+	printf("Armor DBASE Fetched is -- [%s] \n",l_dbase);
+	fflush(stdout);
+
+
+   	EXEC SQL CONNECT :chr_l_uname IDENTIFIED BY :chr_l_passwd;
+   	if(sqlca.sqlcode != 0)                                 
+   	{
+		printf("Unable to connect to ORACLE -- error [%s]\n",sqlca.sqlerrm.sqlerrmc);
+     		goto RETURN_FAILURE;
+
+   	}
+	printf("Connected --- \n");
+	
+
+	EXEC SQL UPDATE PRO_DAEMON_STATUS SET STATUS = 1 where PROC_NAME = 'Daemon_Armor';
+	IS_ANY_ORA_ERROR;
+	EXEC SQL COMMIT;
+	printf("AFTER COMMITING -- \n");
+	sprintf(l_data_fld_sep_str,"%c",DATA_FIELD_SEPRTR);
+	strcat(l_data_fld_sep_str,APL_NULL_STRING);
+
+ 	EXEC SQL DECLARE CUR_BCIF CURSOR FOR SELECT ROWID, BCIF_ID , FIRST_NAME FROM BCIF_DATA WHERE ARMOR_PROCESSED = 'N';
+
+	printf("AFTER DECLARING -- \n");
+
+	fflush(stdout);
+		
+	while(1)
+	{
+		printf("ENTERED WHILE ,,, \n");
+		printf("\n -- IAM TIRED......... GOING TO SLEEP \n");
+      		if(l_sleep_seconds != 0)
+      		{
+         		sleep(l_sleep_seconds);
+      		}
+      		usleep(l_sleep_microseconds);
+
+		printf("\n -- IAM BACK ......... \n");
+
+		printf("\n Calling the PROCEDURE TO FETCH DATA FROM AQUEUE ......\n");
+	
+		EXEC SQL CALL DEQUEUE_BCIF();
+
+		if(sqlca.sqlcode != 0)
+		{
+			printf("Failed in Executing Procedure DEQUEUE_BCIF ....\n");
+			printf("Error Occurred is [%s]\n",sqlca.sqlerrm.sqlerrmc);
+			goto RETURN_FAILURE;
+		}
+		fflush(stdout);
+
+		EXEC SQL SELECT count(*) INTO :l_bcifcount from BCIF_DATA where ARMOR_PROCESSED = 'N';
+		IS_ANY_ORA_ERROR;
+
+		if(l_bcifcount >0)
+		{
+			EXEC SQL SELECT TO_CHAR(SYS_DATE,'DDMMYY'),TO_CHAR(SYSDATE,'HH24MI') INTO :l_date,:l_time FROM PRO_SYS_DATE;
+			if(sqlca.sqlcode!=0)
+			{
+				printf("KS -- failed in Fetching date & Time\n");
+				printf("KS -- Error Occurred is [%s] \n",sqlca.sqlerrm.sqlerrmc);
+				exit(1);
+			}
+			strcpy(l_Upld_FileName,inputfilepath);
+			strcpy(l_trace_FileName,tracefilepath);
+			strcat(l_Upld_FileName,"Ar_");
+			strcat(l_Upld_FileName,l_date);
+			strcat(l_Upld_FileName,l_time);
+			strcat(l_Upld_FileName,".txt");
+			strcat(l_trace_FileName,"Ar_");
+			strcat(l_trace_FileName,l_date);
+			strcat(l_trace_FileName,l_time);
+			strcat(l_trace_FileName,".log");
+
+			printf("KS -- Armor Upload File Name is ---[%s]\n",l_Upld_FileName);	
+			printf("KS -- Armor Trace File Name is ----[%s]\n",l_trace_FileName);	
+			Arm_fp=fopen(l_Upld_FileName,"w");
+			if(Arm_fp==NULL)
+			{
+				printf("\nKS -- Report File could not be created \n");
+				goto RETURN_FAILURE;
+			}
+
+			fprintf(Arm_fp,"CREATE_USER\n");
+			EXEC SQL OPEN CUR_BCIF;
+		
+			if (sqlca.sqlcode != 0)
+			{
+				printf("Error Occurred while opening Cursor CUR_BCIF\n");
+				printf("Error Occurred is [%s]\n",sqlca.sqlerrm.sqlerrmc);
+				printf("Exiting........!!!!!\n");
+				goto RETURN_FAILURE;
+			}
+
+			EXEC SQL SELECT TO_CHAR(SYS_DATE,'DD/MM/')|| (TO_CHAR(SYS_DATE,'YYYY')+:l_expi) INTO :l_exp FROM PRO_SYS_DATE;
+			if (sqlca.sqlcode != 0)
+			{
+				printf("Error Occurred WHILE FETCHING EXPIRY DATE ...\n");
+				printf("Error Occurred is [%s]\n",sqlca.sqlerrm.sqlerrmc);
+				printf("Exiting........!!!!!\n");
+				goto RETURN_FAILURE;
+			}
+			fflush(stdout);
+
+		
+			while(1)
+			{
+
+				EXEC SQL FETCH CUR_BCIF INTO l_rowid,:l_bcifid:i_bcifid,:l_firstname:i_firstname;
+				if(sqlca.sqlcode == 1403)
+				{
+					printf("Completed ... Rows Processed is [%d] \n ",sqlca.sqlerrd[2]);
+					fclose(Arm_fp);
+					EXEC SQL CLOSE CUR_BCIF;
+					break;
+				}
+				else if (sqlca.sqlcode != 0)
+				{
+					printf("Error Occurred while opening Cursor CUR_BCIF\n");
+					printf("Error Occurred is [%s]\n",sqlca.sqlerrm.sqlerrmc);
+					printf("Exiting........!!!!!\n");
+					goto RETURN_FAILURE;
+				}
+
+				EXEC SQL UPDATE BCIF_DATA SET ARMOR_PROCESSED='Y' WHERE ROWID=:l_rowid;
+				if (sqlca.sqlcode != 0)
+				{
+					printf("Error Occurred while Updating Row [%s]\n",l_rowid);
+					printf("Error Occurred is [%s]\n",sqlca.sqlerrm.sqlerrmc);
+					printf("Row not Processed ........!!!!!\n");
+					continue;
+				}
+				else
+				{
+					sprintf(l_arstr,"USERID=%s;NAME=%s;CLUSTER=%s;GROUPS=%s;DBASE=%s;EXPIRY_DATE=%s;USER_TYPE=%s;LANGUAGE=%s",l_bcifid,l_firstname,l_cluster,l_groups,l_dbase,l_exp,l_utype,l_lang);
+					printf("String Created is: \n %s \n",l_arstr);
+					fprintf(Arm_fp,"%s\n",l_arstr);
+				}
+				fflush(stdout);
+
+			}
+
+			/* Call EXEC Here */
+			int_ret_val=Start_Process(l_Upld_FileName,l_trace_FileName);
+			if(int_ret_val == 0)
+			{
+				printf("\n Process Forked Successfully .... \n");
+				EXEC SQL COMMIT;
+			}
+			else
+			{
+				printf("\n Unable to Fork the Process ...\n");
+				EXEC SQL ROLLBACK;
+			}
+
+			fflush(stdout);
+		}
+		fflush(stdout);
+	}
+
+	printf("KS -- OUT \n");
+
+
+	RETURN_SUCCESS:
+
+   	EXEC SQL COMMIT ;
+        printf("Exiting successfully  out of Batch Daemon\n");
+	EXEC SQL UPDATE PRO_DAEMON_STATUS SET STATUS=0 WHERE PROC_NAME='Daemon_Armor';
+        fclose(chr_finifile);
+        exit(0);
+
+	RETURN_FAILURE:
+   	EXEC SQL ROLLBACK;
+	EXEC SQL UPDATE PRO_DAEMON_STATUS SET STATUS=0 WHERE PROC_NAME='Daemon_Armor';
+        printf("Exiting unsuccesfully out of Batch Daemon\n");
+        fclose(chr_finifile);
+        exit(-1);
+}
+int Start_Process(char *inputfilepath, char *tracefilepath)
+{
+
+        int l_child_pid = 0;
+        char l_prog_dir[PATH_LENGTH] = APL_NULL_STRING;
+        char l_cfg_filename[PATH_LENGTH] = APL_NULL_STRING;
+        FILE *l_cfg_file = (FILE *)NULL;
+	char p_process_name[]="batchscruser";
+
+
+        strcpy(l_cfg_filename,getenv("INTL_ROOT_PATH"));
+        strcat(l_cfg_filename,"/intl_sun.cfg");
+        if((l_cfg_file=fopen(l_cfg_filename,"r"))==NULL)
+        {
+                printf("Could Open File\n");
+                goto RETURN_FAILURE;
+        }
+
+
+
+        if ( CO_ReadToken(l_cfg_file,"INTL_PROG_PATH",l_prog_dir,NULL) == APL_FAILURE)
+        {
+                printf("Returned Failure From CO_ReadToken-- INTL_PROG_PATH not found ");
+                goto RETURN_FAILURE;
+        }
+
+        waitpid(-1,NULL,WNOHANG);
+
+        signal(SIGCHLD, SIG_IGN);
+        if((l_child_pid=fork())==-1)
+        {
+                printf("Failed To Fork\n");
+                goto RETURN_FAILURE;
+        }
+
+        if(l_child_pid)
+        {
+
+		printf("Successfully started %s",p_process_name);
+                goto RETURN_SUCCESS;
+        }
+        else
+        {
+                strcat(l_prog_dir,p_process_name);
+                execlp( l_prog_dir,
+				"-M",
+                                "SYSADMIN1",
+				"-C",
+                                "SYSADMIN2",
+                                "-I",
+				inputfilepath,
+				"-T",
+				tracefilepath,
+				(char *) NULL); //AIX -Warnings Removal
+                printf("Could not execute the program %s",p_process_name);
+                exit(-1);
+        }
+
+RETURN_SUCCESS:
+	fclose(l_cfg_file);
+	return(0);
+RETURN_FAILURE:
+	fclose(l_cfg_file);
+        return(-1);
+}

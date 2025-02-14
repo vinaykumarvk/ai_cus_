@@ -1,0 +1,1410 @@
+
+/************************************************************************************************************
+ * 				COPYRIGHT NOTICE 
+ *		 
+ *		  
+ *		   		Copyright @  2005 by Polaris Software Lab Ltd.
+ *		   
+ *		    		All rights reserved. 	
+ *		      	No part of this document may be reproduced, stored in a retrieval system, 
+ *		       	translated, transcribed, or transmitted in any form or by any means, 
+ *		        	without the prior written permission of Polaris Software Lab Limited ('Polaris').
+ *		         
+***********************************************************************************************************/
+
+/**********************************************************************
+*                                                                    *
+
+* Project Name        : INTELLECT CUSTODY                            *
+* Module Name         : DEAL  PROCESSING                          	*
+* File Name           : DF_ProcessMessage_54x.pc                     *
+*                                                                    *
+* Description         : This source file contains the function which *
+                        is used to Process the incoming message 54x  *
+*                                                                    *
+* Screens Used        : None
+        *
+* Reports Used        : None                                         *
+*                                                                    *
+*                                                                    *
+* Notes               :                                              *
+*                                                                    *
+*            Version Control Block                                   *
+*                                                                    *
+* Date       Version     	Author               Description          *
+* ---------  --------  ---------------  ---------------------------- *
+*                                                                    *
+* 			     1.0       Rakesh Singh    		New File                *
+*                                                                    *
+* List of functions   :                                              *
+*                                                                    *
+* Function Name          Description                                 *
+* ----------------  --------------------------------------------------------------------- *
+* ProcessMessage_54x   	The function accepts the Message struct,Message                                                                       file name,log file name and the Error Structure
+								From the calling function .
+								It processes only incoming messages for Deal creation and cancelation and based on the 
+								validations performed puts the message either in Request table or rejects 
+								it
+ * *******************************************************************************************/
+
+
+/*#include <stdio.h>*/
+#include <dirent.h>
+#include <unistd.h>
+#include <stdlib.h>
+
+
+#include "CR_Common.h"
+/*
+#include "Intellect_Interface.h"
+#include "Intellect_Common.h"
+*/
+#include "string.h"
+#include "Df_Fe.h"
+/*#include "MS_Swift.h"*/
+
+EXEC SQL INCLUDE SQLCA;
+
+#define USER_ID "SYS"
+
+
+int ProcessMessage_54x(MESSAGE_STRUCT **p_message_list, char *p_message_path, FILE *fl_log,char *p_str_msg_no,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+/*	CMSGREPAIR_STRUCT_H	*h_cmsgrepair_struct 	= NULL;*/
+/*   CMSGREPAIR_STRUCT_I	i_cmsgrepair_struct		={0,0,0,0,0,0};*/
+	PRO_GSEQNUM_STRUCT_H   	*l_progseqnum_struct_h 			= NULL;
+	MESSAGE_STRUCT 		**l_message_list_first_record	=	NULL ;
+/*	DL_DEALAUDIT_STRUCT_H	*h_ctransaudit_struct	;*/
+	MESSAGE_STRUCT		**l_message_list 				= p_message_list;
+	DL_MSGLINKDET_STRUCT_H    **l_message_cmsg_list         =  (DL_MSGLINKDET_STRUCT_H **)NULL;
+/*	DL_MSGLINKDET_STRUCT_H    **i_message_cmsg_list         =  (DL_MSGLINKDET_STRUCT_H **)NULL;*/
+
+	/*char 	      chr_l_param_str[4000] 	= APL_NULL_STRING;
+	char 	      chr_l_err_desc[4000] 	= APL_NULL_STRING;
+	char	      chr_l_env_str[4000] 		= APL_NULL_STRING;*/
+	char 	      *chr_l_param_str 	= NULL;
+	char 	      *chr_l_err_desc 	= NULL;
+	char	      *chr_l_env_str 	= NULL;
+	char  	   l_line6[80] 				= APL_NULL_STRING;
+	char        l_str_msg_wrapper[25] 	= APL_NULL_STRING;
+	char        l_str_msg_name[7] 		= APL_NULL_STRING;
+	char        chr_l_error_string[1000]= APL_NULL_STRING;
+	char	      l_str_func_mode[11] 		= APL_NULL_STRING;
+	char        l_str_proc_name[21]		= APL_NULL_STRING;	
+	char        l_message_filename[35] 	= APL_NULL_STRING;
+	char			l_msg_sts[4]				= APL_NULL_STRING;	
+	char			l_str_msg_no[8]			= APL_NULL_STRING;
+	char			l_str_account[11]			= APL_NULL_STRING;
+
+	char			l_str_function_name[35]	= APL_NULL_STRING;
+	/*char        l_str_misinfo[4001]     = APL_NULL_STRING;*/
+	char        *l_str_misinfo     = NULL;
+	char			l_str_refno[17]			= APL_NULL_STRING;
+	char			l_str_ref[17]			= APL_NULL_STRING;
+	//char			chr_l_str_qty[31]			= APL_NULL_STRING;
+	char			l_str_trade_sts[3]		= APL_NULL_STRING;
+	int 			int_l_int_retval 			= 0;
+	int			l_int_ftrpr_seq_num 		= 0;
+	int 			l_int_cnt 					= 0;
+	double 		l_dbl_quantity				= 0;
+	char        l_str_qual[10]          = APL_NULL_STRING;
+	char        l_str_msg_nm[7]         = APL_NULL_STRING;
+	char        l_int_returnval[50]     = APL_NULL_STRING;
+   char 			l_str_clientcd[50] 			= APL_NULL_STRING;
+
+/*Nikhil S
+char chr_l_str_amt[31]       = APL_NULL_STRING;
+char chr_l_temp_qty[31]      = APL_NULL_STRING;*/
+char chr_temp_deal_dt[APL_DATE_LEN] = APL_NULL_STRING;
+double      l_temp_dbl_quantity = 0;
+double      l_temp_dbl_amt = 0;
+/*char chr_temp_param_str[4000] = APL_NULL_STRING;*/
+char *chr_temp_param_str = APL_NULL_STRING;
+char chr_temp_client[11]= APL_NULL_STRING;
+char chr_temp_refno[17]         = APL_NULL_STRING;
+/*Nikhil S*/
+
+	short i_account 	=	0;
+	
+	struct sqlca sqlca;
+
+/*	h_ctransaudit_struct = (DL_DEALAUDIT_STRUCT_H *)calloc(300,sizeof(DL_DEALAUDIT_STRUCT_H));
+	APL_MALLOC_FAIL(h_ctransaudit_struct);*/
+
+	EXEC SQL BEGIN DECLARE SECTION;
+	EXEC SQL VAR chr_temp_deal_dt IS STRING;
+
+	EXEC SQL VAR chr_l_err_desc IS STRING;
+	EXEC SQL VAR l_str_function_name IS STRING;
+	EXEC SQL VAR l_str_trade_sts IS STRING;
+	EXEC SQL VAR l_str_account IS STRING;
+	EXEC SQL VAR l_str_refno IS STRING;
+	EXEC SQL VAR l_str_ref IS STRING;
+	EXEC SQL VAR l_str_clientcd IS STRING;
+	EXEC SQL VAR chr_temp_client IS STRING;
+	EXEC SQL VAR chr_temp_refno IS STRING;
+
+	EXEC SQL END DECLARE SECTION;
+
+	strcpy(l_message_filename,strrchr(p_message_path,'/')+1);
+	APL_IF_DEBUG
+	{
+		printf("MSGNO = = %s \n",p_str_msg_no);
+		CO_ProcMonitor(APL_OUT_FILE, "\n Entered processtion ProcessMesssage_54x \n",NULL, NULL);
+	}
+/*
+	h_cmsgrepair_struct = (CMSGREPAIR_STRUCT_H *)calloc(300,sizeof(CMSGREPAIR_STRUCT_H));
+	APL_MALLOC_FAIL(h_cmsgrepair_struct);
+*/
+/*	
+	l_message_cmsg_list = (DL_MSGLINKDET_STRUCT_H *)calloc(300,sizeof(DL_MSGLINKDET_STRUCT_H));
+   APL_MALLOC_FAIL(l_message_cmsg_list);
+*/
+
+	l_message_cmsg_list = (DL_MSGLINKDET_STRUCT_H **)calloc(1,sizeof(DL_MSGLINKDET_STRUCT_H *));
+   APL_MALLOC_FAIL(l_message_cmsg_list);
+
+	chr_l_param_str = (char *)calloc(4000,sizeof(char));
+   APL_MALLOC_FAIL(chr_l_param_str);
+
+	chr_l_err_desc = (char *)calloc(4000,sizeof(char));
+   APL_MALLOC_FAIL(chr_l_err_desc);
+
+	chr_l_env_str = (char *)calloc(4000,sizeof(char));
+   APL_MALLOC_FAIL(chr_l_env_str);
+
+	chr_temp_param_str = (char *)calloc(4000,sizeof(char));
+   APL_MALLOC_FAIL(chr_temp_param_str);
+
+	l_str_misinfo = (char *)calloc(4001,sizeof(char));
+   APL_MALLOC_FAIL(l_str_misinfo);
+
+	l_message_list_first_record = l_message_list;	
+
+	strcpy(l_str_msg_no,p_str_msg_no);
+
+
+	/* for CANC and NEWM */
+	memset(l_str_qual,APL_NULL_CHAR,10);
+	if(I_GetQual(l_message_list,":23G:",l_str_qual,"A","1")!=APL_SUCCESS)
+	{
+		APL_GOBACK_FAIL
+	}
+	APL_IF_DEBUG
+		printf("the qual of message is %s\n",l_str_qual);
+	if (strcmp(l_str_qual,"NEWM")==0)
+	{
+		/*****************Code for swift msg 54xS01***********************/
+
+		printf("\n***************File Path is %s\n",p_message_path);
+		if (strstr(p_message_path,"inmsg_swift") == NULL)
+		{
+			strcpy(l_str_msg_nm,strcat(l_str_msg_no,"N01"));
+			printf("\n***************File Path for sebi is %s\n",p_message_path);
+		}
+		else
+		{
+			strcpy(l_str_msg_nm,strcat(l_str_msg_no,"S01"));
+			printf("\n***************File Path for swift is %s\n",p_message_path);
+		}
+		
+		/*****************************************************************/
+		/*Code for Incoming Deal*/
+		/*strcpy(l_str_msg_nm,strcat(l_str_msg_no,"N01"));*/
+		if((int_l_int_retval=  GetWrapperName(l_str_msg_nm, l_message_list, l_str_msg_wrapper, l_str_func_mode, l_str_proc_name, l_str_msg_name, l_debug_info_ptr)) == APL_FAILURE)
+		{
+			APL_GOBACK_FAIL
+		}
+		else if(int_l_int_retval==SYS_NO_DATA)
+		{
+			if((InsComm_MsgRptFn(l_message_list,l_str_msg_no,"Mapping for the Message Not int_found in the dfwrpmap table - Contact Support Person",NOPROC,l_message_filename,l_debug_info_ptr)) == APL_FAILURE)
+			{		
+				APL_IF_DEBUG
+				{
+					CO_ProcMonitor(APL_OUT_FILE,"ERROR INSERTING IN DF_COMMON_MSGRPT \n",l_debug_info_ptr,NULL);
+				}
+				CO_ProcMonitor(fl_log,"ERROR INSERTING IN DF_COMMON_MSGRPT \n",l_debug_info_ptr,NULL);
+				APL_GOBACK_FAIL
+			}
+			APL_IF_DEBUG
+			{
+				printf("Mapping for msg %s not int_found in DFWRPMAP\n",l_str_msg_no);
+			}
+			SYS_RETURN_NO_DATA_FOUND
+		}
+		
+
+		APL_IF_DEBUG
+		{
+			printf("The wrapper name is %s\n",l_str_msg_wrapper);
+			printf("The l_str_msg_name is %s\n",l_str_msg_name);
+		}
+		
+		
+		
+		int_l_int_retval=0;
+		if((int_l_int_retval= GetEnvString(l_str_func_mode, chr_l_env_str,l_debug_info_ptr)) == APL_FAILURE)
+		{		
+			APL_GOBACK_FAIL
+		}
+		else if(int_l_int_retval==SYS_NO_DATA)
+		{
+			if((InsComm_MsgRptFn(l_message_list,l_str_msg_name,"Mapping for the Message Not int_found in the dfenvmap table - Contact Support Person",NOPROC,l_message_filename,l_debug_info_ptr))==APL_FAILURE)
+			{
+				APL_IF_DEBUG
+				{
+					CO_ProcMonitor(APL_OUT_FILE,"ERROR INSERTING IN DF_COMMON_MSGRPT \n",l_debug_info_ptr,NULL);
+				}
+				CO_ProcMonitor(fl_log,"ERROR INSERTING IN DF_COMMON_MSGRPT \n",l_debug_info_ptr,NULL);
+				APL_GOBACK_FAIL
+			}
+			APL_IF_DEBUG
+			{
+				printf("Mapping for msg %s not int_found in DFENVMAP table \n",l_str_msg_name);
+			}
+			SYS_RETURN_NO_DATA_FOUND
+		}
+		
+		
+		/*Account and Refno are used while inserting record into DL_Msglink Table*/
+		printf("\n ************** Ahswin # 1 *********");
+		if( I_GetVal(l_message_list,":97A:",":SAFE/",l_str_clientcd,"C","1") ==APL_FAILURE)
+		{
+			CO_ProcMonitor(fl_log,"Error getting Account in the msg \n",NULL,NULL);
+			/*APL_GOBACK_FAIL*/
+		}
+		if(strcmp(l_str_clientcd,APL_NULL_STRING)==0)
+		{
+			APL_IF_DEBUG
+			{
+				CO_ProcMonitor(APL_OUT_FILE,"Account  not mentioned in the msg \n",NULL,NULL);
+			}
+			CO_ProcMonitor(fl_log,"Account  not mentioned in the msg \n",NULL,NULL);
+			/*APL_GOBACK_FAIL*/
+		}
+		APL_IF_DEBUG
+		{
+			printf("\n THE VALUE OF ACCOUNT IS %s \n",l_str_clientcd);
+		}
+
+		/** **/ 
+		/*** TUXY removing below query as it is union ***/
+		/*
+		EXEC SQL SELECT CLN_CODE INTO :l_str_account from MT_CLI_EXCH_MAP where STATUS = 'AA' AND CLN_EXCH_MAP_CODE = 
+			:l_str_clientcd  and STATUS = 'AA' and rownum < 2 
+			union 
+			select cln_code from mt_regdetails where cln_sebi_reg_no = :l_str_clientcd or cln_mapinid = :l_str_clientcd and rownum < 2;
+			*/
+		/*** Logic is if message is not swift then fetch sql query else copy l_str_clientcd in l_straccount */
+		/*** inmsg_swift is hardcoding if someone wants differenct name then ??????? ***/
+
+		memset(l_str_account,APL_NULL_CHAR,sizeof(l_str_account));	//Added by Gouse - 09/04/2013 - ISKB_6085 - Record should go in REJECT status if client not maintained
+	
+		if (strstr(p_message_path,"inmsg_swift") == NULL)
+		{
+			EXEC SQL SELECT CLN_CODE INTO :l_str_account:i_account from MT_CLI_EXCH_MAP where STATUS = 'AA' AND 
+				CLN_EXCH_MAP_CODE = :l_str_clientcd  and STATUS = 'AA' and rownum < 2 ;
+			IS_ANY_ORA_ERROR;
+			if( strlen(l_str_account) ==0 || strcmp(l_str_clientcd,APL_NULL_STRING)==0)
+			{
+				EXEC SQL SELECT CLN_CODE INTO :l_str_account:i_account  FROM MT_REGDETAILS WHERE (CLN_SEBI_REG_NO = :l_str_clientcd OR CLN_MAPINID = :l_str_clientcd OR CLN_UCC_CODE = :l_str_clientcd) AND ROWNUM < 2;//CLN_UCC_CODE added by Gouse - ISKB_6085 - 14/05/2013
+				IS_ANY_ORA_ERROR;
+
+			}
+			printf("l_str_account is |%s|",l_str_account);
+		}
+		else
+		{
+			//Changed by Gouse - 09/04/2013 - ISKB_6085 - Record should go in REJECT status if client not maintained
+			EXEC SQL SELECT CLN_CODE INTO :l_str_account:i_account  FROM MT_CLIENT WHERE CLN_CODE = :l_str_clientcd AND STATUS='AA';
+				IS_ANY_ORA_ERROR;
+			APL_IF_DEBUG
+			{
+				printf("\n Came into Else cond to check if account no len >10 ......\n");
+				printf("\n The l_str_account val is [%s]\n",l_str_account);
+		}
+
+			/* ISKB_5096: Deformater is going down when SAFE value is 12 digits(>10) -- Fixed By Chava by throwing error to Front end by Inserting in DF_COMMON_MSGRPT table,no more proceeding furthur - START */
+		}//Changed by Gouse - 09/04/2013 - ISKB_6085 - Record should go in REJECT status if client mapin id is not maintained - Validation added fot both SWIFT & SEBI
+
+			if((strlen(l_str_account) > 10) || (strlen(l_str_account) == 0) )//strlen(l_str_account)==0 added by Gouse - 09/04/2013 - ISKB_6085 - Record should go in REJECT status if client mapin id is not maintained
+			{
+				memset(l_str_clientcd,APL_NULL_CHAR,11);
+				strncpy(l_str_clientcd,l_str_account,10); /* In order to insert in DF_COMMON_MSGRPT table it's len should be 10 - By Chava */
+				memset(l_str_account,APL_NULL_CHAR,11);
+				strcpy(l_str_account,l_str_clientcd);
+
+				APL_IF_DEBUG
+				{
+					printf("\n The l_str_account val is ...[%s]\n",l_str_account);
+				}
+
+				if((InsComm_MsgRptFn(l_message_list,l_str_msg_name,"CLIENT NOT FOUND",REJECT,l_message_filename,l_debug_info_ptr)) == APL_FAILURE)
+				{
+			 		APL_IF_DEBUG
+			   	{
+			      	CO_ProcMonitor(APL_OUT_FILE,"ERROR INSERTING IN DF_COMMON_MSGRPT \n",l_debug_info_ptr,NULL);
+			   	}
+			   	CO_ProcMonitor(fl_log,"ERROR INSERTING IN DF_COMMON_MSGRPT \n",l_debug_info_ptr,NULL);
+					APL_GOBACK_FAIL
+		   	}
+		   	APL_IF_DEBUG
+	      	{
+	         	printf("Error Processing msg [%s],Client Code not_found in MT_CLI_EXCH_MAP and MT_REGDETAIL tables  for code |%s|\n",l_str_msg_name,l_str_clientcd);
+		   	}
+		   	SYS_RETURN_NO_DATA_FOUND
+			}
+			/*** ISKB_5096: Deformater is going down when SAFE value is 12 digits(>10) -- Fixed By Chava by throwing error to Front end by Inserting in DF_COMMON_MSGRPT table,no more proceeding furthur - END ***/
+		//}//Commented by Gouse - 09/04/2013 - ISKB_6085 - Record should go in REJECT status if client mapin id is not maintained - Validation added fot both SWIFT & SEBI
+
+		memset(l_str_refno,APL_NULL_CHAR,17);
+
+		if(I_GetVal(l_message_list,":20C:",":SEME/",l_str_refno,"A","1")==APL_FAILURE)
+		{
+			CO_ProcMonitor(fl_log,"Error getting Refno in the messsage \n",NULL,NULL);
+			/*APL_GOBACK_FAIL*/
+
+		}
+		if(strcmp(l_str_refno,APL_NULL_STRING)==0)
+		{
+			APL_IF_DEBUG
+			{
+				CO_ProcMonitor(APL_OUT_FILE,"Refno not mentioned in the messsage \n",NULL,NULL);
+			}
+			CO_ProcMonitor(fl_log,"Refno not mentioned in the messsage \n",NULL,NULL);
+			/*APL_GOBACK_FAIL*/
+		}
+		/*** ISKB_5096: Deformater is going down when SEME(Ref no) value is 17 digits(>16)-- Fixed By Chava by throwing error to Front end by Inserting in DF_COMMON_MSGRPT table,no more proceeding furthur - START ***/
+
+		printf("\n Going to check if refno len >16 ......\n");
+		if(strlen(l_str_refno)>16)
+		{
+			strncpy(l_str_ref,l_str_refno,16);  /* In order to insert in DF_COMMON_MSGRPT table it's len should be 16 - By Chava */
+			memset(l_str_refno,APL_NULL_CHAR,17);
+			strcpy(l_str_refno,l_str_ref); 		/* In order to insert in DF_COMMON_MSGRPT table it's len should be 16 - By Chava */
+			l_str_refno[strlen(l_str_refno)]='\0';
+
+			APL_IF_DEBUG
+			{
+				printf("\n After strncpy() The l_str_refno val is [%s]\n",l_str_refno);
+			}
+
+			if((InsComm_MsgRptFn(l_message_list,l_str_msg_name,"INVALID REFERENCE NUMBER",REJECT,l_message_filename,l_debug_info_ptr)) == APL_FAILURE)
+			{
+				APL_IF_DEBUG
+				{
+					CO_ProcMonitor(APL_OUT_FILE,"ERROR INSERTING IN DF_COMMON_MSGRPT \n",l_debug_info_ptr,NULL);
+				}
+				CO_ProcMonitor(fl_log,"ERROR INSERTING IN DF_COMMON_MSGRPT \n",l_debug_info_ptr,NULL);
+				APL_GOBACK_FAIL
+			}
+			APL_IF_DEBUG
+			{
+				printf("Error Processing msg [%s],Given Reference num [%s] is >16 That is Invalid ...So Rejecting\n",l_str_msg_name,l_str_refno);
+			}
+			SYS_RETURN_NO_DATA_FOUND
+		}
+		/*** ISKB_5096: Deformater is going down when SEME(Ref no) value is 17 digits(>16) -- Fixed By Chava by throwing error to Front end by Inserting in DF_COMMON_MSGRPT table,no more proceeding furthur - END ***/
+
+		APL_IF_DEBUG
+		{
+			printf("\n THE VALUE OF REFNO IS %s \n",l_str_refno);
+		}
+		
+		
+		int_l_int_retval=0;
+		l_message_list = l_message_list_first_record ;
+
+		printf("JC::: Commented DoValidateFn in DF_ProcessMessage_54x.pc for the Deformater issue\n");
+		strcpy(l_msg_sts,"STP");
+	
+	/* Added by akshay for Kotak ISKB_11534 Deal Server doen end*/
+		if( (strcmp(l_str_msg_name,"541S01") == 0) || (strcmp(l_str_msg_name,"543S01") == 0) )
+		{
+		sqlca.sqlcode=0;
+		if((int_l_int_retval= DoValidateFn(l_str_msg_name, l_message_list,fl_log,l_message_filename,l_msg_sts,l_debug_info_ptr))==APL_FAILURE)
+		{
+				APL_GOBACK_FAIL
+		}
+		else if(int_l_int_retval==SYS_NO_DATA)
+		{
+			if((InsComm_MsgRptFn(l_message_list,l_str_msg_name,"Mapping for the Message Not int_found in the dfvalidatemap table - Contact Support Person",NOPROC,l_message_filename,l_debug_info_ptr)) == APL_FAILURE)
+			{
+						APL_IF_DEBUG
+						{
+							CO_ProcMonitor(APL_OUT_FILE,"ERROR INSERTING IN DF_COMMON_MSGRPT \n",l_debug_info_ptr,NULL);
+						}
+						CO_ProcMonitor(fl_log,"ERROR INSERTING IN DF_COMMON_MSGRPT \n",l_debug_info_ptr,NULL);
+						APL_GOBACK_FAIL
+			}
+			APL_IF_DEBUG
+			{
+				printf("Mapping for msg %s not int_found in DFVALIDATEMAP table \n",l_str_msg_name);
+			}
+			SYS_RETURN_NO_DATA_FOUND
+		}
+		}
+	/* Added by akshay for Kotak ISKB_11534 Deal Server doen end*/
+
+		
+/*
+		EXEC SQL SELECT FUNCTION_NAME ,USR
+			INTO :l_str_function_name , :h_ctransaudit_struct->h_proc_usr
+			FROM DFENVMAP 
+			WHERE FUNCTION_MODE = (SELECT DISTINCT FUNCTION_MODE 
+			FROM DFWRPMAP 
+			WHERE MSG_NAME = :l_str_msg_name);
+			IS_ANY_ORA_ERROR
+*/
+		EXEC SQL SELECT FUNCTION_NAME 
+			INTO :l_str_function_name 
+			FROM DFENVMAP 
+			WHERE FUNCTION_MODE = (SELECT DISTINCT FUNCTION_MODE 
+			FROM DFWRPMAP 
+			WHERE MSG_NAME = :l_str_msg_name);
+			IS_ANY_ORA_ERROR
+
+		APL_IF_DEBUG
+		{
+			printf("sqlca.sqlcode is %d \n",sqlca.sqlcode);
+		}
+	/*	
+		strcpy(h_ctransaudit_struct->h_dl_client,l_str_account);
+		strcpy(h_ctransaudit_struct->h_indentity_no,l_str_refno);
+		strcpy(h_ctransaudit_struct->h_trail_for,"T");
+		strcpy(h_ctransaudit_struct->h_dlfromord,"N");
+*/
+		if(APL_ZERO_RESULT_SET)
+		{
+			if((InsComm_MsgRptFn(l_message_list,l_str_msg_name,"Mapping for the Message Not int_found in the dfenvmap/dfwrpmap table - Contact Support Person",NOPROC,l_message_filename,l_debug_info_ptr)) == APL_FAILURE)
+			{
+				APL_IF_DEBUG
+				{
+					CO_ProcMonitor(APL_OUT_FILE,"ERROR INSERTING IN DF_COMMON_MSGRPT \n",l_debug_info_ptr,NULL);
+				}
+				CO_ProcMonitor(fl_log,"ERROR INSERTING IN DF_COMMON_MSGRPT \n",l_debug_info_ptr,NULL);
+				APL_GOBACK_FAIL
+			}
+			APL_IF_DEBUG
+			{
+				printf("Mapping for msg %s not int_found in DFENVMAP table \n",l_str_msg_name);
+			}
+			SYS_RETURN_NO_DATA_FOUND
+		}
+		/*if(I_GetVal(l_message_list,":36B:",":SETT/",chr_l_str_qty,"C","1") == APL_FAILURE)
+		{
+		/*	APL_GOBACK_FAIL
+		}*/
+
+		/*if(strrchr(chr_l_str_qty,'/'));
+		{
+			strcpy(chr_l_str_qty, strrchr(chr_l_str_qty,'/')+1);
+			l_dbl_quantity=atof(chr_l_str_qty);
+
+			APL_IF_DEBUG
+			{
+				printf("QUANTITY is %f\n",l_dbl_quantity);
+			}
+			h_ctransaudit_struct->h_qty = l_dbl_quantity;
+		}
+
+		if (APL_FAILURE == CO_RtvMachDtTime(h_ctransaudit_struct->h_logdate,l_debug_info_ptr ))
+		{
+			CO_ProcMonitor(fl_log,"Failed getting Machine Date and Time\n",l_debug_info_ptr,NULL);
+			APL_GOBACK_FAIL;
+		}*/
+		/*
+		if(GetSubFunFn(l_message_list,l_str_msg_name,h_ctransaudit_struct->h_subprocess) == APL_FAILURE)
+		{
+			APL_GOBACK_FAIL
+		}
+		*/
+		//strcpy(h_ctransaudit_struct->h_processdetail,l_str_function_name);
+		printf("\nNIKHIL S l_msg_sts :%s:",l_msg_sts);
+		
+		if(strcmp(l_msg_sts,"STP")!=0)
+		{
+				if(strcmp(l_msg_sts,REJECT)==0)
+				{
+				/*Nikhil S*/
+					EXEC SQL DELETE FROM COMMON_MSG_WRAPPER 
+					WHERE FILENAME =:l_message_filename AND STATUS = 'R';
+
+					IS_ANY_ORA_ERROR
+				/*Nikhil S*/
+
+						//strcat(h_ctransaudit_struct->h_processdetail," - REJECT");
+				}
+				else
+				{
+					//strcat(h_ctransaudit_struct->h_processdetail," - REPAIR");
+				}
+
+				APL_IF_DEBUG
+				{
+					//printf (" h_ctransaudit_struct->h_processdetail is %s \n",h_ctransaudit_struct->h_processdetail);
+				}
+				
+				/**** For inserting into the DL_MSGLINK during REJECt************/
+				if((InsCmsgLinkFnforTrd(l_message_list,l_str_account,l_str_refno,l_message_filename,l_str_msg_no,l_int_ftrpr_seq_num,p_message_path,l_debug_info_ptr))== APL_FAILURE)
+				{
+					APL_GOBACK_FAIL
+				}
+
+				/*****************************************************************/
+				
+				/*	
+				if(CDBUpdAudTrlFn1(h_ctransaudit_struct ,l_message_filename,l_debug_info_ptr) == APL_FAILURE)
+				{
+					APL_GOBACK_FAIL
+				}
+				APL_IF_DEBUG
+				{
+					CO_ProcMonitor(APL_OUT_FILE,"Insertion in AUDITTARIL SUCCESSFUL \n",NULL,NULL);
+				}
+				*/
+				if(strcmp(l_msg_sts,REPAIR)== 0)
+				{
+					
+					int_l_int_retval=0;
+					l_message_list = l_message_list_first_record ;
+					if((int_l_int_retval=GetParamString(l_message_list,chr_l_param_str,l_str_msg_name,l_debug_info_ptr)) == APL_FAILURE)
+					{
+						APL_GOBACK_FAIL
+					}
+					else if(int_l_int_retval==SYS_NO_DATA)
+					{
+						if((InsComm_MsgRptFn(l_message_list,l_str_msg_name,"Mapping for the Message Not int_found in the dfparammap table - Contact Support Person",NOPROC,l_message_filename,l_debug_info_ptr)) == APL_FAILURE)
+									
+						{
+							APL_IF_DEBUG
+							{
+								CO_ProcMonitor(APL_OUT_FILE,"ERROR INSERTING IN DF_COMMON_MSGRPT \n",l_debug_info_ptr,NULL);
+							}
+							CO_ProcMonitor(fl_log,"ERROR INSERTING IN DF_COMMON_MSGRPT \n",l_debug_info_ptr,NULL);
+							APL_GOBACK_FAIL
+						}	
+
+						APL_IF_DEBUG
+						{
+							printf("Mapping for %s msg not int_found in DFPARAMMAP table \n",l_str_msg_name); 
+						}
+						SYS_RETURN_NO_DATA_FOUND
+					}
+					
+
+					l_progseqnum_struct_h = (PRO_GSEQNUM_STRUCT_H *)calloc(1,sizeof(PRO_GSEQNUM_STRUCT_H));
+					APL_MALLOC_FAIL(l_progseqnum_struct_h);
+					memset(l_progseqnum_struct_h,NULL,sizeof(PRO_GSEQNUM_STRUCT_H));
+					strcpy(l_progseqnum_struct_h->sequencename ,"CMSGREPAIR");
+					l_int_ftrpr_seq_num = CO_RtvNxtSeqNum(l_progseqnum_struct_h ,l_debug_info_ptr);
+					APL_IF_DEBUG
+					{
+						printf("l_int_ftrpr_seq_num  is %d\n",l_int_ftrpr_seq_num);
+					}
+					if (APL_FAILURE == l_int_ftrpr_seq_num )
+					{
+						APL_IF_DEBUG
+						{
+							printf("\n Failed to get the Next Sequence Number For FrgnTrade repair seq int_num\n");
+						}
+						CO_ProcMonitor(fl_log,"Failed to get the Next Sequence Number For Foreign Trade repair seq int_num\n",l_debug_info_ptr,NULL);
+						APL_GOBACK_FAIL
+					}
+					/* h_cmsgrepair_struct->h_sequence_num= l_int_ftrpr_seq_num;*/
+
+
+					
+					/*
+					if((InsCmsgRepairFn( l_str_account, l_str_refno, chr_l_param_str,l_str_msg_name, l_int_ftrpr_seq_num,l_debug_info_ptr)) == APL_FAILURE)
+					{
+						APL_IF_DEBUG
+						{
+							CO_ProcMonitor(APL_OUT_FILE,"Error Inerting in CmsgRepair table \n",l_debug_info_ptr,NULL);
+						}
+						CO_ProcMonitor(fl_log,"Error Inerting in CmsgRepair table \n",l_debug_info_ptr,NULL);
+						APL_GOBACK_FAIL
+					}	
+					*/
+
+					APL_IF_DEBUG
+						printf("the msg chr_path %s\n",l_message_filename);
+			
+					if((InsCmsgLinkFnforTrd(l_message_list,l_str_account,l_str_refno,l_message_filename,l_str_msg_no,l_int_ftrpr_seq_num,p_message_path,l_debug_info_ptr))== APL_FAILURE)
+					{
+						 APL_GOBACK_FAIL
+					}
+					
+				
+					
+					APL_IF_DEBUG
+						printf("the seq no %s\n",l_str_refno);	
+					if( APL_FAILURE == GenerateLinklistForCMSGLINKDET( l_message_list,
+																							l_message_cmsg_list,
+																							atoi(l_str_refno),
+																							fl_log ))
+					{
+						CO_ProcMonitor(fl_log,"Returned Failure from GenerateLinklistForCMSGLINKDET < Process 54x>\n",NULL,NULL);
+						APL_GOBACK_FAIL
+					}
+					
+					if ( APL_FAILURE == GDbInsCMSGLINKDETFN( l_message_cmsg_list,
+																			fl_log,
+																			l_debug_info_ptr) )
+					{
+						CO_ProcMonitor(fl_log,"Returned Failure from DL_Mod_DLLinkDetNew < Process 54x>\n",NULL,NULL);
+						APL_GOBACK_FAIL
+					}
+					
+				}
+		}
+		else if(strcmp(l_msg_sts,"STP")==0)	
+		{
+			
+		 
+			int_l_int_retval=0;
+			l_message_list = l_message_list_first_record;
+			
+			if((int_l_int_retval=Get_misinfo(l_message_list,p_message_path,l_str_msg_name,l_str_misinfo,l_str_func_mode,"MIS54x",l_debug_info_ptr))==APL_FAILURE)
+			{
+				CO_ProcMonitor(fl_log,"Error making misinfo \n",l_debug_info_ptr,NULL);
+				APL_IF_DEBUG
+				{
+					CO_ProcMonitor(APL_OUT_FILE,"Error making misinfo \n",l_debug_info_ptr,NULL);
+				}
+				APL_GOBACK_FAIL
+			}
+			else if(int_l_int_retval==SYS_NO_DATA)
+			{
+				
+			}
+		/*	
+			if(APL_FAILURE == CPopulateMisInfo(l_message_list,l_str_misinfo,l_debug_info_ptr))
+			{
+				APL_GOBACK_FAIL
+			}
+		*/	
+			APL_IF_DEBUG
+			{
+				printf(" in process msg misinfo = %s \n",l_str_misinfo);
+			}
+			
+
+			
+			int_l_int_retval=0;
+			l_message_list = l_message_list_first_record ;
+			if((int_l_int_retval=GetParamString(l_message_list,chr_l_param_str,l_str_msg_name,l_debug_info_ptr)) == APL_FAILURE)
+			{
+				printf(" is msgname = %s \n",l_str_msg_name);
+				APL_GOBACK_FAIL
+			}
+			else if(int_l_int_retval==SYS_NO_DATA)
+			{
+				if((InsComm_MsgRptFn(l_message_list,l_str_msg_name,"Mapping for the Message Not int_found in the dfparammap table - Contact Support Person",NOPROC,l_message_filename,l_debug_info_ptr)) == APL_FAILURE)
+				{
+					
+					APL_IF_DEBUG
+					{
+						CO_ProcMonitor(APL_OUT_FILE,"ERROR INSERTING IN DF_COMMON_MSGRPT \n",l_debug_info_ptr,NULL);
+					}
+					CO_ProcMonitor(fl_log,"ERROR INSERTING IN DF_COMMON_MSGRPT \n",l_debug_info_ptr,NULL);
+					APL_GOBACK_FAIL
+				}
+				//strcat(h_ctransaudit_struct->h_processdetail," - REJECT");
+				/*
+				if(CDBUpdAudTrlFn1(h_ctransaudit_struct ,l_message_filename,l_debug_info_ptr) == APL_FAILURE)
+				{
+					APL_IF_DEBUG
+					{
+						CO_ProcMonitor(APL_OUT_FILE,"ERROR INSERTING IN DF_COMMON_MSGRPT \n",l_debug_info_ptr,NULL);
+					}
+					CO_ProcMonitor(fl_log,"ERROR INSERTING IN DF_COMMON_MSGRPT \n",l_debug_info_ptr,NULL);
+					APL_GOBACK_FAIL
+				}
+				*/
+				APL_IF_DEBUG
+				{
+					printf("Mapping for %s msg not int_found in DFPARAMMAP table \n",l_str_msg_name); 
+				}
+				SYS_RETURN_NO_DATA_FOUND
+			}
+			
+			
+			APL_IF_DEBUG
+				printf("acc check %s-%s-%s\n",l_str_account,l_str_refno,l_message_filename);	
+		/*	 Temp commented out by dnyanesh */
+			if((InsCmsgLinkFnforTrd(l_message_list,l_str_account,l_str_refno,l_message_filename,l_str_msg_no,l_int_ftrpr_seq_num,p_message_path,l_debug_info_ptr))== APL_FAILURE)
+			{
+				APL_GOBACK_FAIL
+			}	
+			APL_IF_DEBUG
+				printf("the seq is %d\n",l_int_ftrpr_seq_num);
+			if( APL_FAILURE == GenerateLinklistForCMSGLINKDET( l_message_list,
+																					l_message_cmsg_list,
+																					atoi(l_str_refno),
+																					fl_log ))
+			{
+				CO_ProcMonitor(fl_log,"Returned Failure from GenerateLinklistForCMSGLINKDET < Process 54x>\n",NULL,NULL);
+				APL_GOBACK_FAIL
+			}
+			if ( APL_FAILURE == GDbInsCMSGLINKDETFN( l_message_cmsg_list,
+																	fl_log,
+																	l_debug_info_ptr) )
+			{
+				CO_ProcMonitor(fl_log,"Returned Failure from DL_Mod_DLLinkDetNew < Process 54x>\n",NULL,NULL);
+				APL_GOBACK_FAIL
+			}
+			
+		/* */	
+				
+			strcpy(chr_l_err_desc,APL_NULL_STRING);
+			APL_IF_DEBUG
+				printf("mis info is %s\n",l_str_misinfo);
+			printf("\nNikhil ready chr_l_param_str :%s:\n",chr_l_param_str);
+			memset(chr_temp_param_str,APL_NULL_CHAR,4000);
+			memset(chr_temp_deal_dt,APL_NULL_CHAR,APL_DATE_LEN);
+			memset(chr_temp_client,APL_NULL_CHAR,11);
+			memset(chr_temp_refno,APL_NULL_CHAR,17);
+			strcpy(chr_temp_param_str,chr_l_param_str);
+			CO_Rtv_DataDbl(chr_temp_param_str,"NET_AMT",&(l_temp_dbl_amt));
+         CO_Rtv_DataDbl(chr_temp_param_str,"QTY",&(l_temp_dbl_quantity)); 
+			CO_Rtv_DataString(chr_temp_param_str,"DEAL_DATE",chr_temp_deal_dt);
+			CO_Rtv_DataString(chr_temp_param_str,"DL_CLIENT",chr_temp_client);
+			CO_Rtv_DataString(chr_temp_param_str,"DL_REF_NO",chr_temp_refno);
+			printf("\nNikhil ready l_temp_dbl_amt :%lf:\n",l_temp_dbl_amt);
+			printf("\nNikhil ready l_temp_dbl_quantity :%lf:\n",l_temp_dbl_quantity);
+			printf("\nNikhil ready chr_temp_deal_dt :%s:\n",chr_temp_deal_dt);
+			printf("\nNikhil ready chr_temp_refno :%s:\n",chr_temp_refno);
+			printf("\nNikhil ready chr_temp_client :%s:\n",chr_temp_client);
+
+
+			
+			if((PutClientRequest(l_str_proc_name, l_str_msg_wrapper, chr_l_env_str, chr_l_param_str, USER_ID,l_str_misinfo,chr_l_err_desc,l_debug_info_ptr)) == APL_FAILURE )
+			{
+				APL_IF_DEBUG
+				{
+					CO_ProcMonitor(APL_OUT_FILE,"ERROR IN  PutclientRequest\n",l_debug_info_ptr,NULL);
+				}
+				CO_ProcMonitor(fl_log,"ERROR IN  PutclientRequest\n",l_debug_info_ptr,NULL);
+				APL_GOBACK_FAIL
+			}
+
+			EXEC SQL UPDATE COMMON_MSG_WRAPPER SET val=:l_temp_dbl_amt,QUANTITY = :l_temp_dbl_quantity,
+			REFNO = :chr_temp_refno, deal_dt = to_date(:chr_temp_deal_dt,'DD/MM/YYYY HH:MI:SS'),
+			CLIENT = :chr_temp_client, STP_STAT = DECODE(:chr_l_err_desc,'SUCCESS','STP','RPR')
+			WHERE FILENAME =:l_message_filename AND STATUS = 'R';
+			
+			IS_ANY_ORA_ERROR
+				
+			
+			if(strstr(chr_l_err_desc,"4|12|") != APL_FAILURE)
+			{
+				
+				fprintf(fl_log,"%s\n",chr_l_err_desc);	
+				if( CO_InsertErr(l_debug_info_ptr, 0, chr_l_err_desc, APL_NULL_STRING, APL_NULL_STRING, 0, APL_NULL_STRING)==APL_FAILURE)	
+				{
+					APL_GOBACK_FAIL
+					CO_ProcMonitor(fl_log,"Error inserting l_debuglist h_code in l_debug_info_ptr \n",l_debug_info_ptr,NULL);
+				}
+			}
+		}
+		
+		APL_GOBACK_SUCCESS
+	
+	}/*End of NEWM code*/
+	
+	else
+	{
+		/*Code for Cancellation */
+		if (strstr(p_message_path,"inmsg_swift") == NULL)
+		{
+			printf("\n Ash #2 for SEBI message ");
+			strcpy(l_str_msg_nm,strcat(l_str_msg_no,"C01"));
+		}
+		else
+		{
+			printf("\n Ash #2 for SWIFT message ");
+			strcpy(l_str_msg_nm,strcat(l_str_msg_no,"CS1"));
+		}
+		/** strcpy(l_str_msg_nm, strcat(l_str_msg_no,"C01")); ----- Cancellation message for swift ***/
+		if((int_l_int_retval=  GetWrapperName(l_str_msg_nm, l_message_list, l_str_msg_wrapper, l_str_func_mode, l_str_proc_name, l_str_msg_name, l_debug_info_ptr)) == APL_FAILURE)
+		{
+			APL_GOBACK_FAIL
+		}
+		else if(int_l_int_retval==SYS_NO_DATA)
+		{
+			if((InsComm_MsgRptFn(l_message_list,l_str_msg_no,"Mapping for the Message Not int_found in the dfwrpmap table - Contact Support Person",NOPROC,l_message_filename,l_debug_info_ptr)) == APL_FAILURE)
+			{		
+				APL_IF_DEBUG
+				{
+					CO_ProcMonitor(APL_OUT_FILE,"ERROR INSERTING IN DF_COMMON_MSGRPT \n",l_debug_info_ptr,NULL);
+				}
+				CO_ProcMonitor(fl_log,"ERROR INSERTING IN DF_COMMON_MSGRPT \n",l_debug_info_ptr,NULL);
+				APL_GOBACK_FAIL
+			}
+			APL_IF_DEBUG
+			{
+				printf("Mapping for msg %s not int_found in DFWRPMAP\n",l_str_msg_no);
+			}
+			SYS_RETURN_NO_DATA_FOUND
+		}
+		
+
+		APL_IF_DEBUG
+		{
+			printf("The wrapper name is %s\n",l_str_msg_wrapper);
+			printf("The l_str_msg_name is %s\n",l_str_msg_name);
+		}
+		
+		
+		
+		int_l_int_retval=0;
+		if((int_l_int_retval= GetEnvString(l_str_func_mode, chr_l_env_str,l_debug_info_ptr)) == APL_FAILURE)
+		{		
+			APL_GOBACK_FAIL
+		}
+		else if(int_l_int_retval==SYS_NO_DATA)
+		{
+			if((InsComm_MsgRptFn(l_message_list,l_str_msg_name,"Mapping for the Message Not int_found in the dfenvmap table - Contact Support Person",NOPROC,l_message_filename,l_debug_info_ptr))==APL_FAILURE)
+			{
+				APL_IF_DEBUG
+				{
+					CO_ProcMonitor(APL_OUT_FILE,"ERROR INSERTING IN DF_COMMON_MSGRPT \n",l_debug_info_ptr,NULL);
+				}
+				CO_ProcMonitor(fl_log,"ERROR INSERTING IN DF_COMMON_MSGRPT \n",l_debug_info_ptr,NULL);
+				APL_GOBACK_FAIL
+			}
+			APL_IF_DEBUG
+			{
+				printf("Mapping for msg %s not int_found in DFENVMAP table \n",l_str_msg_name);
+			}
+			SYS_RETURN_NO_DATA_FOUND
+		}
+		
+		
+		/*Account and Refno are used while inserting record into DL_Msglink Table*/
+		printf("\n ************** Ahswin #2 *********");
+		/* if( I_GetVal(l_message_list,":97A:",":SAFE/",l_str_account,"C","1") ==APL_FAILURE) */
+		if( I_GetVal(l_message_list,":97A:",":SAFE/",l_str_clientcd,"C","1") ==APL_FAILURE)
+		{
+			CO_ProcMonitor(fl_log,"Error getting Account in the msg \n",NULL,NULL);
+			/*APL_GOBACK_FAIL*/
+		}
+		/*if(strcmp(l_str_account,APL_NULL_STRING)==0) */
+		if(strcmp(l_str_clientcd,APL_NULL_STRING)==0)
+		{
+			APL_IF_DEBUG
+			{
+				CO_ProcMonitor(APL_OUT_FILE,"Account  not mentioned in the msg \n",NULL,NULL);
+			}
+			CO_ProcMonitor(fl_log,"Account  not mentioned in the msg \n",NULL,NULL);
+			/*APL_GOBACK_FAIL*/
+		}
+		APL_IF_DEBUG
+		{
+			printf("\n THE VALUE OF ACCOUNT IS %s \n",l_str_account);
+		}
+		/*** Added on 13-may-2006 for making it with sync with NEWM ***/
+		if (strstr(p_message_path,"inmsg_swift") == NULL)
+		{
+			EXEC SQL SELECT CLN_CODE INTO :l_str_account:i_account from MT_CLI_EXCH_MAP where STATUS = 'AA' AND 
+				CLN_EXCH_MAP_CODE = :l_str_clientcd  and STATUS = 'AA' and rownum < 2 ;
+			IS_ANY_ORA_ERROR;
+			if( strlen(l_str_account) ==0 || strcmp(l_str_clientcd,APL_NULL_STRING)==0)
+			{
+				EXEC SQL SELECT CLN_CODE INTO :l_str_account:i_account  FROM MT_REGDETAILS WHERE CLN_SEBI_REG_NO = :l_str_clientcd OR CLN_MAPINID = :l_str_clientcd AND ROWNUM < 2;
+				IS_ANY_ORA_ERROR;
+
+			}
+		}
+		else
+		{
+			strcpy(l_str_account,l_str_clientcd);
+		}
+
+		memset(l_str_refno,APL_NULL_CHAR,17);
+		if(I_GetVal(l_message_list,":20C:",":PREV/",l_str_refno,"A1","1,1")==APL_FAILURE)
+		{
+			CO_ProcMonitor(fl_log,"Error getting Refno in the messsage \n",NULL,NULL);
+			/*APL_GOBACK_FAIL*/
+
+		}
+		if(strcmp(l_str_refno,APL_NULL_STRING)==0)
+		{
+			APL_IF_DEBUG
+			{
+				CO_ProcMonitor(APL_OUT_FILE,"Refno not mentioned in the messsage \n",NULL,NULL);
+			}
+			CO_ProcMonitor(fl_log,"Refno not mentioned in the messsage \n",NULL,NULL);
+			/*APL_GOBACK_FAIL*/
+		}
+
+		APL_IF_DEBUG
+		{
+			printf("\n THE VALUE OF REFNO IS %s \n",l_str_refno);
+		}
+		
+		
+		int_l_int_retval=0;
+		l_message_list = l_message_list_first_record ;
+
+        /* Added by siva.ganapathi for ISKB_3930 on 10/06/2010 started*/  
+      strcpy(l_msg_sts,"STP");
+        /* Added by siva.ganapathi for ISKB_3930 on 10/06/2010 Ended*/  
+		/*
+		if((int_l_int_retval= DoValidateFn(l_str_msg_name, l_message_list,fl_log,l_message_filename,l_msg_sts,l_debug_info_ptr))==APL_FAILURE)
+		{
+				APL_GOBACK_FAIL
+		}
+		else if(int_l_int_retval==SYS_NO_DATA)
+		{
+			if((InsComm_MsgRptFn(l_message_list,l_str_msg_name,"Mapping for the Message Not int_found in the dfvalidatemap table - Contact Support Person",NOPROC,l_message_filename,l_debug_info_ptr)) == APL_FAILURE)
+			{
+						APL_IF_DEBUG
+						{
+							CO_ProcMonitor(APL_OUT_FILE,"ERROR INSERTING IN DF_COMMON_MSGRPT \n",l_debug_info_ptr,NULL);
+						}
+						CO_ProcMonitor(fl_log,"ERROR INSERTING IN DF_COMMON_MSGRPT \n",l_debug_info_ptr,NULL);
+						APL_GOBACK_FAIL
+			}
+			APL_IF_DEBUG
+			{
+				printf("Mapping for msg %s not int_found in DFVALIDATEMAP table \n",l_str_msg_name);
+			}
+			SYS_RETURN_NO_DATA_FOUND
+		}
+	*/
+		
+/*
+		EXEC SQL SELECT FUNCTION_NAME ,USR
+			INTO :l_str_function_name , :h_ctransaudit_struct->h_proc_usr
+			FROM DFENVMAP 
+			WHERE FUNCTION_MODE = (SELECT DISTINCT FUNCTION_MODE 
+			FROM DFWRPMAP 
+			WHERE MSG_NAME = :l_str_msg_name);
+			IS_ANY_ORA_ERROR
+*/
+		EXEC SQL SELECT FUNCTION_NAME 
+			INTO :l_str_function_name 
+			FROM DFENVMAP 
+			WHERE FUNCTION_MODE = (SELECT DISTINCT FUNCTION_MODE 
+			FROM DFWRPMAP 
+			WHERE MSG_NAME = :l_str_msg_name);
+			IS_ANY_ORA_ERROR
+
+		APL_IF_DEBUG
+		{
+			printf("sqlca.sqlcode is %d \n",sqlca.sqlcode);
+		}
+	/*	
+		strcpy(h_ctransaudit_struct->h_dl_client,l_str_account);
+		strcpy(h_ctransaudit_struct->h_indentity_no,l_str_refno);
+		strcpy(h_ctransaudit_struct->h_trail_for,"T");
+		strcpy(h_ctransaudit_struct->h_dlfromord,"N");
+*/
+		if(APL_ZERO_RESULT_SET)
+		{
+			if((InsComm_MsgRptFn(l_message_list,l_str_msg_name,"Mapping for the Message Not int_found in the dfenvmap/dfwrpmap table - Contact Support Person",NOPROC,l_message_filename,l_debug_info_ptr)) == APL_FAILURE)
+			{
+				APL_IF_DEBUG
+				{
+					CO_ProcMonitor(APL_OUT_FILE,"ERROR INSERTING IN DF_COMMON_MSGRPT \n",l_debug_info_ptr,NULL);
+				}
+				CO_ProcMonitor(fl_log,"ERROR INSERTING IN DF_COMMON_MSGRPT \n",l_debug_info_ptr,NULL);
+				APL_GOBACK_FAIL
+			}
+			APL_IF_DEBUG
+			{
+				printf("Mapping for msg %s not int_found in DFENVMAP table \n",l_str_msg_name);
+			}
+			SYS_RETURN_NO_DATA_FOUND
+		}
+		/*
+		if(I_GetVal(l_message_list,":36B:",":SETT/",chr_l_str_qty,"C","1") == APL_FAILURE)
+		{
+			/*APL_GOBACK_FAIL
+		}
+
+		if(strrchr(chr_l_str_qty,'/'));
+		{
+			strcpy(chr_l_str_qty, strrchr(chr_l_str_qty,'/')+1);
+			l_dbl_quantity=atof(chr_l_str_qty);
+
+			APL_IF_DEBUG
+			{
+				printf("QUANTITY is %f\n",l_dbl_quantity);
+			}
+			//h_ctransaudit_struct->h_qty = l_dbl_quantity;
+		}
+		*/
+/*
+		if (APL_FAILURE == CO_RtvMachDtTime(h_ctransaudit_struct->h_logdate,l_debug_info_ptr ))
+		{
+			CO_ProcMonitor(fl_log,"Failed getting Machine Date and Time\n",l_debug_info_ptr,NULL);
+			APL_GOBACK_FAIL;
+		}*/
+		/*
+		if(GetSubFunFn(l_message_list,l_str_msg_name,h_ctransaudit_struct->h_subprocess) == APL_FAILURE)
+		{
+			APL_GOBACK_FAIL
+		}
+		*/
+		//strcpy(h_ctransaudit_struct->h_processdetail,l_str_function_name);
+
+		
+		if(strcmp(l_msg_sts,"STP")!=0)
+		{
+				if(strcmp(l_msg_sts,REJECT)==0)
+				{
+				/*Nikhil S*/
+					EXEC SQL DELETE FROM COMMON_MSG_WRAPPER 
+					WHERE FILENAME =:l_message_filename AND STATUS = 'R';
+
+					IS_ANY_ORA_ERROR
+				/*Nikhil S*/
+						//strcat(h_ctransaudit_struct->h_processdetail," - REJECT");
+				}
+				else
+				{
+					//strcat(h_ctransaudit_struct->h_processdetail," - REPAIR");
+				}
+
+				APL_IF_DEBUG
+				{
+					//printf (" h_ctransaudit_struct->h_processdetail is %s \n",h_ctransaudit_struct->h_processdetail);
+				}
+				
+				/**** For inserting into the DL_MSGLINK during REJECt************/
+				if((InsCmsgLinkFnforTrd(l_message_list,l_str_account,l_str_refno,l_message_filename,l_str_msg_no,l_int_ftrpr_seq_num,p_message_path,l_debug_info_ptr))== APL_FAILURE)
+				{
+					APL_GOBACK_FAIL
+				}
+
+				/*****************************************************************/
+				/*	
+				if(CDBUpdAudTrlFn1(h_ctransaudit_struct ,l_message_filename,l_debug_info_ptr) == APL_FAILURE)
+				{
+					APL_GOBACK_FAIL
+				}
+				APL_IF_DEBUG
+				{
+					CO_ProcMonitor(APL_OUT_FILE,"Insertion in AUDITTARIL SUCCESSFUL \n",NULL,NULL);
+				}
+				*/
+				if(strcmp(l_msg_sts,REPAIR)== 0)
+				{
+					
+					int_l_int_retval=0;
+					l_message_list = l_message_list_first_record ;
+					if((int_l_int_retval=GetParamString(l_message_list,chr_l_param_str,l_str_msg_name,l_debug_info_ptr)) == APL_FAILURE)
+					{
+						APL_GOBACK_FAIL
+					}
+					else if(int_l_int_retval==SYS_NO_DATA)
+					{
+						if((InsComm_MsgRptFn(l_message_list,l_str_msg_name,"Mapping for the Message Not int_found in the dfparammap table - Contact Support Person",NOPROC,l_message_filename,l_debug_info_ptr)) == APL_FAILURE)
+									
+						{
+							APL_IF_DEBUG
+							{
+								CO_ProcMonitor(APL_OUT_FILE,"ERROR INSERTING IN DF_COMMON_MSGRPT \n",l_debug_info_ptr,NULL);
+							}
+							CO_ProcMonitor(fl_log,"ERROR INSERTING IN DF_COMMON_MSGRPT \n",l_debug_info_ptr,NULL);
+							APL_GOBACK_FAIL
+						}	
+
+						APL_IF_DEBUG
+						{
+							printf("Mapping for %s msg not int_found in DFPARAMMAP table \n",l_str_msg_name); 
+						}
+						SYS_RETURN_NO_DATA_FOUND
+					}
+					
+
+					l_progseqnum_struct_h = (PRO_GSEQNUM_STRUCT_H *)calloc(1,sizeof(PRO_GSEQNUM_STRUCT_H));
+					APL_MALLOC_FAIL(l_progseqnum_struct_h);
+					memset(l_progseqnum_struct_h,NULL,sizeof(PRO_GSEQNUM_STRUCT_H));
+					strcpy(l_progseqnum_struct_h->sequencename ,"CMSGREPAIR");
+					l_int_ftrpr_seq_num = CO_RtvNxtSeqNum(l_progseqnum_struct_h ,l_debug_info_ptr);
+					APL_IF_DEBUG
+					{
+						printf("l_int_ftrpr_seq_num  is %d\n",l_int_ftrpr_seq_num);
+					}
+					if (APL_FAILURE == l_int_ftrpr_seq_num )
+					{
+						APL_IF_DEBUG
+						{
+							printf("\n Failed to get the Next Sequence Number For FrgnTrade repair seq int_num\n");
+						}
+						CO_ProcMonitor(fl_log,"Failed to get the Next Sequence Number For Foreign Trade repair seq int_num\n",l_debug_info_ptr,NULL);
+						APL_GOBACK_FAIL
+					}
+					/* h_cmsgrepair_struct->h_sequence_num= l_int_ftrpr_seq_num;*/
+
+
+					/*			
+
+					if((InsCmsgRepairFn( l_str_account, l_str_refno, chr_l_param_str,l_str_msg_name, l_int_ftrpr_seq_num,l_debug_info_ptr)) == APL_FAILURE)
+					{
+						APL_IF_DEBUG
+						{
+							CO_ProcMonitor(APL_OUT_FILE,"Error Inerting in CmsgRepair table \n",l_debug_info_ptr,NULL);
+						}
+						CO_ProcMonitor(fl_log,"Error Inerting in CmsgRepair table \n",l_debug_info_ptr,NULL);
+						APL_GOBACK_FAIL
+					}	
+					*/
+					printf("the msg chr_path %s\n",l_message_filename);
+					
+					if((InsCmsgLinkFnforTrd(l_message_list,l_str_account,l_str_refno,l_message_filename,l_str_msg_no,l_int_ftrpr_seq_num,p_message_path,l_debug_info_ptr))== APL_FAILURE)
+					{
+						 APL_GOBACK_FAIL
+					}
+					
+				
+					
+				
+					printf("the seq no %s\n",l_str_refno);	
+					if( APL_FAILURE == GenerateLinklistForCMSGLINKDET( l_message_list,
+																							l_message_cmsg_list,
+																							atoi(l_str_refno),
+																							fl_log ))
+					{
+						CO_ProcMonitor(fl_log,"Returned Failure from GenerateLinklistForCMSGLINKDET < Process 54x>\n",NULL,NULL);
+						APL_GOBACK_FAIL
+					}
+					
+					if ( APL_FAILURE == GDbInsCMSGLINKDETFN( l_message_cmsg_list,
+																			fl_log,
+																			l_debug_info_ptr) )
+					{
+						CO_ProcMonitor(fl_log,"Returned Failure from DL_Mod_DLLinkDetNew < Process 54x>\n",NULL,NULL);
+						APL_GOBACK_FAIL
+					}
+					
+				}
+		}
+		else if(strcmp(l_msg_sts,"STP")==0)	
+		{
+			
+		/*	if( APL_FAILURE == CDBDelTrdInRpr(l_str_account,l_str_refno,l_int_returnval,l_debug_info_ptr)) 
+			{		
+				if(strcmp(l_int_returnval,APL_NULL_STRING) == 0)
+				{
+					APL_GOBACK_FAIL
+				}*/
+				
+				int_l_int_retval=0;
+				l_message_list = l_message_list_first_record;
+				
+				if((int_l_int_retval=Get_misinfo(l_message_list,p_message_path,l_str_msg_name,l_str_misinfo,l_str_func_mode,"MIS54x",l_debug_info_ptr))==APL_FAILURE)
+				{
+					CO_ProcMonitor(fl_log,"Error making misinfo \n",l_debug_info_ptr,NULL);
+					APL_IF_DEBUG
+					{
+						CO_ProcMonitor(APL_OUT_FILE,"Error making misinfo \n",l_debug_info_ptr,NULL);
+					}
+					APL_GOBACK_FAIL
+				}
+				else if(int_l_int_retval==SYS_NO_DATA)
+				{
+					
+				}
+			/*	
+				if(APL_FAILURE == CPopulateMisInfo(l_message_list,l_str_misinfo,l_debug_info_ptr))
+				{
+					APL_GOBACK_FAIL
+				}
+			*/	
+				APL_IF_DEBUG
+				{
+					printf(" in process msg misinfo = %s \n",l_str_misinfo);
+				}
+				
+
+				
+				int_l_int_retval=0;
+				l_message_list = l_message_list_first_record ;
+				if((int_l_int_retval=GetParamString(l_message_list,chr_l_param_str,l_str_msg_name,l_debug_info_ptr)) == APL_FAILURE)
+				{
+					APL_IF_DEBUG
+						printf(" is msgname = %s \n",l_str_msg_name);
+					APL_GOBACK_FAIL
+				}
+				else if(int_l_int_retval==SYS_NO_DATA)
+				{
+					if((InsComm_MsgRptFn(l_message_list,l_str_msg_name,"Mapping for the Message Not int_found in the dfparammap table - Contact Support Person",NOPROC,l_message_filename,l_debug_info_ptr)) == APL_FAILURE)
+					{
+						
+						APL_IF_DEBUG
+						{
+							CO_ProcMonitor(APL_OUT_FILE,"ERROR INSERTING IN DF_COMMON_MSGRPT \n",l_debug_info_ptr,NULL);
+						}
+						CO_ProcMonitor(fl_log,"ERROR INSERTING IN DF_COMMON_MSGRPT \n",l_debug_info_ptr,NULL);
+						APL_GOBACK_FAIL
+					}
+					//strcat(h_ctransaudit_struct->h_processdetail," - REJECT");
+					/*
+					if(CDBUpdAudTrlFn1(h_ctransaudit_struct ,l_message_filename,l_debug_info_ptr) == APL_FAILURE)
+					{
+						APL_IF_DEBUG
+						{
+							CO_ProcMonitor(APL_OUT_FILE,"ERROR INSERTING IN DF_COMMON_MSGRPT \n",l_debug_info_ptr,NULL);
+						}
+						CO_ProcMonitor(fl_log,"ERROR INSERTING IN DF_COMMON_MSGRPT \n",l_debug_info_ptr,NULL);
+						APL_GOBACK_FAIL
+					}
+					*/
+					APL_IF_DEBUG
+					{
+						printf("Mapping for %s msg not int_found in DFPARAMMAP table \n",l_str_msg_name); 
+					}
+					SYS_RETURN_NO_DATA_FOUND
+				}
+				
+				
+				APL_IF_DEBUG
+					printf("acc check %s-%s-%s\n",l_str_account,l_str_refno,l_message_filename);	
+				
+				if((InsCmsgLinkFnforTrd(l_message_list,l_str_account,l_str_refno,l_message_filename,l_str_msg_no,l_int_ftrpr_seq_num,p_message_path,l_debug_info_ptr))== APL_FAILURE)
+				{
+					APL_GOBACK_FAIL
+				}	
+				APL_IF_DEBUG
+					printf("the seq is %d\n",l_int_ftrpr_seq_num);
+				if( APL_FAILURE == GenerateLinklistForCMSGLINKDET( l_message_list,
+																						l_message_cmsg_list,
+																						atoi(l_str_refno),
+																						fl_log ))
+				{
+					CO_ProcMonitor(fl_log,"Returned Failure from GenerateLinklistForCMSGLINKDET < Process 54x>\n",NULL,NULL);
+					APL_GOBACK_FAIL
+				}
+				if ( APL_FAILURE == GDbInsCMSGLINKDETFN( l_message_cmsg_list,
+																		fl_log,
+																		l_debug_info_ptr) )
+				{
+					CO_ProcMonitor(fl_log,"Returned Failure from DL_Mod_DLLinkDetNew < Process 54x>\n",NULL,NULL);
+					APL_GOBACK_FAIL
+				}
+				
+				
+					
+				strcpy(chr_l_err_desc,APL_NULL_STRING);
+				APL_IF_DEBUG
+					printf("mis info is %s\n",l_str_misinfo);
+			printf("\nNikhil ready chr_l_param_str :%s:\n",chr_l_param_str);
+			memset(chr_temp_param_str,APL_NULL_CHAR,4000);
+			memset(chr_temp_deal_dt,APL_NULL_CHAR,APL_DATE_LEN);
+			memset(chr_temp_client,APL_NULL_CHAR,11);
+			memset(chr_temp_refno,APL_NULL_CHAR,17);
+			strcpy(chr_temp_param_str,chr_l_param_str);
+			CO_Rtv_DataDbl(chr_temp_param_str,"NET_AMT",&(l_temp_dbl_amt));
+         CO_Rtv_DataDbl(chr_temp_param_str,"QTY",&(l_temp_dbl_quantity)); 
+			CO_Rtv_DataString(chr_temp_param_str,"DEAL_DATE",chr_temp_deal_dt);
+			CO_Rtv_DataString(chr_temp_param_str,"DL_CLIENT",chr_temp_client);
+			CO_Rtv_DataString(chr_temp_param_str,"DL_REF_NO",chr_temp_refno);
+			printf("\nNikhil ready l_temp_dbl_amt :%lf:\n",l_temp_dbl_amt);
+			printf("\nNikhil ready l_temp_dbl_quantity :%lf:\n",l_temp_dbl_quantity);
+			printf("\nNikhil ready chr_temp_deal_dt :%s:\n",chr_temp_deal_dt);
+			printf("\nNikhil ready chr_temp_client :%s:\n",chr_temp_client);
+			printf("\nNikhil ready chr_temp_refno :%s:\n",chr_temp_refno);
+
+				if((PutClientRequest(l_str_proc_name, l_str_msg_wrapper, chr_l_env_str, chr_l_param_str, USER_ID,l_str_misinfo,chr_l_err_desc,l_debug_info_ptr)) == APL_FAILURE )
+				{
+					APL_IF_DEBUG
+					{
+						CO_ProcMonitor(APL_OUT_FILE,"ERROR IN  PutclientRequest\n",l_debug_info_ptr,NULL);
+					}
+					CO_ProcMonitor(fl_log,"ERROR IN  PutclientRequest\n",l_debug_info_ptr,NULL);
+					APL_GOBACK_FAIL
+				}
+
+			EXEC SQL UPDATE COMMON_MSG_WRAPPER SET val=:l_temp_dbl_amt,QUANTITY = :l_temp_dbl_quantity,
+			REFNO = :chr_temp_refno, deal_dt = to_date(:chr_temp_deal_dt,'DD/MM/YYYY HH:MI:SS'),
+			CLIENT = :chr_temp_client , STP_STAT = DECODE(:chr_l_err_desc,'SUCCESS','STP','RPR')
+			WHERE FILENAME =:l_message_filename AND STATUS = 'R';
+			
+			IS_ANY_ORA_ERROR
+					
+				
+				if(strstr(chr_l_err_desc,"4|12|") != APL_FAILURE)
+				{
+					
+					fprintf(fl_log,"%s\n",chr_l_err_desc);	
+					if( CO_InsertErr(l_debug_info_ptr, 0, chr_l_err_desc, APL_NULL_STRING, APL_NULL_STRING, 0, APL_NULL_STRING)==APL_FAILURE)	
+					{
+						APL_GOBACK_FAIL
+						CO_ProcMonitor(fl_log,"Error inserting l_debuglist h_code in l_debug_info_ptr \n",l_debug_info_ptr,NULL);
+					}
+				}
+		/*	}*/
+
+		}	
+		APL_GOBACK_SUCCESS
+	}/*End of CANC code*/	
+	
+	RETURN_FAILURE :
+	{
+			EXEC SQL ROLLBACK;
+			APL_IF_DEBUG
+			{
+           	CO_ProcMonitor(APL_OUT_FILE, "\n Leaving processtion Processmessage_54x with errors \n",l_debug_info_ptr,NULL);
+			}
+			//APL_FREE(h_ctransaudit_struct);
+			/* APL_FREE(h_cmsgrepair_struct);*/
+			APL_FREE(l_progseqnum_struct_h);
+			APL_FREE(l_message_cmsg_list);
+			APL_FREE(l_message_list);
+			APL_FREE(l_message_list_first_record);		
+			APL_FREE(chr_l_param_str);		
+			APL_FREE(chr_l_err_desc);		
+			APL_FREE(chr_l_env_str);		
+			APL_FREE(l_str_misinfo);		
+			APL_FREE(chr_temp_param_str);
+         return(APL_FAILURE);
+	}
+
+	RETURN_SUCCESS :
+	{
+		EXEC SQL COMMIT;
+   	APL_IF_DEBUG
+		{	
+   		CO_ProcMonitor(APL_OUT_FILE, "\n Leaving processtion Processmessage_54x successfully \n",NULL,NULL);
+		}
+		//APL_FREE(h_ctransaudit_struct);
+		/* APL_FREE(h_cmsgrepair_struct);*/
+		APL_FREE(l_progseqnum_struct_h);
+   		APL_FREE(l_message_cmsg_list);
+		APL_FREE(l_message_list);
+		//APL_FREE(l_message_list_first_record);		
+		APL_FREE(chr_l_param_str);		
+		APL_FREE(chr_l_err_desc);		
+		APL_FREE(chr_l_env_str);		
+		APL_FREE(l_str_misinfo);		
+		APL_FREE(chr_temp_param_str);
+		return(APL_SUCCESS);
+	}
+	LBL_EXIT_NO_DATA :
+	{
+		
+			EXEC SQL COMMIT;
+			APL_IF_DEBUG
+			{
+           	CO_ProcMonitor(APL_OUT_FILE, "\n Leaving processtion Processmessage_54x:	NO_DATA_FOUND  \n",l_debug_info_ptr,NULL);
+			}
+			//APL_FREE(h_ctransaudit_struct);
+			/* APL_FREE(h_cmsgrepair_struct);*/
+			APL_FREE(l_progseqnum_struct_h);
+			APL_FREE(l_message_cmsg_list);
+			APL_FREE(l_message_list);
+			//APL_FREE(l_message_list_first_record);		
+			APL_FREE(chr_l_param_str);		
+			APL_FREE(chr_l_err_desc);		
+			APL_FREE(chr_l_env_str);		
+			APL_FREE(l_str_misinfo);
+                        APL_FREE(chr_temp_param_str);		
+			return(SYS_NO_DATA);
+	}
+}
+

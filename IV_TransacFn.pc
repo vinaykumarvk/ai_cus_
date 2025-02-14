@@ -1,0 +1,186 @@
+
+
+
+
+
+#include "IV_Control_A.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int IV_Rtv_Dist_MastAcc(char 	*chr_p_client,
+								char  *p_mstclt_a,
+								char    *chr_p_billdt,
+								int 	*int_p_retstat,
+								DEBUG_INFO_STRUCT_H	**l_debug_info_ptr
+								)
+{
+struct sqlca sqlca;
+char   h_dl_client[APL_CLIENT_LENGTH];
+char 	 h_mstclt[APL_CLIENT_LENGTH];	 
+
+EXEC SQL BEGIN DECLARE SECTION;
+EXEC SQL VAR h_dl_client IS STRING;
+EXEC SQL VAR h_mstclt IS STRING;
+EXEC SQL END DECLARE SECTION;
+
+#ifdef APL_THREADS
+	APL_SET_CONTEXT
+	EXEC SQL CONTEXT USE :my_ctx_local;
+#endif
+
+strcpy(h_dl_client,chr_p_client);
+
+	EXEC SQL SELECT DISTINCT(MASTER_CLT) 
+	INTO :h_mstclt
+	FROM IV_DEAL
+	WHERE CLIENT=:h_dl_client AND
+        DATEOF_BILLING=:chr_p_billdt
+			AND ROWNUM < 2;
+	
+
+	if (sqlca.sqlcode < 0)
+	{
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+		CO_InsertErr(l_debug_info_ptr,DB_ERR_NO,APL_NULL_STRING,
+							APL_NULL_STRING,APL_NULL_STRING,
+							__LINE__,__FILE__);
+		APL_GOBACK_FAIL;
+	}
+
+	if (sqlca.sqlcode == 1403)
+	{
+		EXEC SQL SELECT DISTINCT(MASTER_CLT) 
+		INTO :h_mstclt
+		FROM IV_SERVICE_CHRG
+		WHERE CLIENT=:chr_p_client and
+                                DATEOF_BILLING=:chr_p_billdt;  
+		
+		if (sqlca.sqlcode < 0)
+		{
+			*int_p_retstat = IV_CRITCAL_ERROR_IND;
+			CO_InsertErr(l_debug_info_ptr,DB_ERR_NO,APL_NULL_STRING,
+								APL_NULL_STRING,APL_NULL_STRING,
+								__LINE__,__FILE__);
+			APL_GOBACK_FAIL;
+		}
+
+		if (sqlca.sqlcode == 1403)
+		{
+			*int_p_retstat = IV_NO_DATA_FOUND_ERR;
+			APL_GOBACK_FAIL
+		}
+	}
+	*int_p_retstat = IV_SUCCESS;
+	strcpy(p_mstclt_a,h_mstclt);
+
+APL_GOBACK_SUCCESS;
+
+
+		
+
+RETURN_SUCCESS:
+
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Exiting successfully  out of BBDbSelDistinctMastFn\n",NULL,NULL);
+
+	}
+	return APL_SUCCESS;
+	
+RETURN_FAILURE:
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Exiting unsuccesfully out of BBDbSelDistinctMastFn\n",NULL,NULL);
+	}
+	return APL_FAILURE;
+}
+
+
+
+int IV_Rtv_IVNo(char *chr_p_client,
+                        char p_mastsub,
+                        char *chr_p_invoiceno,
+                        char *chr_p_billdt,
+                        char b_gen_ind,
+                        int  *int_p_retstat,
+                        DEBUG_INFO_STRUCT_H **l_debug_info_ptr
+                        )
+{
+
+  long l_invoiceno = 0;
+  char chr_l_finalinvoice_no[14];
+  char chr_l_year[5];
+  char chr_l_month[3];
+  char chr_l_mstacc_a[11];
+
+  EXEC SQL VAR chr_l_mstacc_a IS STRING;
+
+  memset(chr_l_finalinvoice_no, APL_NULL_CHAR, 14);
+  memset(chr_l_year, APL_NULL_CHAR,5);
+  memset(chr_l_month, APL_NULL_CHAR,3);
+  memset(chr_l_mstacc_a,APL_NULL_CHAR,11);
+
+  APL_IF_DEBUG
+      {
+        CO_ProcMonitor(APL_OUT_FILE,"Entering Into IV_Rtv_IVNo\n",NULL,NULL);
+      }
+
+  EXEC SQL SELECT cln_master INTO :chr_l_mstacc_a FROM MT_CLIENT WHERE cln_code = :chr_p_client;
+  IS_ANY_ORA_ERROR
+
+if ( p_mastsub == 'C' || (strcmp(chr_p_client,chr_l_mstacc_a) != 0  && b_gen_ind == 'S'))
+{
+
+    l_invoiceno = 0;
+
+     EXEC SQL SELECT IV_SEQNO into :l_invoiceno  from IV_BILL where client = :chr_p_client and dateof_billing = :chr_p_billdt ;
+
+   IS_ANY_ORA_ERROR
+
+   if (sqlca.sqlcode < 0)
+    {
+         *int_p_retstat = IV_CRITCAL_ERROR_IND;
+         CO_InsertErr(l_debug_info_ptr,DB_ERR_NO,APL_NULL_STRING,
+                        APL_NULL_STRING,APL_NULL_STRING,
+                        __LINE__,__FILE__);
+         APL_GOBACK_FAIL;
+    }
+
+  if(l_invoiceno > 0)
+    {
+
+  		EXEC SQL SELECT TO_CHAR(TO_DATE(:chr_p_billdt),'YYYY') INTO :chr_l_year FROM DUAL;
+  		IS_ANY_ORA_ERROR
+
+   	EXEC SQL SELECT TO_CHAR(TO_DATE(:chr_p_billdt),'MM') INTO :chr_l_month FROM DUAL;
+   	IS_ANY_ORA_ERROR
+
+   	strcat(chr_l_finalinvoice_no,chr_l_year);
+   	strcat(chr_l_finalinvoice_no,"/");
+   	strcat(chr_l_finalinvoice_no,chr_l_month);
+   	strcat(chr_l_finalinvoice_no,"/");
+   	strcat(chr_l_finalinvoice_no,ltoa(l_invoiceno));
+   	strcpy(chr_p_invoiceno,chr_l_finalinvoice_no);
+  	}
+}
+
+  *int_p_retstat = IV_SUCCESS;
+
+	APL_GOBACK_SUCCESS;
+
+	RETURN_SUCCESS:
+
+   APL_IF_DEBUG
+   {
+      CO_ProcMonitor(APL_OUT_FILE,"Exiting successfully  out of IV_Rtv_IVNo\n",NULL,NULL);
+   }
+   return APL_SUCCESS;
+
+RETURN_FAILURE:
+   APL_IF_DEBUG
+   {
+      CO_ProcMonitor(APL_OUT_FILE,"Exiting unsuccesfully out of IV_Rtv_IVNo\n",NULL,NULL);
+   }
+   return APL_FAILURE;
+ }
+

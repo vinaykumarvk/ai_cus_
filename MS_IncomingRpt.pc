@@ -1,0 +1,1605 @@
+
+
+
+
+
+#include "stdio_64.h"
+#include <stdlib.h>
+#include <string.h>
+
+#include "CR_Common.h"
+#include "Intellect_Common.h"
+#include "IV_Control_A.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+/*Commented by kotubabu for Linux Migration
+#define OS_UNIX */
+#define LINERR_LENGTH1 100
+
+char chr_g_client[APL_CLIENT_LENGTH] = APL_NULL_STRING;
+short g_account_ind = 1;
+
+char chr_g_548_537_flg[2] = APL_NULL_STRING;
+short g_548_537_ind = 0;
+
+
+//main(int argc,char *argv[])
+int main(int argc,char **argv)//Changes done for AIX Migration
+{
+	int i,j;
+	char chr_intl_msg_arch_dir[50],chr_report_dir[50],chr_path[50];
+	char chr_l_sesaminipath[70] = APL_NULL_STRING;
+	char  **chr_param_list=NULL;
+	int   int_no_elm = 0;
+
+	FILE *fp_SesamIni = (FILE *) NULL ;
+   DEBUG_INFO_STRUCT_H   *l_debug_info_struct = NULL, **l_debug_info_ptr = &l_debug_info_struct;
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+		char chr_custody_id_b[APL_USERID_LEN];
+		char chr_uname[APL_USERID_LEN];
+		char chr_passwd[APL_PASSWD_LEN];
+		EXEC SQL VAR chr_uname IS STRING;
+		EXEC SQL VAR chr_passwd IS STRING;
+		struct sqlca sqlca;
+
+	EXEC SQL END DECLARE SECTION;
+
+	memset(chr_l_sesaminipath, APL_NULL_CHAR, 70);
+	strcpy(chr_l_sesaminipath, getenv("INTL_ROOT_PATH"));
+	strcat(chr_l_sesaminipath, "/intl_sun.cfg");
+	sqlca.sqlcode = 0L;
+
+	if ( (fp_SesamIni = fopen(chr_l_sesaminipath, "r")) == (FILE *)NULL )
+	{
+		printf("Could not open intl_sun.cfg\n");
+		APL_GOBACK_FAIL
+	}
+
+	APL_FETCH_DB_LOGIN_DETAILS(fp_SesamIni, chr_custody_id_b, chr_uname, chr_passwd,
+								 APL_OUT_FILE, l_debug_info_ptr);
+
+	EXEC SQL CONNECT :chr_uname IDENTIFIED BY :chr_passwd;
+	IS_ANY_ORA_ERROR
+
+	
+ 	
+
+	EXEC SQL VAR chr_g_client IS STRING;
+
+   if (  CO_SplitStr(argv[9],',',&int_no_elm,&chr_param_list) == APL_FAILURE)
+   {
+      CO_ProcMonitor(APL_OUT_FILE,"Split String Function returned failure",NULL,NULL);
+      APL_GOBACK_FAIL
+   }
+	
+	if ( int_no_elm < 7 )   
+   {
+      CO_ProcMonitor(APL_OUT_FILE,"7 Concatenated Parameters are expected in argv[9].Less than expected have been passed",NULL,NULL);
+      APL_GOBACK_FAIL
+   }
+	strcpy(chr_g_client,chr_param_list[5]); 
+
+	if (strcmp(chr_g_client,APL_NULL_STRING)==0)
+		g_account_ind=0;
+
+	strcpy(chr_g_548_537_flg,chr_param_list[6]);
+
+	if (strcmp(chr_g_548_537_flg,"Y")==0)
+		g_548_537_ind=1;
+
+
+	if (APL_FAILURE == MS_Prnt_IncMsgRpt(argv, fp_SesamIni, argv[9],l_debug_info_ptr))
+	{
+		printf("Returned unsuccessfully from MS_Prnt_IncMsgRpt().\n");
+		EXEC SQL ROLLBACK WORK RELEASE;
+		IS_ANY_ORA_ERROR
+		APL_GOBACK_FAIL;
+	}
+	else
+	{
+		printf("Returned successfully from MS_Prnt_IncMsgRpt().\n");
+		EXEC SQL COMMIT WORK RELEASE;
+		IS_ANY_ORA_ERROR
+		APL_GOBACK_SUCCESS;
+	}
+
+	RETURN_SUCCESS:
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE, "Exiting Out Of main successfully\n", 
+					NULL, NULL);
+	}//AIX - Warnings Removal 
+		fclose(fp_SesamIni);
+		exit(0);
+	
+	RETURN_FAILURE:
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE, "Exiting Out Of main unsuccessfully\n", 
+					NULL, NULL);
+	}
+		fclose(fp_SesamIni);
+		exit(-1);//AIX Warning Removal
+}
+
+
+int MS_Prnt_IncMsgRpt(char **argv, FILE *p_fp_sesamini, char *mesgflgs, 
+					  DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		char chr_h_batch_in_proc_rowid[APL_ROWID_LEN] = APL_NULL_STRING;
+		struct sqlca sqlca;
+	EXEC SQL END DECLARE SECTION;
+
+	
+	char chr_rjt,chr_rpr,chr_stp,chr_pnd,ALL;
+	short l_rus_flg = 0;
+	char chr_l_reportpath[70], chr_l_archpath[70];
+	char chr_l_repfilenm[15];
+	int int_l_srlnum = 0;
+	char chr_l_rep_date[APL_DATE_LEN] = APL_NULL_STRING;
+	char chr_l_date[APL_DATE_LEN] = APL_NULL_STRING;
+	char h_msg_stat[4] = APL_NULL_STRING;
+	FILE *fp_UserLog = (FILE *)NULL;
+	FILE *fp_Report = (FILE *)NULL;
+	
+	char chr_l_now[APL_DATE_LEN] = APL_NULL_STRING;
+        
+	chr_rjt=mesgflgs[0];
+	chr_rpr=mesgflgs[2];
+	chr_stp=mesgflgs[4];
+	 
+	
+	
+    if (  APL_FAILURE == CO_RtvSysParams(l_debug_info_ptr)   )
+    {
+      APL_GOBACK_FAIL
+    }
+    l_rus_flg = 0;
+    if (APL_FAILURE == CO_Chk_CntryEnabled(  "INCOMING_MSG",
+                                             "PROC_53X",
+                                             &l_rus_flg,
+                                             l_debug_info_ptr ))
+    {
+       APL_GOBACK_FAIL
+    }
+   
+	if (l_rus_flg)
+	{
+		chr_pnd=mesgflgs[6];
+   	ALL=mesgflgs[8];
+	}
+	else
+	
+	ALL=mesgflgs[6];
+	sqlca.sqlcode = 0L;
+
+	EXEC SQL SELECT ROWID
+				INTO :chr_h_batch_in_proc_rowid
+				FROM 	SYS_BATCHPROC
+				WHERE PROCESS_NAME 	= RTRIM(:argv[0]) 
+				AND	PROC_INIT			= RTRIM(:argv[1])
+				AND	STARTDATE	= :argv[2]
+				AND 	STATUS 		= 'started'
+				FOR UPDATE OF STATUS;
+
+	IS_ANY_ORA_ERROR
+
+	if ( APL_ZERO_RESULT_SET )
+	{
+		fprintf(APL_OUT_FILE, "Record not int_found in Batch In Proc. with status_ind as started.\n");
+		fflush(APL_OUT_FILE);
+		APL_GOBACK_FAIL
+	}
+
+	if ( APL_FAILURE == CO_Rtv_RptFileName("4f", APL_LOGFILE_DESC, 100, 
+													argv[5], argv, &fp_UserLog, 
+													 l_debug_info_ptr) )
+	{
+		printf("Could not open User Log h_file.\n");
+		APL_GOBACK_FAIL
+	}
+
+	memset(chr_l_reportpath, APL_NULL_CHAR, 70);
+	memset(chr_l_archpath, APL_NULL_CHAR, 70);
+
+	
+	fprintf(fp_UserLog,"Report Generation started.....\n");
+
+
+	if ( APL_FAILURE == CO_ReadToken(p_fp_sesamini, "INTL_REP_PATH", 
+												chr_l_reportpath, l_debug_info_ptr))
+	{
+		fprintf(fp_UserLog,"Could not read chr_value of the chr_token REPORTS_DIR.\n");
+		fflush(fp_UserLog);
+		APL_GOBACK_FAIL
+	}
+
+	if ( APL_FAILURE == CO_ReadToken(p_fp_sesamini, "INTL_MSINC_ARC_PATH", 
+												chr_l_archpath, l_debug_info_ptr))
+	{
+		fprintf(fp_UserLog,"Could not read chr_value of the chr_token SESAM_INC_ARCH_MESG.\n");
+		fflush(fp_UserLog);
+		APL_GOBACK_FAIL
+	}
+
+	if ( APL_FAILURE == CO_Rtv_RptFileName("4F", "Inc. Mesg. Rpt.", 100, 
+													argv[5], argv, &fp_Report, 
+													 l_debug_info_ptr) )
+	{
+		fprintf(fp_UserLog, "Could not open User Log h_file.\n");
+		fflush(fp_UserLog);
+		APL_GOBACK_FAIL
+	}
+
+	memset(chr_l_repfilenm, APL_NULL_CHAR, 15);
+
+	if ( APL_FAILURE == CO_Rtv_FileNm_From_Pointer(fp_Report, chr_l_reportpath, 
+															  chr_l_repfilenm) )
+	{
+		fprintf(fp_UserLog, "Could not get Name of Report File knowing the pointer.\n");
+		fflush(fp_UserLog);
+		APL_GOBACK_FAIL
+	}
+
+	strcat(chr_l_reportpath, "/");
+	strcat(chr_l_reportpath, chr_l_repfilenm);
+
+	
+
+	if ( APL_FAILURE == CO_RtvMachDtTime(chr_l_now, l_debug_info_ptr) )
+	{
+		APL_GOBACK_FAIL
+	}
+	sscanf(chr_l_now, "%[^ ]",chr_l_date);
+	strcat(chr_l_date,APL_NULL_TIME);
+	
+
+        
+
+	EXEC SQL UPDATE MS_INMSGRP a
+	SET a.REPORT_IND='Y' 
+	WHERE a.MESSAGE_STAT='RPR'
+          AND a.REPORT_IND='N'
+	  AND a.SWIFT_MSG_NO='54C'
+          AND EXISTS (  SELECT 1 FROM MS_INMSGRP b
+                         WHERE b.MESSAGE_STAT IN ( 'RJT', 'STP','RJO')
+                           AND b.REPORT_IND = 'N'
+                           AND b.SWIFT_MSG_NO ='54C'
+                           AND b.NAMEOF_FILE = a.NAMEOF_FILE );
+	IS_ANY_ORA_ERROR;
+
+	EXEC SQL UPDATE MS_INMSGRP a
+	SET a.REPORT_IND='Y' 
+	WHERE a.MESSAGE_STAT='RPR'
+          AND a.REPORT_IND='N'
+	  AND a.SWIFT_MSG_NO='54N'
+          AND EXISTS (  SELECT 1 FROM MS_INMSGRP b
+                         WHERE b.MESSAGE_STAT IN ( 'STO','RJO')
+                           AND b.REPORT_IND = 'N'
+                           AND b.SWIFT_MSG_NO ='54N'
+                           AND b.NAMEOF_FILE = a.NAMEOF_FILE );
+	IS_ANY_ORA_ERROR;
+
+	if (APL_FAILURE == MS_Rtv_IncRptCurSrlNo(&int_l_srlnum, chr_l_date, l_debug_info_ptr))
+	{
+		APL_GOBACK_FAIL	
+	}
+
+	if (APL_FAILURE == MS_Chk_IncRptMsgAlrdyPrcd(fp_UserLog,l_debug_info_ptr))
+	{
+		APL_GOBACK_FAIL	
+	}
+
+	if (g_548_537_ind ==0)   
+	{
+		if (APL_FAILURE == MS_Prnt_IncRptSummary(fp_UserLog, fp_Report, int_l_srlnum,
+												  		chr_l_date, l_debug_info_ptr))
+   	{
+			APL_GOBACK_FAIL
+		}
+	}
+
+	if (ALL == 'Y')
+   {
+      strcpy(h_msg_stat,"ALL");
+      if (APL_FAILURE == MS_Prnt_IncRptReason(fp_UserLog,fp_Report,int_l_srlnum,
+                                    chr_l_date,chr_l_archpath,chr_l_repfilenm,
+                                    h_msg_stat,l_debug_info_ptr))
+      {
+         APL_GOBACK_FAIL
+      }
+      if (APL_FAILURE == MS_Mod_IncRptFlag(int_l_srlnum, chr_l_date, h_msg_stat,
+                                       fp_UserLog, l_debug_info_ptr))
+      {
+         APL_GOBACK_FAIL
+      }
+   }
+
+	if (chr_rjt == 'Y')
+	{
+		if (g_548_537_ind==0)
+		{
+			strcpy(h_msg_stat,"RJO");
+			if (APL_FAILURE == MS_Prnt_IncRptReason(fp_UserLog,fp_Report,int_l_srlnum,
+												chr_l_date,chr_l_archpath,chr_l_repfilenm,
+												h_msg_stat,l_debug_info_ptr))
+      	{
+				APL_GOBACK_FAIL
+			}
+			if (APL_FAILURE == MS_Mod_IncRptFlag(int_l_srlnum, chr_l_date, h_msg_stat,
+													fp_UserLog, l_debug_info_ptr))
+			{
+				APL_GOBACK_FAIL
+			}
+		}
+	   strcpy(h_msg_stat,"RJT");    
+      if (APL_FAILURE == MS_Prnt_IncRptReason(fp_UserLog,fp_Report,int_l_srlnum,
+                                    chr_l_date,chr_l_archpath,chr_l_repfilenm,
+                                    h_msg_stat,l_debug_info_ptr))
+      {
+         APL_GOBACK_FAIL
+      }
+      if (APL_FAILURE == MS_Mod_IncRptFlag(int_l_srlnum, chr_l_date, h_msg_stat,
+                                       fp_UserLog, l_debug_info_ptr))
+      {
+         APL_GOBACK_FAIL
+      }
+
+	}
+	if (chr_rpr == 'Y')
+	{
+		strcpy(h_msg_stat,"RPR");
+		if (APL_FAILURE == MS_Prnt_IncRptReason(fp_UserLog,fp_Report,int_l_srlnum,
+												 chr_l_date,chr_l_archpath,chr_l_repfilenm,
+												 h_msg_stat,l_debug_info_ptr))
+		{
+			APL_GOBACK_FAIL
+		}
+		if (APL_FAILURE == MS_Mod_IncRptFlag(int_l_srlnum, chr_l_date, h_msg_stat,
+													fp_UserLog, l_debug_info_ptr))
+		{
+			APL_GOBACK_FAIL
+		}
+	}
+	
+	if (l_rus_flg)
+	{
+		if (chr_pnd == 'Y')
+   	{
+      	strcpy(h_msg_stat,"PND");
+      	if (APL_FAILURE == MS_Prnt_IncRptReason(fp_UserLog,fp_Report,int_l_srlnum,
+                                     chr_l_date,chr_l_archpath,chr_l_repfilenm,
+                                     h_msg_stat,l_debug_info_ptr))
+      	{
+         	APL_GOBACK_FAIL
+      	}
+      	if (APL_FAILURE == MS_Mod_IncRptFlag(int_l_srlnum, chr_l_date, h_msg_stat,
+                                       fp_UserLog, l_debug_info_ptr))
+      	{
+         	APL_GOBACK_FAIL
+      	}
+   	}
+	}	
+	
+	if (chr_stp == 'Y')
+	{
+		if (g_548_537_ind==0)
+		{
+			strcpy(h_msg_stat,"STO");
+			if (APL_FAILURE == MS_Prnt_IncRptReason(fp_UserLog,fp_Report,int_l_srlnum,
+												 chr_l_date,chr_l_archpath,chr_l_repfilenm,
+												 h_msg_stat,l_debug_info_ptr))
+			{
+				APL_GOBACK_FAIL
+			}
+			if (APL_FAILURE == MS_Mod_IncRptFlag(int_l_srlnum, chr_l_date, h_msg_stat,
+													fp_UserLog, l_debug_info_ptr))
+			{
+				APL_GOBACK_FAIL
+			}
+		}
+	   strcpy(h_msg_stat,"STP"); 
+      if (APL_FAILURE == MS_Prnt_IncRptReason(fp_UserLog,fp_Report,int_l_srlnum,
+                                     chr_l_date,chr_l_archpath,chr_l_repfilenm,
+                                     h_msg_stat,l_debug_info_ptr))
+      {
+         APL_GOBACK_FAIL
+      }
+      if (APL_FAILURE == MS_Mod_IncRptFlag(int_l_srlnum, chr_l_date, h_msg_stat,
+                                       fp_UserLog, l_debug_info_ptr))
+      {
+         APL_GOBACK_FAIL
+      }
+	}
+		
+	EXEC SQL UPDATE SYS_BATCHPROC
+				SET STATUS = 'completed'
+				WHERE ((PROCESS_NAME = :argv[0]) 
+						  AND	PROC_INIT = RTRIM(:argv[1])
+						  AND	STARTDATE = :argv[2]
+						  AND (STATUS = 'started'));
+
+	IS_ANY_ORA_ERROR
+
+	if ( APL_ZERO_RESULT_SET )
+	{
+		
+		fprintf(APL_OUT_FILE, "Record not int_found in Batch In Proc. for marking status_ind as completed.\n");
+		fflush(APL_OUT_FILE);
+		APL_GOBACK_FAIL
+	}
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+	{
+		CO_ProcMonitor(APL_OUT_FILE, "Exiting Out Of MS_Prnt_IncMsgRpt successfully\n",
+					NULL, NULL);
+		fprintf(fp_UserLog,"Report Completed successfully.\n");
+		
+
+		fflush(APL_OUT_FILE);
+		fclose(fp_Report);
+		fclose(fp_UserLog);
+		return(APL_SUCCESS);
+	}
+	
+	RETURN_FAILURE:
+	{
+		CO_ProcMonitor(APL_OUT_FILE, "Exiting Out Of MS_Prnt_IncMsgRpt unsuccessfully\n",
+					NULL, NULL);
+		fprintf(fp_UserLog,"Report Generation has errors....\n");
+		CO_ProcMonitor(fp_UserLog, APL_NULL_STRING, l_debug_info_ptr, NULL);
+		fclose(fp_Report);
+		fclose(fp_UserLog);
+		return(APL_FAILURE);
+	}
+}
+
+
+int MS_Chk_IncRptMsgAlrdyPrcd(FILE *p_fl_userlog_a, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+  EXEC SQL BEGIN DECLARE SECTION;
+	int int_h_tmp_total1 = 0;
+	int int_h_tmp_total2 = 0;
+  	struct sqlca sqlca;
+  EXEC SQL END DECLARE SECTION;
+
+	sqlca.sqlcode = 0L;
+
+  EXEC SQL SELECT NVL(COUNT(*), 0)
+ 			  INTO :int_h_tmp_total1
+  			  FROM MS_INMSGRP
+  			  WHERE REPORT_IND = 'N';
+
+	IS_ANY_ORA_ERROR
+
+	printf("Testing for activity of Inc. Msg. daemon....\n");
+	fflush(stdout);
+ 	sleep(5);
+
+ 	EXEC SQL SELECT NVL(COUNT(*), 0)
+				INTO :int_h_tmp_total2
+ 				FROM MS_INMSGRP
+  				WHERE REPORT_IND = 'N';
+
+	IS_ANY_ORA_ERROR;
+
+  	if (int_h_tmp_total1 != int_h_tmp_total2)
+  {
+	  fprintf(p_fl_userlog_a,"Incoming Messages Daemon is currently processing messages. Please fire for report after sometime.\n");
+
+	  APL_GOBACK_FAIL
+  }
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+	{
+		CO_ProcMonitor(APL_OUT_FILE,
+					"Exiting Out Of MS_Chk_IncRptMsgAlrdyPrcd successfully\n",
+					NULL, NULL);
+		fflush(APL_OUT_FILE);
+		return(APL_SUCCESS);
+	}
+	
+	RETURN_FAILURE:
+	{
+		CO_ProcMonitor(APL_OUT_FILE,
+					"Exiting Out Of MS_Chk_IncRptMsgAlrdyPrcd unsuccessfully\n",
+					NULL, NULL);
+		fflush(APL_OUT_FILE);
+		return(APL_FAILURE);
+	}
+}
+
+
+int MS_Mod_IncRptFlag(int p_srlnum, char *p_rep_date, char *p_msg_stat,
+					  FILE *p_fl_userlog_a,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+ 		struct sqlca sqlca;
+	EXEC SQL END DECLARE SECTION;
+
+	sqlca.sqlcode = 0L;
+
+	EXEC SQL UPDATE MS_INMSGRP
+				SET REPORT_IND = 'Y'
+				WHERE MESSAGE_STAT = DECODE(:p_msg_stat,'ALL',MESSAGE_STAT,:p_msg_stat)
+						AND REPORT_IND = 'N'
+						AND ((srl_num <= :p_srlnum AND REPORT_DT = :p_rep_date)
+							  OR (REPORT_DT < :p_rep_date)) AND (CLIENT = :chr_g_client OR :g_account_ind = 0)
+						AND ((:g_548_537_ind=0 AND swift_msg_no not in ('548','537')) OR 
+								(:g_548_537_ind=1 AND swift_msg_no in ('548','537'))) ;
+
+	IS_ANY_ORA_ERROR;
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+	{
+		CO_ProcMonitor(APL_OUT_FILE, "Exiting Out Of MS_Mod_IncRptFlag successfully\n",
+					NULL, NULL);
+		return(APL_SUCCESS);
+	}
+	
+	RETURN_FAILURE:
+	{
+		CO_ProcMonitor(APL_OUT_FILE, "Exiting Out Of MS_Mod_IncRptFlag unsuccessfully\n",
+					NULL, NULL);
+		return(APL_FAILURE);
+	}
+}
+
+
+
+int MS_Rtv_IncRptCurSrlNo(int *p_srlnum, char *p_rep_date,
+							DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+
+		int int_h_srlnum = 0;
+		short i_SrlNum = 0;
+		struct sqlca sqlca;
+
+	EXEC SQL END DECLARE SECTION;
+
+	sqlca.sqlcode = 0L;
+
+	EXEC SQL SELECT MAX(srl_num)
+				INTO :int_h_srlnum:i_SrlNum
+				FROM MS_INMSGRP
+				WHERE (REPORT_IND='N'
+						 AND REPORT_DT = :p_rep_date AND (CLIENT = :chr_g_client OR :g_account_ind = 0));
+
+	IS_ANY_ORA_ERROR
+
+	if ( i_SrlNum == -1 )
+	{
+		int_h_srlnum = 0;
+	}
+
+	*p_srlnum = int_h_srlnum;
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+	{
+		CO_ProcMonitor(APL_OUT_FILE, "Exiting Out Of MS_Rtv_IncRptCurSrlNo successfully\n", NULL, NULL);
+		return(APL_SUCCESS);
+	}
+	
+	RETURN_FAILURE:
+	{
+		CO_ProcMonitor(APL_OUT_FILE, "Exiting Out Of MS_Rtv_IncRptCurSrlNo unsuccessfully\n", NULL, NULL);
+		return(APL_FAILURE);
+	}
+}
+
+
+int MS_Prnt_IncRptSummary(FILE *p_fp_userlog, FILE *p_fp_report, int p_srlno,
+						  char *p_rep_date, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	
+   short l_rus_flg                     = 0;
+   
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+		int int_h_no_of_processed = 0;
+		int int_h_no_of_52x = 0;
+		int h_no_of_592 = 0;
+		int int_h_no_of_trd_generated_normal = 0;
+      int int_h_no_of_trd_prematched = 0;
+		int int_h_no_of_trd_repaired = 0;
+		int int_h_no_of_52x_rejected_normal = 0;
+      int int_h_no_of_52x_rejected_order = 0;
+		int h_no_of_592_processed = 0;
+		int h_no_of_592_Rejected = 0;
+		int int_h_no_of_53x = 0;
+		int int_h_no_of_53x_rejected = 0;
+		int int_h_no_of_53x_pended = 0;
+		int int_h_no_of_53x_settled = 0;
+		int int_h_no_other_messages = 0;
+		int i = 0;
+		char chr_h_report_date[20] = APL_NULL_STRING;
+		struct sqlca sqlca;
+
+	EXEC SQL END DECLARE SECTION;
+
+	while (p_rep_date[i] != ' ')
+	{
+			chr_h_report_date[i]=p_rep_date[i];
+			i++;
+	}
+			chr_h_report_date[i]='\0';
+
+	
+      l_rus_flg = 0;
+      if (APL_FAILURE == CO_Chk_CntryEnabled(  "INCOMING_MSG",
+                                             "PROC_53X",
+                                             &l_rus_flg,
+                                             l_debug_info_ptr ))
+      {
+         APL_GOBACK_FAIL
+      }
+	
+	
+	EXEC SQL SELECT NVL(COUNT(DISTINCT NAMEOF_FILE), 0)
+				INTO :int_h_no_of_processed
+				FROM  MS_INMSGRP
+				WHERE ((REPORT_IND = 'N')
+						 AND (((srl_num <= :p_srlno) AND (REPORT_DT = :p_rep_date))
+					  		   OR (REPORT_DT < :p_rep_date)) AND (CLIENT = :chr_g_client OR :g_account_ind = 0)
+						 AND swift_msg_no not in ('548','537')
+						);	
+
+	IS_ANY_ORA_ERROR
+
+	EXEC SQL SELECT NVL(COUNT(DISTINCT NAMEOF_FILE), 0)
+				INTO :int_h_no_of_52x
+				FROM MS_INMSGRP
+				WHERE ((REPORT_IND = 'N')
+						 AND ((SWIFT_MSG_NO='52X') OR (SWIFT_MSG_NO='52x') OR (SWIFT_MSG_NO='54N'))	
+						 AND (((srl_num <= :p_srlno) AND (REPORT_DT = :p_rep_date))
+								OR (REPORT_DT < :p_rep_date)) AND (CLIENT = :chr_g_client OR :g_account_ind = 0)
+						);	
+
+	IS_ANY_ORA_ERROR
+
+	EXEC SQL SELECT NVL(COUNT(DISTINCT NAMEOF_FILE), 0)
+				INTO :h_no_of_592
+				FROM  MS_INMSGRP
+				WHERE ((REPORT_IND = 'N')
+						 AND ((SWIFT_MSG_NO='592') OR (SWIFT_MSG_NO='54C'))						
+						 AND (((srl_num <= :p_srlno) AND (REPORT_DT = :p_rep_date))
+						 		OR (REPORT_DT < :p_rep_date)) AND (CLIENT = :chr_g_client OR :g_account_ind = 0)
+						);	
+
+	IS_ANY_ORA_ERROR
+
+	EXEC SQL SELECT NVL(COUNT(DISTINCT NAMEOF_FILE), 0)
+				INTO :int_h_no_of_trd_generated_normal
+				FROM  MS_INMSGRP
+				WHERE ((MESSAGE_STAT='STP')
+						 AND (REPORT_IND = 'N')
+						 AND ((SWIFT_MSG_NO='52X') OR (SWIFT_MSG_NO='52x') OR (SWIFT_MSG_NO='54N'))
+						 AND (((srl_num <= :p_srlno) AND (REPORT_DT = :p_rep_date))
+								OR (REPORT_DT < :p_rep_date)) AND (CLIENT = :chr_g_client OR :g_account_ind = 0)
+						);	
+
+	IS_ANY_ORA_ERROR
+
+	
+	EXEC SQL SELECT NVL(COUNT(DISTINCT NAMEOF_FILE), 0)
+            INTO :int_h_no_of_trd_prematched
+            FROM  MS_INMSGRP
+            WHERE ((MESSAGE_STAT='STO')
+                   AND (REPORT_IND = 'N')
+                   AND ((SWIFT_MSG_NO='52X') OR (SWIFT_MSG_NO='52x') OR (SWIFT_MSG_NO='54N'))
+                   AND (((srl_num <= :p_srlno) AND (REPORT_DT = :p_rep_date
+))
+                        OR (REPORT_DT < :p_rep_date)) AND (CLIENT = :chr_g_client OR :g_account_ind = 0)
+                  );
+
+
+	EXEC SQL SELECT NVL(COUNT(DISTINCT NAMEOF_FILE), 0)
+				INTO :int_h_no_of_trd_repaired
+				FROM  MS_INMSGRP
+				WHERE ((MESSAGE_STAT='RPR')
+						 AND (REPORT_IND = 'N')
+						 AND ((SWIFT_MSG_NO='52X') OR (SWIFT_MSG_NO='52x') OR (SWIFT_MSG_NO='54N'))
+						 AND (((srl_num <= :p_srlno) AND (REPORT_DT = :p_rep_date))
+								OR (REPORT_DT < :p_rep_date)) AND (CLIENT = :chr_g_client OR :g_account_ind = 0)
+						);	
+
+	IS_ANY_ORA_ERROR
+
+	EXEC SQL SELECT NVL(COUNT(DISTINCT NAMEOF_FILE), 0)
+				INTO :int_h_no_of_52x_rejected_normal
+				FROM  MS_INMSGRP
+				WHERE ((MESSAGE_STAT='RJT')
+						  AND (REPORT_IND = 'N')
+						  AND ((SWIFT_MSG_NO='52X') OR (SWIFT_MSG_NO='52x') OR (SWIFT_MSG_NO='54N'))
+						  AND (((srl_num <= :p_srlno) AND (REPORT_DT = :p_rep_date))
+								 OR (REPORT_DT < :p_rep_date)) AND (CLIENT = :chr_g_client OR :g_account_ind = 0)
+						);	
+
+	IS_ANY_ORA_ERROR
+	
+	EXEC SQL SELECT NVL(COUNT(DISTINCT NAMEOF_FILE), 0)
+            INTO :int_h_no_of_52x_rejected_order
+            FROM  MS_INMSGRP
+            WHERE ((MESSAGE_STAT='RJO')
+                    AND (REPORT_IND = 'N')
+                    AND ((SWIFT_MSG_NO='52X') OR (SWIFT_MSG_NO='52x') OR (SWIFT_MSG_NO='54N'))
+                    AND (((srl_num <= :p_srlno) AND (REPORT_DT = :p_rep_date))
+                         OR (REPORT_DT < :p_rep_date)) AND (CLIENT = :chr_g_client OR :g_account_ind = 0)
+                  );
+
+	EXEC SQL SELECT NVL(COUNT(DISTINCT NAMEOF_FILE), 0)
+				INTO :h_no_of_592_processed
+				FROM  MS_INMSGRP
+				WHERE ((MESSAGE_STAT='STP')
+						 AND (REPORT_IND = 'N')
+						 AND ((SWIFT_MSG_NO='592') OR (SWIFT_MSG_NO='54C'))
+						 AND (((srl_num <= :p_srlno) AND (REPORT_DT = :p_rep_date))
+								OR (REPORT_DT < :p_rep_date)) AND (CLIENT = :chr_g_client OR :g_account_ind = 0)
+						);	
+
+	IS_ANY_ORA_ERROR
+
+	EXEC SQL SELECT NVL(COUNT(DISTINCT NAMEOF_FILE), 0)
+				INTO :h_no_of_592_Rejected
+				FROM  MS_INMSGRP
+				WHERE ((MESSAGE_STAT='RJT')
+						 AND (REPORT_IND = 'N')
+						 AND ((SWIFT_MSG_NO='592') OR (SWIFT_MSG_NO='54C'))
+						 AND (((srl_num <= :p_srlno) AND (REPORT_DT = :p_rep_date))
+							OR (REPORT_DT < :p_rep_date)) AND (CLIENT = :chr_g_client OR :g_account_ind = 0)
+						);	
+
+	IS_ANY_ORA_ERROR
+
+  
+	if (l_rus_flg)
+	{
+		EXEC SQL SELECT NVL(COUNT(DISTINCT NAMEOF_FILE), 0)
+            INTO :int_h_no_of_53x
+            FROM MS_INMSGRP
+            WHERE ((REPORT_IND = 'N')
+                   AND ((SWIFT_MSG_NO='53X') OR (SWIFT_MSG_NO='53x') OR (SWIFT_MSG_NO='54s') OR (SWIFT_MSG_NO='54S'))
+                   AND (((srl_num <= :p_srlno) AND (REPORT_DT = :p_rep_date))
+                        OR (REPORT_DT < :p_rep_date)) AND (CLIENT = :chr_g_client OR :g_account_ind = 0)
+                  );
+
+   	IS_ANY_ORA_ERROR
+
+		EXEC SQL SELECT NVL(COUNT(DISTINCT NAMEOF_FILE), 0)
+            INTO :int_h_no_of_53x_rejected
+            FROM  MS_INMSGRP
+            WHERE ((MESSAGE_STAT='RJT')
+                    AND (REPORT_IND = 'N')
+                    AND ((SWIFT_MSG_NO='53X') OR (SWIFT_MSG_NO='53x') OR (SWIFT_MSG_NO='54s') OR (SWIFT_MSG_NO='54S'))
+                    AND (((srl_num <= :p_srlno) AND (REPORT_DT = :p_rep_date))
+                         OR (REPORT_DT < :p_rep_date)) AND (CLIENT = :chr_g_client OR :g_account_ind = 0)
+                  );
+
+   	IS_ANY_ORA_ERROR
+
+		EXEC SQL SELECT NVL(COUNT(DISTINCT NAMEOF_FILE), 0)
+            INTO :int_h_no_of_53x_pended
+            FROM  MS_INMSGRP
+            WHERE ((MESSAGE_STAT='PND')
+                    AND (REPORT_IND = 'N')
+                    AND ((SWIFT_MSG_NO='53X') OR (SWIFT_MSG_NO='53x')OR (SWIFT_MSG_NO='54s') OR (SWIFT_MSG_NO='54S'))
+                    AND (((srl_num <= :p_srlno) AND (REPORT_DT = :p_rep_date))
+                         OR (REPORT_DT < :p_rep_date)) AND (CLIENT = :chr_g_client OR :g_account_ind = 0)
+                  );
+
+      IS_ANY_ORA_ERROR
+
+		EXEC SQL SELECT NVL(COUNT(DISTINCT NAMEOF_FILE), 0)
+            INTO :int_h_no_of_53x_settled
+            FROM  MS_INMSGRP
+            WHERE ((MESSAGE_STAT='STP')
+                    AND (REPORT_IND = 'N')
+                    AND ((SWIFT_MSG_NO='53X') OR (SWIFT_MSG_NO='53x')OR (SWIFT_MSG_NO='54s') OR (SWIFT_MSG_NO='54S'))
+                    AND (((srl_num <= :p_srlno) AND (REPORT_DT = :p_rep_date))
+                         OR (REPORT_DT < :p_rep_date)) AND (CLIENT = :chr_g_client OR :g_account_ind = 0)
+                  );
+
+      IS_ANY_ORA_ERROR
+
+		 int_h_no_other_messages = int_h_no_of_processed - ( int_h_no_of_52x + h_no_of_592 + int_h_no_of_53x);
+	}
+	else
+	{	
+	int_h_no_other_messages = int_h_no_of_processed - ( int_h_no_of_52x + h_no_of_592 );
+	}
+
+	fprintf(p_fp_report,"							INCOMING MESSAGE REPORT\n");
+	fprintf(p_fp_report,"   						Date : %s\n",chr_h_report_date);
+	if (g_account_ind == 1) 
+		fprintf(p_fp_report,"                     Safekeeping Account : %s\n",chr_g_client);
+	fprintf(p_fp_report,"----------------------------------------------------------------------------\n");
+	fprintf(p_fp_report,"Total number of messages processed        	 : %d\n",int_h_no_of_processed);
+	fprintf(p_fp_report,"Total number of 52x/54x messages(New)     		: %d\n",int_h_no_of_52x);	
+	fprintf(p_fp_report,"Total number of 592/54x messages(Cancel)  		: %d\n",h_no_of_592);	
+	
+	if(l_rus_flg)
+	{
+		fprintf(p_fp_report,"Total number of 53x/54x(Settlement) messages            : %d\n",int_h_no_of_53x);
+	}
+	
+	fprintf(p_fp_report,"Total number of Other messages            		: %d\n",int_h_no_other_messages);
+	fprintf(p_fp_report,"Total number of Trades generated          		: %d\n",int_h_no_of_trd_generated_normal);
+   fprintf(p_fp_report,"Total number of Trades Prematched         		: %d\n",int_h_no_of_trd_prematched);
+	fprintf(p_fp_report,"Total number of Trades Repaired           		: %d\n",int_h_no_of_trd_repaired);
+	fprintf(p_fp_report,"Total number of 52x/54x Rejected(Normal)  		: %d\n",int_h_no_of_52x_rejected_normal);
+   fprintf(p_fp_report,"Total number of 52x/54x Rejected (Order)  		: %d\n",int_h_no_of_52x_rejected_order);
+	fprintf(p_fp_report,"Total number of 592/54x processed successfully	        : %d\n",h_no_of_592_processed);
+	fprintf(p_fp_report,"Total number of 592 rejected              		: %d\n",h_no_of_592_Rejected);
+	
+	if(l_rus_flg)
+	{
+		fprintf(p_fp_report,"Total number of 53x/54x(Settlement) Rejected	        : %d\n",int_h_no_of_53x_rejected);
+		fprintf(p_fp_report,"Total number of 53x/54x(Settlement) Pended	        : %d\n",int_h_no_of_53x_pended);
+		fprintf(p_fp_report,"Total number of 53x/54x(Settlement) Settled	        : %d\n",int_h_no_of_53x_settled);
+	}
+	
+	fprintf(p_fp_report,"----------------------------------------------------------------------------\n");
+	fprintf(p_fp_report, "\n");
+	fprintf(p_fp_report, "\f\n"); 
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+	{
+		CO_ProcMonitor(APL_OUT_FILE, "Exiting Out Of MS_Prnt_IncRptSummary successfully\n", NULL, NULL);
+		return(APL_SUCCESS);
+	}
+	
+	RETURN_FAILURE:
+	{
+		CO_ProcMonitor(APL_OUT_FILE, "Exiting Out Of MS_Prnt_IncRptSummary unsuccessfully\n", NULL, NULL);
+		return(APL_FAILURE);
+	}
+}
+
+
+
+int MS_Prnt_IncRptReason(FILE *p_fp_userlog, FILE *p_fp_report, int p_srlnum, 
+					 char *p_rep_date, char *p_archmsgnm, char *p_repfilenm, 
+					 char *p_msgstat, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+		EXEC SQL BEGIN DECLARE SECTION;
+		char chr_h_mesg_status[4] = APL_NULL_STRING;
+		char chr_last_settle_dt[APL_DATE_LEN] = APL_NULL_STRING;  
+		char chr_h_fmt_date[12] = APL_NULL_STRING;                
+		char chr_fmtsettledt[12] = APL_NULL_STRING;
+      char chr_date_tag[11] = APL_NULL_STRING;
+      int int_h_no_of_52xrjt = 0;
+      int int_h_no_of_52xrjo = 0;
+      int h_no_of_592RJT = 0;
+      int int_h_no_of_52xrpr = 0;
+      int int_h_no_of_52xstp = 0;
+      int int_h_no_of_52xsto = 0;
+      int h_no_of_592STP = 0;									
+
+		 
+		int int_h_no_of_53xrjt = 0;										
+		int int_h_no_of_53xpnd = 0;
+		int int_h_no_of_53xstp = 0;
+		
+		
+		int int_h_no_of_othrs  = 0;
+		int int_h_no_of_failmsg_548  = 0;
+		int int_h_no_of_failmsg_537  = 0;
+
+      int int_not_null_indicator = 0;
+
+		MS_INMSGRP_STRUCT_H   l_ms_inmsgrp_struct_h;
+		MS_INMSGRP_STRUCT_I   l_ms_inmsgrp_struct_ia = {0, 0, 0, 0, 0, 0, 0, 0,0,0}; 
+		EXEC SQL VAR l_ms_inmsgrp_struct_h.h_rep_dt IS STRING;
+		EXEC SQL VAR l_ms_inmsgrp_struct_h.h_swift_msg_no IS STRING;
+		EXEC SQL VAR l_ms_inmsgrp_struct_h.h_nameof_file IS STRING;
+		EXEC SQL VAR l_ms_inmsgrp_struct_h.h_message_stat IS STRING;
+		EXEC SQL VAR l_ms_inmsgrp_struct_h.h_reject_reason IS STRING;
+		EXEC SQL VAR l_ms_inmsgrp_struct_h.h_dl_client IS STRING;							
+		EXEC SQL VAR chr_h_mesg_status IS STRING;
+		EXEC SQL VAR l_ms_inmsgrp_struct_h.h_setl_dt IS STRING;                 
+		EXEC SQL VAR l_ms_inmsgrp_struct_h.h_sfe_indentity_no IS STRING;
+		EXEC SQL VAR chr_h_fmt_date IS STRING;                             
+		struct sqlca sqlca;
+
+	EXEC SQL END DECLARE SECTION;
+	
+	int int_h_no_files = 0;
+	int int_l_isfirstmsg = 1; 
+	int int_l_first_settle_dt = 1;                                        
+	char chr_file_desc[40] = APL_NULL_STRING;
+	char chr_last_file_name[16] = APL_NULL_STRING;
+	char chr_reason_desc[41] = APL_NULL_STRING;
+	char chr_command[100] = APL_NULL_STRING;
+	char chr_l_bad_file[16] = APL_NULL_STRING;
+	char chr_l_msgline[LINERR_LENGTH1] = APL_NULL_STRING;
+	FILE *fp_content = NULL, *fp_msgfile = NULL;
+
+        
+   char chr_l_temp_msgline[70] = APL_NULL_STRING;
+	
+	short l_rus_flg = 0;
+	
+		
+	sqlca.sqlcode = 0L;
+	memset(&l_ms_inmsgrp_struct_h, NULL, sizeof(MS_INMSGRP_STRUCT_H));
+	memset(chr_last_file_name,APL_NULL_CHAR,16);
+
+	
+      l_rus_flg = 0;
+      if (APL_FAILURE == CO_Chk_CntryEnabled(  "INCOMING_MSG",
+                                             "PROC_53X",
+                                             &l_rus_flg,
+                                             l_debug_info_ptr ))
+      {
+         APL_GOBACK_FAIL
+      }
+   
+	strcpy(chr_h_mesg_status,p_msgstat);
+	strcpy(chr_last_settle_dt,"00/00/0000 00:00:00");   
+	                                                
+
+	EXEC SQL SELECT COUNT(*) 
+				INTO  :int_h_no_files
+				FROM MS_INMSGRP
+				WHERE ((MESSAGE_STAT = DECODE(:chr_h_mesg_status,'ALL',MESSAGE_STAT,:chr_h_mesg_status))
+						 AND (REPORT_IND = 'N')
+						 AND (((srl_num <= :p_srlnum) 
+								  AND (REPORT_DT = :p_rep_date))
+								OR (REPORT_DT < :p_rep_date)
+							  ) AND (CLIENT = :chr_g_client OR :g_account_ind = 0)
+						AND ((:g_548_537_ind=0 AND swift_msg_no not in ('548','537')) OR 
+								(:g_548_537_ind=1 AND swift_msg_no in ('548','537'))) 
+						);
+	EXEC SQL DECLARE REPORT_CURSOR_NOTNULL CURSOR FOR     
+            SELECT srl_num, REPORT_DT, SWIFT_MSG_NO, NAMEOF_FILE, MESSAGE_STAT,
+                   REJECT_REASON, REPORT_IND, SETL_DT, CLIENT,SFE_IDENTITY_NO
+            FROM MS_INMSGRP
+            WHERE ((MESSAGE_STAT = DECODE(:chr_h_mesg_status,'ALL',MESSAGE_STAT,:chr_h_mesg_status))
+                   AND SETL_DT IS NOT NULL
+                   AND (REPORT_IND = 'N')
+                   AND (((srl_num <= :p_srlnum)
+                          AND (REPORT_DT = :p_rep_date))
+                        OR (REPORT_DT < :p_rep_date)
+                       ) AND (CLIENT = :chr_g_client OR :g_account_ind = 0)
+						AND ((:g_548_537_ind=0 AND swift_msg_no not in ('548','537')) OR 
+								(:g_548_537_ind=1 AND swift_msg_no in ('548','537'))) 
+                  )
+            ORDER BY SETL_DT,MESSAGE_STAT, SWIFT_MSG_NO, NAMEOF_FILE;
+
+   EXEC SQL DECLARE REPORT_CURSOR_NULL CURSOR FOR  
+            SELECT srl_num, REPORT_DT, SWIFT_MSG_NO, NAMEOF_FILE, MESSAGE_STAT,
+                   REJECT_REASON, REPORT_IND , SETL_DT, CLIENT,SFE_IDENTITY_NO
+            FROM MS_INMSGRP
+            WHERE ((MESSAGE_STAT = DECODE(:chr_h_mesg_status,'ALL',MESSAGE_STAT,:chr_h_mesg_status))
+                   AND SETL_DT IS NULL
+                   AND (REPORT_IND = 'N')
+                   AND (((srl_num <= :p_srlnum)
+                          AND (REPORT_DT = :p_rep_date))
+                        OR (REPORT_DT < :p_rep_date)
+                       ) AND (CLIENT = :chr_g_client OR :g_account_ind = 0)
+						AND ((:g_548_537_ind=0 AND swift_msg_no not in ('548','537')) OR 
+								(:g_548_537_ind=1 AND swift_msg_no in ('548','537'))) 
+                  )
+            ORDER BY MESSAGE_STAT, SWIFT_MSG_NO, NAMEOF_FILE;
+
+	EXEC SQL OPEN REPORT_CURSOR_NOTNULL;
+  	IS_ANY_ORA_ERROR;
+
+   EXEC SQL OPEN REPORT_CURSOR_NULL;
+   IS_ANY_ORA_ERROR;
+
+		strcpy(chr_file_desc,APL_NULL_STRING);
+		if (!strcmp(chr_h_mesg_status,"RJT"))
+			strcpy(chr_file_desc,"REJECTED MESSAGES(NORMAL)");
+      else if (!strcmp(chr_h_mesg_status,"RJO"))
+         strcpy(chr_file_desc,"REJECTED MESSAGES (ORDER)");
+		else if (!strcmp(chr_h_mesg_status,"RPR"))
+			strcpy(chr_file_desc,"REPAIRED MESSAGES");
+		
+      else if (!strcmp(chr_h_mesg_status,"PND"))
+         strcpy(chr_file_desc,"PENDED MESSAGES");
+      
+		else if (!strcmp(chr_h_mesg_status,"STP"))
+			strcpy(chr_file_desc,"STRAIGHT THROUGH PROCESSED MESSAGES (GENERATED)");
+      else if (!strcmp(chr_h_mesg_status,"STO"))
+         strcpy(chr_file_desc,"STRAIGHT THROUGH PROCESSED MESSAGES (PREMATCHED)");
+		else if (!strcmp(chr_h_mesg_status,"ALL"))
+			strcpy(chr_file_desc,"ALL MESSAGES");
+	
+		if (g_548_537_ind==1)
+			strcat(chr_file_desc," FOR 548/537 MESSAGES");	
+	
+	if (int_h_no_files == 0)
+		{
+			fprintf(p_fp_report,"\n\n\n\n");
+			fprintf(p_fp_report,"There are no Unreported Incoming msg files of type\n");
+			fprintf(p_fp_report,"		*	%s  *\n",chr_file_desc);
+			fprintf(p_fp_report, "\f\n"); 
+			APL_GOBACK_SUCCESS
+		}
+
+			fprintf(p_fp_report, "\n");
+			fprintf(p_fp_report,"*************************************************************************\n");
+			fprintf(p_fp_report,"INC_MSG_ARCH_DIR : %s\n", p_archmsgnm);      
+         fprintf(p_fp_report,"File Description : %s \n",chr_file_desc);        
+			fprintf(p_fp_report,"*************************************************************************\n\n");
+
+	for ( ; ; )
+	{
+		memset(&l_ms_inmsgrp_struct_h, NULL, sizeof(MS_INMSGRP_STRUCT_H));
+		memset(l_ms_inmsgrp_struct_h.h_swift_msg_no,APL_NULL_CHAR,4);
+
+		if(int_not_null_indicator == 0)      
+		 	{
+         EXEC SQL FETCH REPORT_CURSOR_NOTNULL
+               INTO  :l_ms_inmsgrp_struct_h:l_ms_inmsgrp_struct_ia;
+         }
+      else
+         {
+         EXEC SQL FETCH REPORT_CURSOR_NULL
+               INTO  :l_ms_inmsgrp_struct_h:l_ms_inmsgrp_struct_ia;
+         }
+
+      if ((APL_ZERO_RESULT_SET)  && (int_not_null_indicator == 0)) 
+         {
+         int_not_null_indicator = 1;
+         continue;
+         }
+
+      IS_ANY_ORA_ERROR
+	
+		if ( APL_ZERO_RESULT_SET )
+		{
+			break;
+		}
+
+
+
+
+
+
+   if ( l_ms_inmsgrp_struct_ia.i_setl_dt == -1 )
+   {
+      strcpy(l_ms_inmsgrp_struct_h.h_setl_dt,APL_NULL_STRING);
+   }
+if (strcmp(chr_last_settle_dt,l_ms_inmsgrp_struct_h.h_setl_dt))
+   {
+
+   if (!int_l_first_settle_dt)
+      {
+         fprintf(p_fp_report,"\f\n");
+      }
+
+   else
+      {
+         fprintf(p_fp_report,"\n");
+         int_l_first_settle_dt = 0;
+      }
+     
+   if (!strcmp(l_ms_inmsgrp_struct_h.h_setl_dt,APL_NULL_STRING))
+      {
+         fprintf(p_fp_report,"*************************************************************************\n");
+			if (g_548_537_ind == 0)
+         	fprintf(p_fp_report,"Settlement Date(52x) / Trade Date(592) NOT AVAILABLE\n");
+			else
+         	fprintf(p_fp_report,"Settlement Date / Trade Date  (548/537) NOT AVAILABLE\n");
+         fprintf(p_fp_report,"*************************************************************************\n");
+      }
+   else
+      {
+         strcpy(chr_h_fmt_date,APL_NULL_STRING);
+         EXEC SQL SELECT TO_CHAR(TO_DATE(:l_ms_inmsgrp_struct_h.h_setl_dt),'DD-MON-YYYY')
+         INTO :chr_h_fmt_date
+         FROM DUAL;
+         fprintf(p_fp_report,"*************************************************************************\n");
+			if (g_548_537_ind == 0)
+         	fprintf(p_fp_report,"Settlement Date(52x) / Trade Date(592) : %s\n",chr_h_fmt_date);
+			else
+         	fprintf(p_fp_report,"Settlement Date / Trade Date (548/537) : %s\n",chr_h_fmt_date);
+         fprintf(p_fp_report,"*************************************************************************\n");
+      }
+
+	if ( strlen(l_ms_inmsgrp_struct_h.h_setl_dt) )
+   {
+		if (g_548_537_ind == 0)
+		{
+   		EXEC SQL SELECT NVL(COUNT(DISTINCT NAMEOF_FILE),0)      
+      		INTO :int_h_no_of_52xrjt
+      		FROM MS_INMSGRP
+      		WHERE ((MESSAGE_STAT='RJT')
+                     AND (REPORT_IND = 'N')
+                     AND SETL_DT = :l_ms_inmsgrp_struct_h.h_setl_dt
+                     AND ((SWIFT_MSG_NO='52X') OR (SWIFT_MSG_NO='52x') OR (SWIFT_MSG_NO='54N'))
+                     AND (((srl_num <= :p_srlnum) AND (REPORT_DT = :p_rep_date))
+                        OR REPORT_DT < :p_rep_date) AND (CLIENT = :chr_g_client OR :g_account_ind = 0)
+                  );
+
+  
+    		EXEC SQL SELECT NVL(COUNT(DISTINCT NAMEOF_FILE),0)  
+      		INTO :int_h_no_of_52xrjo
+      		FROM MS_INMSGRP
+      		WHERE ((MESSAGE_STAT='RJO')
+                    AND (REPORT_IND = 'N')
+                    AND SETL_DT = :l_ms_inmsgrp_struct_h.h_setl_dt
+                    AND ((SWIFT_MSG_NO='52X') OR (SWIFT_MSG_NO='52x') OR (SWIFT_MSG_NO='54N'))
+                    AND (((srl_num <= :p_srlnum) AND (REPORT_DT = :p_rep_date))
+                         OR (REPORT_DT < :p_rep_date)) AND (CLIENT = :chr_g_client OR :g_account_ind = 0)
+                  );
+
+      		EXEC SQL SELECT NVL(COUNT(DISTINCT NAMEOF_FILE),0)   
+      		INTO :h_no_of_592RJT
+      		FROM MS_INMSGRP
+      		WHERE ((MESSAGE_STAT='RJT')
+                    AND (REPORT_IND = 'N')
+                    AND SETL_DT = :l_ms_inmsgrp_struct_h.h_setl_dt
+                    AND ((SWIFT_MSG_NO='592') OR (SWIFT_MSG_NO='54C'))
+                    AND (((srl_num <= :p_srlnum) AND (REPORT_DT = :p_rep_date))
+                         OR (REPORT_DT < :p_rep_date)) AND (CLIENT = :chr_g_client OR :g_account_ind = 0)
+                  );
+
+   		EXEC SQL SELECT NVL(COUNT(DISTINCT NAMEOF_FILE),0)      
+      		INTO :int_h_no_of_52xrpr
+      		FROM MS_INMSGRP
+      		WHERE ((MESSAGE_STAT='RPR')
+                    AND (REPORT_IND = 'N')
+                    AND SETL_DT = :l_ms_inmsgrp_struct_h.h_setl_dt
+                    AND ((SWIFT_MSG_NO='52x') OR (SWIFT_MSG_NO='52X') OR (SWIFT_MSG_NO='54N'))
+                    AND (((srl_num <= :p_srlnum) AND (REPORT_DT = :p_rep_date))
+                         OR (REPORT_DT < :p_rep_date)) AND (CLIENT = :chr_g_client OR :g_account_ind = 0)
+                  );
+	   		EXEC SQL SELECT NVL(COUNT(DISTINCT NAMEOF_FILE),0)      
+      		INTO :int_h_no_of_52xstp
+      		FROM MS_INMSGRP
+      		WHERE ((MESSAGE_STAT='STP')
+                    AND (REPORT_IND = 'N')
+                    AND SETL_DT = :l_ms_inmsgrp_struct_h.h_setl_dt
+                    AND ((SWIFT_MSG_NO='52x') OR (SWIFT_MSG_NO='52X') OR (SWIFT_MSG_NO='54N'))
+                    AND (((srl_num <= :p_srlnum) AND (REPORT_DT = :p_rep_date))
+                         OR (REPORT_DT < :p_rep_date)) AND (CLIENT = :chr_g_client OR :g_account_ind = 0)
+                  );
+
+   		EXEC SQL SELECT NVL(COUNT(DISTINCT NAMEOF_FILE),0)      
+      		INTO :int_h_no_of_52xsto
+      		FROM MS_INMSGRP
+      		WHERE ((MESSAGE_STAT='STO')
+                    AND (REPORT_IND = 'N')
+                    AND SETL_DT = :l_ms_inmsgrp_struct_h.h_setl_dt
+                    AND ((SWIFT_MSG_NO='52x') OR (SWIFT_MSG_NO='52X') OR (SWIFT_MSG_NO='54N'))
+                    AND (((srl_num <= :p_srlnum) AND (REPORT_DT = :p_rep_date))
+                         OR (REPORT_DT < :p_rep_date)) AND (CLIENT = :chr_g_client OR :g_account_ind = 0)
+                  );
+
+   		EXEC SQL SELECT NVL(COUNT(DISTINCT NAMEOF_FILE),0)   
+      		INTO :h_no_of_592STP
+      		FROM MS_INMSGRP
+      		WHERE ((MESSAGE_STAT='STP')
+                    AND (REPORT_IND = 'N')
+                    AND SETL_DT = :l_ms_inmsgrp_struct_h.h_setl_dt
+                    AND ((SWIFT_MSG_NO='592') OR (SWIFT_MSG_NO='54C'))
+                    AND (((srl_num <= :p_srlnum) AND (REPORT_DT = :p_rep_date))
+                         OR (REPORT_DT < :p_rep_date)) AND (CLIENT = :chr_g_client OR :g_account_ind = 0)
+                  );
+
+			
+			if(l_rus_flg)
+				{
+				EXEC SQL SELECT NVL(COUNT(DISTINCT NAMEOF_FILE),0)   
+      		INTO :int_h_no_of_53xrjt
+      		FROM MS_INMSGRP
+      		WHERE ((MESSAGE_STAT='RJT')
+                    AND (REPORT_IND = 'N')
+                    AND SETL_DT = :l_ms_inmsgrp_struct_h.h_setl_dt
+                    AND SWIFT_MSG_NO IN ('53x','54S')
+                    AND (((srl_num <= :p_srlnum) AND (REPORT_DT = :p_rep_date))
+                         OR (REPORT_DT < :p_rep_date)) AND (CLIENT = :chr_g_client OR :g_account_ind = 0)
+                  );
+				EXEC SQL SELECT NVL(COUNT(DISTINCT NAMEOF_FILE),0)   
+      		INTO :int_h_no_of_53xpnd
+      		FROM MS_INMSGRP
+      		WHERE ((MESSAGE_STAT='PND')
+                    AND (REPORT_IND = 'N')
+                    AND SETL_DT = :l_ms_inmsgrp_struct_h.h_setl_dt
+                    AND SWIFT_MSG_NO IN ('53x','54S')
+                    AND (((srl_num <= :p_srlnum) AND (REPORT_DT = :p_rep_date))
+                         OR (REPORT_DT < :p_rep_date)) AND (CLIENT = :chr_g_client OR :g_account_ind = 0)
+                  );
+				EXEC SQL SELECT NVL(COUNT(DISTINCT NAMEOF_FILE),0)   
+      		INTO :int_h_no_of_53xstp
+      		FROM MS_INMSGRP
+      		WHERE ((MESSAGE_STAT='STP')
+                    AND (REPORT_IND = 'N')
+                    AND SETL_DT = :l_ms_inmsgrp_struct_h.h_setl_dt
+                    AND SWIFT_MSG_NO IN ('53x','54S')
+                    AND (((srl_num <= :p_srlnum) AND (REPORT_DT = :p_rep_date))
+                         OR (REPORT_DT < :p_rep_date)) AND (CLIENT = :chr_g_client OR :g_account_ind = 0)
+                  );
+				}
+			
+			
+				EXEC SQL SELECT NVL(COUNT(DISTINCT NAMEOF_FILE),0)
+				INTO :int_h_no_of_othrs
+				FROM MS_INMSGRP
+				WHERE (
+				(REPORT_IND = 'N')
+                    AND SETL_DT = :l_ms_inmsgrp_struct_h.h_setl_dt
+                    AND SWIFT_MSG_NO='XXX'
+                    AND (((srl_num <= :p_srlnum) AND (REPORT_DT = :p_rep_date))
+                         OR (REPORT_DT < :p_rep_date)) AND (CLIENT =:chr_g_client OR :g_account_ind = 0)
+                  );
+		}
+		else
+		{
+				EXEC SQL SELECT NVL(COUNT(DISTINCT NAMEOF_FILE),0)
+				INTO :int_h_no_of_failmsg_548
+				FROM MS_INMSGRP
+				WHERE (
+						(REPORT_IND = 'N')
+                    AND SETL_DT = :l_ms_inmsgrp_struct_h.h_setl_dt
+                    AND SWIFT_MSG_NO = '548'
+                    AND (((srl_num <= :p_srlnum) AND (REPORT_DT = :p_rep_date))
+                         OR (REPORT_DT < :p_rep_date)) AND (CLIENT =:chr_g_client OR :g_account_ind = 0)
+                  );
+				EXEC SQL SELECT NVL(COUNT(DISTINCT NAMEOF_FILE),0)
+				INTO :int_h_no_of_failmsg_537
+				FROM MS_INMSGRP
+				WHERE (
+						(REPORT_IND = 'N')
+                    AND SETL_DT = :l_ms_inmsgrp_struct_h.h_setl_dt
+                    AND SWIFT_MSG_NO = '537'
+                    AND (((srl_num <= :p_srlnum) AND (REPORT_DT = :p_rep_date))
+                         OR (REPORT_DT < :p_rep_date)) AND (CLIENT =:chr_g_client OR :g_account_ind = 0)
+                  );
+		}
+   }
+ else
+	{
+		if (g_548_537_ind == 0)
+		{
+   		EXEC SQL SELECT NVL(COUNT(DISTINCT NAMEOF_FILE),0)      
+      		INTO :int_h_no_of_52xrjt
+      		FROM MS_INMSGRP
+      		WHERE ((MESSAGE_STAT='RJT')
+                     AND (REPORT_IND = 'N')
+                     AND SETL_DT is NULL
+                     AND ((SWIFT_MSG_NO='52X') OR (SWIFT_MSG_NO='52x') OR (SWIFT_MSG_NO='54N'))
+                     AND (((srl_num <= :p_srlnum) AND (REPORT_DT = :p_rep_date))
+                        OR REPORT_DT < :p_rep_date) AND (CLIENT = :chr_g_client OR :g_account_ind = 0)
+                  );
+
+  
+    		EXEC SQL SELECT NVL(COUNT(DISTINCT NAMEOF_FILE),0)  
+      		INTO :int_h_no_of_52xrjo
+      		FROM MS_INMSGRP
+      		WHERE ((MESSAGE_STAT='RJO')
+                    AND (REPORT_IND = 'N')
+                    AND SETL_DT is NULL
+                    AND ((SWIFT_MSG_NO='52X') OR (SWIFT_MSG_NO='52x') OR (SWIFT_MSG_NO='54N'))
+                    AND (((srl_num <= :p_srlnum) AND (REPORT_DT = :p_rep_date))
+                         OR (REPORT_DT < :p_rep_date)) AND (CLIENT = :chr_g_client OR :g_account_ind = 0)
+                  );
+
+      		EXEC SQL SELECT NVL(COUNT(DISTINCT NAMEOF_FILE),0)   
+      		INTO :h_no_of_592RJT
+      		FROM MS_INMSGRP
+      		WHERE ((MESSAGE_STAT='RJT')
+                    AND (REPORT_IND = 'N')
+                    AND SETL_DT is NULL
+                    AND ((SWIFT_MSG_NO='592') OR (SWIFT_MSG_NO='54C'))
+                    AND (((srl_num <= :p_srlnum) AND (REPORT_DT = :p_rep_date))
+                         OR (REPORT_DT < :p_rep_date)) AND (CLIENT = :chr_g_client OR :g_account_ind = 0)
+                  );
+
+   		EXEC SQL SELECT NVL(COUNT(DISTINCT NAMEOF_FILE),0)      
+      		INTO :int_h_no_of_52xrpr
+      		FROM MS_INMSGRP
+      		WHERE ((MESSAGE_STAT='RPR')
+                    AND (REPORT_IND = 'N')
+                    AND SETL_DT is NULL
+                    AND ((SWIFT_MSG_NO='52x') OR (SWIFT_MSG_NO='52X') OR (SWIFT_MSG_NO='54N'))
+                    AND (((srl_num <= :p_srlnum) AND (REPORT_DT = :p_rep_date))
+                         OR (REPORT_DT < :p_rep_date)) AND (CLIENT = :chr_g_client OR :g_account_ind = 0)
+                  );
+	
+	
+   		EXEC SQL SELECT NVL(COUNT(DISTINCT NAMEOF_FILE),0)      
+      		INTO :int_h_no_of_52xstp
+      		FROM MS_INMSGRP
+      		WHERE ((MESSAGE_STAT='STP')
+                    AND (REPORT_IND = 'N')
+                    AND SETL_DT is NULL
+                    AND ((SWIFT_MSG_NO='52x') OR (SWIFT_MSG_NO='52X') OR (SWIFT_MSG_NO='54N'))
+                    AND (((srl_num <= :p_srlnum) AND (REPORT_DT = :p_rep_date))
+                         OR (REPORT_DT < :p_rep_date)) AND (CLIENT = :chr_g_client OR :g_account_ind = 0)
+                  );
+
+   		EXEC SQL SELECT NVL(COUNT(DISTINCT NAMEOF_FILE),0)      
+      		INTO :int_h_no_of_52xsto
+      		FROM MS_INMSGRP
+      		WHERE ((MESSAGE_STAT='STO')
+                    AND (REPORT_IND = 'N')
+                    AND SETL_DT is NULL
+                    AND ((SWIFT_MSG_NO='52x') OR (SWIFT_MSG_NO='52X') OR (SWIFT_MSG_NO='54N'))
+                    AND (((srl_num <= :p_srlnum) AND (REPORT_DT = :p_rep_date))
+                         OR (REPORT_DT < :p_rep_date)) AND (CLIENT = :chr_g_client OR :g_account_ind = 0)
+                  );
+
+   		EXEC SQL SELECT NVL(COUNT(DISTINCT NAMEOF_FILE),0)   
+      		INTO :h_no_of_592STP
+      		FROM MS_INMSGRP
+      		WHERE ((MESSAGE_STAT='STP')
+                    AND (REPORT_IND = 'N')
+                    AND SETL_DT is NULL
+                    AND ((SWIFT_MSG_NO='592') OR (SWIFT_MSG_NO='54C'))
+                    AND (((srl_num <= :p_srlnum) AND (REPORT_DT = :p_rep_date))
+                         OR (REPORT_DT < :p_rep_date)) AND (CLIENT = :chr_g_client OR :g_account_ind = 0)
+                  );
+
+	   		
+   			if(l_rus_flg)
+      		{
+      		EXEC SQL SELECT NVL(COUNT(DISTINCT NAMEOF_FILE),0)   
+      		INTO :int_h_no_of_53xrjt
+      		FROM MS_INMSGRP
+      		WHERE ((MESSAGE_STAT='RJT')
+                    AND (REPORT_IND = 'N')
+                    AND SETL_DT is NULL
+                    AND SWIFT_MSG_NO IN ('53x','54S')
+                    AND (((srl_num <= :p_srlnum) AND (REPORT_DT = :p_rep_date))
+                         OR (REPORT_DT < :p_rep_date)) AND (CLIENT = :chr_g_client OR :g_account_ind = 0)
+                  );
+      		EXEC SQL SELECT NVL(COUNT(DISTINCT NAMEOF_FILE),0)   
+      		INTO :int_h_no_of_53xpnd
+      		FROM MS_INMSGRP
+      		WHERE ((MESSAGE_STAT='PND')
+                    AND (REPORT_IND = 'N')
+                    AND SETL_DT is NULL
+                    AND SWIFT_MSG_NO IN ('53x','54S')
+                    AND (((srl_num <= :p_srlnum) AND (REPORT_DT = :p_rep_date))
+                         OR (REPORT_DT < :p_rep_date)) AND (CLIENT = :chr_g_client OR :g_account_ind = 0)
+                  );
+      		EXEC SQL SELECT NVL(COUNT(DISTINCT NAMEOF_FILE),0)   
+      		INTO :int_h_no_of_53xstp
+      		FROM MS_INMSGRP
+      		WHERE ((MESSAGE_STAT='STP')
+                    AND (REPORT_IND = 'N')
+                    AND SETL_DT is NULL
+                    AND SWIFT_MSG_NO IN ('53x','54S')
+                    AND (((srl_num <= :p_srlnum) AND (REPORT_DT = :p_rep_date))
+                         OR (REPORT_DT < :p_rep_date)) AND (CLIENT = :chr_g_client OR :g_account_ind = 0)
+                  );
+      		}
+			
+      		EXEC SQL SELECT NVL(COUNT(DISTINCT NAMEOF_FILE),0)   
+      		INTO :int_h_no_of_othrs
+      		FROM MS_INMSGRP
+      		WHERE (
+                    (REPORT_IND = 'N')
+                    AND SETL_DT is NULL
+                    AND SWIFT_MSG_NO='XXX'
+                    AND (((srl_num <= :p_srlnum) AND (REPORT_DT = :p_rep_date))
+                         OR (REPORT_DT < :p_rep_date)) AND (CLIENT = :chr_g_client OR :g_account_ind = 0)
+                  );
+   		
+		}
+		else
+		{
+      	EXEC SQL SELECT NVL(COUNT(DISTINCT NAMEOF_FILE),0)   
+      	INTO :int_h_no_of_failmsg_548
+      	FROM MS_INMSGRP
+      	WHERE (
+                    (REPORT_IND = 'N')
+                    AND SETL_DT is NULL
+                    AND SWIFT_MSG_NO = '548'
+                    AND (((srl_num <= :p_srlnum) AND (REPORT_DT = :p_rep_date))
+                         OR (REPORT_DT < :p_rep_date)) AND (CLIENT = :chr_g_client OR :g_account_ind = 0)
+                  );
+      	EXEC SQL SELECT NVL(COUNT(DISTINCT NAMEOF_FILE),0)   
+      	INTO :int_h_no_of_failmsg_537
+      	FROM MS_INMSGRP
+      	WHERE (
+                    (REPORT_IND = 'N')
+                    AND SETL_DT is NULL
+                    AND SWIFT_MSG_NO = '537'
+                    AND (((srl_num <= :p_srlnum) AND (REPORT_DT = :p_rep_date))
+                         OR (REPORT_DT < :p_rep_date)) AND (CLIENT = :chr_g_client OR :g_account_ind = 0)
+                  );
+		}
+   }
+
+
+	if (g_548_537_ind==0)
+	{
+   	fprintf(p_fp_report,"Number of 52x/54x Rejects (Normal)     	  : %d\n",int_h_no_of_52xrjt);
+   	fprintf(p_fp_report,"Number of 52x/54x Rejects (Order)      	  : %d\n",int_h_no_of_52xrjo);
+   	fprintf(p_fp_report,"Number of 592/54x Rejects              	  : %d\n",h_no_of_592RJT);
+   	fprintf(p_fp_report,"Number of 52x/54x Repairs              	  : %d\n",int_h_no_of_52xrpr);
+   	fprintf(p_fp_report,"Number of 52x/54x Processed (Generated)	  : %d\n",int_h_no_of_52xstp);
+   	fprintf(p_fp_report,"Number of 52x/54x Processed (Pre Matched) : %d\n",int_h_no_of_52xsto);
+   	fprintf(p_fp_report,"Number of 592/54x Processed     	  : %d\n",h_no_of_592STP);
+		if(l_rus_flg)
+		{
+				fprintf(p_fp_report,"Number of 53x/54x(settlement)Processed    : %d\n",int_h_no_of_53xstp);
+				fprintf(p_fp_report,"Number of 53x/54x(settlement) Rejects     : %d\n",int_h_no_of_53xrjt);	
+   			fprintf(p_fp_report,"Number of 53x/54x(settlement) Pendings    : %d\n",int_h_no_of_53xpnd);
+		}
+
+		
+   	fprintf(p_fp_report,"Number of Others Messages                 : %d\n",int_h_no_of_othrs);
+	}
+	else
+	{
+   	fprintf(p_fp_report,"Number of 548 Messages processed      : %d\n",int_h_no_of_failmsg_548);
+   	fprintf(p_fp_report,"Number of 537 Messages processed      : %d\n",int_h_no_of_failmsg_537);
+	}
+
+   fprintf(p_fp_report,"*************************************************************************\n\n"); 
+	
+   strcpy(chr_last_settle_dt,l_ms_inmsgrp_struct_h.h_setl_dt);
+}
+
+		if ( strcmp(chr_last_file_name,l_ms_inmsgrp_struct_h.h_nameof_file) )
+		{
+			
+
+			if ( !int_l_isfirstmsg )
+			{
+				fprintf(p_fp_report, "\f\n");
+			}
+			else
+			{
+				fprintf(p_fp_report, "\n");
+				int_l_isfirstmsg = 0;
+			}
+
+         
+         if (!strcmp(l_ms_inmsgrp_struct_h.h_setl_dt,APL_NULL_STRING))
+            strcpy(chr_fmtsettledt,"NOT AVAILABLE");
+         else
+            {
+             EXEC SQL SELECT TO_CHAR(TO_DATE(:l_ms_inmsgrp_struct_h.h_setl_dt),'DD-MON-YYYY')
+             INTO :chr_h_fmt_date
+             FROM DUAL;
+             strcpy(chr_fmtsettledt,chr_h_fmt_date);
+            }
+
+         if (!strcmp(l_ms_inmsgrp_struct_h.h_swift_msg_no,"52x"))
+            strcpy(chr_date_tag,"Settle Dt.");
+         else if (!strcmp(l_ms_inmsgrp_struct_h.h_swift_msg_no,"592"))
+            strcpy(chr_date_tag,"Trade Dt.");
+
+			fprintf(p_fp_report,"-------------------------------------------------------------------------\n");
+         fprintf(p_fp_report,"Filename : %s  Message Type : %s  %s : %s\n",l_ms_inmsgrp_struct_h.h_nameof_file,l_ms_inmsgrp_struct_h.h_swift_msg_no,chr_date_tag,chr_fmtsettledt);    
+
+			 
+
+			if ( strcmp(l_ms_inmsgrp_struct_h.h_nameof_file, chr_l_bad_file) )
+			{
+				memset(chr_command, APL_NULL_CHAR, 100);
+				sprintf(chr_command,"%s/%s", p_archmsgnm, l_ms_inmsgrp_struct_h.h_nameof_file);
+
+				if ((fp_content = fopen(chr_command,"r")) == (FILE *) NULL )	
+				{
+					fprintf(p_fp_userlog,"Failed To Open The Incoming Message File %s \n", l_ms_inmsgrp_struct_h.h_nameof_file);
+				   fprintf(p_fp_report,"							**	File Not Found. **\n");
+
+					fflush(p_fp_userlog);
+					fflush(p_fp_report);
+					memset(chr_l_bad_file, APL_NULL_CHAR, 16);
+					strcpy(chr_l_bad_file, l_ms_inmsgrp_struct_h.h_nameof_file);
+					fprintf(p_fp_report,"-------------------------------------------------------------------------\n");
+					strcpy(chr_reason_desc,APL_NULL_STRING);
+
+					if ((!strcmp(l_ms_inmsgrp_struct_h.h_message_stat,"RJT"))||(!strcmp(l_ms_inmsgrp_struct_h.h_message_stat,"RJO")))
+                  strcpy(chr_reason_desc,"REASON FOR REJECTION");           
+               else if (!strcmp(l_ms_inmsgrp_struct_h.h_message_stat,"RPR"))
+                  strcpy(chr_reason_desc,"REASON FOR REPAIR");              
+					
+					else if (!strcmp(l_ms_inmsgrp_struct_h.h_message_stat,"PND"))
+						strcpy(chr_reason_desc,"REASON FOR PEND");
+					
+
+					fprintf(p_fp_report,"                    %s\n",chr_reason_desc);
+					fprintf(p_fp_report,"-------------------------------------------------------------------------\n");
+					fprintf(p_fp_report,"    (*)    %s\n",l_ms_inmsgrp_struct_h.h_reject_reason);
+					strcpy(chr_last_file_name,l_ms_inmsgrp_struct_h.h_nameof_file);
+					continue;
+				}
+				else
+				{
+					fclose(fp_content);
+				}
+			}
+			else
+			{
+				fprintf(p_fp_report,"    (*)    %s\n",l_ms_inmsgrp_struct_h.h_reject_reason);
+				strcpy(chr_last_file_name,  l_ms_inmsgrp_struct_h.h_nameof_file);
+				continue;
+			}
+
+			memset(chr_command, APL_NULL_CHAR, 100);
+			strcpy(chr_command, p_archmsgnm);
+			strcat(chr_command, "/");
+			strcat(chr_command, l_ms_inmsgrp_struct_h.h_nameof_file);
+
+			if ( (fp_msgfile = fopen(chr_command, "r")) == (FILE *)NULL )
+			{
+				fprintf(p_fp_userlog, "Could not read contents of msg h_file.\n");
+				fflush(p_fp_userlog);
+				APL_GOBACK_FAIL
+			}
+
+			while ( !feof(fp_msgfile) )
+			{
+            memset(chr_l_msgline, APL_NULL_CHAR, LINERR_LENGTH1);
+            
+                                memset(chr_l_temp_msgline, APL_NULL_CHAR, 70);
+                                
+                                fscanf(fp_msgfile, "%[^\n]\n", chr_l_temp_msgline);
+                 strncpy(chr_l_msgline, chr_l_temp_msgline, LINERR_LENGTH1 -1 );
+                                
+                           CO_WrLog_WODtTime(p_fp_report, chr_l_msgline, NULL, NULL);
+			}
+
+			fclose(fp_msgfile);
+
+			fprintf(p_fp_report,"-------------------------------------------------------------------------\n");
+			strcpy(chr_reason_desc,APL_NULL_STRING);
+
+			if ((!strcmp(l_ms_inmsgrp_struct_h.h_message_stat,"RJT"))||(!strcmp(l_ms_inmsgrp_struct_h.h_message_stat,"RJO")))      
+            strcpy(chr_reason_desc,"REASON FOR REJECTION");
+         else if (!strcmp(l_ms_inmsgrp_struct_h.h_message_stat,"RPR"))                                          
+            strcpy(chr_reason_desc,"REASON FOR REPAIR");
+			
+               else if (!strcmp(l_ms_inmsgrp_struct_h.h_message_stat,"PND"))
+                  strcpy(chr_reason_desc,"REASON FOR PEND");
+         
+
+			fprintf(p_fp_report,"                    %s\n",chr_reason_desc);
+			fprintf(p_fp_report,"-------------------------------------------------------------------------\n");
+			fprintf(p_fp_report,"    (*)    %s\n",l_ms_inmsgrp_struct_h.h_reject_reason);
+			strcpy(chr_last_file_name,l_ms_inmsgrp_struct_h.h_nameof_file);
+		}
+		else
+		{
+			fprintf(p_fp_report,"    (*)    %s\n",l_ms_inmsgrp_struct_h.h_reject_reason);
+		}
+
+		fflush(p_fp_report);
+	}
+
+	EXEC SQL CLOSE REPORT_CURSOR_NOTNULL;
+   EXEC SQL CLOSE REPORT_CURSOR_NULL;
+	IS_ANY_ORA_ERROR
+
+	RETURN_SUCCESS:
+	{
+		CO_ProcMonitor(APL_OUT_FILE, "Exiting Out Of MS_Prnt_IncRptReason successfully\n",
+					NULL, NULL);
+		fflush(p_fp_report);
+		return(APL_SUCCESS);
+	}
+	
+	RETURN_FAILURE:
+	{
+		CO_ProcMonitor(APL_OUT_FILE, "Exiting Out Of MS_Prnt_IncRptReason unsuccessfully\n",
+					NULL, NULL);
+		fflush(p_fp_report);
+		return(APL_FAILURE);
+	}
+}

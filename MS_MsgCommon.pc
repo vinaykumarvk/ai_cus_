@@ -1,0 +1,319 @@
+
+
+
+
+
+
+
+#include "CO_HostStructdef.h"
+EXEC SQL INCLUDE SQLCA ;
+
+
+
+int MS_Chk_MsgAlrdySent(	char *chr_p_msgno_a, 
+							char *chr_p_key_a, 
+							char *chr_p_client, 
+							int   p_lock,
+							int  *p_sent,
+							DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	
+
+	struct sqlca sqlca;	
+	char 		chr_l_buf[BUFFER_LEN] 				= APL_NULL_STRING;
+	char		chr_l_h_status[APL_FLAG_LENGTH]	= APL_NULL_STRING;
+	short		l_i_status						= 0;
+	int 		int_l_error_flag 					= APL_SUCCESS;
+	 
+   short  int_l_exist_a                    = 0; // AIX - Warnings removal 
+	char     chr_l_transmitdt[APL_DATE_LEN] = APL_NULL_STRING;
+   short    i_transmitdate               =0;               
+    
+   EXEC SQL VAR chr_l_transmitdt IS STRING;
+
+	#ifdef APL_THREADS
+		APL_SET_CONTEXT
+		EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	sqlca.sqlcode = 0;
+	memset(chr_l_transmitdt,NULL,APL_DATE_LEN);  
+
+	
+
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(	APL_OUT_FILE, 
+						"Entered Function MS_Chk_MsgAlrdySent\n",
+						NULL,
+						NULL);
+		memset( chr_l_buf, NULL, BUFFER_LEN );
+		sprintf(		chr_l_buf, 
+						"The Message No is : %s\n", 
+						chr_p_msgno_a);
+		CO_ProcMonitor(	APL_OUT_FILE, 
+						chr_l_buf,	
+						NULL,
+						NULL);
+		memset( chr_l_buf, NULL, BUFFER_LEN );
+		sprintf(		chr_l_buf, 
+						"The proc_init is : %s\n", 
+						chr_p_key_a);
+		CO_ProcMonitor(	APL_OUT_FILE, 
+						chr_l_buf,	
+						NULL,
+						NULL);
+		memset( chr_l_buf, NULL, BUFFER_LEN );
+		sprintf(		chr_l_buf, 
+						"The Account is : %s\n", 
+						chr_p_client);
+		CO_ProcMonitor(	APL_OUT_FILE, 
+						chr_l_buf,	
+						NULL,
+						NULL);
+	}
+
+	
+	
+
+	if (!strlen(chr_p_msgno_a))
+	{
+		APL_DATA_MISSING("Message No.", APL_NULL_STRING, APL_NULL_STRING);
+		int_l_error_flag = APL_FAILURE;
+	} 
+	if (!strlen(chr_p_key_a))
+	{
+		APL_DATA_MISSING("Key", APL_NULL_STRING, APL_NULL_STRING);
+		int_l_error_flag = APL_FAILURE;
+	} 
+	if (!strlen(chr_p_client))
+	{
+		APL_DATA_MISSING("Account", APL_NULL_STRING, APL_NULL_STRING);
+		int_l_error_flag = APL_FAILURE;
+	} 
+
+	if (APL_FAILURE == int_l_error_flag) APL_GOBACK_FAIL
+
+	
+
+
+	
+
+	
+	 if (APL_FAILURE == CO_Chk_CntryEnabled(	"TRD_MAINT",
+		 												"SEND_592",
+														&int_l_exist_a,
+														l_debug_info_ptr))
+	 {
+		 APL_GOBACK_FAIL
+	 }
+	 
+    if(int_l_exist_a && (strcmp(chr_p_msgno_a,MS_MSGNO_52X)==0 || strcmp(chr_p_msgno_a, MS_SWIFT_BOG_NO)==0))
+    {
+			EXEC SQL SELECT TRANS_DATE
+   	   INTO :chr_l_transmitdt:i_transmitdate
+			FROM DL_DEAL
+			WHERE CLIENT=RTRIM(:chr_p_client)
+			AND   IDENTIY_NO  =RTRIM(:chr_p_key_a);
+
+			IS_ANY_ORA_ERROR
+
+ 	      if(strcmp(chr_l_transmitdt,"") )
+			{
+		     *p_sent=SENT_IND;
+			}
+	   	else
+	   	{
+     		  *p_sent=MS_NOTSENT;
+			}
+    }
+	else
+	{
+		if (p_lock == LOCK_REC_IND)
+		{
+			EXEC SQL SELECT STATUS
+			INTO :chr_l_h_status:l_i_status
+			FROM MS_MSGENT
+			WHERE SWIFT_MSG_NO = RTRIM(:chr_p_msgno_a)
+			AND	PROC_INIT	 = RTRIM(:chr_p_key_a)
+			AND	CLIENT= RTRIM(:chr_p_client) 
+			FOR UPDATE OF STATUS ;
+
+			IS_ANY_ORA_ERROR
+		}
+		else
+		{
+			EXEC SQL SELECT STATUS
+			INTO :chr_l_h_status:l_i_status
+			FROM MS_MSGENT
+			WHERE SWIFT_MSG_NO = RTRIM(:chr_p_msgno_a)
+			AND	PROC_INIT	 = RTRIM(:chr_p_key_a)
+			AND	CLIENT= RTRIM(:chr_p_client) ;
+
+			IS_ANY_ORA_ERROR
+		}
+
+		if (APL_ZERO_RESULT_SET)
+		{
+			*p_sent = NOT_EXIST_IND;
+		}
+		else if (chr_l_h_status[0] == MS_STATUS_UNSEND)
+		{
+			*p_sent = MS_NOTSENT;
+		}
+		else
+		{
+			*p_sent = SENT_IND;
+		}
+	}
+	
+	
+
+	APL_GOBACK_SUCCESS
+
+   RETURN_SUCCESS :
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(	APL_OUT_FILE, 
+							"Leaving Function MS_Chk_MsgAlrdySent with success\n",
+							NULL,
+							NULL);
+		}
+      return(APL_SUCCESS);
+
+   RETURN_FAILURE :
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(	APL_OUT_FILE, 
+							"Leaving Function MS_Chk_MsgAlrdySent with errors\n",
+							NULL,
+							NULL);
+		}
+      return(APL_FAILURE);
+
+}
+
+
+
+int MS_Mod_MsgEntDel(	char *chr_p_msgno_a, 
+							char *chr_p_key_a, 
+							char *chr_p_client, 
+							DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	
+
+	struct sqlca sqlca;	
+	char 		chr_l_buf[BUFFER_LEN] 				= APL_NULL_STRING;
+	char		chr_l_unsent_sts[APL_FLAG_LENGTH]	= APL_NULL_STRING;
+	//short		l_i_status						= 0; //AIX - Warnings Removal
+	int 		int_l_error_flag 					= APL_SUCCESS;
+
+
+	#ifdef APL_THREADS
+		APL_SET_CONTEXT
+		EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	sqlca.sqlcode = 0;
+
+	
+
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(	APL_OUT_FILE, 
+						"Entered Function MS_Mod_MsgEntDel\n",
+						NULL,
+						NULL);
+		memset( chr_l_buf, NULL, BUFFER_LEN );
+		sprintf(		chr_l_buf, 
+						"The Message No is : %s\n", 
+						chr_p_msgno_a);
+		CO_ProcMonitor(	APL_OUT_FILE, 
+						chr_l_buf,	
+						NULL,
+						NULL);
+		memset( chr_l_buf, NULL, BUFFER_LEN );
+		sprintf(		chr_l_buf, 
+						"The proc_init is : %s\n", 
+						chr_p_key_a);
+		CO_ProcMonitor(	APL_OUT_FILE, 
+						chr_l_buf,	
+						NULL,
+						NULL);
+		memset( chr_l_buf, NULL, BUFFER_LEN );
+		sprintf(		chr_l_buf, 
+						"The Account is : %s\n", 
+						chr_p_client);
+		CO_ProcMonitor(	APL_OUT_FILE, 
+						chr_l_buf,	
+						NULL,
+						NULL);
+	}
+
+	
+	
+
+	if (!strlen(chr_p_msgno_a))
+	{
+		APL_DATA_MISSING("Message No.", APL_NULL_STRING, APL_NULL_STRING);
+		int_l_error_flag = APL_FAILURE;
+	} 
+	if (!strlen(chr_p_key_a))
+	{
+		APL_DATA_MISSING("Key", APL_NULL_STRING, APL_NULL_STRING);
+		int_l_error_flag = APL_FAILURE;
+	} 
+	if (!strlen(chr_p_client))
+	{
+		APL_DATA_MISSING("Account", APL_NULL_STRING, APL_NULL_STRING);
+		int_l_error_flag = APL_FAILURE;
+	} 
+
+	if (APL_FAILURE == int_l_error_flag) APL_GOBACK_FAIL
+
+	
+
+	
+
+	chr_l_unsent_sts[0] = MS_STATUS_UNSEND;
+	chr_l_unsent_sts[1] = '\0';
+
+	EXEC SQL DELETE MS_MSGENT 
+	WHERE SWIFT_MSG_NO = RTRIM(:chr_p_msgno_a)
+	AND	PROC_INIT	 = RTRIM(:chr_p_key_a)
+	AND	CLIENT= RTRIM(:chr_p_client)
+	AND	STATUS = :chr_l_unsent_sts ;
+
+	IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(	ERR_REC_NOTFND,
+														"Message Rec.",
+														chr_p_msgno_a,
+														chr_p_client );
+ 
+	
+
+	APL_GOBACK_SUCCESS
+
+   RETURN_SUCCESS :
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(	APL_OUT_FILE, 
+							"Leaving Function MS_Mod_MsgEntDel with success\n",
+							NULL,
+							NULL);
+		}
+      return(APL_SUCCESS);
+
+   RETURN_FAILURE :
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(	APL_OUT_FILE, 
+							"Leaving Function MS_Mod_MsgEntDel with errors\n",
+							NULL,
+							NULL);
+		}
+      return(APL_FAILURE);
+
+}
+

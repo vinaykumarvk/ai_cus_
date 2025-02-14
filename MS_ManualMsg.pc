@@ -1,0 +1,1783 @@
+#include "CR_Common.h"
+#include "Intellect_Interface.h"
+#include "IV_InterFace.h"
+#include "MS_Swift.h"
+#define CORP_IND	9    
+/* OPT:AIX */
+#ifdef SETTLEMENT
+#undef SETTLEMENT
+#endif
+#define SETTLEMENT      6    
+
+
+EXEC SQL INCLUDE SQLCA.H;
+static char chr_icustmsgdatadir[PATH_LENGTH] = APL_NULL_STRING;
+static char h_identify[41] = APL_NULL_STRING;
+static char chr_h_tempaddress1[15] = APL_NULL_STRING;
+static char chr_icust_msg_out_dir[PATH_LENGTH] = APL_NULL_STRING;
+// long *l_int_msgsrno; /* JC -- RFS_MS_001 */
+
+static int MS_Rtv_ManMsgFlName(char *chr_p_filename,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	PRO_GSEQNUM_STRUCT_H l_pro_gseqnum_struct_h_msg;
+	int int_returnval = 0;
+	struct sqlca sqlca;
+	#ifdef APL_THREADS
+	APL_SET_CONTEXT
+	EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	strcpy(l_pro_gseqnum_struct_h_msg.sequencename,"MANFILE");
+	strcpy(l_pro_gseqnum_struct_h_msg.seq_attrb_a,APL_NULL_STRING);
+	strcpy(l_pro_gseqnum_struct_h_msg.seq_attrb_b,APL_NULL_STRING);
+	strcpy(l_pro_gseqnum_struct_h_msg.seq_attrb_c,APL_NULL_STRING);
+
+	l_pro_gseqnum_struct_h_msg.seq_stepby = 1;
+	l_pro_gseqnum_struct_h_msg.seq_start = ST_MAN_MSG;
+	l_pro_gseqnum_struct_h_msg.last_seqnum = EN_MAN_MSG;
+
+	int_returnval = CO_RtvNxtSeqNum(&l_pro_gseqnum_struct_h_msg,l_debug_info_ptr);
+
+	if(int_returnval != APL_FAILURE)
+	{
+		strcpy(chr_p_filename,g_mt_commonsys_params_struct_h.nation_code);
+		strcat(chr_p_filename,"00");
+		strcat(chr_p_filename,ltoa(int_returnval));
+		strcat(chr_p_filename,".TBS");
+	}
+	else
+	     APL_GOBACK_FAIL;
+
+APL_GOBACK_SUCCESS//AIX - Warnings Removal
+	RETURN_SUCCESS:
+
+		CO_ProcMonitor(APL_OUT_FILE,"Exiting successfully  out of IGenMsgFilename\n",NULL,NULL);
+		return APL_SUCCESS;
+
+	RETURN_FAILURE:
+		CO_ProcMonitor(APL_OUT_FILE,"Exiting unsuccesfully out of IGenMsgFilename\n",NULL,NULL);
+		return APL_FAILURE;
+}
+
+static int MS_Rtv_ManMsgDataFlName(char *chr_p_filename,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	PRO_GSEQNUM_STRUCT_H l_pro_gseqnum_struct_h_msg;
+	int int_returnval=0;
+
+	#ifdef APL_THREADS
+		APL_SET_CONTEXT
+		EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+	strcpy(l_pro_gseqnum_struct_h_msg.sequencename,"MSGDAT");
+	strcpy(l_pro_gseqnum_struct_h_msg.seq_attrb_a,APL_NULL_STRING);
+	strcpy(l_pro_gseqnum_struct_h_msg.seq_attrb_b,APL_NULL_STRING);
+	strcpy(l_pro_gseqnum_struct_h_msg.seq_attrb_c,APL_NULL_STRING);
+	l_pro_gseqnum_struct_h_msg.last_usednum = 0;
+	l_pro_gseqnum_struct_h_msg.seq_start = 0;
+	l_pro_gseqnum_struct_h_msg.last_seqnum = 0;
+	l_pro_gseqnum_struct_h_msg.seq_stepby = 0;
+
+
+	int_returnval = CO_RtvNxtSeqNum(&l_pro_gseqnum_struct_h_msg,l_debug_info_ptr);
+
+	if(int_returnval != APL_FAILURE)
+	{
+	     strcpy(chr_p_filename,"T00");
+	     strcat(chr_p_filename,ltoa(int_returnval));
+	     strcat(chr_p_filename,".DAT");
+	     APL_GOBACK_SUCCESS
+	}
+	else
+	     APL_GOBACK_FAIL;
+	RETURN_SUCCESS:
+
+		CO_ProcMonitor(APL_OUT_FILE,"Exiting successfully  out of IGenDataFile\n",NULL,NULL);
+
+		return APL_SUCCESS;
+
+	RETURN_FAILURE:
+		CO_ProcMonitor(APL_OUT_FILE,"Exiting unsuccesfully out of IGenDataFile\n",NULL,NULL);
+		return APL_FAILURE;
+}
+
+static int  MS_Proc_ManMsg(MS_MANMSG_STRUCT_H *p_ms_manmsg_struct_h_a,
+				char  chr_startflag,
+				long *int_p_msgsrno,
+				char *p_swftlx,
+				char *corp_id,
+				char *event_id,
+				char *p_crf_no,
+				DEBUG_INFO_STRUCT_H **l_debug_info_ptr,
+				INTL_ENV_DATA_STRUCT_H *p_intl_env_datastruct_h)
+{
+	fflush(stdout);
+	printf("***** In function MS_Proc_ManMsg *****\n");
+	short i_swift_tlx_gcn = 0;
+	long int_l_msgsrnotemp;
+	int i;
+	char h_swift_tlx_gcn[2]	= APL_NULL_STRING;
+	char chr_local_crf_no[3] = APL_NULL_STRING;
+	char chr_h_priority1_swift[12] = APL_NULL_STRING;
+	char h_dl_client[APL_CLIENT_LENGTH] = APL_NULL_STRING;
+	FILE *dataFile;
+	int int_stillleft = 0;
+	FILE *messageFile;
+	char chr_h_date[APL_DATE_LEN] = APL_NULL_STRING;
+	char chr_msgfilename[PATH_LENGTH] = APL_NULL_STRING;
+	char chr_tempfilename[PATH_LENGTH] = APL_NULL_STRING;
+	char nameof_file_a[PATH_LENGTH] = APL_NULL_STRING;
+	char chr_h_msg_seq_no[11] = APL_NULL_STRING;
+	char chr_l_msgsrno[61] = APL_NULL_STRING;
+	char h_infolex[12] = APL_NULL_STRING;
+	char chr_mmanualmsgno[8] = APL_NULL_STRING;
+	char chr_h_str_baseno[7] = APL_NULL_STRING;
+	short i_str_baseno = -1;
+	struct sqlca sqlca;
+	PRO_GSEQNUM_STRUCT_H l_pro_gseqnum_struct_h_msg;
+	char chr_h_prepdate_new[17] = APL_NULL_STRING;
+      	char chr_l_date_time_new[APL_DATE_LEN] = APL_NULL_STRING;
+      	short i_prepdate_new = 0;
+	char instr_code[9] = APL_NULL_STRING;
+	char entitl_infono[5] = APL_NULL_STRING;
+	char instr_isin[13] = APL_NULL_STRING;
+	char chr_l_msgno[4] = APL_NULL_STRING ;
+	char chr_l_uniq_seme_refno[APL_TXNREFNO_LEN] = APL_NULL_STRING;
+	char chr_l_unique_ref_num[APL_UNIQUE_REF_NUM_LEN]=APL_NULL_STRING; 
+	char h_corp_id[21] = APL_NULL_STRING;
+	char chr_h_eventid[17] = APL_NULL_STRING;
+	char chr_l_priority=APL_NULL_CHAR;
+ 
+	char l_part_redem[2]=APL_NULL_STRING;
+	char l_ca_event[3]=APL_NULL_STRING;
+	char l_op_evt_class[3]=APL_NULL_STRING;
+	char l_instr_nomimal_value_converted[30]=APL_NULL_STRING;
+	float l_mt_nomval,l_cae_redem_rt;
+	char instr_nominal_value_str[30]=APL_NULL_STRING;
+	char instr_isin_name[130]=APL_NULL_STRING;
+	char instr_isin_name_only35[36]=APL_NULL_STRING;
+
+ short   i_l_ca_event = 0;
+ short   i_l_op_evt_class  = 0;
+ short   i_l_part_redem  = 0;
+
+	short i_instr_code = 0;
+	short i_entinfo_no = 0;
+	short i_instr_isin = 0;
+	short i_corp_id = -1;
+	short i_priority1_swift = 0;
+	int int_l_txn_type = 0; 
+	int l_tmp_swift_msg_seqno = 0;
+
+	#ifdef APL_THREADS
+	APL_SET_CONTEXT
+	EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	EXEC SQL VAR chr_tempfilename IS STRING;
+	EXEC SQL VAR h_infolex IS STRING;
+	EXEC SQL VAR p_swftlx IS STRING;
+	EXEC SQL VAR nameof_file_a IS STRING;
+	EXEC SQL VAR chr_h_msg_seq_no IS STRING;
+	EXEC SQL VAR h_identify IS STRING;
+	EXEC SQL VAR h_swift_tlx_gcn IS STRING;
+	EXEC SQL VAR chr_local_crf_no IS STRING;
+	EXEC SQL VAR chr_h_priority1_swift IS STRING;
+	EXEC SQL VAR h_dl_client IS STRING;
+	EXEC SQL VAR chr_h_str_baseno IS STRING;
+	EXEC SQL VAR p_ms_manmsg_struct_h_a->client IS STRING;
+	EXEC SQL VAR p_ms_manmsg_struct_h_a->contact_details IS STRING;
+	EXEC SQL VAR chr_h_date IS STRING;
+	EXEC SQL VAR chr_l_msgsrno IS STRING;
+	EXEC SQL VAR chr_mmanualmsgno IS STRING;
+	EXEC SQL VAR chr_l_msgno IS STRING;
+	EXEC SQL VAR chr_l_uniq_seme_refno IS STRING;
+	EXEC SQL VAR chr_l_unique_ref_num IS STRING;
+	EXEC SQL VAR h_corp_id IS STRING;
+	EXEC SQL VAR chr_h_eventid IS STRING;
+	EXEC SQL VAR instr_code IS STRING;
+	EXEC SQL VAR instr_isin IS STRING;
+
+	memset(chr_h_prepdate_new,APL_NULL_CHAR,17);
+      	memset(chr_l_date_time_new,APL_NULL_CHAR,APL_DATE_LEN);
+      	memset(chr_l_msgno,APL_NULL_CHAR,4);
+	memset(chr_l_uniq_seme_refno,APL_NULL_CHAR,APL_TXNREFNO_LEN);
+	memset(chr_l_unique_ref_num,APL_NULL_CHAR,APL_UNIQUE_REF_NUM_LEN);
+	memset(h_corp_id,APL_NULL_CHAR,21);
+	memset(chr_h_eventid,APL_NULL_CHAR,17);
+	memset(instr_code,APL_NULL_CHAR,9);
+	memset(instr_isin,APL_NULL_CHAR,13);
+	memset(chr_mmanualmsgno,APL_NULL_CHAR,8);
+
+	strcpy(h_corp_id,corp_id);
+	strcpy(chr_h_eventid,event_id);
+	strcpy(chr_local_crf_no,p_crf_no);
+
+	printf("corp_id -- |%s|\n", corp_id);
+
+	if( !strcmp(corp_id,APL_NULL_STRING) )
+	{
+		sprintf(chr_mmanualmsgno,"599MAN");
+		strcpy(chr_l_msgno,"599");
+		i_corp_id = -1;
+	}
+	else
+	{
+		sprintf(chr_mmanualmsgno,"568MAN");
+		strcpy(chr_l_msgno,"568");
+		i_corp_id = 0;
+	}
+
+	printf("chr_mmanualmsgno -- |%s|\n", chr_mmanualmsgno); /* JC - 26/02/2007 */
+	printf("chr_l_msgno -- |%s|\n", chr_l_msgno); /* JC - 26/02/2007 */
+	printf("client -- |%s|\n", p_ms_manmsg_struct_h_a->client); /* JC - 26/02/2007 */
+	printf("line[0] -- |%s|\n", p_ms_manmsg_struct_h_a->h_line[0]);
+
+	fflush(stdout);
+
+	printf("\n 253 |%ld| ", *int_p_msgsrno);
+	fflush(stdout);
+
+	sprintf(chr_l_msgsrno,"%ld",*int_p_msgsrno);//AIX - Warnings Removal
+	if(!strcmp(p_ms_manmsg_struct_h_a->client,APL_NULL_STRING)) 
+	{
+		APL_DATA_MISSING("Account",APL_NULL_STRING,APL_NULL_STRING)
+	}
+	if(!strcmp(p_ms_manmsg_struct_h_a->h_line[0],APL_NULL_STRING))
+	{
+		APL_DATA_MISSING("Line 1",APL_NULL_STRING,APL_NULL_STRING)
+	}
+	if(CO_ChkErr(*l_debug_info_ptr)==APL_SUCCESS)
+	{
+		APL_GOBACK_FAIL
+	}
+
+	strcpy(h_dl_client,p_ms_manmsg_struct_h_a->client);
+	strcpy(h_swift_tlx_gcn,p_swftlx);
+	chr_l_priority = (char)(p_ms_manmsg_struct_h_a->priority_ind);
+	if(strcmp(l_mt_message_sys_params_struct_h.ccs_int_ind, "Y") && (h_swift_tlx_gcn[0] != 'M') && (h_swift_tlx_gcn[0] !='Q') )
+	{
+		printf("271 In the iffff \n");
+		if(strcmp(p_swftlx,APL_NULL_STRING))
+		{
+			printf("In the second iffff \n");
+			EXEC SQL SELECT BASEID INTO :chr_h_str_baseno:i_str_baseno
+			FROM MS_BASE 
+			WHERE CONTACT_DETAILS=:p_ms_manmsg_struct_h_a->contact_details
+			AND 	SWIFT_TLX_GCN =:h_swift_tlx_gcn;
+			IS_ANY_ORA_ERROR
+			
+			if(APL_ZERO_RESULT_SET) 
+			{
+				CO_InsertErr(l_debug_info_ptr,
+						ERR_BASENO_NOTEXIST,
+						NULL,
+						NULL,
+						NULL,
+						__LINE__,
+						__FILE__);
+					APL_GOBACK_FAIL
+			}
+		} 
+		else 
+		{
+			EXEC SQL SELECT BASEID,SWIFT_TLX_GCN INTO :chr_h_str_baseno:i_str_baseno, :h_swift_tlx_gcn
+			FROM MS_BASE 
+			WHERE CONTACT_DETAILS=:p_ms_manmsg_struct_h_a->contact_details;
+			IS_ANY_ORA_ERROR
+			
+			if(APL_ZERO_RESULT_SET) 
+			{
+				CO_InsertErr(l_debug_info_ptr,
+						ERR_BASENO_NOTEXIST,
+						NULL,
+						NULL,
+						NULL,
+						__LINE__,
+						__FILE__);
+					APL_GOBACK_FAIL
+			}
+		}
+	}
+
+	printf("startflag=(%c)\n",chr_startflag);
+	if(chr_startflag == 'Y')
+	{
+		if(MS_Rtv_ManMsgDataFlName(chr_tempfilename,l_debug_info_ptr)==APL_FAILURE)
+		{
+			APL_GOBACK_FAIL
+		}
+		printf("chr_tempfilename -------- |%s|\n", chr_tempfilename);
+		printf("chr_icustmsgdatadir  --------------|%s|\n", chr_icustmsgdatadir);
+		fflush(stdout);
+		
+		sprintf(nameof_file_a,"%s/%s",chr_icustmsgdatadir,chr_tempfilename);
+		dataFile=fopen(nameof_file_a,"w");
+		
+		if( !strcmp(corp_id,APL_NULL_STRING) )
+		{
+			for(i=0;strcmp(p_ms_manmsg_struct_h_a->h_line[i],APL_NULL_STRING)&&i<35;
+				fprintf(dataFile,"%s\n",p_ms_manmsg_struct_h_a->h_line[i++]));
+		}
+		else
+		{
+			for(i=0;strcmp(p_ms_manmsg_struct_h_a->h_line[i],APL_NULL_STRING)&&i<200;
+				fprintf(dataFile,"%s\n",p_ms_manmsg_struct_h_a->h_line[i++]));
+		}		
+
+		fclose(dataFile);
+			
+		strncpy(chr_h_msg_seq_no,chr_tempfilename+3, strlen(chr_tempfilename)-3-strlen(strrchr(chr_tempfilename, '.')));
+		chr_h_msg_seq_no[strlen(chr_tempfilename)-3-strlen(strrchr(chr_tempfilename, '.'))]='\0';
+
+		EXEC SQL VAR chr_tempfilename IS STRING;
+		EXEC SQL INSERT INTO  MS_MSGENT(STATUS,SWIFT_MSG_NO,SWIFT_MSG_SEQNO,CLIENT,INFO_FILE,AUTO_TRAN_IND,PROC_DATA,PROC_INIT) VALUES ('U',:chr_mmanualmsgno,:chr_h_msg_seq_no,:p_ms_manmsg_struct_h_a->client,:chr_tempfilename,'Y',:chr_h_eventid,:h_corp_id);
+		IS_ANY_ORA_ERROR
+	} 
+	else 
+	{
+		
+		EXEC SQL SELECT SWIFT_MSG_SEQNO  INTO l_tmp_swift_msg_seqno   /* Sam temporary var since not used */
+		FROM MS_MSGENT
+		WHERE SWIFT_MSG_NO=:chr_mmanualmsgno
+		AND	SWIFT_MSG_SEQNO=:chr_l_msgsrno;
+		strcpy(chr_h_msg_seq_no,chr_l_msgsrno);		
+		IS_ANY_ORA_ERROR
+		if(APL_ZERO_RESULT_SET)
+		{
+			CO_InsertErr(l_debug_info_ptr,
+					ERR_FILE_NOTFND,
+					NULL,
+					NULL,
+					NULL,
+					__LINE__,
+					__FILE__);
+			APL_GOBACK_FAIL
+		}
+	}
+	if(MS_Rtv_ManMsgFlName(chr_tempfilename,l_debug_info_ptr)==APL_FAILURE)
+	{
+		APL_GOBACK_FAIL
+	}
+
+	sprintf(chr_msgfilename,"%s/%s",chr_icust_msg_out_dir,chr_tempfilename);
+	printf("ca_id=(%s)\n",corp_id);
+
+	 if( !strcmp(corp_id,APL_NULL_STRING) )
+	 {
+		strcpy(chr_l_msgno,"599");
+		if((!strcmp(h_swift_tlx_gcn,"S"))||(!strcmp(h_swift_tlx_gcn,"Q"))||(!strcmp(h_swift_tlx_gcn,"M"))||(!strcmp(h_swift_tlx_gcn,"C")))
+		{
+			char chr_templine[51];			
+			int_l_txn_type=SETTLEMENT;
+
+			if (MS_Rtv_RefNo_A(int_l_txn_type,chr_l_unique_ref_num,l_debug_info_ptr) == APL_FAILURE)
+			{
+				printf("Failure from MS_Rtv_RefNo_A\n");
+				APL_GOBACK_FAIL;
+			}
+			messageFile=fopen(chr_msgfilename,"w");
+			fprintf(messageFile,":20:%s\n",chr_l_unique_ref_num);
+			strcpy(chr_templine,p_ms_manmsg_struct_h_a->h_line[1]);
+			chr_templine[50]='\0';
+			if(strlen(h_identify) > 0)
+			{
+				fprintf(messageFile,":79:ATTN %s\n",h_identify);
+			}
+			else
+			{
+				fprintf(messageFile,":79:");
+			}
+			if( strcmp(event_id,APL_NULL_STRING) )	
+			{
+				fprintf(messageFile,"DEAL REFERENCE NO. %s\n",event_id);
+			}
+			fprintf(messageFile,"%s\n",p_ms_manmsg_struct_h_a->h_line[0]);
+
+			if (strlen(chr_templine) != 0)
+			fprintf(messageFile,"%s\n",chr_templine);
+
+			for(i=2;strcmp(p_ms_manmsg_struct_h_a->h_line[i],APL_NULL_STRING)&&i<35;
+			fprintf(messageFile,"%s\n",p_ms_manmsg_struct_h_a->h_line[i++]));
+			fclose(messageFile);
+		}
+
+		if(!strcmp(h_swift_tlx_gcn,"T"))
+		{
+			char priority_ind = '\0';//AIX - Warnings Removal
+
+			EXEC SQL VAR p_ms_manmsg_struct_h_a->client IS STRING;
+			EXEC SQL VAR p_ms_manmsg_struct_h_a->contact_details IS STRING;
+			EXEC SQL VAR chr_mmanualmsgno IS STRING;
+
+			priority_ind=(char)(p_ms_manmsg_struct_h_a->priority_ind);
+			messageFile=fopen(chr_msgfilename,"w");			
+			strcpy(h_infolex,p_ms_manmsg_struct_h_a->contact_details);
+			fprintf(messageFile,"TLX %s\n",h_infolex);
+			fprintf(messageFile,"ATTN %s\n",h_identify);
+			
+			for(i=0;strcmp(p_ms_manmsg_struct_h_a->h_line[i],APL_NULL_STRING)&&i<35;
+				fprintf(messageFile,"%s\n",p_ms_manmsg_struct_h_a->h_line[i++]));
+			
+			fclose(messageFile);
+		}
+	 }
+	 else 
+	 {
+		strcpy(chr_l_msgno,"568");
+
+		strcpy(l_ca_event,APL_NULL_STRING);
+		strcpy(l_op_evt_class,APL_NULL_STRING);
+		strcpy(l_part_redem,APL_NULL_STRING);
+		strcpy(instr_code,APL_NULL_STRING);
+		strcpy(entitl_infono,APL_NULL_STRING);
+
+		i_l_ca_event = 0;
+		i_l_op_evt_class  = 0;
+		i_l_part_redem  = 0;
+		i_instr_code = 0;
+		i_entinfo_no = 0;
+	
+
+		printf("Calling Genuniqseme fn\n");
+
+
+		int_l_txn_type=CORP_IND;
+		if (MS_Rtv_RefNo_A(int_l_txn_type,chr_l_unique_ref_num,l_debug_info_ptr) == APL_FAILURE)
+		{
+			printf("Failure from MS_Rtv_RefNo_A\n");
+			APL_GOBACK_FAIL;
+		}
+
+		printf("Calling getsystemdatetime fn\n");
+		if(APL_FAILURE == CO_RtvSysDtTime(chr_l_date_time_new,l_debug_info_ptr))
+		APL_GOBACK_FAIL
+      
+		EXEC SQL SELECT ltrim(rtrim(to_char(to_date(:chr_l_date_time_new),'yyyymmddhh24miss')))
+		INTO :chr_h_prepdate_new:i_prepdate_new
+		FROM DUAL;
+		IS_ANY_ORA_ERROR
+
+		EXEC SQL SELECT 
+		INSTR_CODE,ENTITL_INFONO, CA_EVENT,OP_EVT_CLASS,REDEM_RT 
+		INTO :instr_code:i_instr_code , :entitl_infono:i_entinfo_no,
+		:l_ca_event:i_l_ca_event,	:l_op_evt_class:i_l_op_evt_class,l_cae_redem_rt
+		FROM CAEVENT WHERE CORP_ID = :h_corp_id ;
+		IS_ANY_ORA_ERROR
+
+		EXEC SQL SELECT INSTR_ISIN,NOMINAL_VALUE,INSTR_NAME  INTO :instr_isin:i_instr_isin,l_mt_nomval,instr_isin_name FROM MT_INSTRUMENT WHERE INSTR_CODE = :instr_code;
+		IS_ANY_ORA_ERROR
+
+		if (l_cae_redem_rt == l_mt_nomval)
+		{
+			strcpy(l_part_redem,"N");
+			i_l_part_redem=0;	
+		}
+		else
+		{
+			strcpy(l_part_redem,"Y");
+			i_l_part_redem=0;	
+		}
+
+
+		messageFile=fopen(chr_msgfilename,"w");			
+		fprintf(messageFile,":16R:GENL\n");
+		fprintf(messageFile,":20C::CORP//%s\n",chr_h_eventid);
+
+		
+		fprintf(messageFile,":20C::SEME//%s\n",chr_l_unique_ref_num);
+		if (chr_l_priority == '1')
+			fprintf(messageFile,":23G:NEWM\n");
+		else
+			fprintf(messageFile,":23G:NEWM/COPY\n");
+/*
+		if ( i_entinfo_no == -1)    
+			fprintf(messageFile,":22F::CAEV//MEET\n");
+		else
+			fprintf(messageFile,":22F::CAEV//%s\n",entitl_infono);
+*/
+		if (strcmp(l_ca_event,"CD")==0)
+		{		
+			fprintf(messageFile,":22F::CAEV//DVCA\n");
+		}
+		else if (strcmp(l_ca_event,"CR")==0)
+		{		
+			fprintf(messageFile,":22F::CAEV//DECR\n");
+		}
+		else if (strcmp(l_ca_event,"BO")==0)
+		{	
+			if (strcmp(l_op_evt_class,"DM")==0)
+			{
+				fprintf(messageFile,":22F::CAEV//SOFF\n");
+			}
+			else
+			{	
+				fprintf(messageFile,":22F::CAEV//BONU\n");
+			}
+		}
+		else if (strcmp(l_ca_event,"SD")==0)
+		{		
+			fprintf(messageFile,":22F::CAEV//DVSE\n");
+		}
+		else if (strcmp(l_ca_event,"SP")==0)
+		{	
+			if (strcmp(l_op_evt_class,"SP")==0)
+			{
+				fprintf(messageFile,":22F::CAEV//SPLF\n");
+			}
+			else if (strcmp(l_op_evt_class,"SR")==0)
+			{	
+				fprintf(messageFile,":22F::CAEV//SPLR\n");
+			}
+			else if (strcmp(l_op_evt_class,"TO")==0)
+			{	
+				fprintf(messageFile,":22F::CAEV//TEND\n");
+			}
+			else if (strcmp(l_op_evt_class,"AM")==0)
+			{	
+				fprintf(messageFile,":22F::CAEV//MRGR\n");
+			}
+		}
+		else if (strcmp(l_ca_event,"BI")==0)
+		{		
+			fprintf(messageFile,":22F::CAEV//INTR\n");
+		}
+		else if (strcmp(l_ca_event,"RT")==0)
+		{		
+			fprintf(messageFile,":22F::CAEV//RHTS\n");
+		}
+		else if ( ( (strcmp(l_op_evt_class,"RD")==0) || (strcmp(l_op_evt_class,"PT")==0) ) && (strcmp(l_part_redem,"N")==0))
+		{		
+			fprintf(messageFile,":22F::CAEV//REDM\n");
+		}
+		else if (strcmp(l_ca_event,"RD")==0)
+		{	
+			if (strcmp(l_part_redem,"Y")==0)
+			{
+				fprintf(messageFile,":22F::CAEV//PCAL\n");
+			}
+		}
+		else if (strcmp(l_part_redem,"N")==0)
+		{	
+			if (strcmp(l_op_evt_class,"PO")==0)
+			{
+				fprintf(messageFile,":22F::CAEV//BPUT\n");
+			}
+			else if (strcmp(l_op_evt_class,"CA")==0)
+			{	
+				fprintf(messageFile,":22F::CAEV//MCAL\n");
+			}
+		}
+		else if (strcmp(l_ca_event,"BB")==0)
+		{		
+			fprintf(messageFile,":22F::CAEV//TEND\n");
+		}
+		else if (strcmp(l_ca_event,"DV")==0)
+		{		
+			fprintf(messageFile,":22F::CAEV//DECR\n");
+		}
+		else if (strcmp(l_ca_event,"CV")==0)
+		{		
+			fprintf(messageFile,":22F::CAEV//CONV\n");
+		}
+		else
+		{
+			fprintf(messageFile,":22F::CAEV//MEET\n");
+		}
+
+		fprintf(messageFile,":98C::PREP//%.14s\n",chr_h_prepdate_new);   
+		fprintf(messageFile,":16S:GENL\n");
+		fprintf(messageFile,":16R:USECU\n");
+		fprintf(messageFile,":97A::SAFE//%s\n",p_ms_manmsg_struct_h_a->client);
+		if (i_instr_isin == -1)
+		{
+			fprintf(messageFile,":35B:/XX/%s\n",instr_code);
+		}
+		else
+		{
+		fprintf(messageFile,":35B:ISIN %s\n",instr_isin);
+		}
+
+		// JC - 22-05-2007 -- Start
+		int nominal_val = 0;
+		char temp_nom_val[30] = APL_NULL_STRING;
+
+		CO_ToStr(l_mt_nomval,8,2,temp_nom_val);
+
+		EXEC SQL
+		SELECT SUBSTR(:temp_nom_val, INSTR(:temp_nom_val, '.')+1) into :nominal_val 
+		FROM DUAL;
+		printf("JC::::::::::ORA for substr -- [%d]\n", sqlca.sqlcode);
+		printf("JC::::::::::Nominal Val aftr substr = [%d]\n", nominal_val);
+
+		if(nominal_val == 0)
+		{
+			printf("Iffffffffffffff......\n");
+			strncpy(instr_nominal_value_str, temp_nom_val, strlen(temp_nom_val)-2);
+			printf("JC:::::instr_nominal_value_str -- [%s]\n", instr_nominal_value_str);
+			printf("JC:::::temp_nom_val -- [%s]\n", temp_nom_val);
+		}
+		else
+		{
+			printf("Elseeeeeeeeeee......\n");
+			memset(instr_nominal_value_str, APL_NULL_CHAR, 30);
+			CO_ToStr(l_mt_nomval,8,2,instr_nominal_value_str);
+		}
+
+		printf("JC:::::instr_nominal_value_str -- [%s]\n", instr_nominal_value_str);
+		//APL_GOBACK_FAIL
+		// JC - 22-05-2007 -- End
+
+		EXEC SQL select trim(replace(:instr_nominal_value_str, '.',',')) into :l_instr_nomimal_value_converted from dual;
+ 
+		fprintf(messageFile,"INR%s\n",l_instr_nomimal_value_converted);
+
+		if (strlen(instr_isin_name) > 35)	
+		{
+			strncpy(instr_isin_name_only35,instr_isin_name,35);			
+			strcat(instr_isin_name_only35,APL_NULL_STRING);			
+		}
+		else
+		{
+			strcpy(instr_isin_name_only35,instr_isin_name);			
+		}
+
+		fprintf(messageFile,"%s\n",instr_isin_name_only35);
+		fprintf(messageFile,":16S:USECU\n");
+		fprintf(messageFile,":16R:ADDINFO\n");
+		fprintf(messageFile,":70F::ADTX//");
+
+		
+		for(i=0;strcmp(p_ms_manmsg_struct_h_a->h_line[i],APL_NULL_STRING)&&i<200;
+			fprintf(messageFile,"%s\n",p_ms_manmsg_struct_h_a->h_line[i++]));
+			
+		memset(chr_h_priority1_swift,APL_NULL_CHAR,12);
+		if ( (chr_l_priority != '1') && 
+			  ((strcmp(h_swift_tlx_gcn,"S") == 0)||(strcmp(h_swift_tlx_gcn,"Q") == 0)) )
+		{
+			if (strcmp(h_swift_tlx_gcn,"S") == 0)
+			{
+				EXEC SQL SELECT SWIFT_ADDR INTO :chr_h_priority1_swift:i_priority1_swift
+				FROM MT_MSGADDRESS_VEW WHERE CLN_CODE=:h_dl_client
+				AND MSG_IDENT_NO=rtrim(:chr_local_crf_no)
+				AND PRIORITY_IND ='1'
+				AND SWIFT_TLX_GCN ='S'
+				AND SWIFT_ADDR is not null
+				AND (:chr_local_crf_no<>'3' OR (:chr_local_crf_no='3' AND SCHEDULE='ZZZZ'))
+				AND ISO_MSG_FORMAT = 'Y' and rownum < 2;
+				IS_ANY_ORA_ERROR
+				if (sqlca.sqlcode == 1403)
+				{
+					EXEC SQL SELECT SWIFT_ADDR INTO :chr_h_priority1_swift:i_priority1_swift
+					FROM MT_MSGADDRESS_VEW WHERE CLN_CODE=:h_dl_client
+					AND MSG_IDENT_NO=rtrim(:chr_local_crf_no)
+					AND PRIORITY_IND ='1'
+					AND SWIFT_TLX_GCN in ('Q')
+					AND SWIFT_ADDR is not null
+					AND (:chr_local_crf_no<>'3' OR (:chr_local_crf_no='3' AND SCHEDULE='ZZZZ'))
+					AND ISO_MSG_FORMAT = 'Y' and rownum < 2;
+					IS_ANY_ORA_ERROR
+				}
+			}
+			else if (strcmp(h_swift_tlx_gcn,"Q") == 0)
+			{
+				EXEC SQL SELECT SWIFT_ADDR INTO :chr_h_priority1_swift:i_priority1_swift
+				FROM MT_MSGADDRESS_VEW WHERE CLN_CODE=:h_dl_client
+				AND MSG_IDENT_NO=rtrim(:chr_local_crf_no)
+				AND PRIORITY_IND ='1'
+				AND SWIFT_TLX_GCN ='Q'
+				AND SWIFT_ADDR is not null
+				AND (:chr_local_crf_no<>'3' OR (:chr_local_crf_no='3' AND SCHEDULE='ZZZZ'))
+				AND ISO_MSG_FORMAT = 'Y' and rownum < 2;
+				IS_ANY_ORA_ERROR
+				if (sqlca.sqlcode == 1403)
+				{
+					EXEC SQL SELECT SWIFT_ADDR INTO :chr_h_priority1_swift:i_priority1_swift
+					FROM MT_MSGADDRESS_VEW WHERE CLN_CODE=:h_dl_client
+					AND MSG_IDENT_NO=rtrim(:chr_local_crf_no)
+					AND PRIORITY_IND ='1'
+					AND SWIFT_TLX_GCN in ('S')
+					AND SWIFT_ADDR is not null
+					AND (:chr_local_crf_no<>'3' OR (:chr_local_crf_no='3' AND SCHEDULE='ZZZZ'))
+					AND ISO_MSG_FORMAT = 'Y' and rownum < 2;
+					IS_ANY_ORA_ERROR
+				}
+			}
+			if (sqlca.sqlcode == 1403)
+			{
+				EXEC SQL SELECT SWIFT_ADDR INTO :chr_h_priority1_swift:i_priority1_swift
+				FROM MT_MSGADDRESS_VEW WHERE CLN_CODE=:h_dl_client
+				AND MSG_IDENT_NO=rtrim(:chr_local_crf_no)
+				AND PRIORITY_IND ='1'
+				AND SWIFT_TLX_GCN in ('C')
+				AND SWIFT_ADDR is not null
+				AND (:chr_local_crf_no<>'3' OR (:chr_local_crf_no='3' AND SCHEDULE='ZZZZ'))
+				AND ISO_MSG_FORMAT = 'Y' and rownum < 2;
+				IS_ANY_ORA_ERROR
+			}
+			if (sqlca.sqlcode == 1403)
+			{
+				EXEC SQL SELECT SWIFT_ADDR INTO :chr_h_priority1_swift:i_priority1_swift
+				FROM MT_MSGADDRESS_VEW WHERE CLN_CODE=:h_dl_client
+				AND MSG_IDENT_NO=rtrim(:chr_local_crf_no)
+				AND PRIORITY_IND ='1'
+				AND SWIFT_TLX_GCN in ('M')
+				AND SWIFT_ADDR is not null
+				AND (:chr_local_crf_no<>'3' OR (:chr_local_crf_no='3' AND SCHEDULE='ZZZZ'))
+				AND ISO_MSG_FORMAT = 'Y' and rownum < 2;
+				IS_ANY_ORA_ERROR
+			}
+			if (strcmp(chr_h_priority1_swift,APL_NULL_STRING) != 0)
+				fprintf(messageFile,":95P::MERE//%s\n",chr_h_priority1_swift);
+		}
+		if ( (chr_l_priority != '1') && 
+			  ((strcmp(h_swift_tlx_gcn,"C") == 0)||(strcmp(h_swift_tlx_gcn,"M") == 0)) )
+		{
+			if (strcmp(h_swift_tlx_gcn,"C") == 0)
+			{
+				EXEC SQL SELECT SWIFT_ADDR INTO :chr_h_priority1_swift:i_priority1_swift
+				FROM MT_MSGADDRESS_VEW WHERE CLN_CODE=:h_dl_client
+				AND MSG_IDENT_NO=rtrim(:chr_local_crf_no)
+				AND PRIORITY_IND ='1'
+				AND SWIFT_TLX_GCN ='C'
+				AND SWIFT_ADDR is not null
+				AND (:chr_local_crf_no<>'3' OR (:chr_local_crf_no='3' AND SCHEDULE='ZZZZ'))
+				AND ISO_MSG_FORMAT = 'Y' and rownum < 2;
+				IS_ANY_ORA_ERROR
+				if (sqlca.sqlcode == 1403)
+				{
+					EXEC SQL SELECT SWIFT_ADDR INTO :chr_h_priority1_swift:i_priority1_swift
+					FROM MT_MSGADDRESS_VEW WHERE CLN_CODE=:h_dl_client
+					AND MSG_IDENT_NO=rtrim(:chr_local_crf_no)
+					AND PRIORITY_IND ='1'
+					AND SWIFT_TLX_GCN in ('M')
+					AND SWIFT_ADDR is not null
+					AND (:chr_local_crf_no<>'3' OR (:chr_local_crf_no='3' AND SCHEDULE='ZZZZ'))
+					AND ISO_MSG_FORMAT = 'Y' and rownum < 2;
+					IS_ANY_ORA_ERROR
+				}
+			}
+			else if (strcmp(h_swift_tlx_gcn,"M") == 0)
+			{
+				EXEC SQL SELECT SWIFT_ADDR INTO :chr_h_priority1_swift:i_priority1_swift
+				FROM MT_MSGADDRESS_VEW WHERE CLN_CODE=:h_dl_client
+				AND MSG_IDENT_NO=rtrim(:chr_local_crf_no)
+				AND PRIORITY_IND ='1'
+				AND SWIFT_TLX_GCN ='M'
+				AND SWIFT_ADDR is not null
+				AND (:chr_local_crf_no<>'3' OR (:chr_local_crf_no='3' AND SCHEDULE='ZZZZ'))
+				AND ISO_MSG_FORMAT = 'Y' and rownum < 2;
+				IS_ANY_ORA_ERROR
+				if (sqlca.sqlcode == 1403)
+				{
+					EXEC SQL SELECT SWIFT_ADDR INTO :chr_h_priority1_swift:i_priority1_swift
+					FROM MT_MSGADDRESS_VEW WHERE CLN_CODE=:h_dl_client
+					AND MSG_IDENT_NO=rtrim(:chr_local_crf_no)
+					AND PRIORITY_IND ='1'
+					AND SWIFT_TLX_GCN in ('C')
+					AND SWIFT_ADDR is not null
+					AND (:chr_local_crf_no<>'3' OR (:chr_local_crf_no='3' AND SCHEDULE='ZZZZ'))
+					AND ISO_MSG_FORMAT = 'Y' and rownum < 2;
+					IS_ANY_ORA_ERROR
+				}
+			}
+			if (sqlca.sqlcode == 1403)
+			{
+				EXEC SQL SELECT SWIFT_ADDR INTO :chr_h_priority1_swift:i_priority1_swift
+				FROM MT_MSGADDRESS_VEW WHERE CLN_CODE=:h_dl_client
+				AND MSG_IDENT_NO=rtrim(:chr_local_crf_no)
+				AND PRIORITY_IND ='1'
+				AND SWIFT_TLX_GCN in ('S')
+				AND SWIFT_ADDR is not null
+				AND (:chr_local_crf_no<>'3' OR (:chr_local_crf_no='3' AND SCHEDULE='ZZZZ'))
+				AND ISO_MSG_FORMAT = 'Y' and rownum < 2;
+				IS_ANY_ORA_ERROR
+			}
+			if (sqlca.sqlcode == 1403)
+			{
+				EXEC SQL SELECT SWIFT_ADDR INTO :chr_h_priority1_swift:i_priority1_swift
+				FROM MT_MSGADDRESS_VEW WHERE CLN_CODE=:h_dl_client
+				AND MSG_IDENT_NO=rtrim(:chr_local_crf_no)
+				AND PRIORITY_IND ='1'
+				AND SWIFT_TLX_GCN in ('Q')
+				AND SWIFT_ADDR is not null
+				AND (:chr_local_crf_no<>'3' OR (:chr_local_crf_no='3' AND SCHEDULE='ZZZZ'))
+				AND ISO_MSG_FORMAT = 'Y' and rownum < 2;
+				IS_ANY_ORA_ERROR
+			}
+			if (strcmp(chr_h_priority1_swift,APL_NULL_STRING) != 0)
+				fprintf(messageFile,":95P::MERE//%s\n",chr_h_priority1_swift);
+		}
+		
+		fprintf(messageFile,":16S:ADDINFO\n");
+		fclose(messageFile);
+ 	}
+
+	EXEC SQL VAR chr_h_date IS STRING;
+	if(CO_RtvSysDt(chr_h_date,l_debug_info_ptr)==APL_FAILURE)
+	{
+		APL_GOBACK_FAIL
+	}
+
+	printf("834  Inserting into imsglog\n");
+
+	EXEC SQL INSERT INTO MS_MSGLOG (STATUS,CLIENT,SWIFT_MSG_NO,MAKER,MESSAGE_CLASS,CONTACT_DETAILS,MAKER_DT,MESSAGE_IND,BASEID,MSG_IN_OUT_IND,MSG,CONTACT_DETAILS1,SWIFT_MSG_IDENT) 
+	VALUES('U',:p_ms_manmsg_struct_h_a->client,:chr_l_msgno,:p_intl_env_datastruct_h->usr,:h_swift_tlx_gcn,:p_ms_manmsg_struct_h_a->contact_details,:chr_h_date,:chr_h_msg_seq_no,:chr_h_str_baseno:i_str_baseno,'O',:chr_tempfilename,:chr_h_tempaddress1,:chr_l_unique_ref_num);
+	
+	printf("JC:::::::for inserting in MS_MSGLOG -- sqlca.sqlcode=[%d]\n",sqlca.sqlcode);
+	printf("JC:::::chr_h_msg_seq_no in MS_MSGLOG >>>>>> |%s|\n", chr_h_msg_seq_no);
+	fflush(stdout);
+	IS_ANY_ORA_ERROR
+
+   int_l_msgsrnotemp = atol(chr_h_msg_seq_no);
+
+//	sscanf(chr_h_msg_seq_no,"%d",&int_l_msgsrnotemp);
+	printf("int_l_msgsrnotemp >>>>>>>>>>> |%ld|\n", int_l_msgsrnotemp);
+	fflush(stdout);
+
+
+	*int_p_msgsrno=int_l_msgsrnotemp;
+	printf("848  returning *int_p_msgsrno -------- |%ld|\n", *int_p_msgsrno);
+
+	fflush(stdout);
+	RETURN_SUCCESS:
+	{
+		return APL_SUCCESS;
+	}
+	RETURN_FAILURE:
+	{
+		return APL_FAILURE;
+	}
+}
+
+int MS_Proc_ManMsgMain(MS_MANMSG_STRUCT_H *p_ms_manmsg_struct_h_a,
+				char chr_startflag,
+				long *int_p_msgsrno,
+				long *l_int_msgsrno, /* JC -- RFS_MS_001 */
+				char *corp_id,
+				char *event_id,
+				DEBUG_INFO_STRUCT_H **l_debug_info_ptr,
+				INTL_ENV_DATA_STRUCT_H *p_intl_env_datastruct_h) 
+{
+	printf("***** In MS_Proc_ManMsgMain *****\n"); /* JC - 26/02/2007 */
+	printf("JC::::: ***** event id --- [%s] ***** :::::JC in MS_Proc_ManMsgMain\n", event_id);
+	char h_infolex[12] = APL_NULL_STRING;
+	char h_swift_addr[12] = APL_NULL_STRING;
+	long temp_msgsrno = 0;
+	short i_identify;
+	char h_gcn_addr[6] = APL_NULL_STRING;
+	char h_swift_tlx_gcn[2] = APL_NULL_STRING;
+	char chr_h_crf_no[3] = APL_NULL_STRING;
+	char chr_mmanualmsgno[8] = APL_NULL_STRING;
+	char chr_mmanualmsgno1[8] = APL_NULL_STRING;
+	char priority_ind = '\0';//AIX - Warnings Removal
+	int  l_iso15022format = 0;	
+	short i_infolex,i_gcn_addr,i_swift_addr,i_swift_tlx_gcn;
+	short int_i_crf_no = 0;
+	short i_category_568 = 0;
+	char chr_h_category_568[5] = APL_NULL_STRING;
+	struct sqlca sqlca;
+
+	#ifdef APL_THREADS
+	APL_SET_CONTEXT
+	EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	i_infolex = i_gcn_addr = i_swift_addr = i_swift_tlx_gcn = i_identify = 0;
+
+	EXEC SQL VAR h_infolex IS STRING;
+	EXEC SQL VAR h_gcn_addr IS STRING;
+	EXEC SQL VAR h_swift_addr IS STRING;
+	EXEC SQL VAR chr_mmanualmsgno IS STRING;
+	EXEC SQL VAR chr_mmanualmsgno1 IS STRING;
+	EXEC SQL VAR h_swift_tlx_gcn IS STRING;
+	EXEC SQL VAR chr_h_crf_no IS STRING;
+	EXEC SQL VAR chr_h_category_568 IS STRING;
+	
+	priority_ind = (char )(p_ms_manmsg_struct_h_a->priority_ind);
+
+	memset(chr_mmanualmsgno,APL_NULL_CHAR,8);
+	memset(chr_mmanualmsgno1,APL_NULL_CHAR,8);
+
+	if( !strcmp(corp_id,APL_NULL_STRING) )
+		sprintf(chr_mmanualmsgno,"%d",MMANUALMSGNO);
+	else
+	{
+		sprintf(chr_mmanualmsgno,"%d",MCORPACTIONSSMMSGNO);
+		sprintf(chr_mmanualmsgno1,"%d",MCORPACTIONSMSGNO);
+		l_iso15022format = 1; 
+	}
+
+	printf("920 MMANUALMSGNO ------- |%d|\n", MMANUALMSGNO);
+	printf("mmanualmsgno = (%s)\n", chr_mmanualmsgno);
+	printf("mmanualmsgno1 = (%s)\n", chr_mmanualmsgno1);
+	printf("ca_id = (%s)\n", corp_id);
+	printf("eventid = (%s)\n", event_id);
+	printf("p_message_struct->client = (%s)\n", p_ms_manmsg_struct_h_a->client);
+	printf("priority = (%c)\n", priority_ind);
+	printf("Contact details -- (%s)\n", p_ms_manmsg_struct_h_a->contact_details); /* JC - 26/02/2007 */
+
+	/* JC - 26/02/2007 -- For Testing -- Start 
+	EXEC SQL
+	SELECT	SWIFT_ADDR into :p_ms_manmsg_struct_h_a->contact_details
+	FROM	MT_MSGADDRESS
+	WHERE	CLN_CODE = :p_ms_manmsg_struct_h_a->client
+		AND CONTACTSEQ = '2';
+	IS_ANY_ORA_ERROR
+	printf("Contact details after query -- (%s)\n", p_ms_manmsg_struct_h_a->contact_details);
+	 JC - 26/02/2007 -- For Testing -- End */
+
+	if(strcmp(p_ms_manmsg_struct_h_a->contact_details,APL_NULL_STRING))
+	{
+		printf("Loop 1\n");
+		strcpy(h_swift_tlx_gcn,APL_NULL_STRING);
+
+		printf("l_iso15022format -- |%d|\n", l_iso15022format);  /* JC - 26/02/2007 */
+
+		if (l_iso15022format == 1)
+		{
+			EXEC SQL DECLARE refCursor_iso CURSOR FOR 
+			SELECT SWIFT_TLX_GCN,IDENTIFY,SWIFT_ADDR,GCN_ADDR,TELEX_ADDR,MSG_IDENT_NO,SCHEDULE
+			FROM MT_MSGADDRESS_VEW
+			WHERE CLN_CODE=:p_ms_manmsg_struct_h_a->client
+			AND MSG_IDENT_NO = (SELECT MAX(to_number(MSG_IDENT_NO)) 
+						from MT_MSGADDRESS_VEW 
+						where	CLN_CODE = :p_ms_manmsg_struct_h_a->client 
+					   		and MSG_IDENT_NO in (:chr_mmanualmsgno,:chr_mmanualmsgno1) 
+							AND ISO_MSG_FORMAT = 'Y' 
+							AND PRIORITY_IND=:p_ms_manmsg_struct_h_a->priority_ind
+							AND (SWIFT_ADDR=:p_ms_manmsg_struct_h_a->contact_details
+							OR GCN_ADDR=:p_ms_manmsg_struct_h_a->contact_details
+							OR TELEX_ADDR=:p_ms_manmsg_struct_h_a->contact_details))
+			AND PRIORITY_IND=:p_ms_manmsg_struct_h_a->priority_ind
+			AND ISO_MSG_FORMAT='Y'
+			AND (SWIFT_ADDR=:p_ms_manmsg_struct_h_a->contact_details
+			OR GCN_ADDR=:p_ms_manmsg_struct_h_a->contact_details
+			OR TELEX_ADDR=:p_ms_manmsg_struct_h_a->contact_details);
+			IS_ANY_ORA_ERROR
+
+			EXEC SQL OPEN refCursor_iso;
+			IS_ANY_ORA_ERROR
+		}
+		else
+		{
+			EXEC SQL DECLARE refCursor CURSOR FOR 
+			SELECT SWIFT_TLX_GCN,IDENTIFY,SWIFT_ADDR,GCN_ADDR,TELEX_ADDR 
+			FROM MT_MSGADDRESS_VEW
+			WHERE CLN_CODE=:p_ms_manmsg_struct_h_a->client
+			AND MSG_IDENT_NO IN (:chr_mmanualmsgno,:chr_mmanualmsgno1)
+			AND PRIORITY_IND=:p_ms_manmsg_struct_h_a->priority_ind
+			AND (SWIFT_ADDR=:p_ms_manmsg_struct_h_a->contact_details
+			OR GCN_ADDR=:p_ms_manmsg_struct_h_a->contact_details
+			OR TELEX_ADDR=:p_ms_manmsg_struct_h_a->contact_details);
+			IS_ANY_ORA_ERROR
+			
+			EXEC SQL OPEN refCursor;
+			IS_ANY_ORA_ERROR
+		}
+		
+		while(1) 
+		{
+			if (l_iso15022format == 1)
+			{
+				EXEC SQL FETCH refCursor_iso INTO :h_swift_tlx_gcn:i_swift_tlx_gcn,
+								:h_identify:i_identify,
+								:h_swift_addr:i_swift_addr,
+								:h_gcn_addr:i_gcn_addr,
+								:h_infolex:i_infolex,
+								:chr_h_crf_no:int_i_crf_no,
+								:chr_h_category_568:i_category_568;
+			}
+			else
+			{
+				EXEC SQL FETCH refCursor INTO :h_swift_tlx_gcn:i_swift_tlx_gcn,
+								:h_identify:i_identify,
+								:h_swift_addr:i_swift_addr,
+								:h_gcn_addr:i_gcn_addr,
+								:h_infolex:i_infolex;
+			}
+			IS_ANY_ORA_ERROR
+
+			printf("h_swift_tlx_gcn:i_swift_tlx_gcn -- |%s|\n", h_swift_tlx_gcn);
+			
+			if(sqlca.sqlcode==1403) 
+			{
+				EXEC SQL CLOSE refCursor;
+				APL_GOBACK_SUCCESS
+			}
+	
+			strcpy(chr_h_tempaddress1,APL_NULL_STRING);
+
+			if(!strcmp(h_swift_tlx_gcn,"T"))
+				strcpy(chr_h_tempaddress1,h_gcn_addr);
+			
+			if((!strcmp(h_swift_tlx_gcn,"C")) || (!strcmp(h_swift_tlx_gcn,"M")))
+				strcpy(chr_h_tempaddress1,h_swift_addr);
+
+			if(l_iso15022format == 1)
+			{
+				if((strcmp(chr_h_crf_no,"3")==0) && (strcmp(chr_h_category_568,"ZZZZ")!=0))
+					continue;
+			}
+			
+			if(MS_Proc_ManMsg(p_ms_manmsg_struct_h_a,
+						chr_startflag,
+						int_p_msgsrno,
+						h_swift_tlx_gcn,
+						corp_id,
+						event_id,
+						chr_h_crf_no,
+						l_debug_info_ptr,
+						p_intl_env_datastruct_h)==APL_FAILURE)
+			{
+		
+				if (l_iso15022format == 1)
+				{
+					EXEC SQL CLOSE refCursor_iso;
+				}
+				else
+				{
+					EXEC SQL CLOSE refCursor;
+				}
+				APL_GOBACK_FAIL
+			}
+			printf("\t\t1053  |%ld|\n", *int_p_msgsrno);
+fflush(stdout);
+		}
+	}
+
+	printf("Here...... outside the if loop......\n");
+
+	EXEC SQL VAR p_ms_manmsg_struct_h_a->client IS STRING;
+	EXEC SQL VAR p_ms_manmsg_struct_h_a->contact_details IS STRING;
+	EXEC SQL VAR h_infolex IS STRING;
+	EXEC SQL VAR h_gcn_addr IS STRING;
+	EXEC SQL VAR h_swift_addr IS STRING;
+	EXEC SQL VAR chr_mmanualmsgno IS STRING;
+	EXEC SQL VAR chr_mmanualmsgno1 IS STRING;
+	EXEC SQL VAR h_swift_tlx_gcn IS STRING;
+	EXEC SQL VAR chr_h_crf_no IS STRING;
+
+	printf("l_iso15022format...... -- |%d|\n", l_iso15022format);
+	if (l_iso15022format == 1)
+	{
+		printf("iffffffffffffff\n");
+		sqlca.sqlcode = 0L; /* JC - 26/02/2007 */
+
+		EXEC SQL DECLARE accCursor_iso CURSOR FOR
+		SELECT	SWIFT_TLX_GCN,GCN_ADDR,TELEX_ADDR,SWIFT_ADDR,IDENTIFY,MSG_IDENT_NO,SCHEDULE
+		FROM	MT_MSGADDRESS_VEW
+		WHERE	CLN_CODE=:p_ms_manmsg_struct_h_a->client
+			AND MSG_IDENT_NO = (SELECT MIN(to_number(MSG_IDENT_NO)) 
+						from MT_MSGADDRESS_VEW 
+						where CLN_CODE = :p_ms_manmsg_struct_h_a->client 
+						AND PRIORITY_IND=:p_ms_manmsg_struct_h_a->priority_ind
+						and MSG_IDENT_NO in (:chr_mmanualmsgno,:chr_mmanualmsgno1) 
+						AND ISO_MSG_FORMAT = 'Y' )
+			AND ISO_MSG_FORMAT='Y'
+			AND SWIFT_TLX_GCN='S'
+			AND PRIORITY_IND=:p_ms_manmsg_struct_h_a->priority_ind;
+
+		printf("In iffff....... ORA -- [%d]\n", sqlca.sqlcode);
+		fflush(stdout);
+		IS_ANY_ORA_ERROR
+
+		EXEC SQL OPEN accCursor_iso;
+		printf("In iffff....... ORA -- [%d]\n", sqlca.sqlcode);
+		IS_ANY_ORA_ERROR
+	}
+	else
+	{
+		printf("elseeeeeeeeeeeeeeee\n");
+		sqlca.sqlcode = 0L; /* JC - 26/02/2007 */
+
+		/* Commented by JC - 22-05-2007 for Considering MSG_IDENT_NO = 3 if 3 & 31 both are present in MT_MSGADDRESS for the given Client */
+		/*
+		EXEC SQL DECLARE accCursor CURSOR FOR
+			SELECT 	SWIFT_TLX_GCN,GCN_ADDR,TELEX_ADDR,SWIFT_ADDR,IDENTIFY
+				FROM MT_MSGADDRESS_VEW
+				WHERE CLN_CODE=:p_ms_manmsg_struct_h_a->client
+				AND MSG_IDENT_NO IN (:chr_mmanualmsgno,:chr_mmanualmsgno1)
+				AND PRIORITY_IND=:priority_ind;
+
+		*/
+
+		/* JC - 22-05-2007 for Considering MSG_IDENT_NO = 3 if 3 & 31 both are present in MT_MSGADDRESS for the given Client - Start */
+		EXEC SQL
+		DECLARE accCursor CURSOR FOR
+		SELECT  SWIFT_TLX_GCN,GCN_ADDR,TELEX_ADDR,SWIFT_ADDR,IDENTIFY
+		FROM	MT_MSGADDRESS_VEW
+		WHERE	CLN_CODE=:p_ms_manmsg_struct_h_a->client
+			AND MSG_IDENT_NO = (SELECT MIN(to_number(MSG_IDENT_NO)) 
+					from MT_MSGADDRESS_VEW 
+					where CLN_CODE = :p_ms_manmsg_struct_h_a->client 
+					AND PRIORITY_IND=:p_ms_manmsg_struct_h_a->priority_ind
+					and MSG_IDENT_NO in (:chr_mmanualmsgno,:chr_mmanualmsgno1) 
+					AND ISO_MSG_FORMAT = 'Y' )
+			AND ISO_MSG_FORMAT='Y'
+			AND SWIFT_TLX_GCN='S'
+			AND PRIORITY_IND=:priority_ind;
+		/* JC - 22-05-2007 -- End */
+
+		printf("In elseeeee....... ORA -- [%d]\n", sqlca.sqlcode);
+		IS_ANY_ORA_ERROR
+
+		fflush(stdout);
+
+		EXEC SQL OPEN accCursor;
+		printf("In elseeeee....... ORA -- [%d]\n", sqlca.sqlcode);
+		IS_ANY_ORA_ERROR
+	}
+	while(1)
+	{
+		printf("1139 in the while .......\n");
+		if (l_iso15022format == 1)
+		{
+			printf("Iso == 1 \n");
+			EXEC SQL FETCH accCursor_iso INTO :h_swift_tlx_gcn :i_swift_tlx_gcn,
+							:h_gcn_addr	:i_gcn_addr,
+							:h_infolex :i_infolex,
+							:h_swift_addr	:i_swift_addr,
+							:h_identify:i_identify,
+							:chr_h_crf_no:int_i_crf_no,
+							:chr_h_category_568:i_category_568;
+			fflush(stdout);
+			printf("Aftr fetch cursor ....... ORA -- [%d]\n", sqlca.sqlcode);
+		}
+		else 
+		{
+			printf("Iso != 1 \n");
+			EXEC SQL FETCH accCursor INTO :h_swift_tlx_gcn :i_swift_tlx_gcn,
+							:h_gcn_addr	:i_gcn_addr,
+							:h_infolex :i_infolex,
+							:h_swift_addr	:i_swift_addr,
+							:h_identify:i_identify;
+			fflush(stdout);
+			printf("Aftr fetch cursor ....... ORA -- [%d]\n", sqlca.sqlcode);
+		}
+
+		//IS_ANY_ORA_ERROR
+
+		fflush(stdout);
+		printf("h_swift_tlx_gcn -- |%s|\n", h_swift_tlx_gcn);
+		printf("h_gcn_addr      -- |%s|\n", h_gcn_addr);
+		printf("h_infolex       -- |%s|\n", h_infolex);
+		printf("h_swift_addr    -- |%s|\n", h_swift_addr);
+		printf("h_identify      -- |%s|\n", h_identify);
+		fflush(stdout);
+
+		if(APL_ZERO_RESULT_SET) 
+		{
+			EXEC SQL CLOSE accCursor;
+
+			printf("KS -- Going Back.... [976] \n");
+		fflush(stdout);
+			break;
+			APL_GOBACK_SUCCESS
+		}
+		
+		strcpy(chr_h_tempaddress1,APL_NULL_STRING);
+		
+		if((!strcmp(h_swift_tlx_gcn,"S")) || (!strcmp(h_swift_tlx_gcn,"Q")))
+			strcpy(p_ms_manmsg_struct_h_a->contact_details,h_swift_addr);
+		
+		if(!strcmp(h_swift_tlx_gcn,"T"))
+		{
+			strcpy(p_ms_manmsg_struct_h_a->contact_details,h_infolex);
+			strcpy(chr_h_tempaddress1,h_gcn_addr);
+		}
+		
+		if(!strcmp(h_swift_tlx_gcn,"C") || (!strcmp(h_swift_tlx_gcn,"M")))
+		{
+			strcpy(p_ms_manmsg_struct_h_a->contact_details,h_gcn_addr);
+			strcpy(chr_h_tempaddress1,h_swift_addr);
+		}
+		
+		if(l_iso15022format == 1)
+		{
+			if((strcmp(chr_h_crf_no,"3")==0) && (strcmp(chr_h_category_568,"ZZZZ")!=0))
+			continue;
+		}
+
+		fflush(stdout);
+		printf("1207 Calling MS_Proc_ManMsg\n");	
+			printf("\t\t1213  |%ld|\n", *int_p_msgsrno);
+fflush(stdout);
+		if(MS_Proc_ManMsg(p_ms_manmsg_struct_h_a,
+					chr_startflag,
+					int_p_msgsrno,
+					h_swift_tlx_gcn,
+					corp_id,
+					event_id,
+					chr_h_crf_no,
+					l_debug_info_ptr,
+					p_intl_env_datastruct_h)==APL_FAILURE)
+		{
+			if (l_iso15022format == 1)
+			{
+				EXEC SQL CLOSE accCursor_iso;
+			}
+			else
+			{
+				EXEC SQL CLOSE accCursor;
+			}
+		
+			CO_InsertErr(l_debug_info_ptr,
+					ERR_MSG_CANT_GENERATE,
+					p_ms_manmsg_struct_h_a->client,
+					h_swift_tlx_gcn,
+					p_ms_manmsg_struct_h_a->contact_details,
+					__LINE__,
+					__FILE__);
+				APL_GOBACK_FAIL
+		}
+		printf("\t\t1236   |%ld|\n", *int_p_msgsrno);
+		fflush(stdout);
+	}
+
+	printf("JC::::: ***** event id --- [%s] ***** :::::JC end of MS_Proc_ManMsgMain\n", event_id);
+	printf("returning from MS_Proc_ManMsgMain\n");
+fflush(stdout);
+
+RETURN_SUCCESS:
+	{
+		printf("\n 1246 returning");
+		fflush(stdout);
+		return APL_SUCCESS;
+	}
+RETURN_FAILURE:
+	{
+		return APL_FAILURE;
+	}
+}
+
+static int MS_Proc_ManMsgAuth( long *int_p_msgsrno,
+				char *chr_p_msgno_a,
+				DEBUG_INFO_STRUCT_H **l_debug_info_ptr,
+				INTL_ENV_DATA_STRUCT_H *p_intl_env_datastruct_h)
+{
+	printf("In function MS_Proc_ManMsgAuth\n");
+	printf("JC -- Swift no -- |%s|\n", chr_p_msgno_a);
+	printf("JC -- Msg Seq No -- |%ld|\n", *int_p_msgsrno);
+
+	char chr_l_msgsrno[61] = APL_NULL_STRING;
+	char chr_mmanualmsgno[8] = APL_NULL_STRING;
+	char chr_date[APL_DATE_LEN] = APL_NULL_STRING;
+	char maker[APL_USERID_LEN] = APL_NULL_STRING;
+	char h_status_ind[2] = APL_NULL_STRING;
+	char h_msg_ident_no[4] = APL_NULL_STRING;
+	struct sqlca sqlca;
+	#ifdef APL_THREADS
+	APL_SET_CONTEXT
+	EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	EXEC SQL VAR chr_mmanualmsgno IS STRING;
+	EXEC SQL VAR chr_date IS STRING;
+	EXEC SQL VAR chr_l_msgsrno IS STRING;
+	EXEC SQL VAR h_status_ind IS STRING;
+	EXEC SQL VAR maker IS STRING;
+	EXEC SQL VAR h_msg_ident_no IS STRING;
+	memset(h_msg_ident_no,APL_NULL_CHAR,4);
+
+	strcpy(h_msg_ident_no,chr_p_msgno_a);
+	sprintf(chr_l_msgsrno,"%ld",*int_p_msgsrno);
+
+	if( !strcmp(h_msg_ident_no,"599") )
+	sprintf(chr_mmanualmsgno,"599MAN");
+	else
+	sprintf(chr_mmanualmsgno,"568MAN");
+
+	printf("p_msgno=(%s)\n",chr_p_msgno_a);
+	printf("l_msgsrno=(%s)\n",chr_l_msgsrno);
+
+	EXEC SQL SELECT DISTINCT STATUS,MAKER INTO :h_status_ind ,:maker
+		FROM MS_MSGLOG
+		WHERE SWIFT_MSG_NO=:h_msg_ident_no
+		AND 	MESSAGE_IND=:chr_l_msgsrno;
+	IS_ANY_ORA_ERROR
+	
+	if(APL_ZERO_RESULT_SET)
+	{
+		CO_InsertErr(l_debug_info_ptr,
+				ERR_REC_NOTFND,
+				NULL,
+				NULL,
+				NULL,
+				__LINE__,
+				__FILE__);
+			APL_GOBACK_FAIL		
+	}
+
+	/* Commented by JC - RFS_MS_001
+	if(!strcmp(maker,p_intl_env_datastruct_h->usr))
+	{
+		CO_InsertErr(l_debug_info_ptr,
+				ERR_MAKER_CHECKER_SAME,
+				NULL,
+				NULL,
+				NULL,
+				__LINE__,
+				__FILE__);
+			APL_GOBACK_FAIL
+	}
+	Commented by JC - RFS_MS_001 */
+
+	if(!strcmp(h_status_ind,"X"))
+	{
+		EXEC SQL DELETE MS_MSGLOG 
+			WHERE SWIFT_MSG_NO=:h_msg_ident_no
+			AND MESSAGE_IND=:chr_l_msgsrno;
+		IS_ANY_ORA_ERROR
+
+		EXEC SQL DELETE MS_MSGENT
+			WHERE SWIFT_MSG_NO=:chr_mmanualmsgno
+			AND	SWIFT_MSG_SEQNO=:chr_l_msgsrno;
+		IS_ANY_ORA_ERROR
+	}
+
+	if(!strcmp(h_status_ind,"U"))
+	{
+		EXEC SQL UPDATE MS_MSGLOG
+			SET STATUS='P'
+			WHERE SWIFT_MSG_NO=:h_msg_ident_no
+			AND 	MESSAGE_IND=:chr_l_msgsrno;
+		IS_ANY_ORA_ERROR
+
+		EXEC SQL UPDATE MS_MSGENT
+			SET STATUS='P'
+			WHERE SWIFT_MSG_NO=:chr_mmanualmsgno
+			AND 	SWIFT_MSG_SEQNO=:chr_l_msgsrno;
+		IS_ANY_ORA_ERROR
+	}
+APL_GOBACK_SUCCESS//AIX - Warnings Removal
+	RETURN_SUCCESS:
+	{
+		return APL_SUCCESS;
+	}
+	RETURN_FAILURE:
+	{
+		return APL_FAILURE;
+	}
+}
+
+static int MS_Proc_ManMsgDel( long *int_p_msgsrno,
+				char *chr_p_msgno_a,
+				DEBUG_INFO_STRUCT_H **l_debug_info_ptr,
+				INTL_ENV_DATA_STRUCT_H *p_intl_env_datastruct_h)
+{
+	char chr_l_msg_seq_no[61] = APL_NULL_STRING;
+	char chr_mmanualmsgno[8] = APL_NULL_STRING;
+	char chr_date[APL_DATE_LEN] = APL_NULL_STRING;
+	char h_status_ind[2] = APL_NULL_STRING;
+	char h_msg_ident_no[4] = APL_NULL_STRING;
+	struct sqlca sqlca;	
+	#ifdef APL_THREADS
+	APL_SET_CONTEXT
+	EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	EXEC SQL VAR chr_mmanualmsgno IS STRING;
+	EXEC SQL VAR p_intl_env_datastruct_h->usr IS STRING;
+	EXEC SQL VAR chr_date IS STRING;
+	EXEC SQL VAR chr_l_msg_seq_no IS STRING;
+	EXEC SQL VAR h_status_ind IS STRING;
+	EXEC SQL VAR h_msg_ident_no IS STRING;
+
+	memset(h_msg_ident_no,APL_NULL_CHAR,4);
+	strcpy(h_msg_ident_no,chr_p_msgno_a);
+	sprintf(chr_l_msg_seq_no,"%ld",*int_p_msgsrno); 
+
+	if( !strcmp(h_msg_ident_no,"599") )
+		sprintf(chr_mmanualmsgno,"599MAN");
+	else
+		sprintf(chr_mmanualmsgno,"568MAN");
+
+	EXEC SQL SELECT STATUS INTO :h_status_ind
+		FROM MS_MSGENT
+		WHERE SWIFT_MSG_NO=:chr_mmanualmsgno
+		AND	SWIFT_MSG_SEQNO=:chr_l_msg_seq_no;
+	IS_ANY_ORA_ERROR
+	
+	if(APL_ZERO_RESULT_SET)
+	{
+		CO_InsertErr(l_debug_info_ptr,
+				ERR_REC_NOTFND,
+				NULL,
+				NULL,
+				NULL,
+				__LINE__,
+				__FILE__);
+			APL_GOBACK_FAIL		
+	}
+
+	if(strcmp(h_status_ind,"U"))
+	{
+		CO_InsertErr(l_debug_info_ptr,
+				ERR_MSGNOTIN_CORRECT_STS,
+				NULL,
+				NULL,
+				NULL,
+				__LINE__,
+				__FILE__);
+			APL_GOBACK_FAIL
+	}
+	
+	if(CO_RtvSysDt(chr_date,l_debug_info_ptr)==APL_FAILURE)
+	{
+		APL_GOBACK_FAIL
+	}
+	
+	EXEC SQL UPDATE MS_MSGENT
+		SET STATUS='X'
+		WHERE SWIFT_MSG_NO=:chr_mmanualmsgno
+		AND 	SWIFT_MSG_SEQNO=:chr_l_msg_seq_no;
+	IS_ANY_ORA_ERROR
+	
+	EXEC SQL UPDATE MS_MSGLOG
+		SET STATUS='X',
+			 MAKER=:p_intl_env_datastruct_h->usr,
+			 MAKER_DT=:chr_date 
+			 WHERE SWIFT_MSG_NO=:h_msg_ident_no
+			 AND	MESSAGE_IND=:chr_l_msg_seq_no;
+	IS_ANY_ORA_ERROR
+
+APL_GOBACK_SUCCESS //AIX - Warnings Removal
+	RETURN_SUCCESS:
+	{
+		return APL_SUCCESS;
+	}
+	RETURN_FAILURE:
+	{
+		return APL_FAILURE;
+	}
+}
+
+static int MS_Proc_ManMsgRst( long *int_p_msgsrno,
+				char *chr_p_msgno_a,
+				DEBUG_INFO_STRUCT_H **l_debug_info_ptr,
+				INTL_ENV_DATA_STRUCT_H *p_intl_env_datastruct_h)
+{
+	char chr_l_msg_seq_no[61] = APL_NULL_STRING;
+	char chr_date[APL_DATE_LEN] = APL_NULL_STRING;
+	char chr_mmanualmsgno[8] = APL_NULL_STRING;
+	char h_status_ind[2] = APL_NULL_STRING;
+	char h_msg_ident_no[4] = APL_NULL_STRING;
+	struct sqlca sqlca;
+	#ifdef APL_THREADS
+	APL_SET_CONTEXT
+	EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+	
+	EXEC SQL VAR chr_mmanualmsgno IS STRING;
+	EXEC SQL VAR chr_date IS STRING;
+	EXEC SQL VAR chr_l_msg_seq_no IS STRING;
+	EXEC SQL VAR h_status_ind IS STRING;
+	EXEC SQL VAR p_intl_env_datastruct_h->usr IS STRING;
+	EXEC SQL VAR h_msg_ident_no IS STRING;
+
+	memset(h_msg_ident_no,APL_NULL_CHAR,4);
+	sprintf(chr_l_msg_seq_no,"%ld",*int_p_msgsrno); 
+
+	strcpy(h_msg_ident_no,chr_p_msgno_a);
+	
+	if( !strcmp(h_msg_ident_no,"599") )
+		sprintf(chr_mmanualmsgno,"599MAN");
+	else
+		sprintf(chr_mmanualmsgno,"568MAN");
+
+	EXEC SQL SELECT STATUS INTO :h_status_ind
+		FROM MS_MSGENT 
+		WHERE SWIFT_MSG_NO=:chr_mmanualmsgno
+		AND	SWIFT_MSG_SEQNO=:chr_l_msg_seq_no;
+	IS_ANY_ORA_ERROR
+	
+	if(APL_ZERO_RESULT_SET)
+	{
+		CO_InsertErr(l_debug_info_ptr,
+				ERR_REC_NOTFND,
+				NULL,
+				NULL,
+				NULL,
+				__LINE__,
+				__FILE__);
+			APL_GOBACK_FAIL		
+	}
+
+	if(strcmp(h_status_ind,"X"))
+	{
+		CO_InsertErr(l_debug_info_ptr,
+				ERR_MSGDEL_CANT_RESET,
+				NULL,
+				NULL,
+				NULL,
+				__LINE__,
+				__FILE__);
+			APL_GOBACK_FAIL
+	}
+	
+	EXEC SQL UPDATE MS_MSGENT
+		SET STATUS='U'
+		WHERE SWIFT_MSG_NO=:chr_mmanualmsgno
+		AND 	SWIFT_MSG_SEQNO=:chr_l_msg_seq_no;
+	IS_ANY_ORA_ERROR
+	
+	if(CO_RtvSysDt(chr_date,l_debug_info_ptr)==APL_FAILURE)
+	{
+		APL_GOBACK_FAIL
+	}
+
+	EXEC SQL UPDATE MS_MSGLOG
+		SET STATUS='U',
+			 MAKER=:p_intl_env_datastruct_h->usr,
+			 MAKER_DT=:chr_date
+		WHERE SWIFT_MSG_NO=:h_msg_ident_no
+		AND 	MESSAGE_IND=:chr_l_msg_seq_no;
+	IS_ANY_ORA_ERROR
+
+APL_GOBACK_SUCCESS //AIX - Warnings Removal
+	RETURN_SUCCESS:
+	{
+		return APL_SUCCESS;
+	}
+	RETURN_FAILURE:
+	{
+		return APL_FAILURE;
+	}
+}
+
+int MS_Proc_ManMsgInit(MS_MANMSG_STRUCT_H *p_ms_manmsg_struct_h_a,
+				char chr_startflag,
+				long *int_msgsrno,
+				char *corp_id,
+				char *event_id,
+				DEBUG_INFO_STRUCT_H **l_debug_info_ptr,
+				INTL_ENV_DATA_STRUCT_H *p_intl_env_datastruct_h)
+{
+	char chr_inifile[PATH_LENGTH];
+	FILE *chr_finifile;
+	struct sqlca sqlca;
+	long *l_int_msgsrno;
+
+	#ifdef APL_THREADS
+	APL_SET_CONTEXT
+	EXEC SQL CONTEXT USE :my_ctx_local;
+	EXEC SQL VAR chr_h_tempaddress1 IS STRING;
+	#endif
+
+printf("1563 [%ld]",*int_msgsrno);
+*int_msgsrno = 100000;
+printf("1563 [%ld]",*int_msgsrno);
+
+	printf("Entered MS_Proc_ManMsgInit\n");
+	chr_finifile=fopen(strcat(strcpy(chr_inifile,getenv("INTL_ROOT_PATH")),"/intl_sun.cfg"),"r");
+	
+	if(CO_ReadToken(chr_finifile,"INTL_MS_DATA_PATH",
+			chr_icustmsgdatadir,l_debug_info_ptr)==APL_FAILURE)
+	{
+		fclose(chr_finifile);
+		APL_GOBACK_FAIL
+	}
+	
+	if(CO_ReadToken(chr_finifile,"INTL_MS_SND_PATH",
+			chr_icust_msg_out_dir,l_debug_info_ptr)==APL_FAILURE)
+	{
+		fclose(chr_finifile);
+		APL_GOBACK_FAIL
+	}
+
+	fclose(chr_finifile);
+	printf("1590 Before MS_Proc_ManMsgMain\n");
+	printf("chr_startflag = |%c|\n", chr_startflag); /* JC - 26/02/2007 */
+	printf("int_msgsrno = |%ld|\n", *int_msgsrno);	/* JC - 26/02/2007 *///AIX - Warnings Removal
+
+	if(!strcmp(APL_FUNC_INPUT,p_intl_env_datastruct_h->h_mode))
+	{
+		if ( (chr_startflag == 'N') && (*int_msgsrno == 0) )
+			chr_startflag = 'Y';
+
+		printf("$$$$$ chr_startflag = |%c|\n", chr_startflag); /* JC - 26/02/2007 */
+		printf("***** Calling function MS_Proc_ManMsgMain *****\n"); /* JC - 26/02/2007 */
+		return(MS_Proc_ManMsgMain(p_ms_manmsg_struct_h_a,
+					 chr_startflag,
+					 int_msgsrno,//AIX - Warnings Removal
+					l_int_msgsrno, /* JC -- RFS_MS_001 *///AIX - Warnings Removal
+					 corp_id,
+					 event_id,
+					 l_debug_info_ptr,
+					 p_intl_env_datastruct_h));
+	}
+		printf("After MS_Proc_ManMsgMain\n");
+	
+	APL_GOBACK_SUCCESS//AIX - Warnings Removal
+	RETURN_SUCCESS:
+	{
+		return APL_SUCCESS;
+	}
+	RETURN_FAILURE:
+	{
+		return APL_FAILURE;
+	}
+}
+
+int  MS_Proc_ManMsgAutRstDel(long *int_msgsrno,
+				char *chr_p_msgno_a,
+				INTL_ENV_DATA_STRUCT_H *p_intl_env_datastruct_h,
+				DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	printf("\t######### Entered MS_Proc_ManMsgAutRstDel #########\n");
+	printf("Mode is |%s|\n", p_intl_env_datastruct_h->h_mode);
+	printf("Process is |%s|\n", p_intl_env_datastruct_h->h_process);
+	printf("Swift No -- |%s|\n", chr_p_msgno_a);
+	printf("Msg Seq No -- |%ld|\n", int_msgsrno);
+	printf("*****\n");
+
+	struct sqlca sqlca;
+	#ifdef APL_THREADS
+	APL_SET_CONTEXT
+	EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+	EXEC SQL VAR chr_h_tempaddress1 IS STRING;
+	
+	/* Commented by JC
+	if(!strcmp(APL_FUNC_AUTHORISE,p_intl_env_datastruct_h->h_mode))
+	{
+		printf("Mode is -- Rst Rst Rst Rst Rst\n");
+		return(MS_Proc_ManMsgRst( int_msgsrno,
+						chr_p_msgno_a,
+						l_debug_info_ptr,
+						p_intl_env_datastruct_h));
+	}
+	Commented by JC */
+	
+	if(!strcmp(APL_FUNC_DELETE,p_intl_env_datastruct_h->h_mode))
+	{
+		printf("Mode is -- Del Del Del Del Del\n");
+		return(MS_Proc_ManMsgDel( int_msgsrno,
+						chr_p_msgno_a,
+						l_debug_info_ptr,
+						p_intl_env_datastruct_h));
+	}
+
+	if(!strcmp(APL_FUNC_AUTHORISE,p_intl_env_datastruct_h->h_mode))
+	{
+		printf("Mode is -- Auth Auth Auth Auth Auth\n");
+		return(MS_Proc_ManMsgAuth( int_msgsrno,
+						chr_p_msgno_a,
+						l_debug_info_ptr,
+						p_intl_env_datastruct_h));
+	}
+
+    
+  return(APL_SUCCESS);//AIX - Warnings Removal
+}
+
+/* JC - RFS_MS_001 -- Start */
+int IC_MS_Proc_ManMsgInit(MS_MANMSG_STRUCT_H *p_ms_manmsg_struct_h_a,
+				char chr_startflag,
+				long *int_msgsrno,
+				char *corp_id,
+				char *event_id,
+				DEBUG_INFO_STRUCT_H **l_debug_info_ptr,
+				INTL_ENV_DATA_STRUCT_H *p_intl_env_datastruct_h)
+{
+	char chr_inifile[PATH_LENGTH];
+	char *chr_p_msgno_a;
+	char l_chr_msgno[5] = APL_NULL_STRING;
+	FILE *chr_finifile;
+	long *l_int_msgsrno;
+	struct sqlca sqlca;
+
+	#ifdef APL_THREADS
+	APL_SET_CONTEXT
+	EXEC SQL CONTEXT USE :my_ctx_local;
+	EXEC SQL VAR chr_h_tempaddress1 IS STRING;
+	#endif
+
+	printf("Entered IC_MS_Proc_ManMsgInit\n");
+	printf("JC::::: ***** event id --- [%s] ***** :::::JC in IC_MS_Proc_Init\n", event_id);
+	chr_finifile=fopen(strcat(strcpy(chr_inifile,getenv("INTL_ROOT_PATH")),"/intl_sun.cfg"),"r");
+
+	if(CO_ReadToken(chr_finifile,"INTL_MS_DATA_PATH",
+			chr_icustmsgdatadir,l_debug_info_ptr)==APL_FAILURE)
+	{
+		fclose(chr_finifile);
+		APL_GOBACK_FAIL
+	}
+
+	if(CO_ReadToken(chr_finifile,"INTL_MS_SND_PATH",
+			chr_icust_msg_out_dir,l_debug_info_ptr)==APL_FAILURE)
+	{
+		fclose(chr_finifile);
+		APL_GOBACK_FAIL
+	}
+
+	fclose(chr_finifile);
+	printf("1715 Before MS_Proc_ManMsgMain\n");
+	printf("chr_startflag = |%c|\n", chr_startflag); /* JC - 26/02/2007 */
+	printf("int_msgsrno = |%ld|\n", *int_msgsrno);    /* JC - 26/02/2007 *///AIX - Warnings Removal
+
+	if ( (chr_startflag == 'N') && (*int_msgsrno == 0) )
+		chr_startflag = 'Y';
+
+	printf("$$$$$ chr_startflag = |%c|\n", chr_startflag); /* JC - 26/02/2007 */
+	printf("***** Calling function MS_Proc_ManMsgMain *****\n"); /* JC - 26/02/2007 */
+
+	if(MS_Proc_ManMsgMain(p_ms_manmsg_struct_h_a,
+				 chr_startflag,
+				 int_msgsrno, //AIX - Warnings Removal
+				l_int_msgsrno, /* JC -- RFS_MS_001 */ //AIX - Warnings Removal
+				 corp_id,
+				 event_id,
+				 l_debug_info_ptr,
+				 p_intl_env_datastruct_h) != APL_SUCCESS)
+	{
+		printf("\n 1739 error ");
+		APL_GOBACK_FAIL;
+	}
+	//printf("\t\t 1736 |%ld|\n", *l_int_msgsrno); //AIX - Warnings Removal
+	fflush(stdout);
+	printf("\n 1744 int_msgsrno aftr MS_Proc_ManMsgMain >>> >>>>>> >>>>> |%ld|\n", *int_msgsrno); //AIX - Warnings Removal
+	fflush(stdout);
+	
+	printf("After MS_Proc_ManMsgMain calling MS_Proc_ManMsgAutRstDel\n");
+
+	printf("KS -- Event_ID [%s] \n",event_id);
+	fflush(stdout);
+
+	//if(strlen(event_id) != 0) Commented by Kalyan
+	if(strlen(corp_id) != 0)
+	{
+		strcpy(l_chr_msgno, "568");
+	}
+	else
+	{
+		strcpy(l_chr_msgno, "599");
+	}
+
+	printf("l_chr_msgno >>>>>>>>>>>>>> |%s|\n", l_chr_msgno);
+	chr_p_msgno_a = l_chr_msgno;
+	printf("chr_p_msgno_a >>>>>>>>>>>>>> |%s|\n", chr_p_msgno_a);
+	fflush(stdout);
+
+	printf("\n 1776 |%ld|\n", *int_msgsrno);
+	if(MS_Proc_ManMsgAutRstDel(int_msgsrno,
+					chr_p_msgno_a,
+					p_intl_env_datastruct_h,
+					l_debug_info_ptr) != APL_SUCCESS)
+	{
+		APL_GOBACK_FAIL;
+	}
+
+	printf("\n 1765 ");	
+	fflush(stdout);
+	APL_GOBACK_SUCCESS//AIX - Warnings Removal
+	RETURN_SUCCESS:
+	{
+		return APL_SUCCESS;
+	}
+	RETURN_FAILURE:
+	{
+		return APL_FAILURE;
+	}
+}
+/* JC - RFS_MS_001 -- End */

@@ -1,0 +1,1293 @@
+/*
+ *    COPYRIGHT NOTICE
+ *
+ *   Copyright 2005 Polaris Software Lab Limited. All rights reserved.
+ *
+ *   These materials are confidential and proprietary to
+ *    Polaris Software Lab Limited and no part of these materials should
+ *    be reproduced, published, transmitted or distributed in any form or
+ *    by any means, electronic, mechanical, photocopying, recording or
+ *    otherwise, or stored in any information storage or retrieval system
+ *    of any nature nor should the materials be disclosed to third parties
+ *    or used in any other manner for which this is not authorized, without
+ *    the prior express written authorization of Polaris Software Lab Limited.
+ */
+/*********************************************************************
+ *
+ * Module Name         :      Corporate Actions
+ *
+ * File Name           :      CA_EvtMod.pc
+ *
+ * Description         :      Contains Functions To validate Event Details
+ *
+ *
+ *
+ *            Version Control Block
+ *
+ * Date        Version     Author           Description          RFS No.
+ * ---------   --------  ---------------  ------------------     ---------
+ * 01-01-2006	 1.0			Chirag				Data Migration			
+ *************************************************************************/
+
+#include "CR_Common.h"
+#include "CA_Common.h"
+
+EXEC SQL INCLUDE SQLCA.H;
+
+#define	L_INSTR_CODERR_PLUS_CERR_TYP_LEN	APL_INSTRUMENTCODE_LEN +	EVT_CLASS_ 
+#define	LOCAL_LEN_EVNT_NBR		    3	
+#define LOG_BUFFER_LEN 70
+
+extern int   CA_CheckEvnt( CA_CAEVENT_STRUCT_H    *p_ca_caevent_struct_h,
+                           CA_CASECEVENT_STRUCT_H  *p_ca_casecevent_struct_h,
+                           CA_CASECEVENT_STRUCT_I  *p_ca_casecevent_struct_i,
+                           INTL_ENV_DATA_STRUCT_H   *p_intlenv_data_struct_h,
+                           DEBUG_INFO_STRUCT_H         **l_debug_info_ptr
+                        );
+
+extern int   CA_MandDataChk( CA_CAEVENT_STRUCT_H    *p_ca_caevent_struct_h,
+                              INTL_ENV_DATA_STRUCT_H   *p_intlenv_data_struct_h,
+                              DEBUG_INFO_STRUCT_H         **l_debug_info_ptr
+                           );
+
+extern int CA_ChkEventDetails (  CA_CAEVENT_STRUCT_H     *p_ca_caevent_struct_h,
+                                 int                     *int_p_result,
+                                 INTL_ENV_DATA_STRUCT_H  *p_intlenv_data_struct_h,
+                                 DEBUG_INFO_STRUCT_H     **l_debug_info_ptr
+                              );
+
+extern	int	CO_Chk_InstrValid(	char*,
+										char,
+										char,
+										char,
+										char,
+										char,
+										char,
+										DEBUG_INFO_STRUCT_H**
+									);
+
+extern void  CA_IndVarSet(  CA_CAEVENT_STRUCT_H     *p_ca_caevent_struct_h,
+                              CA_CAEVENT_STRUCT_I     *p_ca_caevent_struct_i,
+                              CA_CASECEVENT_STRUCT_H  *p_secevt_struct
+                           );
+
+int 	CA_EventAdd_MIG( 	CA_CAEVENT_STRUCT_H    *p_ca_caevent_struct_h,
+				                  INTL_ENV_DATA_STRUCT_H   *p_intlenv_data_struct_h,
+	      				         DEBUG_INFO_STRUCT_H         **l_debug_info_ptr
+                 				);
+
+
+int CA_Mod_Event_MIG(  CA_CAEVENT_STRUCT_H    *p_ca_caevent_struct_h,
+                     INTL_ENV_DATA_STRUCT_H   *p_intlenv_data_struct_h,
+                     DEBUG_INFO_STRUCT_H         **l_debug_info_ptr
+                  )
+{
+	struct sqlca sqlca;
+
+	#ifdef APL_THREADS
+	APL_SET_CONTEXT
+	EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	/*Smita - HDFCCA_027 */
+	int int_retval = 0;
+	/*Smita - HDFCCA_027 */
+
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Entered A_DbUpdeventDMFn",NULL,p_intlenv_data_struct_h);
+	}
+										
+	if (	(	!strcmp(p_intlenv_data_struct_h->h_mode,"MIG")	)	)
+		{
+			APL_IF_DEBUG	
+			{
+				CO_ProcMonitor(APL_OUT_FILE,"Mode is Migration",NULL,p_intlenv_data_struct_h);
+			}
+			if (	CA_EventAdd_MIG(	p_ca_caevent_struct_h,
+											p_intlenv_data_struct_h,
+											l_debug_info_ptr
+										) == APL_FAILURE
+				)
+				{
+					APL_GOBACK_FAIL
+				}
+			else
+				{
+					APL_GOBACK_SUCCESS
+				}
+		}
+
+		else
+		{
+            CO_InsertErr(l_debug_info_ptr,
+                           ERR_INVALID_MODE,
+									p_intlenv_data_struct_h->h_mode,
+                           APL_NULL_STRING,
+                           APL_NULL_STRING,
+                           __LINE__,
+                           __FILE__
+                           );
+            APL_GOBACK_FAIL
+		}
+		
+		
+		APL_GOBACK_SUCCESS
+		RETURN_SUCCESS	:
+		{
+			APL_IF_DEBUG
+			{
+				CO_ProcMonitor(APL_OUT_FILE,"Exiting A_DbUpdeventDMFn successfully",NULL,p_intlenv_data_struct_h);
+			}
+			return (APL_SUCCESS);
+		}
+		RETURN_FAILURE	:
+		{
+			APL_IF_DEBUG
+			{
+				CO_ProcMonitor(APL_OUT_FILE,"Exiting A_DbUpdeventDMFn unsuccessfully",NULL,p_intlenv_data_struct_h);
+			}
+			return (APL_FAILURE);
+		}
+}
+
+int CA_EventAdd_MIG(	CA_CAEVENT_STRUCT_H 	*p_ca_caevent_struct_h,
+									INTL_ENV_DATA_STRUCT_H	*p_intlenv_data_struct_h,
+						   		DEBUG_INFO_STRUCT_H 			**l_debug_info_ptr
+									)
+{
+	
+	
+
+	struct	sqlca	sqlca;
+	CA_CAEVENT_STRUCT_I		*l_ca_caeventimg_struct_i		=	NULL;
+	CA_CASECEVENT_STRUCT_H	*l_ca_casetup_struct_h		=	NULL;
+	CA_CASECEVENT_STRUCT_I	*l_ca_casecevent_struct_i		=	NULL;
+	char		pro_sys_date[APL_DATE_LEN]	=	APL_NULL_STRING;
+	char		chr_error_key[L_INSTR_CODERR_PLUS_CERR_TYP_LEN] = APL_NULL_STRING;
+	char		chr_char_event_nbr[LOCAL_LEN_EVNT_NBR] = APL_NULL_STRING;
+	char		chr_log_buff[LOG_BUFFER_LEN]=APL_NULL_STRING;
+	char		*int_pos;
+   int      int_l_num_data_key      =  0;
+   int      int_l_key               =  0;
+	char		**temp_data_key;
+	char l_temp_dt[APL_DATE_LEN] =  APL_NULL_STRING;
+
+	#ifdef APL_THREADS
+	APL_SET_CONTEXT
+	EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Entering Event_Migration",NULL,p_intlenv_data_struct_h);
+	}
+   
+	sqlca.sqlcode = 0;/*Smita - HDFCCA_027*/
+	/*
+   if (!strcmp(p_ca_caevent_struct_h->h_evt_class,EVT_NS))
+	{ 		
+			strcpy(p_ca_caevent_struct_h->h_bc_from_date,p_ca_caevent_struct_h->h_maker_dt);
+			EXEC SQL SELECT TO_DATE(p_ca_caevent_struct_h->h_bc_from_date,'DD/MM/YYYY HH24:MI:SS')+90 INTO :l_temp_dt
+						FROM DUAL;
+			IS_ANY_ORA_ERROR
+			strcpy(p_ca_caevent_struct_h->h_bc_to_date,l_temp_dt);
+			printf("Issue start Date = |%s|\n",p_ca_caevent_struct_h->h_bc_from_date);
+         printf("Issue close Date = |%s|\n",p_ca_caevent_struct_h->h_bc_to_date);		
+	}
+	*/
+	if(!strcmp(p_ca_caevent_struct_h->h_evt_class,EVT_BOND_REDMP))
+	{
+		p_ca_caevent_struct_h->h_earnings = 100;
+	}
+   printf("\n302 |%s|",p_ca_caevent_struct_h->h_follmsg2date);	
+	if	 (	CA_MandDataChk(	p_ca_caevent_struct_h,
+									p_intlenv_data_struct_h,
+									l_debug_info_ptr
+								) == APL_FAILURE
+		 )
+	{
+		APL_GOBACK_FAIL
+	}
+   CO_ProcMonitor(APL_OUT_FILE, "BEFORE MEMORY ALLOCATION CALL", NULL, p_intlenv_data_struct_h);
+	
+	
+
+			l_ca_casetup_struct_h = (CA_CASECEVENT_STRUCT_H *) calloc(1,sizeof(CA_CASECEVENT_STRUCT_H)	);	
+			APL_MALLOC_FAIL(l_ca_casetup_struct_h) 
+		
+   CO_ProcMonitor(APL_OUT_FILE, "AMID MEMORY ALLOCATION CALL", NULL, p_intlenv_data_struct_h);
+			l_ca_casecevent_struct_i = (CA_CASECEVENT_STRUCT_I *) calloc(1,sizeof(CA_CASECEVENT_STRUCT_I)	);	
+			APL_MALLOC_FAIL(l_ca_casecevent_struct_i) 
+
+	
+   CO_ProcMonitor(APL_OUT_FILE, "AFTER MEMORY ALLOCATION CALL", NULL, p_intlenv_data_struct_h);
+   printf("\n324 |%s|",p_ca_caevent_struct_h->h_follmsg2date);	
+	if (	CA_CheckEvnt(  p_ca_caevent_struct_h,
+							l_ca_casetup_struct_h, 
+							l_ca_casecevent_struct_i,	
+ 	 		   		   p_intlenv_data_struct_h, 
+						 	l_debug_info_ptr
+         		   	 )	==	APL_FAILURE
+		)
+			{
+				APL_GOBACK_FAIL
+			}
+		sprintf(chr_log_buff,"-------------Migration Data Record-------------\n");
+		CO_ProcMonitor(APL_OUT_FILE,chr_log_buff,NULL,p_intlenv_data_struct_h);
+		sprintf(chr_log_buff,"Event ID : |%s| \n",p_ca_caevent_struct_h->h_corp_id);
+		CO_ProcMonitor(APL_OUT_FILE,chr_log_buff,NULL,p_intlenv_data_struct_h);
+		sprintf(chr_log_buff,"Maker : |%s| \n",p_ca_caevent_struct_h->h_maker);
+		CO_ProcMonitor(APL_OUT_FILE,chr_log_buff,NULL,p_intlenv_data_struct_h);
+		sprintf(chr_log_buff,"Checker : |%s| \n",p_ca_caevent_struct_h->h_checker);
+		CO_ProcMonitor(APL_OUT_FILE,chr_log_buff,NULL,p_intlenv_data_struct_h);
+		sprintf(chr_log_buff,"Maker Date : |%s| \n",p_ca_caevent_struct_h->h_maker_dt);
+		CO_ProcMonitor(APL_OUT_FILE,chr_log_buff,NULL,p_intlenv_data_struct_h);
+		sprintf(chr_log_buff,"Checker Date : |%s| \n",p_ca_caevent_struct_h->h_checker_dt);
+		CO_ProcMonitor(APL_OUT_FILE,chr_log_buff,NULL,p_intlenv_data_struct_h);
+		if (  CO_RtvSysDtTime(pro_sys_date,l_debug_info_ptr) == APL_FAILURE )
+      {
+         APL_GOBACK_FAIL
+      }
+      strcpy(p_ca_caevent_struct_h->h_access_stamp,pro_sys_date);
+		sprintf(chr_log_buff,"Access Stamp : |%s| \n",p_ca_caevent_struct_h->h_access_stamp);
+		CO_ProcMonitor(APL_OUT_FILE,chr_log_buff,NULL,p_intlenv_data_struct_h);
+		sprintf(chr_log_buff,"Status : |%s| \n",p_ca_caevent_struct_h->h_evt_stat);
+		CO_ProcMonitor(APL_OUT_FILE,chr_log_buff,NULL,p_intlenv_data_struct_h);
+		sprintf(chr_log_buff,"------------------------------------------------\n");
+		CO_ProcMonitor(APL_OUT_FILE,chr_log_buff,NULL,p_intlenv_data_struct_h); 
+
+		if	(	!strcmp(p_ca_caevent_struct_h->h_evt_class,EVT_OFFER) )
+		{
+			strcpy(p_ca_caevent_struct_h->h_pymt_dt,p_ca_caevent_struct_h->h_effect_date);
+		}
+	
+		(l_ca_caeventimg_struct_i) = (CA_CAEVENT_STRUCT_I*)calloc(2,sizeof(CA_CAEVENT_STRUCT_I));
+		APL_MALLOC_FAIL(l_ca_caeventimg_struct_i) 
+   printf("\n378 |%s|",p_ca_caevent_struct_h->h_follmsg2date);	
+		
+		CA_IndVarSet(	p_ca_caevent_struct_h,
+						l_ca_caeventimg_struct_i,
+						l_ca_casetup_struct_h			
+					);
+		l_ca_caeventimg_struct_i->i_checker=0;
+   	l_ca_caeventimg_struct_i->i_checker_dt=0;
+	/*
+     	  if (strcmp(p_ca_caevent_struct_h->h_evt_class,EVT_NS))
+	      { 		
+		
+			p_ca_caevent_struct_h->h_amount_due 		= 0;
+			p_ca_caevent_struct_h->h_amount_recd 		= 0;
+		  }
+			p_ca_caevent_struct_h->h_quantity_due 		= 0;
+			p_ca_caevent_struct_h->h_quantity_recd 		= 0;*/
+			if(p_ca_caevent_struct_h->h_quantity_due < p_ca_caevent_struct_h->h_quantity_recd)
+			{
+				sprintf(chr_log_buff,"Qty Due : |%lf| Qty Recv |%lf| \n",p_ca_caevent_struct_h->h_quantity_due,p_ca_caevent_struct_h->h_quantity_recd);
+				CO_ProcMonitor(APL_OUT_FILE,chr_log_buff,NULL,p_intlenv_data_struct_h);
+				APL_GOBACK_FAIL
+			}
+			p_ca_caevent_struct_h->h_evt_msg_count		= 0;
+			p_ca_caevent_struct_h->h_entl_msg_cnt		= 0;
+			p_ca_caevent_struct_h->h_evt_clt_cnt		= 0;
+			p_ca_caevent_struct_h->h_entl_clt_cnt		= 0;	
+			p_ca_caevent_struct_h->h_count_acs_pend		= 0;
+			l_ca_caeventimg_struct_i->i_nrepdate1		= -1;
+			l_ca_caeventimg_struct_i->i_follmsg1date	= -1;
+   printf("\n400 |%s|",p_ca_caevent_struct_h->h_follmsg2date);	
+         if (strcmp(p_ca_caevent_struct_h->h_evt_class,EVT_RHTS)) /* Vaibhav 19/05/2006 */
+		   {
+			l_ca_caeventimg_struct_i->i_follmsg2date	= -1; 
+			}
+
+			strcpy(chr_error_key,APL_NULL_STRING);
+			strcpy(chr_error_key,p_ca_caevent_struct_h->h_instr_code);
+			strcat(chr_error_key," ");
+			strcat(chr_error_key,p_ca_caevent_struct_h->h_evt_class);
+			strcpy(chr_char_event_nbr,APL_NULL_STRING);
+			strcpy(chr_char_event_nbr,ltoa(p_ca_caevent_struct_h->h_evt_nbr)	);
+			printf("p_ca_caevent_struct_h->h_start_date is |%s|\n",p_ca_caevent_struct_h->h_start_date);   
+			printf("p_ca_caevent_struct_h->h_sub_pr is |%lf|\n",p_ca_caevent_struct_h->h_sub_pr);
+			printf("\n $$$$$$$ p_ca_caevent_struct_h->h_response_date is |%s|\n",p_ca_caevent_struct_h->h_respons_date);    // AIX -Warnings Reaoval
+			printf("\n $$$$$$$ p_ca_caevent_struct_h->h_follmsg2date is |%s|\n",p_ca_caevent_struct_h->h_follmsg2date);   
+			EXEC SQL INSERT INTO CAEVENT VALUES (:p_ca_caevent_struct_h:l_ca_caeventimg_struct_i);
+			IS_ANY_ORA_ERROR_AND_DUPLICATE(ERR_DUPLICATE_EVENT,
+													 chr_error_key, 
+													 p_ca_caevent_struct_h->h_decl_date,
+													 chr_char_event_nbr) 
+
+			printf("\n $$$$$$$ AFTER INSERT STATEMENTp_ca_caevent_struct_h->h_response_date is |%s|\n",p_ca_caevent_struct_h->h_respons_date);   
+			printf("\n $$$$$$$ AFTER INSERT STATEMENTp_ca_caevent_struct_h->h_follmsg2date is |%s|\n",p_ca_caevent_struct_h->h_follmsg2date);   
+			/* Insert here into syndicate_member table after parsing synd_membr 
+		
+			if (APL_FAILURE == CO_SplitStr( p_ca_caevent_struct_h->h_synd_membr,
+                                     ',',
+                                     &int_l_num_data_key,
+                                     &temp_data_key ))
+			{
+				APL_GOBACK_FAIL;
+			}
+
+			for (int_l_key=0;int_l_key<int_l_num_data_key;++int_l_key)
+			{
+				EXEC SQL insert into casyndmem values (:p_ca_caevent_struct_h->h_corp_id,:temp_data_key[int_l_key]);
+
+				IS_ANY_ORA_ERROR
+			}
+		*/
+
+		APL_IF_DEBUG
+			{
+				CO_ProcMonitor(APL_OUT_FILE,"Record created successfuly",NULL,p_intlenv_data_struct_h);
+			}
+	
+		APL_GOBACK_SUCCESS
+		RETURN_SUCCESS	:
+		
+		{
+			APL_FREE(l_ca_casetup_struct_h);	
+			APL_FREE(l_ca_casecevent_struct_i);	
+			APL_FREE(l_ca_caeventimg_struct_i);	
+
+			APL_IF_DEBUG
+			{
+				CO_ProcMonitor(APL_OUT_FILE,"Exiting CA_EventAdd_MIG successfully",NULL,p_intlenv_data_struct_h);
+			}
+			return (APL_SUCCESS);
+		}
+		RETURN_FAILURE	:
+		{
+			APL_FREE(l_ca_casetup_struct_h);	
+			APL_FREE(l_ca_casecevent_struct_i);	
+			APL_FREE(l_ca_caeventimg_struct_i);	
+			
+			APL_IF_DEBUG
+			{
+				CO_ProcMonitor(APL_OUT_FILE,"Exiting CA_EventAdd_MIG unsuccessfully",NULL,p_intlenv_data_struct_h);
+			}
+			return (APL_FAILURE);
+		}
+}		
+
+
+int CA_Mod_Entitl_MIG(CA_CAENTITLEMENT_STRUCT_H    *p_ca_caentitlement_struct_h,
+                     INTL_ENV_DATA_STRUCT_H   *p_intlenv_data_struct_h,
+                     DEBUG_INFO_STRUCT_H         **l_debug_info_ptr
+                  )
+{
+	struct sqlca sqlca;
+
+	#ifdef APL_THREADS
+	APL_SET_CONTEXT
+	EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	/*Smita - HDFCCA_027 */
+	int int_retval = 0;
+	/*Smita - HDFCCA_027 */
+
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Entered wrp_A_DbUpdEntitlDMFn",NULL,p_intlenv_data_struct_h);
+	}
+										
+	if (	(	!strcmp(p_intlenv_data_struct_h->h_mode,"MIG")	)	)
+		{
+			APL_IF_DEBUG	
+			{
+				CO_ProcMonitor(APL_OUT_FILE,"Mode is Migration",NULL,p_intlenv_data_struct_h);
+			}
+			if (  CA_EntitlAdd_MIG(  p_ca_caentitlement_struct_h,
+											p_intlenv_data_struct_h,
+											l_debug_info_ptr
+										) == APL_FAILURE
+				)
+				{
+					APL_GOBACK_FAIL
+				}
+			else
+				{
+					APL_GOBACK_SUCCESS
+				}
+		}
+
+		else
+		{
+            CO_InsertErr(l_debug_info_ptr,
+                           ERR_INVALID_MODE,
+									p_intlenv_data_struct_h->h_mode,
+                           APL_NULL_STRING,
+                           APL_NULL_STRING,
+                           __LINE__,
+                           __FILE__
+                           );
+            APL_GOBACK_FAIL
+		}
+		
+		
+		APL_GOBACK_SUCCESS
+		RETURN_SUCCESS	:
+		{
+			APL_IF_DEBUG
+			{
+				CO_ProcMonitor(APL_OUT_FILE,"Exiting wrp_A_DbUpdEntitlDMFn successfully",NULL,p_intlenv_data_struct_h);
+			}
+			return (APL_SUCCESS);
+		}
+		RETURN_FAILURE	:
+		{
+			APL_IF_DEBUG
+			{
+				CO_ProcMonitor(APL_OUT_FILE,"Exiting wrp_A_DbUpdEntitlDMFn unsuccessfully",NULL,p_intlenv_data_struct_h);
+			}
+			return (APL_FAILURE);
+		}
+}
+
+int CA_EntitlAdd_MIG( CA_CAENTITLEMENT_STRUCT_H  *p_ca_caentitlement_struct_h,
+                              INTL_ENV_DATA_STRUCT_H  *p_intlenv_data_struct_h,
+                              DEBUG_INFO_STRUCT_H        **l_debug_info_ptr
+                           )
+{
+   struct   sqlca sqlca;
+   CA_CAENTITLEMENT_STRUCT_I  *l_ca_caentitlement_struct_i     =  NULL;
+   CA_CHK_DET_STRUCT_H    *l_ca_chk_det_struct_h   =  NULL;
+   char     pro_sys_date[APL_DATE_LEN]=APL_NULL_STRING;
+   char     *int_pos;
+
+   #ifdef APL_THREADS
+   APL_SET_CONTEXT
+   EXEC SQL CONTEXT USE :my_ctx_local;
+   #endif
+
+   APL_IF_DEBUG
+   {
+      CO_ProcMonitor(APL_OUT_FILE,"Entering S_EntitlInput",NULL,p_intlenv_data_struct_h);
+   }
+
+   if  ( CA_MandDataChkEntitle(   p_ca_caentitlement_struct_h,
+                        p_intlenv_data_struct_h,
+                        l_debug_info_ptr
+                        ) == APL_FAILURE
+       )
+         {
+            APL_GOBACK_FAIL
+         }
+
+   l_ca_chk_det_struct_h=(CA_CHK_DET_STRUCT_H *)calloc(  1,sizeof(CA_CHK_DET_STRUCT_H) );
+   APL_MALLOC_FAIL(l_ca_chk_det_struct_h)
+
+   (l_ca_caentitlement_struct_i) = (CA_CAENTITLEMENT_STRUCT_I*)calloc(1,sizeof(CA_CAENTITLEMENT_STRUCT_I));
+   APL_MALLOC_FAIL(l_ca_caentitlement_struct_i)
+	//GET_ACCESS_STAMP_APL_DATE
+
+   if ( CA_RndEntitl(p_ca_caentitlement_struct_h,l_debug_info_ptr) == APL_FAILURE )
+   {
+      APL_GOBACK_FAIL
+   }
+
+   if (  CA_CheckEntl(  p_ca_caentitlement_struct_h->h_corp_id,
+                      p_ca_caentitlement_struct_h->h_dl_client,
+                      l_ca_chk_det_struct_h,
+                      p_intlenv_data_struct_h,
+                      l_debug_info_ptr
+                      ) == APL_FAILURE
+      )
+   {
+      APL_GOBACK_FAIL
+   }
+
+   /*SET_MAKER_MAKERDT
+   SET_CHECKER_CHECKERDT
+
+   strcpy(p_ca_caentitlement_struct_h->h_stat_date,pro_sys_date);
+   strcpy(p_ca_caentitlement_struct_h->h_entitl_stat,APL_STATUS_UNAUTH);
+
+   p_ca_caentitlement_struct_h->h_amount_recd   = 0.0;
+   p_ca_caentitlement_struct_h->h_quantity_recd    = 0.0;*/
+   l_ca_caentitlement_struct_i->i_nrepdate2     = -1;
+   l_ca_caentitlement_struct_i->i_nrepdate3     = -1;
+   l_ca_caentitlement_struct_i->i_sent550date   = -1;
+	
+	  if (  CA_NewEntitl(  p_ca_caentitlement_struct_h,
+                        l_ca_caentitlement_struct_i,
+                        l_debug_info_ptr
+                     )  == APL_FAILURE
+      )
+      {
+            APL_GOBACK_FAIL
+      }
+
+   APL_GOBACK_SUCCESS
+   RETURN_SUCCESS :
+      {
+         APL_FREE(l_ca_chk_det_struct_h);
+         APL_FREE(l_ca_caentitlement_struct_i);
+         APL_IF_DEBUG
+         {
+            CO_ProcMonitor(APL_OUT_FILE,"Exiting CA_EntitlAdd_MIG successfully",NULL,p_intlenv_data_struct_h);
+         }
+         return (APL_SUCCESS);
+      }
+   RETURN_FAILURE :
+      {
+         APL_FREE(l_ca_chk_det_struct_h);
+         APL_FREE(l_ca_caentitlement_struct_i);
+         APL_IF_DEBUG
+         {
+            CO_ProcMonitor(APL_OUT_FILE,"Exiting CA_EntitlAdd_MIG unsuccessfully",NULL,p_intlenv_data_struct_h);
+         }
+         return (APL_FAILURE);
+      }
+}
+
+int CA_Appln_MIG(CA_APPLN_DM_STRUCT_H 			*p_ca_appln_dm_struct_h,
+                     INTL_ENV_DATA_STRUCT_H   *p_intlenv_data_struct_h,
+                     DEBUG_INFO_STRUCT_H         **l_debug_info_ptr
+                  )
+{
+	struct sqlca sqlca;
+
+	#ifdef APL_THREADS
+	APL_SET_CONTEXT
+	EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	/*Smita - HDFCCA_027 */
+	int int_retval = 0;
+	/*Smita - HDFCCA_027 */
+
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Entered wrp_A_CA_Appln_DMFn",NULL,p_intlenv_data_struct_h);
+	}
+										
+	if (	(	!strcmp(p_intlenv_data_struct_h->h_mode,"MIG")	)	)
+		{
+			APL_IF_DEBUG	
+			{
+				CO_ProcMonitor(APL_OUT_FILE,"Mode is Migration",NULL,p_intlenv_data_struct_h);
+			}
+			if (  CA_ApplnAdd_MIG(  p_ca_appln_dm_struct_h,
+											p_intlenv_data_struct_h,
+											l_debug_info_ptr
+										) == APL_FAILURE
+				)
+				{
+					APL_GOBACK_FAIL
+				}
+			else
+				{
+					APL_GOBACK_SUCCESS
+				}
+		}
+
+		else
+		{
+            CO_InsertErr(l_debug_info_ptr,
+                           ERR_INVALID_MODE,
+									p_intlenv_data_struct_h->h_mode,
+                           APL_NULL_STRING,
+                           APL_NULL_STRING,
+                           __LINE__,
+                           __FILE__
+                           );
+            APL_GOBACK_FAIL
+		}
+		
+		
+		APL_GOBACK_SUCCESS
+		RETURN_SUCCESS	:
+		{
+			APL_IF_DEBUG
+			{
+				CO_ProcMonitor(APL_OUT_FILE,"Exiting wrp_A_CA_Appln_DMFn successfully",NULL,p_intlenv_data_struct_h);
+			}
+			return (APL_SUCCESS);
+		}
+		RETURN_FAILURE	:
+		{
+			APL_IF_DEBUG
+			{
+				CO_ProcMonitor(APL_OUT_FILE,"Exiting wrp_A_CA_Appln_DMFn unsuccessfully",NULL,p_intlenv_data_struct_h);
+			}
+			return (APL_FAILURE);
+		}
+}
+
+int CA_ApplnAdd_MIG(CA_APPLN_DM_STRUCT_H *p_ca_appln_dm_struct_h,INTL_ENV_DATA_STRUCT_H *p_intlenv_data_struct_h,DEBUG_INFO_STRUCT_H **l_debug_info_ptr) //AIX -Warning Removal
+{
+
+	struct sqlca sqlca;
+
+   #ifdef APL_THREADS
+   APL_SET_CONTEXT
+   EXEC SQL CONTEXT USE :my_ctx_local;
+   #endif
+	
+	CA_NIS_APPLICATION_STRUCT_H *l_ca_nis_application_struct_h;
+	CA_NIS_APPLICATION_STRUCT_I *l_ca_nis_application_struct_i;
+
+	CA_APPLICATION_STRUCT_I *l_ca_application_struct_i;
+  	CA_APPLICATION_STRUCT_H *l_ca_application_struct_h;	
+	
+	int l_cln_srno = 0;
+	int l_count = 0;
+	short i_l_cln_srno = 0;
+	l_ca_application_struct_i=(CA_APPLICATION_STRUCT_I*)calloc(1,sizeof(CA_APPLICATION_STRUCT_I));
+	APL_MALLOC_FAIL(l_ca_application_struct_i)
+
+   l_ca_application_struct_h=(CA_APPLICATION_STRUCT_H*)calloc(1,sizeof(CA_APPLICATION_STRUCT_H));
+	APL_MALLOC_FAIL(l_ca_application_struct_h)
+
+	l_ca_nis_application_struct_i=(CA_NIS_APPLICATION_STRUCT_I*)calloc(1,sizeof(CA_NIS_APPLICATION_STRUCT_I));
+	APL_MALLOC_FAIL(l_ca_nis_application_struct_i)
+
+   l_ca_nis_application_struct_h=(CA_NIS_APPLICATION_STRUCT_H*)calloc(1,sizeof(CA_NIS_APPLICATION_STRUCT_H));
+	APL_MALLOC_FAIL(l_ca_nis_application_struct_h)
+
+	EXEC SQL SELECT NVL(COUNT(*),0) INTO :l_count
+			FROM CAEVENT
+			WHERE CORP_ID =: p_ca_appln_dm_struct_h->h_ca_ref_no;
+
+	IS_ANY_ORA_ERROR
+	
+	if(l_count <= 0)
+	{
+		CO_InsertErr(l_debug_info_ptr,
+                           ERR_EVNT_NOTFND_A,
+                           p_intlenv_data_struct_h->h_mode,
+                           APL_NULL_STRING,
+                           APL_NULL_STRING,
+                           __LINE__,
+                           __FILE__
+                           );
+            APL_GOBACK_FAIL
+	}
+	else
+	{		 
+			Alert("p_ca_appln_dm_struct_h->h_ca_event is |%s| \n",p_ca_appln_dm_struct_h->h_ca_event);
+			if(strlen(p_ca_appln_dm_struct_h->h_ca_event) > 0)
+			{
+					  if(!strcmp(p_ca_appln_dm_struct_h->h_ca_event,"RT"))
+					  {
+								 strcpy(l_ca_application_struct_h->h_corp_id,p_ca_appln_dm_struct_h->h_ca_ref_no);
+								 l_ca_application_struct_i->i_corp_id = 0;
+								 strcpy(l_ca_application_struct_h->h_cln_code,p_ca_appln_dm_struct_h->h_cln_code);
+								 l_ca_application_struct_i->i_cln_code = 0;
+
+								 if(strlen(p_ca_appln_dm_struct_h->h_appln_dt) > 0)
+								 {
+											strcpy(l_ca_application_struct_h->h_application_date,p_ca_appln_dm_struct_h->h_appln_dt);
+											l_ca_application_struct_i->i_application_date = 0;
+								 }
+								 else
+											l_ca_application_struct_i->i_application_date = -1;
+
+								 l_ca_application_struct_h->h_applied_qty = p_ca_appln_dm_struct_h->h_appln_qty;
+								 l_ca_application_struct_i->i_applied_qty = 0;
+								 l_ca_application_struct_h->h_avl_qty = p_ca_appln_dm_struct_h->h_appln_qty;
+								 l_ca_application_struct_i->i_avl_qty = 0;
+								 l_ca_application_struct_h->h_addqty_app = 0;
+								 l_ca_application_struct_i->i_addqty_app = 0;
+								 l_ca_application_struct_h->h_amt_payable = p_ca_appln_dm_struct_h->h_amt_payble;
+								 l_ca_application_struct_i->i_amt_payable = 0;
+								 l_ca_application_struct_h->h_amt_due = 0;
+								 l_ca_application_struct_i->i_amt_due = 0;
+								 l_ca_application_struct_h->h_price = l_ca_application_struct_h->h_amt_payable/l_ca_application_struct_h->h_applied_qty;
+								 l_ca_application_struct_i->i_price = 0;
+								 if(strlen(p_ca_appln_dm_struct_h->h_remark) > 0)
+								 {
+											strcpy(l_ca_application_struct_h->h_remark,p_ca_appln_dm_struct_h->h_remark);			
+											l_ca_application_struct_i->i_remark = 0;
+											if(strlen(p_ca_appln_dm_struct_h->h_mode_of_pymt) > 0)
+											{
+													  strcat(l_ca_application_struct_h->h_remark,"\nMODE OF PYMT : ");
+													  strcat(l_ca_application_struct_h->h_remark,p_ca_appln_dm_struct_h->h_mode_of_pymt);
+											}
+								 }
+								 else
+								 {
+											if(strlen(p_ca_appln_dm_struct_h->h_mode_of_pymt) > 0)
+											{
+													  strcat(l_ca_application_struct_h->h_remark,"MODE OF PYMT : ");
+													  strcat(l_ca_application_struct_h->h_remark,p_ca_appln_dm_struct_h->h_mode_of_pymt);
+													  l_ca_application_struct_i->i_remark = 0;
+											}
+											else
+											{	 
+													  l_ca_application_struct_i->i_remark = -1;
+											}
+								 }
+								 strcpy(l_ca_application_struct_h->h_status,p_ca_appln_dm_struct_h->h_status);
+								 l_ca_application_struct_i->i_status = 0;
+								 strcpy(l_ca_application_struct_h->h_maker,p_ca_appln_dm_struct_h->h_maker);
+								 l_ca_application_struct_i->i_maker = 0;
+								 strcpy(l_ca_application_struct_h->h_maker_dt,p_ca_appln_dm_struct_h->h_maker_dt);
+								 l_ca_application_struct_i->i_maker_dt = 0;
+								 strcpy(l_ca_application_struct_h->h_access_stamp,p_ca_appln_dm_struct_h->h_access_stamp);
+								 l_ca_application_struct_i->i_access_stamp = 0;
+								 strcpy(l_ca_application_struct_h->h_checker,p_ca_appln_dm_struct_h->h_checker);
+								 l_ca_application_struct_i->i_checker = 0;
+								 if(strlen(p_ca_appln_dm_struct_h->h_checker_dt) > 0)
+								 {
+											strcpy(l_ca_application_struct_h->h_checker_dt,p_ca_appln_dm_struct_h->h_checker_dt);
+											l_ca_application_struct_i->i_checker_dt = 0;
+								 }
+								 else
+								 {
+											strcpy(l_ca_application_struct_h->h_checker_dt,l_ca_application_struct_h->h_access_stamp);
+											l_ca_application_struct_i->i_checker_dt = 0;
+								 }
+								 strcpy(l_ca_application_struct_h->h_depo_code,"VAUL");
+								 l_ca_application_struct_i->i_depo_code = 0;
+								 l_ca_application_struct_i->i_depo_cln_id = -1;
+								 l_ca_application_struct_i->i_dp_id = -1;
+
+								 EXEC SQL SELECT (NVl(MAX(CA_APPLICATION.CLN_SRNO),0) + 1) INTO :l_cln_srno:i_l_cln_srno 
+											FROM  CA_APPLICATION
+											WHERE CLN_CODE =: l_ca_application_struct_h->h_cln_code
+											AND CORP_ID =: l_ca_application_struct_h->h_corp_id;
+								 IS_ANY_ORA_ERROR
+
+											l_ca_application_struct_h->h_cln_srno = l_cln_srno; 
+								 l_ca_application_struct_i->i_cln_srno = 0;
+								 l_ca_application_struct_i->i_hf_date = -1;
+								 l_ca_application_struct_i->i_clt_seqnum = -1;
+								 l_ca_application_struct_i->i_ae_passind = -1;
+								 l_ca_application_struct_i->i_processed_date = -1;	
+								 strcpy(l_ca_application_struct_h->h_cln_refno,p_ca_appln_dm_struct_h->h_appln_no);
+								 l_ca_application_struct_i->i_cln_refno = 0;
+
+								 EXEC SQL INSERT INTO CA_APPLICATION VALUES (:l_ca_application_struct_h:l_ca_application_struct_i);
+
+								 IS_ANY_ORA_ERROR
+					  }
+					  else if(!strcmp(p_ca_appln_dm_struct_h->h_ca_event,"NS"))
+					  {
+								 strcpy(l_ca_nis_application_struct_h->h_corp_id,p_ca_appln_dm_struct_h->h_ca_ref_no);
+								 l_ca_nis_application_struct_i->i_corp_id = 0;
+								 strcpy(l_ca_nis_application_struct_h->h_cln_code,p_ca_appln_dm_struct_h->h_cln_code);
+								 l_ca_nis_application_struct_i->i_cln_code = 0;
+
+								 if(strlen(p_ca_appln_dm_struct_h->h_appln_dt) > 0)
+								 {
+											strcpy(l_ca_nis_application_struct_h->h_adate,p_ca_appln_dm_struct_h->h_appln_dt);
+											l_ca_nis_application_struct_i->i_adate = 0;
+								 }
+								 else
+											l_ca_nis_application_struct_i->i_adate = -1;
+
+								 l_ca_nis_application_struct_h->h_aqty = p_ca_appln_dm_struct_h->h_appln_qty;
+								 l_ca_nis_application_struct_i->i_aqty = 0;
+								 l_ca_nis_application_struct_h->h_mmpaid = p_ca_appln_dm_struct_h->h_amt_payble;
+								 l_ca_nis_application_struct_i->i_mmpaid = 0;
+								 l_ca_nis_application_struct_h->h_arate = l_ca_nis_application_struct_h->h_mmpaid/l_ca_nis_application_struct_h->h_aqty;
+								 l_ca_nis_application_struct_i->i_arate = 0;
+								 if(strlen(p_ca_appln_dm_struct_h->h_remark) > 0)
+								 {
+											strcpy(l_ca_nis_application_struct_h->h_paycomm,p_ca_appln_dm_struct_h->h_remark);			
+											l_ca_nis_application_struct_i->i_paycomm = 0;
+											if(strlen(p_ca_appln_dm_struct_h->h_mode_of_pymt) > 0)
+											{
+													  strcat(l_ca_nis_application_struct_h->h_paycomm," MODE OF PYMT : ");
+													  strcat(l_ca_nis_application_struct_h->h_paycomm,p_ca_appln_dm_struct_h->h_mode_of_pymt);
+											}
+								 }
+								 else
+								 {
+											if(strlen(p_ca_appln_dm_struct_h->h_mode_of_pymt) > 0)
+											{
+													  strcat(l_ca_nis_application_struct_h->h_paycomm,"MODE OF PYMT : ");
+													  strcat(l_ca_nis_application_struct_h->h_paycomm,p_ca_appln_dm_struct_h->h_mode_of_pymt);
+													  l_ca_nis_application_struct_i->i_paycomm = 0;
+											}
+											else
+											{	 
+													  l_ca_nis_application_struct_i->i_paycomm = -1;
+											}
+								 }
+								 strcpy(l_ca_nis_application_struct_h->h_status,p_ca_appln_dm_struct_h->h_status);
+								 l_ca_nis_application_struct_i->i_status = 0;
+								 strcpy(l_ca_nis_application_struct_h->h_maker,p_ca_appln_dm_struct_h->h_maker);
+								 l_ca_nis_application_struct_i->i_maker = 0;
+								 strcpy(l_ca_nis_application_struct_h->h_maker_dt,p_ca_appln_dm_struct_h->h_maker_dt);
+								 l_ca_nis_application_struct_i->i_maker_dt = 0;
+								 strcpy(l_ca_nis_application_struct_h->h_access_stamp,p_ca_appln_dm_struct_h->h_access_stamp);
+								 l_ca_nis_application_struct_i->i_access_stamp = 0;
+								 strcpy(l_ca_nis_application_struct_h->h_checker,p_ca_appln_dm_struct_h->h_checker);
+								 l_ca_nis_application_struct_i->i_checker = 0;
+								 if(strlen(p_ca_appln_dm_struct_h->h_checker_dt) > 0)
+								 {
+											strcpy(l_ca_nis_application_struct_h->h_checker_dt,p_ca_appln_dm_struct_h->h_checker_dt);
+											l_ca_nis_application_struct_i->i_checker_dt = 0;
+								 }
+								 else
+								 {
+											strcpy(l_ca_nis_application_struct_h->h_checker_dt,l_ca_nis_application_struct_h->h_access_stamp);
+											l_ca_nis_application_struct_i->i_checker_dt = 0;
+								 }
+								 strcpy(l_ca_nis_application_struct_h->h_depo_code,"NSDL");
+								 l_ca_nis_application_struct_i->i_depo_code = 0;
+								 l_ca_nis_application_struct_i->i_depo_cln_id = -1;
+								 l_ca_nis_application_struct_i->i_dp_id = -1;
+							   l_ca_nis_application_struct_h->h_brevno = 1; 
+								 l_ca_nis_application_struct_i->i_brevno = 0;
+								 l_ca_nis_application_struct_i->i_hf_date = -1;
+								 l_ca_nis_application_struct_i->i_clt_seqnum = -1;
+								 l_ca_nis_application_struct_i->i_ae_passind = -1;
+								 l_ca_nis_application_struct_i->i_processed_date = -1;	
+								 l_ca_nis_application_struct_i->i_synd_membr = -1;
+								 strcpy(l_ca_nis_application_struct_h->h_filegenflg,"Y");
+								 l_ca_nis_application_struct_i->i_filegenflg = 0;
+								 strcpy(l_ca_nis_application_struct_h->h_bk_build_ind,"N");
+								 l_ca_nis_application_struct_i->i_bk_build_ind = 0;
+								 strcpy(l_ca_nis_application_struct_h->h_alloted,"N");
+								 l_ca_nis_application_struct_i->i_alloted = 0;
+								 strcpy(l_ca_nis_application_struct_h->h_applncode,p_ca_appln_dm_struct_h->h_appln_no);
+								 l_ca_nis_application_struct_i->i_applncode = 0;
+			
+								 EXEC SQL INSERT INTO CA_NIS_APPLICATION VALUES (:l_ca_nis_application_struct_h:l_ca_nis_application_struct_i);
+
+								 IS_ANY_ORA_ERROR
+					  }
+
+
+			}
+
+	}
+APL_GOBACK_SUCCESS
+   RETURN_SUCCESS :
+      {
+         APL_FREE(l_ca_application_struct_h);
+         APL_FREE(l_ca_application_struct_i);
+			APL_FREE(l_ca_nis_application_struct_h);
+         APL_FREE(l_ca_nis_application_struct_i);
+
+/*			 APL_IF_DEBUG
+         {
+            CO_ProcMonitor(APL_OUT_FILE,"Exiting CA_ApplnAdd_MIG successfully",NULL,p_intlenv_data_struct_h);
+         }*/
+         return (APL_SUCCESS);
+      }
+   RETURN_FAILURE :
+      {
+         APL_FREE(l_ca_application_struct_h);
+         APL_FREE(l_ca_application_struct_i);
+			APL_FREE(l_ca_nis_application_struct_h);
+			APL_FREE(l_ca_nis_application_struct_i);
+
+/*         APL_IF_DEBUG
+         {
+            CO_ProcMonitor(APL_OUT_FILE,"Exiting CA_ApplnAdd_MIG unsuccessfully",NULL,p_intlenv_data_struct_h);
+         }*/
+         return (APL_FAILURE);
+      }
+}
+
+int CA_Allot_MIG(CA_ALLOT_DM_STRUCT_H 			*p_ca_allot_dm_struct_h,
+                     INTL_ENV_DATA_STRUCT_H   *p_intlenv_data_struct_h,
+                     DEBUG_INFO_STRUCT_H         **l_debug_info_ptr
+                  )
+{
+	struct sqlca sqlca;
+
+	#ifdef APL_THREADS
+	APL_SET_CONTEXT
+	EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	/*Smita - HDFCCA_027 */
+	int int_retval = 0;
+	/*Smita - HDFCCA_027 */
+
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Entered wrp_A_CA_Allot_DMFn",NULL,p_intlenv_data_struct_h);
+	}
+										
+	if (	(	!strcmp(p_intlenv_data_struct_h->h_mode,"MIG")	)	)
+		{
+			APL_IF_DEBUG	
+			{
+				CO_ProcMonitor(APL_OUT_FILE,"Mode is Migration",NULL,p_intlenv_data_struct_h);
+			}
+			if (  CA_AllotAdd_MIG(  p_ca_allot_dm_struct_h,
+											p_intlenv_data_struct_h,
+											l_debug_info_ptr
+										) == APL_FAILURE
+				)
+				{
+					APL_GOBACK_FAIL
+				}
+			else
+				{
+					APL_GOBACK_SUCCESS
+				}
+		}
+
+		else
+		{
+            CO_InsertErr(l_debug_info_ptr,
+                           ERR_INVALID_MODE,
+									p_intlenv_data_struct_h->h_mode,
+                           APL_NULL_STRING,
+                           APL_NULL_STRING,
+                           __LINE__,
+                           __FILE__
+                           );
+            APL_GOBACK_FAIL
+		}
+		
+		
+		APL_GOBACK_SUCCESS
+		RETURN_SUCCESS	:
+		{
+			APL_IF_DEBUG
+			{
+				CO_ProcMonitor(APL_OUT_FILE,"Exiting wrp_A_CA_Allot_DMFn successfully",NULL,p_intlenv_data_struct_h);
+			}
+			return (APL_SUCCESS);
+		}
+		RETURN_FAILURE	:
+		{
+			APL_IF_DEBUG
+			{
+				CO_ProcMonitor(APL_OUT_FILE,"Exiting wrp_A_CA_Allot_DMFn unsuccessfully",NULL,p_intlenv_data_struct_h);
+			}
+			return (APL_FAILURE);
+		}
+}
+
+
+int CA_AllotAdd_MIG(CA_ALLOT_DM_STRUCT_H *p_ca_allot_dm_struct_h,INTL_ENV_DATA_STRUCT_H *p_intlenv_data_struct_h,DEBUG_INFO_STRUCT_H **l_debug_info_ptr) //AIX -Warning Removal
+{
+
+	struct sqlca sqlca;
+
+   #ifdef APL_THREADS
+   APL_SET_CONTEXT
+   EXEC SQL CONTEXT USE :my_ctx_local;
+   #endif
+	
+	CA_NIS_ALLOTMENT_STRUCT_H *l_ca_nis_allotment_struct_h;
+	CA_NIS_ALLOTMENT_STRUCT_I *l_ca_nis_allotment_struct_i;
+
+	CA_RTBB_ALLOTMENT_STRUCT_H *l_ca_allotment_struct_h;
+  	CA_RTBB_ALLOTMENT_STRUCT_I *l_ca_allotment_struct_i;	
+	
+	int l_cln_srno = 0;
+	int l_count = 0;
+	int l_cnt = 0;
+	int l_cnt1 = 0;
+	short i_l_cln_srno = 0;
+	char l_ca_event[3] = APL_NULL_STRING;
+	short i_ca_event = 0;
+	char l_cln_code[11] = APL_NULL_STRING;
+	short i_cln_code = 0;
+	double l_mmpaid = 0;
+	short i_mmpaid = 0;
+
+	l_ca_allotment_struct_i=(CA_RTBB_ALLOTMENT_STRUCT_I*)calloc(1,sizeof(CA_RTBB_ALLOTMENT_STRUCT_I));
+	APL_MALLOC_FAIL(l_ca_allotment_struct_i)
+
+   l_ca_allotment_struct_h=(CA_RTBB_ALLOTMENT_STRUCT_H*)calloc(1,sizeof(CA_RTBB_ALLOTMENT_STRUCT_H));
+	APL_MALLOC_FAIL(l_ca_allotment_struct_h)
+
+	l_ca_nis_allotment_struct_i=(CA_NIS_ALLOTMENT_STRUCT_I*)calloc(1,sizeof(CA_NIS_ALLOTMENT_STRUCT_I));
+	APL_MALLOC_FAIL(l_ca_nis_allotment_struct_i)
+
+   l_ca_nis_allotment_struct_h=(CA_NIS_ALLOTMENT_STRUCT_H*)calloc(1,sizeof(CA_NIS_ALLOTMENT_STRUCT_H));
+	APL_MALLOC_FAIL(l_ca_nis_allotment_struct_h)
+
+	EXEC SQL SELECT CA_EVENT INTO :l_ca_event:i_ca_event
+			FROM CAEVENT
+			WHERE CORP_ID =: p_ca_allot_dm_struct_h->h_ca_ref_no;
+
+	IS_ANY_ORA_ERROR
+	
+	if(i_ca_event < 0)
+	{
+		CO_InsertErr(l_debug_info_ptr,
+                           ERR_EVNT_NOTFND_A,
+                           p_intlenv_data_struct_h->h_mode,
+                           APL_NULL_STRING,
+                           APL_NULL_STRING,
+                           __LINE__,
+                           __FILE__
+                           );
+            APL_GOBACK_FAIL
+	}
+	
+	EXEC SQL SELECT NVL(COUNT(*),0) INTO :l_cnt
+				FROM CA_APPLICATION
+				WHERE CORP_ID =: p_ca_allot_dm_struct_h->h_ca_ref_no
+				AND CLN_REFNO =: p_ca_allot_dm_struct_h->h_appl_no;
+	IS_ANY_ORA_ERROR
+
+	EXEC SQL SELECT NVL(COUNT(*),0) INTO :l_cnt1
+				FROM CA_NIS_APPLICATION
+				WHERE CORP_ID =: p_ca_allot_dm_struct_h->h_ca_ref_no
+				AND APPLNCODE =: p_ca_allot_dm_struct_h->h_appl_no;
+	IS_ANY_ORA_ERROR 
+	
+	if(l_cnt <= 0 && l_cnt1 <= 0)
+	{
+		Alert("Application for Event Id |%s| Application No |%s| not found...\n",p_ca_allot_dm_struct_h->h_ca_ref_no,p_ca_allot_dm_struct_h->h_appl_no);
+		APL_GOBACK_FAIL	
+	}
+	else
+	{
+		if(!strcmp(l_ca_event,"NS"))
+		{
+			strcpy(l_ca_nis_allotment_struct_h->h_corp_id,p_ca_allot_dm_struct_h->h_ca_ref_no);
+			l_ca_nis_allotment_struct_i->i_corp_id = 0;
+			
+			EXEC SQL SELECT CLN_CODE,MMPAID INTO :l_cln_code:i_cln_code,:l_mmpaid:i_mmpaid 
+						FROM CA_NIS_APPLICATION
+						WHERE CORP_ID =: p_ca_allot_dm_struct_h->h_ca_ref_no
+						AND APPLNCODE =: p_ca_allot_dm_struct_h->h_appl_no;
+			IS_ANY_ORA_ERROR
+
+			strcpy(l_ca_nis_allotment_struct_h->h_cln_code,l_cln_code);
+			l_ca_nis_allotment_struct_i->i_cln_code = 0;
+
+			strcpy(l_ca_nis_allotment_struct_h->h_canrefno,p_ca_allot_dm_struct_h->h_appl_no);
+			l_ca_nis_allotment_struct_i->i_canrefno = 0;
+
+			strcpy(l_ca_nis_allotment_struct_h->h_candate,p_ca_allot_dm_struct_h->h_allot_dt);
+			l_ca_nis_allotment_struct_i->i_candate = 0;
+
+			strcpy(l_ca_nis_allotment_struct_h->h_canrecdate,p_ca_allot_dm_struct_h->h_allot_dt);
+			l_ca_nis_allotment_struct_i->i_canrecdate = 0;
+
+			l_ca_nis_allotment_struct_h->h_qtyshallot = p_ca_allot_dm_struct_h->h_allot_qty;
+			l_ca_nis_allotment_struct_i->i_qtyshallot = 0;
+
+			strcpy(l_ca_nis_allotment_struct_h->h_blockflg,"N");
+			l_ca_nis_allotment_struct_i->i_blockflg = 0;
+
+			l_ca_nis_allotment_struct_h->h_price = l_mmpaid/l_ca_nis_allotment_struct_h->h_qtyshallot;
+			l_ca_nis_allotment_struct_i->i_price = 0;
+
+			l_ca_nis_allotment_struct_h->h_mmpaid = l_mmpaid;
+			l_ca_nis_allotment_struct_i->i_mmpaid = 0;
+
+			l_ca_nis_allotment_struct_i->i_money_payable = -1;
+
+			if(p_ca_allot_dm_struct_h->h_refund_amt == 0 && p_ca_allot_dm_struct_h->h_allot_amt_pybl == 0)
+			l_ca_nis_allotment_struct_h->h_amountpay = 0;
+
+			else if(p_ca_allot_dm_struct_h->h_refund_amt > 0 && p_ca_allot_dm_struct_h->h_allot_amt_pybl == 0)
+			l_ca_nis_allotment_struct_h->h_amountpay = -p_ca_allot_dm_struct_h->h_refund_amt;
+
+			else if(p_ca_allot_dm_struct_h->h_allot_amt_pybl > 0 && p_ca_allot_dm_struct_h->h_refund_amt == 0)
+			l_ca_nis_allotment_struct_h->h_amountpay = p_ca_allot_dm_struct_h->h_allot_amt_pybl;
+
+			l_ca_nis_allotment_struct_i->i_amountpay = 0;
+
+			strcpy(l_ca_nis_allotment_struct_h->h_lastdatetime,p_ca_allot_dm_struct_h->h_allot_dt);
+         l_ca_nis_allotment_struct_i->i_lastdatetime = 0;
+		/*	strcat(l_ca_nis_allotment_struct_h->h_lastdatetime," 12:00:00");*/
+
+         strcpy(l_ca_nis_allotment_struct_h->h_clastdatetime,p_ca_allot_dm_struct_h->h_allot_dt);
+         l_ca_nis_allotment_struct_i->i_clastdatetime = 0;	
+		/*	strcat(l_ca_nis_allotment_struct_h->h_clastdatetime," 12:00:00");*/
+
+			strcpy(l_ca_nis_allotment_struct_h->h_maker,p_ca_allot_dm_struct_h->h_maker);
+         l_ca_nis_allotment_struct_i->i_maker = 0;
+
+			strcpy(l_ca_nis_allotment_struct_h->h_maker_dt,p_ca_allot_dm_struct_h->h_maker_dt);
+         l_ca_nis_allotment_struct_i->i_maker_dt = 0;
+
+			strcpy(l_ca_nis_allotment_struct_h->h_checker,p_ca_allot_dm_struct_h->h_checker);
+         l_ca_nis_allotment_struct_i->i_checker = 0;
+
+			strcpy(l_ca_nis_allotment_struct_h->h_checker_dt,p_ca_allot_dm_struct_h->h_checker_dt);
+         l_ca_nis_allotment_struct_i->i_checker_dt = 0;
+
+			strcpy(l_ca_nis_allotment_struct_h->h_access_stamp,p_ca_allot_dm_struct_h->h_access_stamp);
+         l_ca_nis_allotment_struct_i->i_access_stamp = 0;
+
+			strcpy(l_ca_nis_allotment_struct_h->h_status,p_ca_allot_dm_struct_h->h_status);
+         l_ca_nis_allotment_struct_i->i_status = 0;
+
+			l_ca_nis_allotment_struct_i->i_hf_date = -1;
+			l_ca_nis_allotment_struct_i->i_clt_seqnum = -1;
+			l_ca_nis_allotment_struct_i->i_ae_passind = -1;
+			l_ca_nis_allotment_struct_i->i_processed_date = -1;
+	
+			if(p_ca_allot_dm_struct_h->h_elec_qty > 0)
+			{
+				EXEC SQL UPDATE CA_NIS_APPLICATION
+							SET DEPO_CODE = 'NSDL'
+							WHERE CORP_ID =: p_ca_allot_dm_struct_h->h_ca_ref_no
+							AND APPLNCODE =: p_ca_allot_dm_struct_h->h_appl_no;
+				IS_ANY_ORA_ERROR
+			}
+			else
+			{
+				EXEC SQL UPDATE CA_NIS_APPLICATION
+							SET DEPO_CODE = 'VAUL'
+							WHERE CORP_ID =: p_ca_allot_dm_struct_h->h_ca_ref_no
+							AND APPLNCODE =: p_ca_allot_dm_struct_h->h_appl_no;
+				IS_ANY_ORA_ERROR
+			}
+
+		 EXEC SQL INSERT INTO CA_NIS_ALLOTMENT VALUES (:l_ca_nis_allotment_struct_h:l_ca_nis_allotment_struct_i);
+		 IS_ANY_ORA_ERROR
+
+		}
+		
+		if(!strcmp(l_ca_event,"RT"))
+		{
+
+			strcpy(l_ca_allotment_struct_h->h_corp_id,p_ca_allot_dm_struct_h->h_ca_ref_no);
+			l_ca_allotment_struct_i->i_corp_id = 0;
+			
+			EXEC SQL SELECT CLN_CODE INTO :l_cln_code:i_cln_code 
+						FROM CA_APPLICATION
+						WHERE CORP_ID =: p_ca_allot_dm_struct_h->h_ca_ref_no
+						AND CLN_REFNO =: p_ca_allot_dm_struct_h->h_appl_no;
+			IS_ANY_ORA_ERROR
+
+			strcpy(l_ca_allotment_struct_h->h_cln_code,l_cln_code);
+			l_ca_allotment_struct_i->i_cln_code = 0;
+
+			l_ca_allotment_struct_i->i_typeof_info = -1;
+
+			strcpy(l_ca_allotment_struct_h->h_ca_event,l_ca_event);
+			l_ca_allotment_struct_i->i_ca_event = 0;
+
+			strcpy(l_ca_allotment_struct_h->h_allot_dt,p_ca_allot_dm_struct_h->h_allot_dt);
+			l_ca_allotment_struct_i->i_allot_dt = 0;
+
+			l_ca_allotment_struct_h->h_alloted_qty = p_ca_allot_dm_struct_h->h_allot_qty;
+			l_ca_allotment_struct_i->i_alloted_qty = 0;
+
+			l_ca_allotment_struct_h->h_add_allot_qty = 0;
+			l_ca_allotment_struct_i->i_add_allot_qty = 0;
+
+			l_ca_allotment_struct_h->h_amt_rec = p_ca_allot_dm_struct_h->h_refund_amt;
+			l_ca_allotment_struct_i->i_amt_rec = 0;
+			
+			l_ca_allotment_struct_h->h_amt_pay = p_ca_allot_dm_struct_h->h_allot_amt_pybl;
+			l_ca_allotment_struct_i->i_amt_pay = 0;
+
+			strcpy(l_ca_allotment_struct_h->h_maker,p_ca_allot_dm_struct_h->h_maker);
+         l_ca_allotment_struct_i->i_maker = 0;
+
+			strcpy(l_ca_allotment_struct_h->h_maker_dt,p_ca_allot_dm_struct_h->h_maker_dt);
+         l_ca_allotment_struct_i->i_maker_dt = 0;
+
+			strcpy(l_ca_allotment_struct_h->h_checker,p_ca_allot_dm_struct_h->h_checker);
+         l_ca_allotment_struct_i->i_checker = 0;
+
+			strcpy(l_ca_allotment_struct_h->h_checker_dt,p_ca_allot_dm_struct_h->h_checker_dt);
+         l_ca_allotment_struct_i->i_checker_dt = 0;
+
+			strcpy(l_ca_allotment_struct_h->h_access_stamp,p_ca_allot_dm_struct_h->h_access_stamp);
+         l_ca_allotment_struct_i->i_access_stamp = 0;
+
+			strcpy(l_ca_allotment_struct_h->h_status,p_ca_allot_dm_struct_h->h_status);
+         l_ca_allotment_struct_i->i_status = 0;
+
+			l_ca_allotment_struct_i->i_hf_date = -1;
+			l_ca_allotment_struct_i->i_clt_seqnum = -1;
+			l_ca_allotment_struct_i->i_ae_passind = -1;
+			l_ca_allotment_struct_i->i_processed_date = -1;
+			l_ca_allotment_struct_i->i_dp_id = -1;
+			l_ca_allotment_struct_i->i_cln_id = -1;
+
+			if(p_ca_allot_dm_struct_h->h_elec_qty > 0)
+			{
+			/*	EXEC SQL UPDATE CA_APPLICATION
+							SET DEPO_CODE = 'NSDL'
+							WHERE CORP_ID =: p_ca_allot_dm_struct_h->h_ca_ref_no
+							AND CLN_REFNO =: p_ca_allot_dm_struct_h->h_appl_no;
+				IS_ANY_ORA_ERROR */
+				strcpy(l_ca_allotment_struct_h->h_depo_cd,"NSDL");
+				l_ca_allotment_struct_i->i_depo_cd = 0;
+			}
+			else
+			{
+			/*	EXEC SQL UPDATE CA_APPLICATION
+							SET DEPO_CODE = 'VAUL'
+							WHERE CORP_ID =: p_ca_allot_dm_struct_h->h_ca_ref_no
+							AND CLN_REFNO =: p_ca_allot_dm_struct_h->h_appl_no;
+				IS_ANY_ORA_ERROR */
+				strcpy(l_ca_allotment_struct_h->h_depo_cd,"VAUL");
+				l_ca_allotment_struct_i->i_depo_cd = 0;
+			}
+
+			
+		 EXEC SQL INSERT INTO CA_RTBB_ALLOTMENT VALUES (:l_ca_allotment_struct_h:l_ca_allotment_struct_i);
+		 IS_ANY_ORA_ERROR
+
+
+		}
+	}
+	APL_GOBACK_SUCCESS
+			  RETURN_SUCCESS :
+			  {
+						 CO_ProcMonitor(APL_OUT_FILE,"Exiting CA_AllotAdd_MIG successfully",NULL,p_intlenv_data_struct_h);
+						 return (APL_SUCCESS);
+			  }
+RETURN_FAILURE :
+	{
+			  CO_ProcMonitor(APL_OUT_FILE,"Exiting CA_AllotAdd_MIG  unsuccessfully",NULL,p_intlenv_data_struct_h);
+			  return (APL_FAILURE);
+	}
+}
+
+
+int CA_Ex_Date_MIG(CA_EX_DT_DM_STRUCT_H *p_ca_ex_dt_dm_struct_h,
+                     INTL_ENV_DATA_STRUCT_H   *p_intlenv_data_struct_h,
+                     DEBUG_INFO_STRUCT_H         **l_debug_info_ptr
+                  )
+{
+	struct sqlca sqlca;
+
+	#ifdef APL_THREADS
+	APL_SET_CONTEXT
+	EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	/*Smita - HDFCCA_027 */
+	int int_retval = 0;
+	/*Smita - HDFCCA_027 */
+
+	CA_EX_DT_DM_STRUCT_I *l_ca_ex_dt_dm_struct_i;
+	
+	l_ca_ex_dt_dm_struct_i = (CA_EX_DT_DM_STRUCT_I *)calloc(1,sizeof(CA_EX_DT_DM_STRUCT_I));
+   APL_MALLOC_FAIL(l_ca_ex_dt_dm_struct_i)
+
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Entered wrp_A_CA_Ex_Date_DMFn",NULL,p_intlenv_data_struct_h);
+	}
+										
+	if (	(	!strcmp(p_intlenv_data_struct_h->h_mode,"MIG")	)	)
+		{
+			APL_IF_DEBUG	
+			{
+				CO_ProcMonitor(APL_OUT_FILE,"Mode is Migration",NULL,p_intlenv_data_struct_h);
+			}
+		
+		EXEC SQL INSERT INTO CA_EX_DT_MIG VALUES (:p_ca_ex_dt_dm_struct_h:l_ca_ex_dt_dm_struct_i);	
+
+		IS_ANY_ORA_ERROR
+			
+		}
+	APL_GOBACK_SUCCESS
+	  RETURN_SUCCESS :
+			  {
+					CO_ProcMonitor(APL_OUT_FILE,"Exiting CA_AllotAdd_MIG successfully",NULL,p_intlenv_data_struct_h);
+					 return (APL_SUCCESS);
+			  }
+	  RETURN_FAILURE :
+			  {
+					CO_ProcMonitor(APL_OUT_FILE,"Exiting CA_AllotAdd_MIG  unsuccessfully",NULL,p_intlenv_data_struct_h);
+					 return (APL_FAILURE);
+			  }
+}

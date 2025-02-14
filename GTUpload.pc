@@ -1,0 +1,684 @@
+#include <string.h>
+#include <setjmp.h>
+#include <stdlib.h>
+#include <sqlcpr.h>
+#include "Intellect_Common.h"
+#define MAX_OCCURENCES 40
+#define MAX_ARRSZ 100
+
+#define MAX_VAR_LEN 255
+#define MAX_NAME_LEN 31
+#ifndef NULL
+#define NULL 0
+#endif
+EXEC SQL INCLUDE sqlca;
+
+/*    Web UAT Fix. Changed by Dnyanesh. 28/4/2007. Some of the values in "Select List" were not getting properly populated.
+      This was due to mismatch in variable size for "select list" field */
+
+typedef struct {
+char h_uniq_name[51];
+char h_select_list[1001];
+char h_tab_name[51];
+char h_where_cond[501];
+char h_proc_name[21];
+char h_environ_data[2001];
+char h_proc_call[21];
+char h_update_list[101];
+}WI_TABLE_MERGE_STRUCT_H;
+
+typedef struct {
+short i_uniq_name;
+short i_select_list;
+short i_tab_name;
+short i_where_cond;
+short i_proc_name;
+short i_environ_data;
+short i_proc_call;
+short i_update_list;
+}WI_TABLE_MERGE_STRUCT_I;
+
+char 	indesc[]="input_descriptor"; 			/* descriptor names */
+char 	outdesc[]="output_descriptor";
+int 	max_array_size=MAX_ARRSZ; 
+/* Added by kotubabu for Linux Migration -Start*/
+#ifdef OS_LINUX
+FILE 	*gtlog;
+#else
+FILE *gtlog = APL_OUT_FILE;
+#endif
+/* Added by kotubabu for Linux Migration-End*/
+char    c_db_name[]="cust";
+/* Added by kotubabu for Linux Migration -Start*/
+#ifdef OS_LINUX
+FILE    *l_repfile      =  (FILE *)NULL;
+#else
+FILE *l_repfile = APL_OUT_FILE;
+#endif
+/* Added by kotubabu for Linux Migration-End*/
+
+char 	l_usrname[30];
+
+//Changes done for AIX Migration -START
+void  CO_Rtv_DataString(char *chr_p_str, char *p_lbl,char *p_data_value);
+int oracle_web_connect(char *w_username,char *w_password,char *w_db_string);
+int oracle_cust_connect(char *c_username,char *c_password,char *c_db_name, char *c_db_string);
+int fetch_dyn_statement(char *dyn_statement,WI_TABLE_MERGE_STRUCT_H *p_wi_table_merge_struct_h,char *l_uniq_name);
+int process_input(int *in_array_size);
+int process_output(WI_TABLE_MERGE_STRUCT_H *p_wi_table_merge_struct_h);
+extern  int     CO_ReadToken(FILE*                      p_fptr,
+                                                char*                           p_token,
+                                                char*                           p_value,
+                                                DEBUG_INFO_STRUCT_H**   l_debug_info_ptr);
+//Changes done for AIX Migration - END
+int main(int argc,char **argv)
+{
+	char 	w_username[128]; // USERNAME
+	char 	w_password[32]; //PASSWORD
+	char 	c_username[128]; // USERNAME
+	char 	c_password[32]; //PASSWORD
+	char    w_db_string[30];
+	char    c_db_string[30];
+	char    l_uniq_name[20];
+	int	in_array_size;
+
+	char l_param_data[4001];
+	char l_cfg_filename[501];
+	char l_rep_path[501];
+	char l_rep_filename[501];
+	char l_l_rep_filename[20];
+	char l_l_log_filename[20];
+	char l_log_filename[501];
+	char l_date[8];
+	char l_time[8];
+	char l_dttime[20];
+	char rep_dttime[20];
+    FILE 	*fp_cfg = (FILE *)NULL;
+	/* Added by kotubabu for Linux Migration -Start*/
+    #ifdef OS_LINUX
+	 l_repfile = APL_OUT_FILE;
+	 gtlog = APL_OUT_FILE;
+   #endif
+    /* Added by kotubabu for Linux Migration-End*/
+	
+	DEBUG_INFO_STRUCT_H  **l_debug_info_ptr = (DEBUG_INFO_STRUCT_H **)NULL;
+
+	EXEC SQL VAR l_date IS STRING;
+	EXEC SQL VAR l_time IS STRING;
+	EXEC SQL VAR rep_dttime IS STRING;
+	
+       	char *dyn_statement;
+	WI_TABLE_MERGE_STRUCT_H *l_witable_merge_struct_h;
+	l_witable_merge_struct_h =  (WI_TABLE_MERGE_STRUCT_H *)calloc(1,sizeof(WI_TABLE_MERGE_STRUCT_H));
+	dyn_statement =  (char *)calloc(1,sizeof(char));
+
+	memset(l_witable_merge_struct_h,NULL,sizeof(WI_TABLE_MERGE_STRUCT_H));
+
+
+	/* Get CONFIG FILE PATH FROM ENVIRONMENT DATA */
+	strcpy(l_cfg_filename,getenv("INTL_ROOT_PATH"));
+	strcat(l_cfg_filename,"/intl_sun.cfg");
+	printf("KS -- File Path Selected is [%s]\n",l_cfg_filename);
+	fp_cfg = fopen(l_cfg_filename,"r");
+	l_debug_info_ptr = (DEBUG_INFO_STRUCT_H   **)calloc(1,sizeof(DEBUG_INFO_STRUCT_H *));
+
+	memset(l_param_data,APL_NULL_CHAR,sizeof(l_param_data));
+
+	strcpy(l_param_data,argv[9]);
+
+	printf("KS -- Selected PARAM is [%s]\n",l_param_data);
+	CO_Rtv_DataString(l_param_data,"UNIQ_NAME",l_uniq_name);
+	//strcpy(l_uniq_name,"WI_DEAL");
+        printf("KS --- uniq_name value selected is  [%s]\n",l_uniq_name);
+
+	printf(" KS -- argc --[%d] \n ",argc);
+	printf(" KS -- argv0 --[%s] \n ",argv[0]);
+	printf(" KS -- argv1 --[%s] \n ",argv[1]);
+	printf(" KS -- argv2 --[%s] \n ",argv[2]);
+	printf(" KS -- argv3 --[%s] \n ",argv[3]);
+	printf(" KS -- argv4 --[%s] \n ",argv[4]);
+	printf(" KS -- argv5 --[%s] \n ",argv[5]);
+	printf(" KS -- argv6 --[%s] \n ",argv[6]);
+	printf(" KS -- argv7 --[%s] \n ",argv[7]);
+	printf(" KS -- argv8 --[%s] \n ",argv[8]);
+	printf(" KS -- argv9 --[%s] \n ",argv[9]);
+
+
+
+	if(fp_cfg == (FILE *)NULL)
+	{
+		printf("Config File |%s| open failed \n",l_cfg_filename);
+		exit(1);
+	}
+        if ( CO_ReadToken(fp_cfg,"INTL_DB_USR",c_username,l_debug_info_ptr) == APL_FAILURE)
+        {
+                printf("KS --- Could not find DB username \n EXITING \n FAILED IN Dynfetch");
+		exit(1);
+        }
+        if ( CO_ReadToken(fp_cfg,"INTL_DB_PWD",c_password,l_debug_info_ptr) == APL_FAILURE)
+        {
+                printf("KS --- Could not find DB password \n EXITING \n FAILED IN Dynfetch");
+		exit(1);
+        }
+        if ( CO_ReadToken(fp_cfg,"WEB_INTL_DB_USR",w_username,l_debug_info_ptr) == APL_FAILURE)
+        {
+                printf("KS --- Could not find DB username \n EXITING \n FAILED IN Dynfetch");
+		exit(1);
+        }
+        if ( CO_ReadToken(fp_cfg,"WEB_INTL_DB_PWD",w_password,l_debug_info_ptr) == APL_FAILURE)
+        {
+                printf("KS --- Could not find DB password \n EXITING \n FAILED IN Dynfetch");
+		exit(1);
+        }
+        if ( CO_ReadToken(fp_cfg,"INTL_REP_PATH",l_rep_path,l_debug_info_ptr) == APL_FAILURE)
+        {
+                printf("KS --- Could not find Report File path \n EXITING \n FAILED IN Dynfetch");
+		exit(1);
+        }
+        if ( CO_ReadToken(fp_cfg,"INTL_NAME",w_db_string,l_debug_info_ptr) == APL_FAILURE)
+        {
+                printf("KS --- Could not find Data Base Name \n EXITING \n FAILED IN Dynfetch");
+		exit(1);
+        }
+        if ( CO_ReadToken(fp_cfg,"INTL_NAME",c_db_string,l_debug_info_ptr) == APL_FAILURE)
+        {
+                printf("KS --- Could not find Data Base Name \n EXITING \n FAILED IN Dynfetch");
+		exit(1);
+        }
+        printf("\nKS -- CUSTODY DB USERNAME SELECTED IS [%s]\n",c_username);
+        printf("\nKS -- WEB DB USERNAME SELECTED IS [%s]\n",w_username);
+
+	/* Connect to the database. */
+	if (oracle_web_connect(w_username,w_password,w_db_string) != 0)
+		exit(1);
+	if (oracle_cust_connect(c_username,c_password,c_db_name,c_db_string) != 0)
+		exit(1);
+
+	/* Trying to Get SYSTEM DATE AND TIME */
+
+	EXEC SQL SELECT TO_CHAR(SYS_DATE,'DDMMYY'),TO_CHAR(SYSDATE,'HH24MI') ,TO_CHAR(SYS_DATE,'DD/MM/YYYY')||' '||TO_CHAR(SYSDATE,'HH24:MI')  INTO :l_date,:l_time,:l_dttime FROM PRO_SYS_DATE;
+	if(sqlca.sqlcode!=0)
+	{
+		printf("KS -- failed in Fetching date & Time\n");
+		printf("KS -- Error Occurred is [%s] \n",sqlca.sqlerrm.sqlerrmc);
+		exit(1);
+	}
+
+	printf("KS -- Datetime selected is -- %s\n",l_dttime);
+
+	strcpy(l_rep_filename,l_rep_path);
+	strcpy(l_l_rep_filename,"GT_");
+	strcat(l_l_rep_filename,l_date);
+	strcat(l_l_rep_filename,l_time);
+	strcat(l_l_rep_filename,".rep");
+
+	strcat(l_rep_filename,l_l_rep_filename);
+
+	strcpy(l_log_filename,l_rep_path);
+	strcat(l_l_log_filename,"GT_");
+	strcat(l_l_log_filename,l_date);
+	strcat(l_l_log_filename,l_time);
+	strcat(l_l_log_filename,".log");
+
+	strcat(l_log_filename,l_l_log_filename);
+
+	printf("KS -- Report Name is ---[%s]\n",l_rep_filename);
+	printf("KS -- Log Name is ---[%s]\n",l_log_filename);
+
+	gtlog=fopen(l_log_filename,"w");
+	if(gtlog==NULL)
+	{
+		printf("\nKS -- Log File could not be created \n");	
+		gtlog=stdout;
+	}
+	l_repfile=fopen(l_rep_filename,"w");
+	if(l_repfile==NULL)
+	{
+		printf("\nKS -- Report File could not be created \n");	
+		exit(1);
+	}
+
+	/* Kalyan -15/04/07 - For Changes in Report Date */
+	
+	strcpy(rep_dttime,argv[2]);
+	strcpy(l_usrname,argv[3]);
+	
+	EXEC SQL AT :c_db_name INSERT INTO PRO_COMMON_REPORT values(:l_l_rep_filename,'REPORT FILE',:rep_dttime,100,'GTUpload','B',:l_usrname,:l_rep_filename);
+	EXEC SQL AT :c_db_name INSERT INTO PRO_COMMON_REPORT values(:l_l_log_filename,'LOG FILE',:rep_dttime,100,'GTUpload','B',:l_usrname,:l_log_filename);
+
+	if(sqlca.sqlcode != 0)
+	{
+		printf("KS -- UNABLE TO INSERT INTO PRO_COMMON_REPORT ERROR [%s]\n",sqlca.sqlerrm.sqlerrmc);
+	}
+
+	fprintf(l_repfile,"CLIENT         INSTR_CODE           Reference No.       STATUS\n");
+	fprintf(l_repfile,"******************************************************************\n");
+	//fclose(l_repfile);
+
+	EXEC SQL FOR :max_array_size ALLOCATE DESCRIPTOR GLOBAL :indesc;
+	if(sqlca.sqlcode!=0)
+	{
+		printf("KS -- failed in Allocating Descriptor for Input\n");
+		fprintf(gtlog,"Failed in Allocating Descriptor for Input\n");
+		printf("KS -- Error Occurred is [%s] \n",sqlca.sqlerrm.sqlerrmc);
+		fprintf(gtlog,"Error Occurred is [%s] ... Exitng...\n",sqlca.sqlerrm.sqlerrmc);
+		exit(1);
+	}
+	EXEC SQL FOR :max_array_size ALLOCATE DESCRIPTOR GLOBAL :outdesc;
+	if(sqlca.sqlcode!=0)
+	{
+		printf("KS -- failed in Allocating Descriptor for Output\n");
+		fprintf(gtlog,"Failed in Allocating Descriptor for Output\n");
+		printf("KS -- Error Occurred is [%s] \n",sqlca.sqlerrm.sqlerrmc);
+		fprintf(gtlog,"Error Occurred is [%s]... Exiting \n",sqlca.sqlerrm.sqlerrmc);
+		exit(1);
+	}
+	
+	if(fetch_dyn_statement(dyn_statement,l_witable_merge_struct_h,l_uniq_name) != 0)   //Kalyan
+	{
+		printf("Failed to get the statement  Exiting........\n");
+		fprintf(gtlog,"Failed to get the statement  Exiting........\n");
+		//break; Kalyan
+		exit(0);
+	}
+
+	printf("KS -- IN MAIN dyn_statement [%s]\n",dyn_statement);
+	fprintf(gtlog,"IN MAIN dyn_statement [%s]\n",dyn_statement);
+//	printf("KS -- IN MAIN p_wi_table_merge_struct_h->h_select_list [%s]\n",l_witable_merge_struct_h->h_select_list);
+
+	EXEC SQL PREPARE S FROM :dyn_statement;
+	if(sqlca.sqlcode !=0)
+        {
+                printf("Error While Preparing Statement from dynamic stmt ... Exiting\n");
+                fprintf(gtlog,"Error While Preparing Statement from dynamic stmt ... Exiting\n");
+                exit(-1);
+        }
+
+	EXEC SQL DECLARE C CURSOR FOR S;
+	if(sqlca.sqlcode !=0)
+        {
+                printf("Error While Declaring Cursor from dynamic stmt ... Exiting\n");
+                fprintf(gtlog,"Error While Declaring Cursor from dynamic stmt ... Exiting\n");
+                exit(-1);
+        }
+
+	/* Call the function that processes the input. */\
+
+	if(process_input(&in_array_size)==-1)
+	{
+		printf("Failed in Processing the input  ... Exiting\n");	
+		fprintf(gtlog,"Failed in Processing the input  ... Exiting\n");	
+		exit(-1);
+	}
+
+	printf("KS -- in_array_size returned is [%d]\n",in_array_size);
+	fprintf(gtlog,"KS -- in_array_size returned is [%d]\n",in_array_size);
+	
+	/* Open the cursor and execute the statement. */
+	EXEC SQL FOR :in_array_size OPEN C USING DESCRIPTOR GLOBAL :indesc;
+
+	/* Call the function that processes the output. */
+	if (process_output(l_witable_merge_struct_h)==-1)
+		exit(-1);
+	/* Tell user how many rows were processed. */
+	//rows_processed();
+	printf("\n\n%d row%c processed.\n", sqlca.sqlerrd[2],sqlca.sqlerrd[2] == 1 ? ' ' : 's');
+	fprintf(gtlog,"\n\n%d row%c processed.\n", sqlca.sqlerrd[2],sqlca.sqlerrd[2] == 1 ? ' ' : 's');
+
+	EXEC SQL AT :c_db_name UPDATE SYS_BATCHPROC SET STATUS='completed' WHERE PROCESS_NAME='GTUpload' AND STATUS='started';	
+        if(sqlca.sqlcode !=0)
+        {
+                printf("KS -- Error [%s] had occurred while trying to update SYS_BATCHPROC \n", sqlca.sqlerrm.sqlerrmc);
+                fprintf(gtlog,"KS -- Error [%s] had occurred while trying to update SYS_BATCHPROC \n", sqlca.sqlerrm.sqlerrmc);
+        }
+
+
+
+	EXEC SQL COMMIT WORK RELEASE;
+        if(sqlca.sqlcode !=0)
+        {
+                printf("Cannot commit ... Exiting\n");
+                fprintf(gtlog,"Cannot commit ... Exiting\n");
+                exit(-1);
+        }
+
+	EXEC SQL AT :c_db_name COMMIT WORK RELEASE;
+        if(sqlca.sqlcode !=0)
+        {
+                //printf("Cannot commit for  %s... Exiting %s\n", c_db_name);Changes done for AIX Migration
+                printf("Cannot commit for  %s... Exiting \n", c_db_name);
+                //fprintf(gtlog,"Cannot commit for  %s... Exiting %s\n", c_db_name);Changes done for AIX Migration
+                fprintf(gtlog,"Cannot commit for  %s... Exiting \n", c_db_name);
+                exit(-1);
+        }
+
+	EXEC SQL CLOSE C;
+	EXEC SQL DEALLOCATE DESCRIPTOR GLOBAL :indesc;
+	EXEC SQL DEALLOCATE DESCRIPTOR GLOBAL :outdesc;
+
+	fclose(fp_cfg);
+	fclose(gtlog);
+
+	puts("\nProcessing Completed!!\n");
+	return 0;
+}
+
+int oracle_web_connect(char *w_username,char *w_password,char *w_db_string)
+{
+	//EXEC SQL WHENEVER SQLERROR GOTO connect_error;
+	//EXEC SQL CONNECT :w_username IDENTIFIED BY :w_password USING :w_db_string; Commented BY Kalyan
+	EXEC SQL CONNECT :w_username IDENTIFIED BY :w_password ;
+	if(sqlca.sqlcode !=0)
+	{
+		printf("Cannot connect to ORACLE as user %s %s\n", w_username,w_db_string);
+		//fprintf(gtlog,"Cannot connect to ORACLE as user %s\n", w_username);
+		return -1;
+	}
+	printf("\nConnected to ORACLE as user %s.\n", w_username);
+	//fprintf(gtlog,"\nConnected to ORACLE as user %s.\n",w_username);
+	return 0;
+}
+int oracle_cust_connect(char *c_username,char *c_password,char *c_db_name, char *c_db_string)
+{
+	//EXEC SQL WHENEVER SQLERROR GOTO connect_error;
+	//EXEC SQL CONNECT :c_username IDENTIFIED BY :c_password AT :c_db_name USING :c_db_string;
+	EXEC SQL CONNECT :c_username IDENTIFIED BY :c_password AT :c_db_name ;
+	if(sqlca.sqlcode !=0)
+	{
+		printf("Cannot connect to ORACLE as user %s\n", c_username);
+		fprintf(gtlog,"Cannot connect to ORACLE as user %s\n", c_username);
+		return -1;
+	}
+	printf("\nConnected to ORACLE as user %s.\n", c_username);
+	return 0;
+}
+
+int fetch_dyn_statement(char *dyn_statement,WI_TABLE_MERGE_STRUCT_H *p_wi_table_merge_struct_h,char *l_uniq_name)
+{
+
+        char fldsepr[2]="";
+        char valsepr[2]="";
+
+
+	printf("KS -- uniq_name [%s]\n",l_uniq_name); //delete
+	fprintf(gtlog,"uniq_name [%s]\n",l_uniq_name); //delete
+	WI_TABLE_MERGE_STRUCT_I *l_wi_table_merge_struct_i;
+	l_wi_table_merge_struct_i = (WI_TABLE_MERGE_STRUCT_I *)calloc(1, sizeof(WI_TABLE_MERGE_STRUCT_I));
+	memset(l_wi_table_merge_struct_i,NULL,sizeof(WI_TABLE_MERGE_STRUCT_I));
+
+	EXEC SQL SELECT 
+			*
+		INTO
+			:p_wi_table_merge_struct_h:l_wi_table_merge_struct_i
+		FROM
+			WI_TABLE_MERGE
+		WHERE
+			UNIQ_NAME=:l_uniq_name;
+
+	if(sqlca.sqlcode != 0)
+	{
+		printf("KS -- Error [%s] occurred while fetching from WI_TABLE_MERGE \n",sqlca.sqlerrm.sqlerrmc);
+		fprintf(gtlog,"Error [%s] occurred while fetching from WI_TABLE_MERGE \n",sqlca.sqlerrm.sqlerrmc);
+		return -1;
+	}
+
+	/* User Updation in Env String */
+
+	printf("KS -- Going for User Updation in Env String \n");
+
+	strcat(p_wi_table_merge_struct_h->h_environ_data,"USER");
+	strcat(p_wi_table_merge_struct_h->h_environ_data,valsepr);
+	strcat(p_wi_table_merge_struct_h->h_environ_data,l_usrname);
+	strcat(p_wi_table_merge_struct_h->h_environ_data,fldsepr);
+	
+	printf("KS -- Completed User Updation in Env String \n");
+	printf("KS -- String selected is .. [%s]\n",p_wi_table_merge_struct_h->h_environ_data);
+
+	/* User Updation in Env String */
+	
+	//strcpy(dyn_statement,"select client,identiy_no from wi_deal");
+
+	printf("KS -- Value - [%s]\n",p_wi_table_merge_struct_h->h_select_list);
+	fprintf(gtlog,"Value - [%s]\n",p_wi_table_merge_struct_h->h_select_list);
+	sprintf(dyn_statement,"select ROWID,%s from %s where %s ",p_wi_table_merge_struct_h->h_select_list,p_wi_table_merge_struct_h->h_tab_name,p_wi_table_merge_struct_h->h_where_cond);
+	printf("KS -- SELECTED STRING IS \n[%s]\n",dyn_statement);
+	fprintf(gtlog,"SELECTED STRING IS \n[%s]\n",dyn_statement);
+	return 0;
+}
+
+int process_input(int *in_array_size)
+{
+	int input_count;
+	sqlca.sqlcode=0;
+	EXEC SQL DESCRIBE INPUT S USING DESCRIPTOR GLOBAL :indesc;
+	if(sqlca.sqlcode!=0)
+	{
+		printf("KS -- failed in Processing Input-- Describing Input\n");
+		fprintf(gtlog,"failed in Processing Input-- Describing Input\n");
+		printf("KS -- Error Occurred is [%d] -- [%s] \n",sqlca.sqlcode,sqlca.sqlerrm.sqlerrmc);
+		fprintf(gtlog,"KS -- Error Occurred is [%d] -- [%s] \n",sqlca.sqlcode,sqlca.sqlerrm.sqlerrmc);
+		return(-1);
+	}
+	EXEC SQL GET DESCRIPTOR GLOBAL :indesc :input_count = COUNT;
+	if(sqlca.sqlcode != 0)
+	{
+		printf("KS -- failed in Processing Input--Get Descriptor \n");
+		fprintf(gtlog,"Failed in Processing Input--Get Descriptor \n");
+		printf("KS -- Error Occurred is [%d] -- [%s] \n",sqlca.sqlcode,sqlca.sqlerrm.sqlerrmc);
+		fprintf(gtlog,"Error Occurred is [%d] -- [%s] \n",sqlca.sqlcode,sqlca.sqlerrm.sqlerrmc);
+		return(-1);
+	}
+	*in_array_size = 1;
+	return(0);
+}
+
+int process_output(WI_TABLE_MERGE_STRUCT_H *p_wi_table_merge_struct_h)
+{
+	int i, j;
+	int output_count, occurs;
+	int type, output_len= MAX_VAR_LEN;
+	char name[MAX_OCCURENCES][MAX_NAME_LEN];
+	char fldsepr='';
+	char valsepr='';
+	int rows_this_fetch=0, cumulative_rows=0;
+ /* Web UAT Fixes. Changes done by Dnyanesh 28/04/2007. Variable initialization has been done */
+	char procdata[4001] = APL_NULL_STRING;
+	char tempprocd[4001] = APL_NULL_STRING;
+	char l_update_string[1000] = APL_NULL_STRING;
+	char l_row_id[25] = APL_NULL_STRING;
+	short 	*iptr;
+	char 	l_error[4001] = APL_NULL_STRING;
+	char 	output[MAX_OCCURENCES][MAX_ARRSZ][MAX_VAR_LEN + 1];
+
+	EXEC SQL VAR l_error IS STRING;
+
+	short 	outindi[MAX_OCCURENCES][MAX_ARRSZ]; 		/* output indicators */
+	EXEC SQL DESCRIBE OUTPUT S USING DESCRIPTOR GLOBAL :outdesc;
+	EXEC SQL GET DESCRIPTOR GLOBAL :outdesc :output_count = COUNT;
+	int out_array_size = 1;
+	printf ("\n");
+	for (i = 0; i < output_count; i++)
+	{
+		occurs = i + 1;
+		EXEC SQL GET DESCRIPTOR GLOBAL :outdesc VALUE :occurs :type = TYPE, :name[i] = NAME;
+		if(sqlca.sqlcode!=0)
+		{
+			printf("KS -- failed in Processing Output--Get Descriptor for TYPE and NAME \n");
+			fprintf(gtlog,"Failed in Processing Output--Get Descriptor for TYPE and NAME \n");
+			printf("KS -- Error Occurred is [%d] -- [%s] \n",sqlca.sqlcode,sqlca.sqlerrm.sqlerrmc);
+			fprintf(gtlog,"Error Occurred is [%d] -- [%s] \n",sqlca.sqlcode,sqlca.sqlerrm.sqlerrmc);
+			return(-1);
+		}
+
+		occurs = i + 1; /* occurence is one based */
+		type = 5; /* force all data to be null terminated character */
+		EXEC SQL SET DESCRIPTOR GLOBAL :outdesc VALUE :occurs TYPE = :type, LENGTH = :output_len;
+		if(sqlca.sqlcode!=0)
+		{
+			printf("KS -- failed in Processing Output--Get Descriptor for value , type and length \n");
+			fprintf(gtlog,"Failed in Processing Output--Get Descriptor for value , type and length \n");
+			printf("KS -- Error Occurred is [%d] -- [%s] \n",sqlca.sqlcode,sqlca.sqlerrm.sqlerrmc);
+			fprintf(gtlog,"Error Occurred is [%d] -- [%s] \n",sqlca.sqlcode,sqlca.sqlerrm.sqlerrmc);
+			return(-1);
+		}
+
+		iptr = (short *)&outindi[i]; /* no mult-dimension non-char host vars */
+		EXEC SQL FOR :out_array_size SET DESCRIPTOR GLOBAL :outdesc VALUE :occurs REF DATA = :output[i], REF INDICATOR = :iptr;
+		if(sqlca.sqlcode!=0)
+		{
+			printf("KS -- failed in Processing output--SET Descriptor for value , ref data and ref indicators \n");
+			fprintf(gtlog,"Failed in Processing output--SET Descriptor for value , ref data and ref indicators \n");
+			printf("KS -- Error Occurred is [%d] -- [%s] \n",sqlca.sqlcode,sqlca.sqlerrm.sqlerrmc);
+			fprintf(gtlog,"Error Occurred is [%d] -- [%s] \n",sqlca.sqlcode,sqlca.sqlerrm.sqlerrmc);
+			return(-1);
+		}
+
+	}
+	/* print the column headings */
+	for (j=0; j < out_array_size; j++)
+	for (i=0; i < output_count; i++)
+	{
+		printf("KAL--%s ",name[i]);   // Kalyan
+		fprintf(gtlog,"%s ",name[i]);   // Kalyan
+	}
+	printf("\n");
+	fprintf(gtlog,"\n");
+	memset(procdata,APL_NULL_CHAR,sizeof(procdata));
+	/* FETCH each row selected and print the column values. */
+	for (;;)
+	{
+		strcpy(l_error,APL_NULL_STRING); /* Web UAT Fixes. Changes done by Dnyanesh 28/04/2007 */
+
+		EXEC SQL FOR :out_array_size FETCH C INTO DESCRIPTOR GLOBAL :outdesc;
+		if(sqlca.sqlcode == 1403)
+		{
+			printf("KS -- Output Processing Completed \n");
+			fprintf(gtlog,"Output Processing Completed \n");
+			break;
+		}
+		else if (sqlca.sqlcode !=0 )
+		{
+			printf("KS --Error [%s] had occurred while processing o/p\n",sqlca.sqlerrm.sqlerrmc);
+			fprintf(gtlog,"Error [%s] had occurred while processing o/p\n",sqlca.sqlerrm.sqlerrmc);
+			break;
+		}
+			
+		rows_this_fetch = sqlca.sqlerrd[2] - cumulative_rows;
+		cumulative_rows = sqlca.sqlerrd[2];
+		if (rows_this_fetch)
+		for (j=0; j < out_array_size && j < rows_this_fetch; j++)
+		{ /* output by columns using simplified formatting */
+
+			printf(" row-- id is [%s]  \n",output[j][0]);
+			strcpy(l_row_id,output[j][0]);
+			for (i=0; i < output_count; i++)
+			{
+				if (outindi[i][j] == -1)
+					sprintf(tempprocd,"%c%s%c",fldsepr,name[i],valsepr);  // Kalyan
+				else
+					sprintf(tempprocd,"%c%s%c%s",fldsepr,name[i],valsepr,output[i][j]);  // Kalyan
+
+				printf("VALUE - [%s]\n",tempprocd); /* simplified */ // Kalyan
+				fprintf(gtlog,"VALUE - [%s]\n",tempprocd); /* simplified */ // Kalyan
+				strcat(procdata,tempprocd);
+				//printf("PROC - [%s]\n",procdata); /* simplified */ // Kalyan
+
+				/* output formatting may cause truncation */
+				/* but columns will line up */
+			}
+		}
+		printf("PROC - [%s]\n",procdata); /* simplified */ // Kalyan
+		fprintf(gtlog,"PROC_DATA - [%s]\n",procdata); /* simplified */ // Kalyan
+		/* Going for insertion */
+		sprintf(tempprocd,"%c",fldsepr);  // Kalyan
+		strcat(procdata,tempprocd);
+		//EXEC SQL AT :c_db_name INSERT INTO ABCD VALUES(:procdata); //KAL
+
+		/*printf("KS -- Value of h_tab_name is [%s]\n",p_wi_table_merge_struct_h->h_tab_name);
+        
+	       	sprintf(l_update_string,"UPDATE %s SET %s  WHERE rowid='%s'",p_wi_table_merge_struct_h->h_tab_name,p_wi_table_merge_struct_h->h_update_list,l_row_id);	
+		printf("KS __ Update Statement is --\n %s \n ",l_update_string);	
+
+		EXEC SQL EXECUTE IMMEDIATE :l_update_string;
+
+		EXEC SQL COMMIT; */
+
+	        printf("Store Procedure Name |%s|\n",p_wi_table_merge_struct_h->h_proc_call);
+	        fprintf(gtlog,"Store Procedure Name |%s|\n",p_wi_table_merge_struct_h->h_proc_call);
+		if(!strcmp(p_wi_table_merge_struct_h->h_proc_call,"SP_INTL_MT_DM"))
+		{
+			EXEC SQL AT :c_db_name CALL SP_INTL_MT_DM(:p_wi_table_merge_struct_h->h_proc_name,:p_wi_table_merge_struct_h->h_environ_data,:procdata,'SYS',:l_error);
+	        }
+		else if(!strcmp(p_wi_table_merge_struct_h->h_proc_call,"SP_INTL_MT"))
+		{
+	                EXEC SQL AT :c_db_name CALL SP_INTL_MT(:p_wi_table_merge_struct_h->h_proc_name,:p_wi_table_merge_struct_h->h_environ_data,:procdata,'SYS',:l_error);
+		}
+	        else if(!strcmp(p_wi_table_merge_struct_h->h_proc_call,"SP_INTL_CA"))
+		{
+		     EXEC SQL AT :c_db_name CALL SP_INTL_CA(:p_wi_table_merge_struct_h->h_proc_name,:p_wi_table_merge_struct_h->h_environ_data,:procdata,'SYS',:l_error);
+	        }
+	        else if(!strcmp(p_wi_table_merge_struct_h->h_proc_call,"SP_INTL_DEAL"))
+	        {
+		        EXEC SQL AT :c_db_name CALL SP_INTL_DEAL(:p_wi_table_merge_struct_h->h_proc_name,:p_wi_table_merge_struct_h->h_environ_data,:procdata,'SYS','',:l_error);
+	        }
+	        else if(!strcmp(p_wi_table_merge_struct_h->h_proc_call,"SP_WEB_MN"))
+	        {
+	                EXEC SQL AT :c_db_name CALL SP_WEB_MN(:p_wi_table_merge_struct_h->h_proc_name,:p_wi_table_merge_struct_h->h_environ_data,:procdata,'SYS',:l_error);
+	        }
+
+		printf("KS -- Return Value from Function is [%s]\n",l_error);
+		fprintf(gtlog,"Return Value from Function is [%s]\n",l_error);
+
+		printf("KS -- Value of h_tab_name is [%s]\n",p_wi_table_merge_struct_h->h_tab_name);
+
+		//KALYAN -- HARD CODED TEMPORARLY .. TO BE CHANGED LATER
+		char l_tclient[11],l_tinstr_code[10],l_tinstr_name[131],l_tidentiy_no[17],l_terror[130];
+		EXEC SQL VAR l_tclient IS STRING;
+		EXEC SQL VAR l_tinstr_code IS STRING;
+		EXEC SQL VAR l_tinstr_name IS STRING;
+		EXEC SQL VAR l_tidentiy_no IS STRING;
+		EXEC SQL SELECT client , nvl(instr_code,'-'),nvl(instr_name,'-'), identiy_no into :l_tclient,:l_tinstr_code,:l_tinstr_name,:l_tidentiy_no FROM WI_DEAL WHERE rowid=:l_row_id;
+		if(sqlca.sqlcode !=0)
+		{
+			printf("KS -- error occurred [%s]...\n",sqlca.sqlerrm.sqlerrmc);
+		}
+
+		if(strstr(l_error,"Timed out")==NULL)
+		{
+	       		sprintf(l_update_string,"UPDATE %s SET %s  WHERE rowid='%s'",p_wi_table_merge_struct_h->h_tab_name,p_wi_table_merge_struct_h->h_update_list,l_row_id);	
+			printf("KS __ Update Statement is --\n %s \n ",l_update_string);	
+			fprintf(gtlog,"KS __ Update Statement is --\n %s \n ",l_update_string);	
+
+			EXEC SQL EXECUTE IMMEDIATE :l_update_string;
+
+		}
+		else
+		{
+			printf("KS -- Server Timed Out hence not updating the PROC FLAG\n");
+			fprintf(gtlog,"KS -- Server Timed Out hence not updating the PROC FLAG\n");
+		}
+
+		if(strstr(l_error,"SUCCESS")!=NULL)
+		{
+			strcpy(l_terror,l_error);
+		}
+		else if(strstr(l_error,"Timed out")!=NULL)
+		{
+			strcpy(l_terror,"Timed out");
+		}
+		else
+		{
+			 strcpy(l_terror,l_error);
+			 strcat(l_terror,"Deal Moved To Repair");
+		}
+
+		fprintf(l_repfile,"%-15s%-21s%-20s%-130s\n",l_tclient,l_tinstr_code,l_tidentiy_no,l_terror);
+
+		EXEC SQL COMMIT;
+
+		memset(procdata,APL_NULL_CHAR,sizeof(procdata));
+
+		printf ("\n");
+	}
+	return(0);
+}

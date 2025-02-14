@@ -1,0 +1,789 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#include "CO_HostStructdef.h"
+#include "MT_Interface.h"
+#include "CA_InterFace.h"
+
+EXEC SQL INCLUDE SQLCA.H;
+
+#define	RTV_SYSTEM_DATA
+
+/* Added by kotubabu for Linux Migration -Start*/
+#ifdef OS_LINUX
+FILE*						g_inifile;
+FILE*						g_logfile;
+FILE*						l_pr_filept;
+FILE*						l_po_filept;
+#else
+FILE *g_inifile = APL_OUT_FILE;
+FILE *g_logfile = APL_OUT_FILE;
+FILE *l_pr_filept = APL_OUT_FILE;
+FILE *l_po_filept = APL_OUT_FILE;
+#endif
+/* Added by kotubabu  for Linux Migration -END*/
+char						chr_g_progname			[APL_BATCH_PROGNAME_LEN]= APL_NULL_STRING;
+char						chr_g_key					[APL_BATCH_KEY_LEN]= APL_NULL_STRING;
+char						chr_g_start_date		[APL_DATE_LEN]= APL_NULL_STRING;
+char						chr_g_funccode			[CA_FUNC_CD_LEN]= APL_NULL_STRING;
+char						chr_g_sys_date			[APL_DATE_LEN]= APL_NULL_STRING;
+char						chr_g_sys_date_time	[APL_DATE_LEN]= APL_NULL_STRING;
+char						chr_g_restart_data_h	[APL_RESTARTDATA_LENGTH]= APL_NULL_STRING;
+char						chr_g_client			[APL_CLIENT_LENGTH]= APL_NULL_STRING;
+char						chr_g_log_buff[MSG_LENGTH]= APL_NULL_STRING;
+
+char                 chr_g_old_ccy      [4]         = APL_NULL_STRING;
+char                 chr_g_new_ccy      [4]         = APL_NULL_STRING;
+int                  int_g_conv_onem                   = CONV_AMT;
+int                  int_g_conv_onek                   = CONV_QTY;
+
+
+
+
+int    Conv_SetUp( INTL_ENV_DATA_STRUCT_H *p_intlenv_data_struct_h, DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+static int rep_file(char *p_preorpost, INTL_ENV_DATA_STRUCT_H *p_intlenv_data_struct_h, DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+
+
+
+main(int argc, char **argv)
+{
+	/* Added by kotubabu for Linux Migration -Start*/
+   #ifdef OS_LINUX
+    g_inifile = APL_OUT_FILE;
+    g_logfile = APL_OUT_FILE;
+    l_pr_filept = APL_OUT_FILE;
+    l_po_filept = APL_OUT_FILE;
+   #endif
+   /* Added by kotubabu for Linux Migration -END*/
+	struct sqlca sqlca;
+	DEBUG_INFO_STRUCT_H			**l_debug_info_ptr=NULL,
+								*l_debug_info_struct=NULL;
+	INTL_ENV_DATA_STRUCT_H	p_intlenv_data_struct_h;
+	char						chr_inifile[PATH_LENGTH]= APL_NULL_STRING;
+	char						chr_logfile[PATH_LENGTH]= APL_NULL_STRING;
+	char						chr_custody_id_b[APL_USERID_LEN];
+
+	EXEC SQL BEGIN DECLARE SECTION;
+		char chr_uname[APL_USERID_LEN];
+		char chr_passwd[APL_PASSWD_LEN];
+	EXEC SQL END DECLARE SECTION; 
+
+	EXEC SQL VAR chr_uname IS STRING;
+	EXEC SQL VAR chr_passwd IS STRING;
+	
+	l_debug_info_ptr = &l_debug_info_struct;
+	
+	
+	strcpy(chr_inifile,getenv("INTL_ROOT_PATH"));
+	strcat(chr_inifile,"/intl_sun.cfg");
+	
+	if ( ( g_inifile=fopen(chr_inifile,"r") ) == NULL)
+		exit(-1);	
+
+	
+
+	
+	APL_FETCH_DB_LOGIN_DETAILS(g_inifile,chr_custody_id_b,chr_uname,chr_passwd,APL_OUT_FILE,l_debug_info_ptr)
+	EXEC SQL CONNECT :chr_uname IDENTIFIED BY :chr_passwd;
+	IS_ANY_ORA_ERROR
+	
+
+	
+   if ( CO_Rtv_RptFileName("SETUP",
+								APL_LOGFILE_DESC,
+								100,
+								argv[5],
+								argv,
+								&g_logfile,
+								l_debug_info_ptr) ==APL_FAILURE) 
+	{
+		exit(-1);
+	}
+
+   if ( CO_Rtv_RptFileName("PrSETUP",
+								"Pre-Conv Setup Data",
+								100,
+								argv[5],
+								argv,
+								&l_pr_filept,
+								l_debug_info_ptr) ==APL_FAILURE) 
+	{
+		exit(-1);
+	}
+
+   if ( CO_Rtv_RptFileName("PoSETUP",
+								"Post-Conv Setup Data",
+								100,
+								argv[5],
+								argv,
+								&l_po_filept,
+								l_debug_info_ptr) ==APL_FAILURE) 
+	{
+		exit(-1);
+	}
+
+
+	EXEC SQL COMMIT;
+	IS_ANY_ORA_ERROR
+	
+
+	
+   if ( argc < 4 )
+   {
+      CO_ProcMonitor(g_logfile,"All Arguments expected by  program not passed \n", NULL, NULL);
+      APL_GOBACK_FAIL
+   }
+	strcpy(chr_g_progname,	argv[0]);
+	strcpy(chr_g_key,			argv[1]);
+	strcpy(chr_g_start_date,	argv[2]);
+	strcpy(chr_g_funccode,argv[5]);
+	
+	if (CO_RtvSysParams(l_debug_info_ptr) == APL_FAILURE)
+		APL_GOBACK_FAIL
+	if(CO_RtvSysDt(chr_g_sys_date,l_debug_info_ptr)==APL_FAILURE)
+		APL_GOBACK_FAIL
+
+	
+	if (Conv_SetUp(&p_intlenv_data_struct_h,l_debug_info_ptr) == APL_FAILURE)
+		APL_GOBACK_FAIL
+
+	
+	
+	APL_GOBACK_SUCCESS
+   RETURN_SUCCESS:
+   {
+		EXEC SQL UPDATE SYS_BATCHPROC
+		SET status_ind 			= 'completed'
+		WHERE process_name		=	RTRIM(:argv[0])
+		AND	proc_init			=	RTRIM(:argv[1])
+		AND	START_DATE	=	:argv[2]
+		AND	status_ind		=	'started';
+		IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"BATCH_IN_PROC",chr_g_progname,chr_g_key)
+		
+		EXEC SQL COMMIT;
+		IS_ANY_ORA_ERROR
+		
+		CO_ProcMonitor(g_logfile,"RECORD COMMITTED \n",NULL,NULL);
+		
+		sprintf(chr_g_log_buff,"T: TRL-TRY Account Setup Conversion exiting successfully\n");
+		CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+		fclose(g_logfile);
+		fclose(l_pr_filept);
+		fclose(l_po_filept);
+		exit(0);
+	}
+	RETURN_FAILURE:
+	{
+		EXEC SQL ROLLBACK;
+		IS_ANY_ORA_ERROR
+		CO_ProcMonitor(g_logfile,"ROLLING BACK \n",NULL,NULL);
+
+		sprintf(chr_g_log_buff,"T: TRL-TRY Account Setup Conversion exiting with failure\n");
+		CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+		fclose(g_logfile);
+		fclose(l_pr_filept);
+		fclose(l_po_filept);
+		exit(-1);
+	}
+}
+
+
+int   Conv_SetUp( INTL_ENV_DATA_STRUCT_H *p_intlenv_data_struct_h, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	struct sqlca sqlca;
+	
+	char chr_l_ccycode[APL_CCYCODE_LEN]   			= APL_NULL_STRING;
+	char chr_l_denomccy[APL_CCYCODE_LEN]  			= APL_NULL_STRING;
+	double l_exchgrt_b                				= 0.0;	
+	double dbl_l_buyrt                 				= 0.0;
+	double l_sellrt                				= 0.0;
+	
+	int int_l_amt_dec_len = 2;
+
+
+	short i_currencycode        = 0;
+	short i_denomccy 		  = 0;
+   short i_exchrt         = 0;
+   short i_buyrt          = 0;
+   short i_sellrt         = 0;
+	
+	EXEC SQL VAR chr_l_ccycode  IS STRING;
+	EXEC SQL VAR chr_l_denomccy IS STRING;
+	
+	#ifdef APL_THREADS
+   	APL_SET_CONTEXT
+   	EXEC SQL CONTEXT USE :my_ctx_local;
+   #endif
+
+
+	sqlca.sqlcode = 0;
+
+	EXEC SQL VAR chr_g_old_ccy IS STRING;
+	EXEC SQL VAR chr_g_new_ccy IS STRING;
+
+	strcpy(chr_g_old_ccy, CONV_FROM_TRL);
+	strcpy(chr_g_new_ccy, CONV_TO_TRY);
+	
+   APL_IF_DEBUG
+   {
+      CO_ProcMonitor(   APL_OUT_FILE,
+                  "Entered Function Conv_Setup \n",
+                  NULL,
+                  NULL);
+   }
+
+	if (rep_file("Pr", 
+					  &p_intlenv_data_struct_h, 
+					  l_debug_info_ptr)
+					  == APL_FAILURE)
+	APL_GOBACK_FAIL;
+
+	memset(chr_g_sys_date_time, APL_NULL_STRING, sizeof(APL_DATE_LEN));
+	if (CO_RtvSysDtTime(chr_g_sys_date_time, l_debug_info_ptr) == APL_FAILURE)
+   	APL_GOBACK_FAIL
+
+
+
+	
+	
+	
+
+	EXEC SQL	DELETE DL_CURRENCY WHERE CURRENCY_CD = :chr_g_new_ccy;
+	IS_ANY_ORA_ERROR;
+	
+	sprintf(chr_g_log_buff,"Deleted |%d| row(s) in CCURRENCY for chr_new currency_cd\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+	EXEC SQL INSERT INTO DL_CURRENCY VALUES (
+				:chr_g_new_ccy, 'TURKISH YENI', 'SYSTEM', 2, 
+				:chr_g_sys_date_time, :chr_g_sys_date_time, '000');
+	
+	IS_ANY_ORA_ERROR; 
+	
+	sprintf(chr_g_log_buff,"Inserted |%d| row(s) in CCURRENCY for chr_new currency_cd\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+
+	EXEC SQL	UPDATE DL_CURRENCY 
+	SET GL_CD = '99'
+	WHERE CURRENCY_CD = :chr_g_old_ccy;
+	IS_ANY_ORA_ERROR;
+
+	sprintf(chr_g_log_buff,"Updated |%d| row(s) in CCURRENCY for old currency_cd\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+
+	EXEC SQL	UPDATE MT_COMMON_SYS_PARAMS 
+       		SET DOM_CCY = :chr_g_new_ccy
+       		WHERE DOM_CCY = :chr_g_old_ccy;
+
+	IS_ANY_ORA_ERROR;
+	
+	sprintf(chr_g_log_buff,"Updated |%d| row(s) in COMMON_SYS_PARAMS for DOMESTIC_CURR_CODE\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+
+	EXEC SQL DELETE MT_EXCHRATE 
+  		      WHERE CURRENCY_CD = :chr_g_new_ccy;
+	IS_ANY_ORA_ERROR;
+	
+	sprintf(chr_g_log_buff,"Deleted |%d| row(s) in CEXCHRATE for CCYCODE\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+	
+	EXEC SQL DECLARE exchrt CURSOR FOR
+				SELECT CURRENCY_CD, DENOM_CCY, EXCHGRT, RATE_BUY, SELL_RT
+				FROM MT_EXCHRATE
+				WHERE CURRENCY_CD != :chr_g_old_ccy
+				AND DENOM_CCY = :chr_g_old_ccy
+				AND RATE_DATE = (SELECT MAX(RATE_DATE) FROM MT_EXCHRATE);
+
+	IS_ANY_ORA_ERROR;
+
+	
+	EXEC SQL OPEN exchrt;
+   IS_ANY_ORA_ERROR;
+
+   for(;;)
+   {
+      EXEC SQL FETCH exchrt
+         	INTO :chr_l_ccycode:i_currencycode, :chr_l_denomccy:i_denomccy, 
+				:l_exchgrt_b:i_exchrt, :dbl_l_buyrt:i_buyrt, :l_sellrt:i_sellrt;
+      
+		IS_ANY_ORA_ERROR
+		if (APL_ZERO_RESULT_SET)
+         	break;
+
+		EXEC SQL INSERT INTO MT_EXCHRATE VALUES (
+            :chr_l_ccycode, :chr_g_new_ccy, :chr_g_sys_date_time, 
+				:l_exchgrt_b/:int_g_conv_onem, 
+				:dbl_l_buyrt/:int_g_conv_onem, 
+				:l_sellrt/:int_g_conv_onem,
+            'SYSTEM', :chr_g_sys_date_time, :chr_g_sys_date_time, 
+				'SYSTEM', :chr_g_sys_date_time, 'AA');
+	
+		IS_ANY_ORA_ERROR;
+		sprintf(chr_g_log_buff,"Inserted %d row(s) in CEXCHRATE for currency %s\n",sqlca.sqlerrd[2],chr_l_ccycode);
+		CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+	}
+	EXEC SQL CLOSE exchrt;
+
+	
+   EXEC SQL INSERT INTO MT_EXCHRATE VALUES (
+            :chr_g_new_ccy, :chr_g_new_ccy, :chr_g_sys_date_time, 1.00, 1.00, 1.00,
+            'SYSTEM', :chr_g_sys_date_time, :chr_g_sys_date_time,
+            'SYSTEM', :chr_g_sys_date_time, 'AA');
+
+   IS_ANY_ORA_ERROR;	
+	
+	sprintf(chr_g_log_buff,"Inserted 1 row in CEXCHRATE for currency %s to %s with rate as 1.00\n",chr_g_new_ccy,chr_g_new_ccy);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+
+
+	EXEC SQL UPDATE MT_CORE_SYS_PARAMS
+       		SET AMOUNT_DECIMAL_LEN = :int_l_amt_dec_len,
+           	PAIDUPCAPITAL_LIMIT = ROUND(PAID_UP_CAPITAL_LIMIT/:int_g_conv_onem, :int_l_amt_dec_len);                         
+
+	IS_ANY_ORA_ERROR;
+
+	sprintf(chr_g_log_buff,"Updated |%d| row(s) in CORE_SYS_PARAMS for AMT_DEC_LENGTH,PAID_UP_CAPITAL_LIMIT\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+	
+	
+
+
+	EXEC SQL UPDATE MT_INSTRUMENT 
+       		SET NOMINAL_VALUE = ROUND(NOMVAL/:int_g_conv_onek, :int_l_amt_dec_len),
+				TOTAL_PDCAPITA = ROUND(TOTPDCAP/:int_g_conv_onem, :int_l_amt_dec_len)
+       		WHERE INSTRUMENT_TYPE NOT IN ('FMT','BON') AND 
+						STATUS NOT IN ('FA') AND
+						NEW_ISSUE <> 'F' AND
+						CURRENCY_CD = :chr_g_old_ccy;
+	
+	IS_ANY_ORA_ERROR;
+
+	sprintf(chr_g_log_buff,"Updated |%d| row(s) in MT_INSTRUMENT for Nomval for SHS\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+	EXEC SQL UPDATE MT_INSTRUMENT 
+       		SET CURRENCY_CD = :chr_g_new_ccy
+       		WHERE  STATUS NOT IN ('FA') AND 
+						NEW_ISSUE <> 'F' AND
+						CURRENCY_CD = :chr_g_old_ccy;
+
+	IS_ANY_ORA_ERROR;
+
+	sprintf(chr_g_log_buff,"Updated |%d| row(s) in MT_INSTRUMENT for currency_cd and totpdcap\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+
+
+
+	
+
+	EXEC SQL UPDATE MT_CLIENT
+				SET CURRENCY_CD = :chr_g_new_ccy
+				WHERE STATUS NOT IN ('FA','CA') AND CURRENCY_CD = :chr_g_old_ccy; 
+
+	IS_ANY_ORA_ERROR;
+
+	sprintf(chr_g_log_buff,"Updated |%d| row(s) in MT_CLIENT for currency_cd\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+	
+	EXEC SQL UPDATE DL_CASHCLT
+				SET CURRENCY_CD = :chr_g_new_ccy
+				WHERE CURRENCY_CD = :chr_g_old_ccy;
+
+	IS_ANY_ORA_ERROR;
+
+	sprintf(chr_g_log_buff,"Updated |%d| row(s) in CCASHACC for currency_cd\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+
+	
+
+	if (rep_file("Po",
+                 &p_intlenv_data_struct_h,
+                 l_debug_info_ptr)
+                 == APL_FAILURE
+      )
+   APL_GOBACK_FAIL;
+
+
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+	{
+		return (APL_SUCCESS);
+	}
+	RETURN_FAILURE:
+	{
+		return (APL_FAILURE);
+	}
+
+}
+
+
+static int rep_file(char *p_preorpost, INTL_ENV_DATA_STRUCT_H *p_intlenv_data_struct_h, DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	struct sqlca sqlca;
+	
+	char chr_l_filename_c[31];
+	
+	char chr_l_client_a[APL_CLIENT_LENGTH]   = APL_NULL_STRING;	
+	char chr_l_refno_a[APL_TXNREFNO_LEN]    = APL_NULL_STRING;
+   char chr_l_glacc[GL_ACCOUNT_LEN] = APL_NULL_STRING;	
+	char chr_l_ccycode[APL_CCYCODE_LEN]   = APL_NULL_STRING;
+   char chr_l_ccydesc[20] 					 = APL_NULL_STRING;
+	int  int_l_decimallen		  				 = 0;
+	char chr_l_glcode[3]	  				 = APL_NULL_STRING;
+	char chr_l_denom_ccycode[APL_CCYCODE_LEN]   = APL_NULL_STRING;
+	char chr_l_ratedt[APL_DATE_LEN]       = APL_NULL_STRING;		 
+	double l_exchgrt_a						 = 0.0;
+	double l_rate_buy						 = 0.0;
+	double l_sell_rt						 = 0.0;
+	int    int_l_amtdeclen					 = 0;
+	int    int_l_maxamtdiff					 = 0;
+	double l_paidupcap					 = 0.0;
+	char chr_l_instrcode_a[APL_INSTRUMENTCODE_LEN]		 = APL_NULL_STRING;
+	char chr_l_typeofinstr[APL_INSTRU_TYPE_LEN]  = APL_NULL_STRING;
+	double l_nominal_value 						 = 0.0;
+	double l_total_pdcapita						 = 0.0;	
+
+	
+	short i_dl_client 		  = 0;
+	short i_indentity_no          = 0;
+	short i_ibbsclt        = 0;
+	short i_currencycode		  = 0;
+	short i_ccydetail		  = 0;
+	short i_dec_len	  = 0;
+	short i_gl_cd		  = 0;
+	short i_denom_currencycode  = 0;
+	short i_rtdt			  = 0;
+	short i_exchgrt		  = 0;
+ 	short i_rate_buy        = 0;
+	short i_sellae_rate       = 0;	
+   short i_amtdeclen      = 0;
+   short i_maxamtdiff     = 0;
+   short i_paidupcap      = 0;
+	short i_instr_code			  = 0;		
+	short i_typeofinstr		  = 0;	
+	short i_nominal_value			  = 0;
+	short i_total_pdcapita		  = 0;	
+	
+	FILE *l_filept = NULL;
+
+	EXEC SQL VAR chr_l_client_a           IS STRING;
+   EXEC SQL VAR chr_l_refno_a             IS STRING;
+   EXEC SQL VAR chr_l_glacc           IS STRING;	
+	EXEC SQL VAR chr_l_ccycode				IS STRING;
+	EXEC SQL VAR chr_l_ccydesc				IS STRING;
+	EXEC SQL VAR chr_l_glcode 			IS STRING;
+	EXEC SQL VAR chr_l_denom_ccycode		IS STRING;
+	EXEC SQL VAR chr_l_ratedt				IS STRING;
+	EXEC SQL VAR chr_l_instrcode_a				IS STRING;
+	EXEC SQL VAR chr_l_typeofinstr				IS STRING;
+
+	APL_IF_DEBUG
+   {
+   	CO_ProcMonitor( APL_OUT_FILE,
+     		"Entered Function rep_file\n",
+      	NULL,
+      	NULL);
+   }
+
+	if (strcmp(p_preorpost,"Pr")==0)
+		l_filept = l_pr_filept;
+	else
+		l_filept = l_po_filept;
+
+	
+   
+
+   sqlca.sqlcode = 0;
+
+   EXEC SQL DECLARE ccy_setup CURSOR FOR
+		SELECT CURRENCY_CD, CURRENCY_DESC, DEC_LEN, GL_CD FROM DL_CURRENCY
+      WHERE CURRENCY_CD IN (:chr_g_old_ccy, :chr_g_new_ccy);
+   IS_ANY_ORA_ERROR
+
+   EXEC SQL OPEN ccy_setup;
+
+   IS_ANY_ORA_ERROR
+
+	fprintf(l_filept,"Currency Records--------------------------------------------------------------------------------------------------------------\n");
+
+   fprintf(l_filept,"%-10s\t%-40s\t%-12s\t%-10s\n","CURRENCY_CD", "CURRENCY_DESC", "DECIMAL_LEN", "IBBS CODE");
+	fprintf(l_filept,"------------------------------------------------------------------------------------------------------------------------------\n");
+
+   for(;;)
+   {
+      EXEC SQL FETCH ccy_setup
+         INTO chr_l_ccycode:i_currencycode, chr_l_ccydesc:i_ccydetail, int_l_decimallen:i_dec_len, chr_l_glcode:i_gl_cd;
+
+      IS_ANY_ORA_ERROR
+      if (APL_ZERO_RESULT_SET)
+         break;
+
+      fprintf(l_filept, "%-10s\t%-40s\t%-12d\t%-10s\n", chr_l_ccycode, chr_l_ccydesc, int_l_decimallen, chr_l_glcode);
+   }
+	fprintf(l_filept,"==============================================================================================================================\n\n");
+
+   EXEC SQL CLOSE ccy_setup;
+
+
+	
+
+   sqlca.sqlcode = 0;
+
+   EXEC SQL DECLARE csp_setup CURSOR FOR
+      SELECT DOM_CCY 
+		FROM MT_COMMON_SYS_PARAMS;	
+   IS_ANY_ORA_ERROR
+
+   EXEC SQL OPEN csp_setup;
+
+   IS_ANY_ORA_ERROR
+
+	fprintf(l_filept,"Common System Parameters------------------------------------------------------------------------------------------------------\n");
+   fprintf(l_filept,"%-20s\n","DOM_CCY");
+	fprintf(l_filept,"------------------------------------------------------------------------------------------------------------------------------\n");
+
+   for(;;)
+   {
+      EXEC SQL FETCH csp_setup
+         INTO chr_l_ccycode:i_currencycode;
+
+      IS_ANY_ORA_ERROR
+      if (APL_ZERO_RESULT_SET)
+         break;
+
+      fprintf(l_filept, "%-20s\n", chr_l_ccycode);
+   }
+	fprintf(l_filept,"==============================================================================================================================\n\n");
+
+   EXEC SQL CLOSE csp_setup;
+
+
+	
+
+   sqlca.sqlcode = 0;
+
+   EXEC SQL DECLARE xrt_setup CURSOR FOR
+      SELECT CURRENCY_CD, DENOM_CCY, RATE_DATE, EXCHGRT, RATE_BUY, SELL_RT
+      FROM MT_EXCHRATE
+      WHERE DENOM_CCY IN (:chr_g_old_ccy, :chr_g_new_ccy); 
+
+   IS_ANY_ORA_ERROR
+
+   EXEC SQL OPEN xrt_setup;
+
+   IS_ANY_ORA_ERROR
+
+	fprintf(l_filept,"Exchange Rate Records---------------------------------------------------------------------------------------------------------\n");
+   fprintf(l_filept,"%-10s\t%-15s%-20s\t%-20s\t%-20s\t%-20s\t\n", 
+			  "CURRENCY_CD", "DENOM_CCY", "RATE_DATE", "EXCHGRT", "RATE_BUY", "SELL_RT");
+	fprintf(l_filept,"------------------------------------------------------------------------------------------------------------------------------\n");
+
+   for(;;)
+   {
+      EXEC SQL FETCH xrt_setup
+         INTO :chr_l_ccycode:i_currencycode, :chr_l_denom_ccycode:i_denom_currencycode, :chr_l_ratedt:i_rtdt, 
+				  :l_exchgrt_a:i_exchgrt, :l_rate_buy:i_rate_buy, :l_sell_rt:i_sellae_rate;
+
+      IS_ANY_ORA_ERROR
+      if (APL_ZERO_RESULT_SET)
+         break;
+
+      fprintf(l_filept, "%-10s\t%-15s%-20s\t%-20f\t%-20f\t%-20f\t\n", 
+				  chr_l_ccycode, chr_l_denom_ccycode, chr_l_ratedt, l_exchgrt_a, l_rate_buy, l_sell_rt);
+   }
+	fprintf(l_filept,"==============================================================================================================================\n\n");
+
+	EXEC SQL CLOSE xrt_setup;
+
+
+
+	
+
+   sqlca.sqlcode = 0;
+
+   EXEC SQL DECLARE cor_setup CURSOR FOR
+      SELECT AMOUNT_DECIMAL_LEN, PAIDUPCAPITAL_LIMIT 
+      FROM MT_CORE_SYS_PARAMS;
+   IS_ANY_ORA_ERROR
+
+   EXEC SQL OPEN cor_setup;
+
+   IS_ANY_ORA_ERROR
+
+	fprintf(l_filept,"Core System Parameters--------------------------------------------------------------------------------------------------------\n");
+   fprintf(l_filept,"%-15s\t%-25s\n",
+			  "AMOUNT_DECIMAL_LEN", "PAIDUPCAPITAL_LIMIT");
+	fprintf(l_filept,"------------------------------------------------------------------------------------------------------------------------------\n");
+
+   for(;;)
+   {
+      EXEC SQL FETCH cor_setup
+			INTO int_l_amtdeclen:i_amtdeclen, l_paidupcap:i_paidupcap;	
+      IS_ANY_ORA_ERROR
+      if (APL_ZERO_RESULT_SET)
+         break;
+
+      fprintf(l_filept, "%-15d\t%-25f\n", int_l_amtdeclen, l_paidupcap);
+   }
+	fprintf(l_filept,"==============================================================================================================================\n\n");
+
+   EXEC SQL CLOSE cor_setup;
+
+
+	
+	
+
+   sqlca.sqlcode = 0;
+
+   EXEC SQL DECLARE instr_setup CURSOR FOR
+      SELECT INSTR_CODE, INSTRUMENT_TYPE, CURRENCY_CD, NOMINAL_VALUE, TOTAL_PDCAPITA
+      FROM MT_INSTRUMENT;
+   IS_ANY_ORA_ERROR
+
+   EXEC SQL OPEN instr_setup;
+
+   IS_ANY_ORA_ERROR
+
+	fprintf(l_filept,"Instrurities Record Details-----------------------------------------------------------------------------------------------------\n");
+   fprintf(l_filept,"%-10s\t%-10s\t%-10s\t%-20s\t%-25s\n",
+           "INSTR_CODE","INSTRUMENT_TYPE", "CURRENCY_CD", "NOMINAL_VALUE", "TOTAL_PDCAPITA");
+	fprintf(l_filept,"------------------------------------------------------------------------------------------------------------------------------\n");
+
+   for(;;)
+   {
+      EXEC SQL FETCH instr_setup
+         INTO chr_l_instrcode_a:i_instr_code, chr_l_typeofinstr:i_typeofinstr, chr_l_ccycode:i_currencycode, l_nominal_value:i_nominal_value, l_total_pdcapita:i_total_pdcapita;
+
+      IS_ANY_ORA_ERROR
+      if (APL_ZERO_RESULT_SET)
+         break;
+
+      fprintf(l_filept, "%-10s\t%-10s\t%-10s\t%-20f\t%-25f\n", chr_l_instrcode_a, chr_l_typeofinstr, chr_l_ccycode, l_nominal_value, l_total_pdcapita);
+   }
+	fprintf(l_filept,"==============================================================================================================================\n\n");
+
+   EXEC SQL CLOSE instr_setup;
+
+
+	
+	
+
+	sqlca.sqlcode = 0;
+	
+	EXEC SQL DECLARE acc_setup CURSOR FOR
+   	SELECT CLIENT, CURRENCY_CD
+   	FROM MT_CLIENT
+		WHERE CURRENCY_CD IN (:chr_g_old_ccy,:chr_g_new_ccy)
+   	ORDER BY CLIENT;
+
+   IS_ANY_ORA_ERROR
+
+   EXEC SQL OPEN acc_setup;
+
+   IS_ANY_ORA_ERROR
+
+	fprintf(l_filept,"Customer Record Details-------------------------------------------------------------------------------------------------------\n");
+   fprintf(l_filept,"%-10s\t%-7s\n","CLIENT", "CURRENCY_CD");
+	fprintf(l_filept,"------------------------------------------------------------------------------------------------------------------------------\n");
+
+	for(;;)
+   {
+   	EXEC SQL FETCH acc_setup
+      	INTO :chr_l_client_a:i_dl_client, chr_l_ccycode:i_currencycode; 
+
+      IS_ANY_ORA_ERROR
+      if (APL_ZERO_RESULT_SET)
+         break;
+		
+      fprintf(l_filept, "%-10s\t%-7s\n", chr_l_client_a, chr_l_ccycode);
+   }
+	fprintf(l_filept,"==============================================================================================================================\n\n");
+  
+	EXEC SQL CLOSE acc_setup;
+ 
+
+
+	
+
+   sqlca.sqlcode = 0;
+
+   EXEC SQL DECLARE csh_setup CURSOR FOR
+      SELECT CLIENT, CURRENCY_CD
+      FROM DL_CASHCLT
+      WHERE CURRENCY_CD IN (:chr_g_old_ccy,:chr_g_new_ccy)
+      ORDER BY CLIENT;
+
+   IS_ANY_ORA_ERROR
+
+   EXEC SQL OPEN csh_setup;
+
+   IS_ANY_ORA_ERROR
+
+	fprintf(l_filept,"Cash Account Details----------------------------------------------------------------------------------------------------------\n");
+   fprintf(l_filept,"%-10s\t%-7s\n","CLIENT", "CURRENCY_CD");
+	fprintf(l_filept,"------------------------------------------------------------------------------------------------------------------------------\n");
+
+   for(;;)
+   {
+      EXEC SQL FETCH csh_setup
+         INTO :chr_l_client_a:i_dl_client, chr_l_ccycode:i_currencycode;
+
+		IS_ANY_ORA_ERROR
+      if (APL_ZERO_RESULT_SET)
+         break;
+
+      fprintf(l_filept, "%-10s\t%-7s\n", chr_l_client_a, chr_l_ccycode);
+   }
+
+	fprintf(l_filept,"==============================================================================================================================\n\n");
+
+   EXEC SQL CLOSE csh_setup;
+
+	
+	APL_IF_DEBUG
+   {
+   	CO_ProcMonitor( APL_OUT_FILE,
+     		"Leaving Function rep_file\n",
+      	NULL,
+      	NULL);
+   }
+
+	RETURN_SUCCESS:
+	{
+		fflush(l_filept);
+		return (APL_SUCCESS);
+	}
+	RETURN_FAILURE:
+	{
+		fflush(l_filept);
+	 	return (APL_FAILURE);
+	}
+}

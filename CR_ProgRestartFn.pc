@@ -1,0 +1,1133 @@
+/*
+ *   COPYRIGHT NOTICE
+ *
+ *   Copyright 2009 Polaris Software Lab Limited. All rights reserved.
+ *
+ *   These materials are confidential and proprietary to Polaris Software Lab Ltd
+ *   and no part of these materials should be reproduced, published,  transmitted
+ *   or distributed in any form or by  any means, electronic, mechanical, photoco
+ *   pying, recording or otherwise, or stored in any information storage or retri
+ *   eval system of  any nature  nor should the  materials be disclosed to  third
+ *   parties or used in any other manner for which this is not authorized,without
+ *   the prior express written authorization of Polaris Software Lab Limited.
+ *
+ */
+/********************************************************************************
+ *
+ * Module Name         : Common Objects
+ *
+ * File Name           : CR_ProgRestartFn.pc
+ *
+ * Description         : This program is used to track the status of the applicat
+ *                       ion run.
+ *
+ *
+ *            Version Control Block
+ *
+ * Date        Version   Author          Description           RFS NO
+ * ----------- --------  --------------  --------------------  ------------------
+ * 21/12/2011  1.1       Naren V         Program is modified
+ *                                       to get the DB login
+ *                                       details in preceden
+ *                                       ce order first from
+ *                                       configuration  file
+ *                                       and if unavailable,
+ *                                       then a decrypted va
+ *                                       lue from an encrypt
+ *                                       ed file by  calling
+ *                                       the remote applicat
+ *                                       ion.
+ * 24/03/2022   1.2      kotubabu N      Linux Migration    Kotak Implementation
+ *********************************************************************************/
+
+#include "stdio_64.h" 
+#include <unistd.h>
+#include <string.h>
+#include <sys/wait.h>
+#include "Prog_Common.h"
+#include "CR_Common.h"
+#include <ctype.h>
+
+/*** AIX Migration Changes -START*/
+/*#include <sys/iso/signal_iso.h>*/
+#ifdef OS_AIX     /*Added by kotubabu for Linux Migration*/
+#if !defined(_AIXVERSION_430) || !defined(_AIXVERSION_431) || !defined(_AIXVERSION_434) || !defined(_AIXVERSION_510) || !defined(_AIXVERSION_520) || !defined(_AIXVERSION_530) || !defined(_AIXVERSION_610)
+#include <sys/iso/signal_iso.h>
+#endif
+#endif
+#ifdef OS_LINUX  /*Added by kotubabu for Linux Migration-Start*/
+  #include <bits/signum.h>
+#endif          /*Added by kotubabu for Linux Migration-End*/
+/*** AIX Migration Changes -END*/
+
+#define S_RESTART 10
+#define S_START 11
+#define S_CANNOT_EXECUTE 12
+#define S_CONFLICT 13
+#define S_PREDECESSOR 14
+#define ERROR_LENGTH 200 
+#define S_NOTGOTLOCK sqlca.sqlcode==-54
+#define EOD_SCH_PROG "CM_EodScheduler"
+#define BOD_SHEDULE_CONTROLLER "CM_BodScheduler"
+#define APL_DB_PWD_LEN      100             /**Biju **/
+
+EXEC SQL INCLUDE SQLCA.H;
+EXEC SQL INCLUDE SQLDA.H;
+
+/********** Web Custody Single Login Changes : Vinay Kalaskar *********/
+char g_custody_web_ind[2];
+
+char						chr_inifile[PATH_LENGTH];
+FILE*						chr_finifile=NULL;
+//extern	char				chr_db_id[APL_USERID_LEN];
+extern	char				chr_db_id[30];
+extern	char				chr_db_pwd[APL_USERID_LEN];
+
+int CO_Pro_MarkAbort( INTL_ENV_DATA_STRUCT_H *p_intl_env_datastruct_h,
+							DEBUG_INFO_STRUCT_H  **l_debug_info_ptr)
+{
+	char 	chr_l_rowid_A[APL_ROWID_LEN] = APL_NULL_STRING;
+	int   int_h_process_id =0;
+	short i_process_id =0;
+	int	int_l_exitcode;
+	int	int_exit_code;
+
+	
+	EXEC SQL DECLARE ChkAbortCur
+	CURSOR  FOR
+	SELECT rowid,PROC_ID
+	FROM SYS_BATCHPROC
+	WHERE (STATUS='started') AND 
+	(PROC_ENDFLG <> 'Y') AND   
+	( (EOD_BOD_IND NOT IN ('E','B')) OR (EOD_BOD_IND IS NULL) );
+	IS_ANY_ORA_ERROR
+
+
+	
+	EXEC SQL OPEN ChkAbortCur;
+	IS_ANY_ORA_ERROR
+	
+	for (;;)
+	{
+		
+		strcpy(chr_l_rowid_A,APL_NULL_STRING);
+		int_h_process_id = 0;
+		i_process_id = 0;
+
+		
+		EXEC SQL FETCH ChkAbortCur
+		INTO :chr_l_rowid_A,:int_h_process_id:i_process_id;
+		IS_ANY_ORA_ERROR_CURSOR
+
+		
+		
+		if ( i_process_id == -1 )
+		{
+			continue;
+		}
+		
+		
+
+		
+		 
+
+		if ( waitpid(int_h_process_id,&int_exit_code,WNOHANG) <= 0)
+			continue;
+		else
+		{
+			
+			if(WIFEXITED(int_exit_code)) {
+				int_l_exitcode=WEXITSTATUS(int_exit_code);
+				if(int_l_exitcode!=0){
+					
+					EXEC SQL UPDATE SYS_BATCHPROC
+						SET PROC_ENDFLG='Y'
+						WHERE rowid=:chr_l_rowid_A; 
+					IS_ANY_ORA_ERROR
+				} 
+			}
+			if(WIFSIGNALED(int_exit_code)) {
+					
+					EXEC SQL UPDATE SYS_BATCHPROC
+						SET PROC_ENDFLG='Y'
+							WHERE rowid=:chr_l_rowid_A;
+					IS_ANY_ORA_ERROR
+				}
+
+		}
+		
+
+	}
+	EXEC SQL COMMIT;
+	IS_ANY_ORA_ERROR
+	RETURN_SUCCESS:
+	{
+		return APL_SUCCESS;
+	}
+	RETURN_FAILURE:
+	{
+		return APL_FAILURE;
+	}
+}
+
+/*
+int	CO_GetDbCon(DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	EXEC SQL CONNECT :chr_db_id IDENTIFIED BY :chr_db_pwd;
+	IS_ANY_ORA_ERROR
+
+	RETURN_SUCCESS:
+	{
+		return APL_SUCCESS;
+	}
+	RETURN_FAILURE:
+	{
+		return APL_FAILURE;
+	}
+}
+*/
+
+static int CO_Pro_ChkConflicts(char **p_conflictprograms,
+										char *p_sysdate,
+										int *p_status_ind,
+										DEBUG_INFO_STRUCT_H **l_debug_info_ptr,
+										INTL_ENV_DATA_STRUCT_H *p_intl_env_datastruct_h) 
+{
+	int int_h_count,i;
+	int int_l_noconflicts;
+	char chr_errmsg[ERROR_LENGTH];
+	*p_status_ind=1;
+
+	for(i=0;p_conflictprograms[i];i++) 
+	{
+		EXEC SQL SELECT NVL(count(*),0) INTO :int_h_count
+			FROM SYS_BATCHPROC
+				WHERE PROCESS_NAME=:p_conflictprograms[i] 
+				AND STATUS='started'
+				AND TO_CHAR(TO_DATE(STARTDATE),'ddmmyy')=TO_CHAR(TO_DATE(:p_sysdate),'ddmmyy');
+		IS_ANY_ORA_ERROR
+
+		
+		if(int_h_count) 
+			break;
+	}
+
+	
+	if(p_conflictprograms[i])
+	{
+		sprintf(chr_errmsg,"Conflict program %s running\n",p_conflictprograms[i]);
+		CO_ProcMonitor(APL_OUT_FILE,chr_errmsg,NULL,p_intl_env_datastruct_h);
+		*p_status_ind=0;
+		APL_GOBACK_SUCCESS
+	}
+
+	RETURN_SUCCESS:
+	{
+		return APL_SUCCESS;
+	}
+	RETURN_FAILURE:
+	{
+		return APL_FAILURE;
+	}
+}
+
+
+
+
+static int CO_Pro_ChkPredecessors(char **p_predecessorprograms,
+											 char *p_sysdate,
+											 int *p_status_ind,
+											 DEBUG_INFO_STRUCT_H **l_debug_info_ptr,
+											 INTL_ENV_DATA_STRUCT_H *p_intl_env_datastruct_h) 
+{
+	int int_h_count;
+	int i;
+	char chr_errmsg[ERROR_LENGTH];
+
+	*p_status_ind=1;
+	for(i=0;p_predecessorprograms[i];i++) 
+	{
+		EXEC SQL SELECT NVL(COUNT(*),0) INTO :int_h_count
+			FROM SYS_BATCHPROC
+				WHERE PROCESS_NAME=:p_predecessorprograms[i]
+				AND TO_CHAR(TO_DATE(STARTDATE),'ddmmyy')=TO_CHAR(TO_DATE(:p_sysdate),'ddmmyy')
+				  AND STATUS='completed';
+		IS_ANY_ORA_ERROR
+
+		if(!int_h_count) 
+			break;
+	}
+
+	if(p_predecessorprograms[i])
+	{
+		sprintf(chr_errmsg,"PRE_PROCESS %s not executed\n",p_predecessorprograms[i]);
+		CO_ProcMonitor(APL_OUT_FILE,chr_errmsg,NULL,p_intl_env_datastruct_h);
+		*p_status_ind=0;
+		APL_GOBACK_SUCCESS
+	}
+
+	RETURN_SUCCESS:
+	{
+		return APL_SUCCESS;
+	}
+	RETURN_FAILURE:
+	{
+		return APL_FAILURE;
+	}
+}
+
+
+
+static int CO_Pro_ChkAborted(char *p_programname,
+							  char *chr_p_key_a,
+							  char *p_sysdate,
+							  int *p_status_ind,
+							  DEBUG_INFO_STRUCT_H **l_debug_info_ptr,
+							  INTL_ENV_DATA_STRUCT_H *p_intl_env_datastruct_h) 
+{
+
+	*p_status_ind=1;
+	char chr_temp_status[16]=APL_NULL_STRING;
+	
+	EXEC SQL SELECT STATUS INTO :chr_temp_status 
+		     FROM SYS_BATCHPROC
+			 WHERE PROCESS_NAME=:p_programname
+			 AND PROC_INIT=:chr_p_key_a
+			 AND STATUS='started'
+			 AND TO_CHAR(TO_DATE(STARTDATE),'ddmmyy')=TO_CHAR(TO_DATE(:p_sysdate),'ddmmyy')
+			 FOR UPDATE OF STATUS NOWAIT;
+
+	if(S_NOTGOTLOCK) 
+	{
+		printf("A copy of program running\n");
+		*p_status_ind=0;
+		APL_GOBACK_SUCCESS
+	}
+	
+	IS_ANY_ORA_ERROR			
+
+	RETURN_SUCCESS:
+	{
+		return APL_SUCCESS;
+	}
+	RETURN_FAILURE:
+	{
+		return APL_FAILURE;
+	}
+
+}
+
+
+
+static int CO_Pro_ChkDuplicate(char *p_programname,
+									  	 char *chr_p_key_a,
+										 char *p_sysdate,
+										 int *p_status_ind,
+										 DEBUG_INFO_STRUCT_H **l_debug_info_ptr,
+										 INTL_ENV_DATA_STRUCT_H *p_intl_env_datastruct_h) 
+{
+	int int_h_count;
+	int int_funcreturnstatus;
+	char chr_errmsg[ERROR_LENGTH];
+	*p_status_ind=1;
+	int l_process_count = 0;
+	
+	/*********** For Multiple Programes Execution : By Vinay Kalaskar [ISKB392] : 24/08/2007 *******/
+
+	printf("Checking Multiple Processes :|%s|\n",p_programname);
+
+	EXEC SQL SELECT COUNT(*) INTO :l_process_count 
+			 FROM SYS_BATCH_MULTIPLE 
+			 WHERE PROCESS_NAME=:p_programname;
+
+	IS_ANY_ORA_ERROR
+
+	printf("Checking Multiple Process Count :|%d|\n",l_process_count);
+
+	if(l_process_count == 0)
+	{
+		EXEC SQL SELECT NVL(COUNT(*),0) INTO :int_h_count
+					FROM SYS_BATCHPROC 
+					WHERE	PROCESS_NAME=:p_programname
+				   AND PROC_INIT=:chr_p_key_a
+					AND TO_CHAR(TO_DATE(STARTDATE),'ddmmyy')=TO_CHAR(TO_DATE(:p_sysdate),'ddmmyy')
+				   AND STATUS ='started';
+
+		IS_ANY_ORA_ERROR
+
+		printf("Processes Count === :|%d|\n",int_h_count);
+
+		if(int_h_count>1) 
+		{
+			sprintf(chr_errmsg,"Duplicate entry for process %s\n",p_programname);
+			CO_ProcMonitor(APL_OUT_FILE,chr_errmsg,NULL,p_intl_env_datastruct_h);
+			*p_status_ind=S_CANNOT_EXECUTE;
+			APL_GOBACK_SUCCESS
+		}
+
+		if(int_h_count==0) 
+		{
+			*p_status_ind=S_START;
+			APL_GOBACK_SUCCESS
+		}
+
+		printf("Before CO_Pro_ChkAborted Function :|%s|%s|%s| - Status Ind :|%d|\n",p_programname,chr_p_key_a,p_sysdate,*p_status_ind);
+
+		if(CO_Pro_ChkAborted(p_programname,
+									chr_p_key_a,
+									p_sysdate,
+									&int_funcreturnstatus,
+									l_debug_info_ptr,
+									p_intl_env_datastruct_h)==APL_SUCCESS)
+		{
+			printf("After CO_Pro_ChkAborted Success :|%d|\n",int_funcreturnstatus);
+			
+			if(int_funcreturnstatus)
+				*p_status_ind=S_RESTART;
+			else
+				*p_status_ind=S_CANNOT_EXECUTE;
+			APL_GOBACK_SUCCESS
+		}
+	}
+	else
+	{
+		*p_status_ind=S_START;
+		APL_GOBACK_SUCCESS
+	}
+
+
+
+	APL_GOBACK_FAIL 
+
+	RETURN_SUCCESS:
+	{
+		return APL_SUCCESS;
+	}
+
+	RETURN_FAILURE:
+	{
+		return APL_FAILURE;
+	}
+}
+
+static void CO_Pro_FreeArray(char **freeThis) 
+{
+	int i;
+	printf("Calling from FreeArray\n");
+	for(i=0;freeThis[i];i++)
+		free(freeThis[i]);
+	free(freeThis);			
+}
+
+
+/*Addition of process id in function parameter   HDFC-UAT2 Log19 Rohit */
+
+int CO_ReStartProg(char *p_progname,
+				  char *chr_p_key_a,
+				  char *p_funcparam,
+				  int *int_p_funcreturnstate,
+				  int *int_proc_id,
+				  DEBUG_INFO_STRUCT_H **l_debug_info_ptr,
+				  INTL_ENV_DATA_STRUCT_H *p_intl_env_datastruct_h)
+{
+	short i_restartDataInd;
+	int int_l_created;
+	int int_h_progcount;
+	char *chr_tempchar;
+	char chr_h_checkthisprogram[PATH_LENGTH];
+	int int_l_chpid;
+	int int_l_status;
+	int int_deleteit;
+	char chr_errmsg[ERROR_LENGTH];
+	int i;
+	int int_l_howtostart;
+	char chr_l_predecessor[PATH_LENGTH],chr_l_conflict[PATH_LENGTH];
+	short l_predecessorInd,l_conflictInd;
+	char chr_l_sysdate_a[APL_DATE_LEN];
+	char **chr_l_predecessorarray;
+	char **chr_l_conflictarray;
+	int int_funcreturnstatus;
+	int int_returnflag;
+	char chr_sesamexecdir[PATH_LENGTH];
+	char chr_temp_status[16]=APL_NULL_STRING;
+	char chr_temp_processing_status[51]=APL_NULL_STRING;
+
+	int l_process_count = 0;
+
+    INTL_ENV_DATA_STRUCT_H *p_intlenv_data_struct_h;
+
+	p_intlenv_data_struct_h = p_intl_env_datastruct_h;
+	chr_l_predecessorarray=chr_l_conflictarray=NULL;
+	EXEC SQL VAR chr_l_predecessor IS STRING;
+	EXEC SQL VAR chr_l_conflict IS STRING;
+	EXEC SQL VAR chr_h_checkthisprogram IS STRING;
+	int_deleteit=0;
+
+		
+
+	if((chr_tempchar=getenv("INTL_ROOT_PATH"))==NULL) 
+		return(APL_FAILURE);
+	sprintf(chr_inifile,"%s/intl_sun.cfg",chr_tempchar);
+	if((chr_finifile=fopen(chr_inifile,"r"))==NULL)
+		return(APL_FAILURE);
+
+	
+	
+	  if(CO_RtvSysDtTime(chr_l_sysdate_a,l_debug_info_ptr)==APL_SUCCESS)
+		  fprintf(APL_OUT_FILE,"The sysDate is %s\n",chr_l_sysdate_a);
+	  else
+	  {
+		  sprintf(chr_errmsg,"Could not get date");
+		  CO_ProcMonitor(APL_OUT_FILE,chr_errmsg,NULL,p_intl_env_datastruct_h);
+		  APL_GOBACK_FAIL
+	  }
+		
+	  printf("Before CO_Pro_MarkAbort Function \n");
+	  
+	  if ( CO_Pro_MarkAbort(p_intl_env_datastruct_h,l_debug_info_ptr) == APL_FAILURE )
+	  {
+		  CO_ProcMonitor(APL_OUT_FILE,"Encountered l_debuglist while marking processes aborted",l_debug_info_ptr,p_intl_env_datastruct_h);
+		  APL_GOBACK_FAIL
+	  }
+
+		  
+	  printf("Before CO_Pro_ChkDuplicate Function :|%s|%s|%s|\n",p_progname,chr_p_key_a,chr_l_sysdate_a);		
+	  int_funcreturnstatus=CO_Pro_ChkDuplicate(p_progname,
+												  chr_p_key_a,
+												  chr_l_sysdate_a,
+												  &int_l_howtostart,
+												  l_debug_info_ptr,
+												  p_intl_env_datastruct_h);
+	  int_l_created=0;
+
+	  printf("int_funcreturnstatus :|%d|\n",int_funcreturnstatus);
+
+	  if(int_funcreturnstatus==APL_FAILURE) 
+	  {
+		  APL_GOBACK_FAIL
+	  }
+	  
+	  *int_p_funcreturnstate=S_RESTART;
+
+	  printf("int_l_howtostart :|%d|\n",int_l_howtostart);
+
+	  if(int_l_howtostart==S_CANNOT_EXECUTE) 
+	  {
+		  printf("Inside S_CANNOT_EXECUTE Part ---- \n");
+
+		  sprintf(chr_errmsg,"A copy of program still running");
+		  CO_ProcMonitor(APL_OUT_FILE,chr_errmsg,NULL,p_intl_env_datastruct_h);
+		  *int_p_funcreturnstate=S_CANNOT_EXECUTE;
+		  int_deleteit=1;
+		  APL_GOBACK_SUCCESS
+	  }
+		
+	  if(int_l_howtostart==S_START) 
+	  {
+		  printf("Inside S_START Part ---- \n");
+		  
+		  *int_p_funcreturnstate=S_START;
+
+		  printf("Inserting Into SYS_BATCHPROC :|%s|%s|%s|%s|\n", p_progname,chr_p_key_a,chr_l_sysdate_a,p_intl_env_datastruct_h->usr);
+
+		  EXEC SQL INSERT INTO SYS_BATCHPROC (PROCESS_NAME,PROC_INIT,STATUS,STARTDATE,USR)
+			  VALUES(:p_progname,:chr_p_key_a,'started',:chr_l_sysdate_a,:p_intl_env_datastruct_h->usr);
+
+		  IS_ANY_ORA_ERROR
+
+		  EXEC SQL COMMIT;
+
+		  IS_ANY_ORA_ERROR
+		  
+
+		  EXEC SQL SELECT STATUS,PROCESSING_STATUS 
+				  INTO :chr_temp_status,:chr_temp_processing_status 
+			 FROM SYS_BATCHPROC
+			 WHERE PROCESS_NAME=:p_progname
+			 AND PROC_INIT=:chr_p_key_a
+			 AND STATUS='started'
+			 AND STARTDATE=:chr_l_sysdate_a
+			 FOR UPDATE OF STATUS,PROCESSING_STATUS NOWAIT;
+
+		  printf("Check SYS_BATCHPROC Table Lock :|%d|\n",sqlca.sqlcode);
+
+		  if(S_NOTGOTLOCK) 
+		  {
+			  CO_ProcMonitor(APL_OUT_FILE,"A copy of program running",NULL,p_intl_env_datastruct_h);
+			  *int_p_funcreturnstate=S_CANNOT_EXECUTE;
+			  int_deleteit=0;
+			  APL_GOBACK_SUCCESS
+		  }
+
+		  int_l_created=1;
+	  }
+		
+		
+	  EXEC SQL SELECT NVL(COUNT(PRE_PROCESS),0) INTO :int_h_progcount
+		  FROM SYS_BATCH_CNTRL
+			  WHERE PROCESS_NAME=:p_progname;
+	  IS_ANY_ORA_ERROR
+
+
+	  chr_l_predecessorarray=(char **)(malloc(sizeof(char *)*(int_h_progcount+1)));
+	  APL_MALLOC_FAIL(chr_l_predecessorarray)
+  
+
+	  for(i=0;i<int_h_progcount+1;i++)
+		  chr_l_predecessorarray[i]=NULL;
+	  chr_l_predecessorarray[int_h_progcount]=NULL;
+
+	  EXEC SQL DECLARE predCursor CURSOR FOR
+		  SELECT PRE_PROCESS
+			  FROM SYS_BATCH_CNTRL
+				  WHERE PROCESS_NAME=:p_progname;
+	  IS_ANY_ORA_ERROR
+
+	  EXEC SQL OPEN predCursor;
+	  IS_ANY_ORA_ERROR
+
+	  for(i=0;i<int_h_progcount;i++) {
+		  EXEC SQL FETCH predCursor INTO :chr_h_checkthisprogram;
+		  IS_ANY_ORA_ERROR_CURSOR
+		  chr_l_predecessorarray[i]=(char *)(malloc(sizeof(char *)*(strlen(chr_h_checkthisprogram)+1)));
+		  APL_MALLOC_FAIL(chr_l_predecessorarray[i])
+  
+		  strcpy(chr_l_predecessorarray[i],chr_h_checkthisprogram);
+		  }
+
+
+	  chr_l_predecessorarray[int_h_progcount]=NULL;
+
+	  EXEC SQL CLOSE predCursor;
+	  IS_ANY_ORA_ERROR
+	  #ifdef SYS_DEBUG
+		  for(i=0;chr_l_predecessorarray[i];i++)
+			  printf("%s\n",chr_l_predecessorarray[i]);
+	  #endif
+
+	  EXEC SQL SELECT NVL(COUNT(MISMATCH),0) INTO :int_h_progcount
+		  FROM SYS_BATCH_CNTRL
+			  WHERE PROCESS_NAME=:p_progname;
+	  IS_ANY_ORA_ERROR
+
+
+	  chr_l_conflictarray=(char **)(malloc(sizeof(char *)*(int_h_progcount+1)));
+	  APL_MALLOC_FAIL(chr_l_conflictarray)
+		
+		  
+		
+	  for(i=0;i<int_h_progcount;i++)
+		  chr_l_conflictarray[i]=NULL;
+	  chr_l_conflictarray[int_h_progcount]=NULL;
+
+	  EXEC SQL DECLARE confCursor CURSOR FOR
+		  SELECT MISMATCH
+			  FROM SYS_BATCH_CNTRL
+				  WHERE PROCESS_NAME=:p_progname;
+	  IS_ANY_ORA_ERROR
+
+	  EXEC SQL OPEN confCursor;
+
+	  IS_ANY_ORA_ERROR
+	  for(i=0;i<int_h_progcount;i++) {
+		  EXEC SQL FETCH confCursor INTO :chr_h_checkthisprogram;
+	  IS_ANY_ORA_ERROR
+		  chr_l_conflictarray[i]=(char *)(malloc(sizeof(char *)*(strlen(chr_h_checkthisprogram)+1)));
+		  APL_MALLOC_FAIL(chr_l_conflictarray[i])
+  
+		  strcpy(chr_l_conflictarray[i],chr_h_checkthisprogram);
+		  }
+
+
+	  chr_l_conflictarray[int_h_progcount]=NULL;
+
+	  EXEC SQL CLOSE predCursor;
+	  IS_ANY_ORA_ERROR
+
+	  #ifdef SYS_DEBUG
+		  for(i=0;chr_l_conflictarray[i];i++)
+			  printf("%s\n",chr_l_conflictarray[i]);
+	  #endif
+
+	  printf("Calling CO_Pro_ChkConflicts Function -- \n");
+
+	  int_funcreturnstatus=CO_Pro_ChkConflicts(chr_l_conflictarray,
+												chr_l_sysdate_a,
+												&int_returnflag,
+												l_debug_info_ptr,
+												p_intl_env_datastruct_h);
+
+	  if(int_funcreturnstatus==APL_FAILURE)
+		  APL_GOBACK_FAIL
+
+	  if(!int_returnflag)
+	  {
+		  sprintf(chr_errmsg,"Conflict program running\n");
+		  CO_ProcMonitor(APL_OUT_FILE,chr_errmsg,NULL,p_intl_env_datastruct_h);
+		  *int_p_funcreturnstate= S_CONFLICT;
+		  int_deleteit=1;
+		  APL_GOBACK_SUCCESS
+	  }
+	  
+	  printf("Calling CO_Pro_ChkPredecessors Function -- \n");
+	  
+	  int_funcreturnstatus=CO_Pro_ChkPredecessors(chr_l_predecessorarray,
+												chr_l_sysdate_a,
+												&int_returnflag,
+												l_debug_info_ptr,
+												p_intl_env_datastruct_h);
+	  if(int_funcreturnstatus==APL_FAILURE)
+		  APL_GOBACK_FAIL
+
+	  if(!int_returnflag)
+	  {
+		  sprintf(chr_errmsg,"PRE_PROCESS not executed as yet\n");
+		  CO_ProcMonitor(APL_OUT_FILE,chr_errmsg,NULL,p_intl_env_datastruct_h);
+		  *int_p_funcreturnstate=S_PREDECESSOR;
+		  int_deleteit=1;
+		  APL_GOBACK_SUCCESS
+	  }
+	  if ( CO_ReadToken(chr_finifile,"INTL_PROG_PATH",chr_sesamexecdir,l_debug_info_ptr)
+			  == APL_FAILURE)
+		  APL_GOBACK_FAIL
+
+
+	  waitpid(-1,NULL,WNOHANG);
+	  signal(SIGCHLD, SIG_IGN); 
+	  signal(SIGCHLD, SIG_DFL);  // AIX -change
+	  
+	  printf("\n Calling fork now ... \n");
+
+	  if((int_l_chpid=fork())==-1) 
+	  {
+		  fprintf(APL_OUT_FILE,"Cannot fork");
+		  APL_GOBACK_FAIL
+	  }
+
+	  *int_proc_id = int_l_chpid;	/*Addition of process id	Rohit	*/
+	  
+	  printf("\n int_proc_id is  ... |%d|\n",*int_proc_id);
+				
+	  if(int_l_chpid) 
+	  {			  	
+		  printf("\n Inside if forked inside int_l_chpid is Calling fork now ... |%d|\n",int_l_chpid);
+			  
+		  EXEC SQL VAR chr_l_sysdate_a IS STRING;
+		  EXEC SQL VAR p_intl_env_datastruct_h->processtion IS STRING;
+
+		  /********* For Multiple Processing : By Vinay Kalaskar [ISKB392] : 24/08/2007 *************/
+		
+		  printf("Checking Multiple Processes *** :|%s|\n",p_progname);
+
+		  EXEC SQL SELECT COUNT(*) INTO :l_process_count 
+				 FROM SYS_BATCH_MULTIPLE 
+				 WHERE PROCESS_NAME=:p_progname;
+
+		  IS_ANY_ORA_ERROR
+
+		  printf("Checking Multiple Process Count **** :|%d|\n",l_process_count);
+printf("shyam::int_l_chpid = %d, chr_l_sysdate_a=%s, p_intl_env_datastruct_h->processtion=%s, p_intl_env_datastruct_h->usr=%s",int_l_chpid, chr_l_sysdate_a, p_intl_env_datastruct_h->processtion, p_intl_env_datastruct_h->usr);
+
+		  if(l_process_count == 0)
+		  {	
+			 EXEC SQL UPDATE SYS_BATCHPROC
+			   SET PROC_ID=:int_l_chpid,
+				   PROC_ENDFLG='N',
+				   STARTDATE=:chr_l_sysdate_a,
+				   PROCESS_DESC=TRIM(:p_intl_env_datastruct_h->processtion),// Added Trim for AIX Migration
+				   USR=:p_intl_env_datastruct_h->usr
+			  WHERE PROCESS_NAME=:p_progname
+			  AND PROC_INIT=:chr_p_key_a
+			  AND TO_CHAR(TO_DATE(STARTDATE),'DDMMYY')=TO_CHAR(TO_DATE(:chr_l_sysdate_a),'DDMMYY')
+			  AND STATUS='started';
+
+			IS_ANY_ORA_ERROR
+		  }
+		  else
+		  {
+			 printf("Updating SYS_BATCHPROC Multiple Process **** :|%d|%s|%s| - For  |%s|%s|%s|\n", int_l_chpid,chr_l_sysdate_a,p_intl_env_datastruct_h->usr,p_progname,chr_p_key_a,chr_l_sysdate_a);
+
+			 EXEC SQL UPDATE SYS_BATCHPROC
+			   SET PROC_ID=:int_l_chpid,
+				   PROC_ENDFLG='N',
+				   STARTDATE=:chr_l_sysdate_a,
+				   PROCESS_DESC=TRIM(:p_intl_env_datastruct_h->processtion), // Added Trim for AIX Migration
+				   USR=:p_intl_env_datastruct_h->usr
+			  WHERE PROCESS_NAME=:p_progname
+			  AND PROC_INIT=:chr_p_key_a
+			  AND TO_CHAR(TO_DATE(STARTDATE),'DD/MM/YYYY HH24:MI:SS')=TO_CHAR(TO_DATE(:chr_l_sysdate_a),'DD/MM/YYYY HH24:MI:SS')
+			  AND STATUS='started';
+
+			IS_ANY_ORA_ERROR
+				
+		  }
+
+
+		  EXEC SQL INSERT INTO AUDIT_LOG
+		  VALUES (	:p_intl_env_datastruct_h->usr,
+					  :p_intl_env_datastruct_h->h_mode,
+					  :p_intl_env_datastruct_h->processtion,
+					  :p_intl_env_datastruct_h->auth_req,
+					  :p_intl_env_datastruct_h->subprocess,
+					  :p_intl_env_datastruct_h->h_process,
+					  :chr_l_sysdate_a,
+					  NULL);
+
+		  IS_ANY_ORA_ERROR
+	
+		  if(int_l_howtostart==S_START) 
+		  {
+			  sprintf(chr_errmsg,"Successfully started %s",p_progname);
+			  CO_ProcMonitor(APL_OUT_FILE,chr_errmsg,NULL,p_intl_env_datastruct_h);
+			  EXEC SQL COMMIT;
+
+			  IS_ANY_ORA_ERROR
+		  }
+		  else 
+		  {
+				  sprintf(chr_errmsg,"Successfully restarted %s",p_progname);
+				  CO_ProcMonitor(APL_OUT_FILE,chr_errmsg,NULL,p_intl_env_datastruct_h);
+		  }
+
+		  APL_GOBACK_SUCCESS
+	  }
+	  else 
+	  {
+		  printf("\n Inside else forked inside int_l_chpid is Calling fork now ... |%d|\n",int_l_chpid);
+		  
+		  strcat(chr_sesamexecdir,p_progname);
+  
+		  printf("\n Inside else |%s|%s|%s|%s|\n",chr_sesamexecdir, p_progname,chr_p_key_a,chr_l_sysdate_a);
+
+		  execlp(chr_sesamexecdir,
+					p_progname,
+					chr_p_key_a,
+					chr_l_sysdate_a,
+					p_intl_env_datastruct_h->usr,
+					p_intl_env_datastruct_h->h_mode,
+					p_intl_env_datastruct_h->processtion,
+					p_intl_env_datastruct_h->auth_req,
+					p_intl_env_datastruct_h->subprocess,
+					p_intl_env_datastruct_h->h_process,
+					p_funcparam,
+					(char *)NULL); //AIX -Warnings Removal
+		  sprintf(chr_errmsg,"Could not execute the program %s",p_progname);
+		  CO_ProcMonitor(APL_OUT_FILE,chr_errmsg,NULL,p_intl_env_datastruct_h);
+		  int_l_created=0;
+		  exit(-1);
+	  }
+
+
+	RETURN_SUCCESS:	
+	{
+		fclose(chr_finifile);
+		printf("In the return block\n");
+		 if(chr_l_predecessorarray) 
+			CO_Pro_FreeArray(chr_l_predecessorarray);
+		 if(chr_l_conflictarray) 
+			CO_Pro_FreeArray(chr_l_conflictarray);
+		printf("Returned from FreeArrays\n");
+		printf("Going to commit\n");
+		fflush(stdout); 
+
+		EXEC SQL COMMIT ;
+		printf("Returning from BatchRestart\n");
+	    return APL_SUCCESS;
+	}
+
+	RETURN_FAILURE:
+	{
+		if(chr_l_predecessorarray) 
+			CO_Pro_FreeArray(chr_l_predecessorarray);
+		if(chr_l_conflictarray) 
+			CO_Pro_FreeArray(chr_l_conflictarray);
+		if(int_l_created) 
+		{
+			/* added by akshay for 11129 start*/
+			printf("Record get deleted from SYS_BATCHPROC");
+			printf("Could not execute %s process %s system date %s",p_progname,chr_p_key_a,chr_l_sysdate_a);
+			/* added by akshay for 11129 end*/
+			EXEC SQL DELETE SYS_BATCHPROC
+				WHERE PROCESS_NAME=:p_progname
+				AND PROC_INIT=:chr_p_key_a
+				AND	STATUS='started'
+				AND STARTDATE=:chr_l_sysdate_a;
+			
+			EXEC SQL COMMIT;
+		}
+		CO_ProcMonitor(APL_OUT_FILE,NULL,l_debug_info_ptr,p_intl_env_datastruct_h);
+		EXEC SQL COMMIT ;
+		fclose(chr_finifile);
+		return APL_FAILURE;
+	}
+} 
+
+int BT_Status_Completed(char *p_process_name,
+					 char *p_process_key,
+					 char *p_start_date,
+					 DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	
+   struct sqlca sqlca;
+   char chr_l_sysdate_a[APL_DATE_LEN] = APL_NULL_STRING;
+   
+   EXEC SQL VAR chr_l_sysdate_a IS STRING;
+
+   CO_RtvSysDtTime(chr_l_sysdate_a,l_debug_info_ptr);
+
+   printf("\n Inside BT_Status_Completed \n");
+   printf("p_process_name = |%s|\n",p_process_name);
+   printf("p_process_key = |%s|\n",p_process_key);
+   printf("p_start_date = |%s|\n",p_start_date);
+   
+   EXEC SQL UPDATE SYS_BATCHPROC
+      SET STATUS='completed',
+	  PROCESS_DESC=TRIM(PROCESS_DESC)|| ':' ||:chr_l_sysdate_a // Added Trim for AIX Migration
+      WHERE PROCESS_NAME=:p_process_name
+      AND PROC_INIT=:p_process_key
+      AND STARTDATE=:p_start_date
+      AND STATUS = 'started';
+
+   IS_ANY_ORA_ERROR
+	
+   printf("\n End Of BT_Status_Completed  :|%d| \n",sqlca.sqlcode);   
+
+   RETURN_SUCCESS:
+	   APL_FUNCTION_RET_SUCCESS(APL_OUT_FILE)
+
+   RETURN_FAILURE:
+	   APL_FUNCTION_RET_FAILURE(APL_OUT_FILE)
+}
+
+
+
+/* Sonali Intellect Reports */
+
+int BT_Status_Lock(  char *p_process_name,
+		char *p_process_key,
+		char *p_start_date,
+		DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	char l_temp_status_info[101]=APL_NULL_STRING;
+	char l_temp_status[16]=APL_NULL_STRING;
+	struct sqlca sqlca;
+	short i_stat_det=0;
+
+	printf("\nInside funtion BT_Status_Lock  :|%s|%s|%s|\n",p_process_name,p_process_key,p_start_date);
+
+	EXEC SQL SELECT STAT_DET,STATUS 
+		INTO :l_temp_status_info:i_stat_det,:l_temp_status 
+		FROM SYS_BATCHPROC
+		WHERE PROCESS_NAME=:p_process_name
+		AND PROC_INIT=:p_process_key
+		AND STARTDATE=:p_start_date
+		AND STATUS='started'
+		FOR UPDATE OF STAT_DET,STATUS;
+
+	printf("\nAfter BT_Status_Lock :|%s|%s| -- Ora Error :|%d|\n", l_temp_status_info,l_temp_status,sqlca.sqlcode);
+
+	IS_ANY_ORA_ERROR
+
+	RETURN_SUCCESS:
+		APL_FUNCTION_RET_SUCCESS(APL_OUT_FILE)
+
+	RETURN_FAILURE:
+		APL_FUNCTION_RET_FAILURE(APL_OUT_FILE)
+}
+
+/* Sonali */
+int CO_Get_DBConnect(DEBUG_INFO_STRUCT_H **l_debug_info_ptr) 
+{
+	FILE *l_logfile = APL_OUT_FILE;
+	APL_FUNCTION_ENTER(l_logfile)
+
+	FILE *fp_cfg = (FILE *)NULL;
+	char l_cfg_filename[PATH_LENGTH];
+	/* char l_db_id[APL_USERID_LEN]; * Commented for Web Intellect Encryption - Decryption Changes - Naren V */
+	char l_db_id[APL_USERID_LEN+20];   /* Increased the size of User Id for Web Intellect Encryption - Decryption Changes - NarenV */ 
+	char l_db_pwd[APL_DB_PWD_LEN];
+	char l_custody_id[APL_USERID_LEN];
+	char l_buffer[KEY_LENGTH];
+
+
+	memset(l_cfg_filename,APL_NULL_CHAR,sizeof(l_cfg_filename));
+	memset(l_db_id,APL_NULL_CHAR,sizeof(l_db_id));
+	memset(l_db_pwd,APL_NULL_CHAR,sizeof(l_db_pwd));
+	memset(l_custody_id,APL_NULL_CHAR,sizeof(l_custody_id));
+	memset(l_buffer,APL_NULL_CHAR,sizeof(l_buffer));
+
+	strcpy(l_cfg_filename,getenv("INTL_ROOT_PATH"));
+	strcat(l_cfg_filename,"/intl_sun.cfg");
+
+	fp_cfg = fopen(l_cfg_filename,"r");
+	
+	if(fp_cfg == (FILE *)NULL)
+	{
+		APL_IF_DEBUG
+			fprintf(l_logfile, "Config File |%s|\n",l_cfg_filename);
+		APL_IF_DEBUG
+			CO_ProcMonitor(l_logfile,"Failed To Open Config File",NULL,NULL);
+		
+		APL_GOBACK_FAIL
+	}
+	/** Get The Login Details **/
+	strcpy(l_custody_id, "I"); /* Web Intellect Encryption - Decryption Changes - Naren V */
+	APL_FETCH_DB_LOGIN_DETAILS(fp_cfg, l_custody_id, l_db_id, l_db_pwd , l_logfile , l_debug_info_ptr)
+	
+	/** Connect **/
+	EXEC SQL CONNECT :l_db_id IDENTIFIED BY :l_db_pwd;
+	if(sqlca.sqlcode != 0)
+	{
+		ltoa_r(sqlca.sqlcode,l_buffer,KEY_LENGTH-1);
+		CO_InsertErr(	l_debug_info_ptr,
+				DB_ERR_NO,
+				l_buffer,
+				APL_NULL_STRING,
+				APL_NULL_STRING,
+				__LINE__,
+				__FILE__);
+		APL_IF_DEBUG
+			CO_ProcMonitor(l_logfile,"Failed To Connect To DB",NULL,NULL);
+		APL_GOBACK_FAIL
+	}
+APL_GOBACK_SUCCESS
+
+RETURN_SUCCESS :
+	APL_CLOSE_FILE(fp_cfg)
+	APL_FUNCTION_RET_SUCCESS(l_logfile)
+	
+RETURN_FAILURE :
+	APL_CLOSE_FILE(fp_cfg)	
+	APL_FUNCTION_RET_FAILURE(l_logfile)
+	  
+}
+
+int BT_RestartData_Update(	char *p_process_name,
+			char *p_process_key,
+			char *p_start_date,
+			char *p_restart_data,
+			DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	struct sqlca sqlca;
+
+	EXEC SQL UPDATE SYS_BATCHPROC
+		SET	PROCESSING_STATUS = :p_restart_data
+		WHERE	PROCESS_NAME = :p_process_name 
+		AND	PROC_INIT  = :p_process_key 
+		AND	STARTDATE = :p_start_date 
+		AND	STATUS = 'started';
+	IS_ANY_ORA_ERROR
+
+	EXEC SQL COMMIT;
+
+	if(APL_FAILURE == BT_Status_Lock(	p_process_name,
+						p_process_key,
+						p_start_date,
+						l_debug_info_ptr))
+		APL_GOBACK_FAIL
+
+	IS_ANY_ORA_ERROR
+RETURN_SUCCESS:
+	APL_FUNCTION_RET_SUCCESS(APL_OUT_FILE)
+
+RETURN_FAILURE:
+	APL_FUNCTION_RET_FAILURE(APL_OUT_FILE)
+}
+
+int BT_Status_Update(char *p_process_name,
+			char *p_process_key,
+			char *p_start_date,
+			char *p_status_info,
+			DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	struct sqlca sqlca;
+	
+	printf("\nInside BT_Status_Update Before Update SYS_BATCHPROC \n");
+
+	EXEC SQL UPDATE SYS_BATCHPROC
+		SET	STAT_DET= :p_status_info
+		WHERE PROCESS_NAME= :p_process_name 
+		AND	PROC_INIT= :p_process_key 
+		AND	STARTDATE= :p_start_date 
+		AND	STATUS= 'started';
+	IS_ANY_ORA_ERROR
+
+	printf("\nInside BT_Status_Update Before Commit SYS_BATCHPROC \n");
+
+	EXEC SQL COMMIT;
+
+	printf("\nBefore BT_Status_Lock :|%s|%s|%s|\n",p_process_name,p_process_key,p_start_date);
+
+	if(APL_FAILURE == BT_Status_Lock(p_process_name,
+									p_process_key,
+									p_start_date,
+									l_debug_info_ptr))
+	{
+		APL_GOBACK_FAIL
+	}
+
+	IS_ANY_ORA_ERROR
+	
+	printf("\nEnd Of BT_Status_Update\n");
+
+RETURN_SUCCESS:
+	APL_FUNCTION_RET_SUCCESS(APL_OUT_FILE)
+
+RETURN_FAILURE:
+	APL_FUNCTION_RET_FAILURE(APL_OUT_FILE)
+}
+
+/**************** Sundar *********************/
+
+int Rtv_Dir_Path( char *p_dir_alias,
+		char *p_path,
+		DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	FILE *l_file = (FILE *)NULL;
+	char l_file_name[PATH_LENGTH] = APL_NULL_STRING;
+	memset(p_path,APL_NULL_CHAR,sizeof(p_path));
+
+
+	/********** Web Custody Single Login Changes : Vinay Kalaskar *********/
+	
+	if(strcmp(g_custody_web_ind,"W") == 0)
+	{
+	   strcpy(l_file_name,getenv("INTL_ROOT_PATH"));
+	   strcat(l_file_name,"intl_web.cfg");
+	}
+	else
+	{
+	strcpy(l_file_name,getenv("INTL_ROOT_PATH"));
+	   strcat(l_file_name,"intl_sun.cfg");
+	}
+
+	/**********************************************************************/
+
+	/*if(l_file_name[strlen(l_file_name) - 1] == '/')
+		strcat(l_file_name,"intl_sun.cfg");
+	else
+		strcat(l_file_name,"/intl_sun.cfg"); ***** GOUSE */
+
+	l_file = fopen(l_file_name,"r");
+
+	if(l_file == (FILE*)NULL)
+		APL_GOBACK_FAIL
+
+			if ( APL_FAILURE == CO_ReadToken(   l_file,
+						p_dir_alias,
+						p_path,
+						l_debug_info_ptr ))
+			{
+				APL_GOBACK_FAIL
+			}
+RETURN_SUCCESS:
+	if(l_file != (FILE *)NULL)fclose(l_file);
+	APL_FUNCTION_RET_SUCCESS(APL_OUT_FILE)
+
+		RETURN_FAILURE:
+		if(l_file != (FILE *)NULL)fclose(l_file);
+	APL_FUNCTION_RET_FAILURE(APL_OUT_FILE)
+}
+/**************** Sundar *********************/

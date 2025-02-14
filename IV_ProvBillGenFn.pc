@@ -1,0 +1,161 @@
+
+
+
+
+
+#include "stdio_64.h"
+#include <IV_Control_A.h>
+
+/* Added by kotubabu for Linux Migration -Start*/
+#ifdef OS_LINUX
+FILE *fp=NULL;
+FILE *TechRep=NULL;
+#else
+FILE *fp = APL_OUT_FILE;
+FILE *TechRep = APL_OUT_FILE;
+#endif
+   /* Added by kotubabu for Linux Migration-End*/
+
+#ifdef BILLDEBUG 
+
+	/* Added by kotubabu for Linux Migration -Start*/
+    #ifdef OS_LINUX
+	FILE *TestRep=NULL;
+    #else
+    FILE *TestRep = APL_OUT_FILE;
+    #endif
+   /* Added by kotubabu for Linux Migration-End*/
+
+#endif 
+
+EXEC SQL INCLUDE SQLCA;
+
+int IV_Proc_CallBillGen(char *argv[])
+{
+	EXEC SQL BEGIN  DECLARE SECTION;
+
+	char h_sys_dt[APL_DATE_LEN];
+
+	EXEC SQL VAR h_sys_dt IS STRING;
+	EXEC SQL END DECLARE SECTION;
+
+	char chr_l_techlogname[40],chr_l_sys_date[APL_DATE_LEN];
+	char chr_acct_str[150],chr_l_dirlogname[PATH_LENGTH],chr_l_userlogname[40];
+	char chr_inifile[PATH_LENGTH],chr_l_techlog_a[PATH_LENGTH],chr_l_userlog_A[PATH_LENGTH];
+
+	#ifdef BILLDEBUG 
+
+		char chr_l_testlogname[40], chr_l_testlog[PATH_LENGTH];
+
+	#endif 
+
+	FILE *chr_finifile = (FILE *)NULL;
+
+	DEBUG_INFO_STRUCT_H *l_debug_info_ptr = (DEBUG_INFO_STRUCT_H *)NULL;
+
+	struct sqlca sqlca;
+	sqlca.sqlcode = 0;
+
+	memset(chr_l_techlogname,APL_NULL_CHAR,40);
+	memset(chr_l_userlogname,APL_NULL_CHAR,40);
+	memset(chr_l_sys_date,APL_NULL_CHAR,APL_DATE_LEN);
+	memset(chr_acct_str,APL_NULL_CHAR,150);
+	memset(chr_l_dirlogname,APL_NULL_CHAR,PATH_LENGTH);
+	memset(chr_inifile,APL_NULL_CHAR,PATH_LENGTH);
+	memset(chr_l_techlog_a,APL_NULL_CHAR,PATH_LENGTH);
+	memset(chr_l_userlog_A,APL_NULL_CHAR,PATH_LENGTH);
+
+	#ifdef BILLDEBUG 
+		memset(chr_l_testlogname,APL_NULL_CHAR,40);
+		memset(chr_l_testlog,APL_NULL_CHAR,PATH_LENGTH);
+	#endif 
+
+
+	strcpy(chr_l_sys_date, argv[2]);
+
+	
+	if (APL_FAILURE == CO_Rtv_RptFileName("1PB", APL_LOGFILE_DESC, 100, argv[5],argv, &fp, &l_debug_info_ptr) )
+	{
+		fclose(TechRep);
+		fclose(fp);
+		exit(-1);
+	}
+
+	
+	if (APL_FAILURE == CO_Rtv_RptFileName("1pb",APL_LOGFILE_DESC,100, argv[5], argv, &TechRep, &l_debug_info_ptr) )
+	{
+		fclose(TechRep);
+		fclose(fp);
+		exit(-1);
+	}
+
+	EXEC SQL COMMIT;
+	
+	if(sqlca.sqlcode < 0)
+	{
+		CO_InsertErr(&l_debug_info_ptr,DB_ERR_NO, ltoa(sqlca.sqlcode), APL_NULL_STRING, APL_NULL_STRING, __LINE__, __FILE__);
+		fclose(TechRep);
+		fclose(fp);
+		exit(-1);
+	}
+
+	fprintf(TechRep,"Billing Technical Log as on %s\n",argv[2]);
+	fprintf(fp,"Billing User Log as on %s\n",argv[2]);
+	fflush(TechRep);	
+	fflush(fp);	
+
+	#ifdef BILLDEBUG 
+
+		TestRep = fopen("TestLog", "a");
+
+		if ( !TestRep )
+		{
+			fprintf(TechRep, "Could not open Test File for debugging.\n");
+			fflush(TechRep);
+			fclose(TechRep);
+			fclose(fp);
+			exit(-1);
+		}
+		else
+		{
+			fprintf(TestRep, "Billing Test Log as on %s\n",argv[2]);
+			fflush(TestRep);
+		}
+			
+	#endif 
+
+	if(APL_FAILURE == IV_Proc_CalculateProvBills(argv,&l_debug_info_ptr))
+	{
+		CO_ProcMonitor(fp,"Errors in bill generation\n",NULL,NULL);
+		CO_ProcMonitor(TechRep,"Errors in bill generation\n",NULL,NULL);
+		printf("Failure from IV_Proc_CalculateBills \n");
+		APL_GOBACK_FAIL
+
+	}
+	else
+	{
+		CO_ProcMonitor(fp,"Bill generation completed successfully\n",NULL,NULL);
+		CO_ProcMonitor(TechRep,"Bill generation completed successfully\n",NULL,NULL);
+		printf("Success from IV_Proc_CalculateBills \n");
+		APL_GOBACK_SUCCESS
+	}
+
+
+RETURN_SUCCESS:
+
+	EXEC SQL COMMIT WORK;
+	fclose(TechRep);
+	fclose(fp);
+
+	CO_ProcMonitor(APL_OUT_FILE,"Exiting successfully out of IV_BillGenerate\n",NULL,NULL);
+	return APL_SUCCESS;
+
+RETURN_FAILURE:
+
+	EXEC SQL ROLLBACK WORK;
+	fclose(TechRep);
+	fclose(fp);
+
+	CO_ProcMonitor(APL_OUT_FILE,"Exiting Unsuccessfully out of IV_BillGenerate\n",NULL,NULL);
+	return APL_FAILURE;
+}

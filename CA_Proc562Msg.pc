@@ -1,0 +1,1000 @@
+/*
+ *    COPYRIGHT NOTICE
+ *
+ *   Copyright 2005 Polaris Software Lab Limited. All rights reserved.
+ *
+ *   These materials are confidential and proprietary to
+ *    Polaris Software Lab Limited and no part of these materials should
+ *    be reproduced, published, transmitted or distributed in any form or
+ *    by any means, electronic, mechanical, photocopying, recording or
+ *    otherwise, or stored in any information storage or retrieval system
+ *    of any nature nor should the materials be disclosed to third parties
+ *    or used in any other manner for which this is not authorized, without
+ *    the prior express written authorization of Polaris Software Lab Limited.
+ */
+/*********************************************************************
+ *
+ * Module Name         :      Corporate Actions
+ *
+ * File Name           :      CA_Proc562Msg.pc
+ *
+ * Description         :      Contains Functions Related to Processing Msg 562
+ *
+ *
+ *
+ *            Version Control Block
+ *
+ * Date        Version     Author           Description        RFS No.
+ * ---------   --------  ---------------  ------------------   ---------
+ * 18/01/2006   1.2        Smita Bhat        New File          Base Version
+ * 08/02/2006   1.3        Smita Bhat        Chgs Related to   HDFCCA Base Version
+ * 														Col Names
+ *************************************************************************/
+
+
+
+
+
+
+
+#include "CR_Common.h"
+#include "CA_Common.h"
+EXEC SQL INCLUDE SQLCA.H;
+
+#define COMMIT_COUNT_G 			5
+#define PAGELENGTH 			24
+#define QUANTITY_LEN  			25
+#define AMOUNT_LEN_B  			18
+#define CNAME_LEN_A 			66
+#define INSTR_NAME_LEN_D		131
+#define FILE_NAME_LEN 		13
+#define SEPARATOR 			"|"
+#define CLS_LOG_ARRAY	memset(chr_g_log_buff,NULL,sizeof(chr_g_log_buff));                                                                   
+#define APL_STATINFO_LEN	71
+#define MSG_LEN				110
+/* OPT:AIX */
+#ifdef COMMITSIZE
+#undef COMMITSIZE
+#endif
+#define COMMITSIZE 20 /*Smita - HDFC CA BAse Version Changes*/
+ 
+
+char chr_g_sys_date[APL_DATE_LEN] = APL_NULL_STRING;
+char chr_g_sys_date_time[APL_DATE_LEN] = APL_NULL_STRING;
+char **temp;
+char chr_g_log_buff[MSG_LEN]             = APL_NULL_STRING;
+char chr_g_user_system[APL_USERID_LEN]  = APL_NULL_STRING;
+
+int main(int argc,char **argv) // AIX-Warning Removal
+{
+	struct sqlca sqlca;
+  	//DEBUG_INFO_STRUCT_H 	*l_debug_info_list = (DEBUG_INFO_STRUCT_H *)NULL,
+		//				**l_debug_info_ptr = (DEBUG_INFO_STRUCT_H **)NULL;
+	  	DEBUG_INFO_STRUCT_H 	*l_debug_info_list = NULL;
+	DEBUG_INFO_STRUCT_H		**l_debug_info_ptr = NULL;
+        //   getting Error aftr  AIX change -- dts y commented
+       // DEBUG_INFO_STRUCT_H    **l_debug_info_ptr = NULL; //AIX - Changes
+  	INTL_ENV_DATA_STRUCT_H l_intl_env_data_h;
+  	FILE *l_finifile	= NULL;
+  	FILE *l_flogfile	= NULL;
+	char chr_l_c_client[APL_CLIENT_LENGTH]       = APL_NULL_STRING;
+	char chr_l_c_ca_id[CORP_ID_LEN]              = APL_NULL_STRING;
+	char chr_l_logdir[PATH_LENGTH]  = APL_NULL_STRING;
+	char chr_l_inifile[PATH_LENGTH] = APL_NULL_STRING;
+  	int int_l_retval=0;
+	char chr_custody_id[APL_USERID_LEN] = APL_NULL_STRING;
+char chr_uname[APL_USERID_LEN]  = APL_NULL_STRING;
+	char chr_passwd[APL_PASSWD_LEN] = APL_NULL_STRING;
+   int int_num = 0;
+	char  chr_h_stat_info[APL_STATINFO_LEN] = APL_NULL_STRING;
+	char                  chr_g_restart_data[APL_RESTARTDATA_LENGTH];
+	 short                 g_restart_data_i;
+
+   EXEC SQL VAR chr_uname IS STRING;
+   EXEC SQL VAR chr_custody_id IS STRING;
+   EXEC SQL VAR chr_passwd IS STRING;
+	EXEC SQL VAR chr_l_c_client IS STRING;
+	EXEC SQL VAR chr_l_c_ca_id IS STRING;
+	  EXEC SQL VAR chr_g_restart_data is string;
+
+ 	l_debug_info_ptr = &l_debug_info_list;
+
+   strcpy(chr_l_inifile,getenv("INTL_ROOT_PATH"));
+   strcat(chr_l_inifile,"intl_sun.cfg");
+
+	if ( ( l_finifile=fopen(chr_l_inifile,"r") ) == NULL)
+	{
+		APL_GOBACK_FAIL
+	}
+
+	
+		if ( !l_debug_info_ptr )
+		printf("\n 110");
+
+                fflush(stdout);
+
+                if (*l_debug_info_ptr == NULL )
+                	printf("115 \n");
+                fflush(stdout);
+
+
+	APL_FETCH_DB_LOGIN_DETAILS(l_finifile, chr_custody_id, chr_uname, chr_passwd, APL_OUT_FILE, l_debug_info_ptr)
+
+   EXEC SQL CONNECT :chr_uname IDENTIFIED BY :chr_passwd;
+
+   	if (sqlca.sqlcode)
+   	{
+      		APL_GOBACK_FAIL
+   	}
+   	else
+   	{
+			
+
+			if (APL_FAILURE == CO_Rtv_RptFileName(	"2J",
+									APL_LOGFILE_DESC,
+									100,
+									argv[5],
+									argv,
+									&l_flogfile,
+									l_debug_info_ptr ) ) // AIX -Changes removed &
+			{
+				APL_GOBACK_FAIL
+			}
+
+			
+
+			EXEC SQL COMMIT WORK;
+
+			if (sqlca.sqlcode)
+			{
+				CO_ProcMonitor(l_flogfile, "Could not commit after opening chr_log file", NULL, NULL);
+				CO_Proc_RptClose(l_flogfile, l_debug_info_ptr);
+				APL_GOBACK_FAIL
+			}
+
+			EXEC SQL SELECT processing_status INTO :chr_g_restart_data:g_restart_data_i
+			FROM SYS_BATCHPROC
+       	WHERE PROCESS_NAME=:argv[0]
+       	AND   PROC_INIT=:argv[1]
+       	AND   STARTDATE=:argv[2]
+       	AND   STATUS='started'
+			FOR UPDATE OF STATUS;
+
+			IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND, "BATCH_IN_PROC",APL_NULL_STRING, APL_NULL_STRING)
+		
+			
+
+
+   		if ( CO_RtvSysDtTime(chr_g_sys_date_time,l_debug_info_ptr) == APL_FAILURE )
+         		APL_GOBACK_FAIL
+
+   		if ( CO_RtvSysDt(chr_g_sys_date,l_debug_info_ptr) == APL_FAILURE )
+         		APL_GOBACK_FAIL
+
+			if (APL_FAILURE == CO_RtvSysParams(l_debug_info_ptr))
+			{
+				CO_ProcMonitor(l_flogfile, "Could Not Get System Parameters", l_debug_info_ptr, NULL);
+				CO_Proc_RptClose(l_flogfile, l_debug_info_ptr);
+				APL_GOBACK_FAIL
+			}
+		
+			strcpy(chr_g_user_system, APL_USER_SYSTEM);
+
+			
+
+			strcpy(l_intl_env_data_h.usr, argv[3]);
+			strcpy(l_intl_env_data_h.h_mode, argv[4]);
+			strcpy(l_intl_env_data_h.processtion, argv[5]);
+			
+
+     		int_l_retval = CA_Proc_RespDtMsg( argv, l_flogfile, &l_intl_env_data_h, l_debug_info_ptr);
+     		if ( int_l_retval == APL_FAILURE )
+     		{
+				CO_ProcMonitor(l_flogfile, "Could Not Generate Response Date Message", l_debug_info_ptr, NULL);
+				EXEC SQL ROLLBACK WORK RELEASE;
+        		APL_GOBACK_FAIL
+			}
+			else
+			{
+
+				EXEC SQL COMMIT WORK;
+				IS_ANY_ORA_ERROR	
+
+   			CO_ProcMonitor(l_flogfile,"Record Committed After Response Date Message\n",NULL,NULL);
+			
+				EXEC SQL SELECT processing_status INTO :chr_g_restart_data:g_restart_data_i
+        		FROM SYS_BATCHPROC
+       		WHERE PROCESS_NAME  = :argv[0]
+       		AND   PROC_INIT       = :argv[1]
+       		AND   STARTDATE = :argv[2]
+       		AND   STATUS    = 'started'
+   	     	FOR UPDATE OF STATUS;
+  
+  	      	IS_ANY_ORA_ERROR
+			}
+	/* 20-02-07 Added Cntry Condition to Avoid Payment Message Gen for Kotak*/
+	IF_COND_NOT_EXISTS("CA_BODMSG","BLOCK_MSG")
+	{
+		int_l_retval = CA_Proc_PayDtMsg( argv, l_flogfile, &l_intl_env_data_h, l_debug_info_ptr);
+		if ( int_l_retval == APL_FAILURE )
+		{
+			CO_ProcMonitor(l_flogfile, "Could Not Generate Payment Date Message", l_debug_info_ptr, NULL);
+			EXEC SQL ROLLBACK WORK RELEASE;
+			APL_GOBACK_FAIL
+		}
+		CO_ProcMonitor(l_flogfile,"Record Committed After Payment Date Message\n",NULL,NULL);
+	}
+
+			EXEC SQL UPDATE SYS_BATCHPROC
+       	SET  status = 'completed'
+       	WHERE PROCESS_NAME=:argv[0]
+       	AND   PROC_INIT=:argv[1]
+       	AND   STARTDATE=:argv[2]
+       	AND   STATUS='started';
+
+       	EXEC SQL COMMIT WORK RELEASE;
+         APL_GOBACK_SUCCESS
+      		
+   	}
+
+   	RETURN_SUCCESS:
+		{
+   		CLS_LOG_ARRAY
+			sprintf(chr_g_log_buff,"T:Corporate Actions Status Message Generation exiting successfully\n");
+			CO_ProcMonitor(l_flogfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+			CO_Proc_RptClose(l_flogfile, l_debug_info_ptr);
+			CO_FreeErrLst(l_debug_info_ptr);
+      
+			fclose(l_finifile);
+			exit(0);
+   	}
+      RETURN_FAILURE  :
+      {
+   		CLS_LOG_ARRAY
+	   	sprintf(chr_g_log_buff,"T:Corporate Actions Status Message Generation exiting unsuccessfully\n");
+      	CO_ProcMonitor(l_flogfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+			CO_Proc_RptClose(l_flogfile, l_debug_info_ptr);
+			CO_FreeErrLst(l_debug_info_ptr);
+      
+			fclose(l_finifile);
+			exit(-1);
+		}
+}
+
+//int CA_Proc_RespDtMsg(char **p_argv,FILE *p_logfile, INTL_ENV_DATA_STRUCT_H p_intl_envdata_struct_h,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+int CA_Proc_RespDtMsg(char **p_argv,FILE *p_logfile, INTL_ENV_DATA_STRUCT_H *p_intl_envdata_struct_h,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	int int_commit_count_a = 0;
+	int int_result = 0;
+	struct sqlca sqlca;
+	char  chr_h_stat_info[APL_STATINFO_LEN] = APL_NULL_STRING;
+	char chr_l_c_client[APL_CLIENT_LENGTH]       = APL_NULL_STRING;
+	char chr_l_c_ca_id[CORP_ID_LEN]              = APL_NULL_STRING;
+	char chr_l_c_ca_id_client[CORP_ID_LEN+APL_CLIENT_LENGTH] = APL_NULL_STRING;
+	char l_temp_client[APL_CLIENT_LENGTH]       = APL_NULL_STRING;
+
+	char                  chr_g_restart_data[APL_RESTARTDATA_LENGTH];
+	short                 g_restart_data_i;
+	int int_l_i_resp_no_days = l_mt_message_sys_params_struct_h.response_days;
+	char l_param[201]= APL_NULL_STRING;
+	char l_temp_acc[11] = APL_NULL_STRING;
+	char l_temp_corp_id[21] = APL_NULL_STRING;
+
+	CO_ProcMonitor(p_logfile, "Entering Response Date Message Routine", NULL, NULL);
+	
+	EXEC SQL VAR chr_l_c_client IS STRING;
+	EXEC SQL VAR chr_l_c_ca_id IS STRING;
+	EXEC SQL VAR chr_l_c_ca_id_client IS STRING;
+	EXEC SQL VAR chr_g_restart_data is string;
+
+
+/*Smita - Changed Col Names - HDFCCA_BaseVer*/	
+	printf("\n Amit:chr_g_sys_date=|%s| \n",chr_g_sys_date);
+	
+   strcpy(chr_l_c_ca_id_client, " ");  
+	EXEC SQL DECLARE A_Res_Dt_Cur CURSOR
+	FOR
+	
+		SELECT
+			a.CORP_ID,
+			a.CLIENT,
+			a.CORP_ID||a.CLIENT 
+		FROM
+			CAENTITLEMENT a, CAEVENT b
+		WHERE
+			a.CORP_ID = b.CORP_ID
+			AND ((b.CA_EVENT IN ('SD','OP','BO')
+					AND b.STATUS IN ('RP','PP'))
+				OR (b.CA_EVENT = 'RT' AND b.STATUS IN ('RP','PP','CP'))
+					)
+         AND a.STATUS not in ( 'RV')
+			AND b.RESPONSE_DATE IS NOT NULL
+			AND to_date(to_char(b.RESPONSE_DATE,'DD/MM/YYYY')) - to_date(to_char(TO_date(:chr_g_sys_date),'DD/MM/YYYY')) >= 0
+			AND to_date(to_char(b.RESPONSE_DATE,'DD/MM/YYYY')) - to_date(to_char(TO_date(:chr_g_sys_date),'DD/MM/YYYY')) =  (SELECT COUNT(d.H_DATE) + :int_l_i_resp_no_days
+                                        FROM MT_HOLIDAY d WHERE d.H_DATE BETWEEN
+                                        TO_DATE(:chr_g_sys_date,'DD/MM/YYYY HH:MI:SS') AND TO_DATE(b.RESPONSE_DATE) and d.bank_ind ='Y') /** IsolveId-143:AmitB-230307:Only Bank Holiday should be considered **/
+			AND a.CORP_ID||a.CLIENT NOT IN (SELECT  x.CORP_ID||x.CLIENT FROM CAENTITLEMENT x ,CAREPLY y
+													 WHERE x.client= y.client (+)
+													 AND x.corp_id = y.corp_id(+)
+													 AND x.QUANTITY_BAL <= nvl(y.INSTR_HOLD,0)
+													 AND x.corp_id in (select z.CORP_ID from  CAEVENT z where z.CORP_ID = x.CORP_ID
+																		  AND z.CA_EVENT in ('OP','RT') )
+								  					)
+         AND a.CORP_ID||a.CLIENT > :chr_l_c_ca_id_client
+			AND EXISTS (SELECT client FROM MT_MSGADDRESS_VEW c where c.CLN_CODE = a.CLIENT
+							AND c.MSG_IDENT_NO = '3')
+		FOR UPDATE
+		ORDER BY
+			a.CORP_ID, a.CLIENT;
+
+	
+	
+
+	EXEC SQL OPEN A_Res_Dt_Cur;
+	IS_ANY_ORA_ERROR	
+	CO_ProcMonitor(p_logfile,"Opened cursor",NULL,NULL);
+	for(;;)
+	{
+		memset(chr_l_c_ca_id,APL_NULL_CHAR, sizeof(chr_l_c_ca_id));
+		memset(chr_l_c_client,APL_NULL_CHAR, sizeof(chr_l_c_client));
+		memset(chr_l_c_ca_id_client,APL_NULL_CHAR, sizeof(chr_l_c_ca_id_client));
+		
+
+		
+		EXEC SQL FETCH  A_Res_Dt_Cur
+		INTO
+				:chr_l_c_ca_id,
+				:chr_l_c_client,
+				:chr_l_c_ca_id_client;
+
+		
+		
+		printf("Amit:sqlca.sqlcode1 is %d\n",sqlca.sqlcode);
+
+		if(sqlca.sqlcode ==1403)
+			break;
+
+		IS_ANY_ORA_ERROR_CURSOR;
+     	CLS_LOG_ARRAY;
+		sprintf(chr_g_log_buff,"Fetching Record from AENTITL table\nCA_Id :(%s)\t Account : (%s) ",chr_l_c_ca_id, chr_l_c_client);
+		CO_ProcMonitor(p_logfile,chr_g_log_buff,NULL,NULL);
+      printf("\n\n\n*********************************************************BEFORE INSSERT IMSGENT CALL ******************************************\n\n");
+
+		
+		memset(l_param,APL_NULL_CHAR,201);
+		printf("HERE1!!!\n");
+		if(APL_FAILURE == GBDbInsIMSGENT("562N01", chr_l_c_ca_id, chr_l_c_client, 'Y', l_param, l_debug_info_ptr))
+		{
+			CO_ProcMonitor(p_logfile, "Response Date Message Could Not be sent", l_debug_info_ptr, NULL);
+        	APL_GOBACK_FAIL
+		}
+
+		EXEC SQL SELECT
+				CLIENT INTO :chr_g_restart_data:g_restart_data_i   /* temp into since this value was not used */
+		FROM	
+				CAREPLY
+		WHERE
+				CORP_ID = :chr_l_c_ca_id
+				AND CLIENT = :chr_l_c_client
+		FOR UPDATE;
+
+		IS_ANY_ORA_ERROR
+		
+		if(APL_ZERO_RESULT_SET)
+		{
+			EXEC SQL INSERT INTO
+						CAREPLY
+			VALUES
+						(	:chr_l_c_ca_id, 
+							:chr_l_c_client, 
+							NULL, 
+							:chr_g_sys_date,
+							NULL,
+							NULL,
+							NULL,
+							NULL,
+							NULL,
+							:chr_g_user_system, 
+							:chr_g_sys_date, 
+							NULL,
+							NULL,
+							'AA',
+							:chr_g_sys_date_time, 
+							:chr_g_sys_date
+						);
+
+			IS_ANY_ORA_ERROR
+	
+		}
+		else
+		{
+			EXEC SQL UPDATE
+						CAREPLY
+			SET
+						RES_MSG_DATE = :chr_g_sys_date,
+						ACCESS_STAMP = :chr_g_sys_date_time,
+						MAKER = :chr_g_user_system,
+						MAKER_DT = :chr_g_sys_date
+			WHERE
+						CORP_ID = :chr_l_c_ca_id
+						AND CLIENT = :chr_l_c_client;
+
+			IS_ANY_ORA_ERROR
+		}
+
+
+
+		int_commit_count_a++;
+		if( (int_commit_count_a%COMMITSIZE) == 0 )
+		{
+			sprintf(chr_h_stat_info,"Processed %d Records",int_commit_count_a);
+
+			EXEC SQL UPDATE SYS_BATCHPROC
+			SET STAT_DET =:chr_h_stat_info
+       	WHERE PROCESS_NAME=:p_argv[0]
+       	AND   PROC_INIT=:p_argv[1]
+       	AND   STARTDATE=:p_argv[2]
+       	AND   STATUS='started';
+		
+			EXEC SQL COMMIT WORK;
+			IS_ANY_ORA_ERROR	
+
+   		CO_ProcMonitor(p_logfile,"RECORD COMMITTED \n",NULL,NULL);
+			
+			EXEC SQL SELECT processing_status INTO :chr_g_restart_data:g_restart_data_i
+        	FROM SYS_BATCHPROC
+       	WHERE PROCESS_NAME  = :p_argv[0]
+       	AND   PROC_INIT       = :p_argv[1]
+       	AND   STARTDATE = :p_argv[2]
+       	AND   STATUS    = 'started'
+        	FOR UPDATE OF STATUS;
+  
+        	IS_ANY_ORA_ERROR
+	      EXEC SQL CLOSE A_Res_Dt_Cur;
+        	EXEC SQL OPEN A_Res_Dt_Cur;
+
+        	IS_ANY_ORA_ERROR;
+		}
+	}
+	EXEC SQL CLOSE A_Res_Dt_Cur;
+
+
+	/*** changes for SM event***/
+
+   strcpy(chr_l_c_ca_id_client, " ");  
+	printf("\n ####################### chr_g_sys_date = |%s| ",chr_g_sys_date);
+	printf("\n ####################### int_l_i_resp_no_days = |%d| ",int_l_i_resp_no_days);
+
+ EXEC SQL DECLARE  A_SM_RESP_Cur CURSOR
+	  FOR
+   SELECT DISTINCT a.CORP_ID,b.CLIENT, a.CORP_ID||b.CLIENT
+	FROM CAEVENT a, DL_SAFEK b, MT_INSTRUMENT v
+	WHERE
+	   a.INSTR_CODE = v.INSTR_CODE AND
+	  (a.CA_EVENT = 'SM' AND a.STATUS = 'SN')
+	     AND a.proxy_date IS NOT NULL
+	     AND a.PRELIMINARY_FLAG = 'N'
+	     AND to_date(to_char(a.proxy_date,'DD/MM/YYYY')) - to_date(to_char(TO_date(:chr_g_sys_date),'DD/MM/YYYY') )>= 0
+	    AND round(to_date(to_char(a.proxy_date,'DD/MM/YYYY')) - to_date(to_char(TO_date(:chr_g_sys_date),'DD/MM/YYYY') ),0)=  (SELECT COUNT(d.H_DATE)  + :int_l_i_resp_no_days
+	   FROM MT_HOLIDAY d WHERE d.H_DATE BETWEEN
+	   TO_DATE(:chr_g_sys_date) AND to_date(to_char(to_date(a.proxy_date),'DD/MM/YYYY') || '12:00:00','DD/MM/YYYY hh24:mi:ss')   and bank_ind ='Y')
+		AND b.INSTR_CODE = a.INSTR_CODE
+	     AND (b.SAFEKEEP_POS - b.val_del-b.dp_del-b.nvaldeliver) > 0
+/*	      AND a.CORP_ID||b.CLIENT NOT IN (SELECT  DISTINCT(y.CORP_ID||y.CLIENT) FROM dl_safek x ,CAREPLY y, CAEVENT z WHERE x.client= y.client (+)
+       AND y.corp_id = z.corp_id(+)
+       AND ( nvl(y.instr_hold,0) >= (select sum(h.safekeep_pos-h.val_del-h.dp_del-h.nvaldeliver) from dl_safek h where h.client=y.client and h.instr_code = z.instr_code)) AND z.ca_event = 'SM' )
+	    
+	   Changed for the SNOW - CS0109018 for Long Run */
+      AND NOT EXISTS
+	  (SELECT 1
+	  FROM CAREPLY y
+	  WHERE y.corp_id            = a.corp_id
+	  AND y.client               = b.client
+	  AND NVL (y.INSTR_HOLD, 0) >=
+		(SELECT SUM ( ( ( ( safekeep_pos - val_del) - dp_del) - nvaldeliver))
+		FROM dl_safek
+		WHERE ( client = y.client
+		AND instr_code = a.instr_code)
+		)
+	  )	   
+      AND EXISTS (SELECT cln_code FROM MT_MSGADDRESS_VEW c where c.cln_code = b.client
+    AND c.msg_ident_no in ('3','31'))
+      ORDER BY
+    a.CORP_ID, b.client;
+
+ IS_ANY_ORA_ERROR
+
+
+   EXEC SQL OPEN A_SM_RESP_Cur;
+   IS_ANY_ORA_ERROR
+
+  	CO_ProcMonitor(p_logfile,"Opened cursor",NULL,NULL);
+   for(;;)
+   {
+     /*** fetch record from the cursor       ***/
+          EXEC SQL FETCH  A_SM_RESP_Cur
+          			 INTO
+						 :chr_l_c_ca_id,
+						 :chr_l_c_client,
+						 :chr_l_c_ca_id_client;
+
+			 printf("sqlca.sqlcode2 is %d\n",sqlca.sqlcode);
+						
+         IS_ANY_ORA_ERROR;
+			if(sqlca.sqlcode ==1403)
+				break;
+
+       sprintf(chr_g_log_buff," ***** Fetching Record from AEVENT table\nCA_Id :(%s)\t Account : (%s) ",chr_l_c_ca_id, chr_l_c_client);
+      CO_ProcMonitor(p_logfile,chr_g_log_buff,NULL,NULL);
+      printf("\n\n\n*********************************************************BEFORE INSSERT IMSGENT CALL ******************************************\n\n");
+      if(APL_FAILURE == GBDbInsIMSGENT("562N01", 
+												   chr_l_c_ca_id, 
+													chr_l_c_client, 
+													'Y', 
+													l_param, 
+													l_debug_info_ptr))
+     {
+         CO_ProcMonitor(p_logfile, "Response Date Message Could Not be sent", l_debug_info_ptr, NULL);
+         APL_GOBACK_FAIL
+
+	  }
+			EXEC SQL SELECT CORP_ID,CLIENT
+						INTO :l_temp_corp_id,:l_temp_client
+						FROM CAREPLY 
+						WHERE CORP_ID =:chr_l_c_ca_id
+						AND CLIENT=:chr_l_c_client;
+
+		  IS_ANY_ORA_ERROR
+
+		if(APL_ZERO_RESULT_SET)
+		{
+			EXEC SQL INSERT INTO
+						CAREPLY
+			VALUES
+						(	:chr_l_c_ca_id, 
+							:chr_l_c_client, 
+							NULL, 
+							:chr_g_sys_date,
+							NULL,
+							NULL,
+							NULL,
+							NULL,
+							NULL,
+							:chr_g_user_system, 
+							:chr_g_sys_date, 
+							NULL,
+							NULL,
+							'AA',
+							:chr_g_sys_date_time, 
+							:chr_g_sys_date
+						);
+
+			IS_ANY_ORA_ERROR
+	
+		}
+		else
+		{
+			EXEC SQL UPDATE
+						CAREPLY
+			SET
+						RES_MSG_DATE = :chr_g_sys_date,
+						ACCESS_STAMP = :chr_g_sys_date_time,
+						MAKER = :chr_g_user_system,
+						MAKER_DT = :chr_g_sys_date
+			WHERE
+						CORP_ID = :chr_l_c_ca_id
+						AND CLIENT = :chr_l_c_client;
+
+			IS_ANY_ORA_ERROR
+		}
+		int_commit_count_a++;
+		if( (int_commit_count_a%COMMITSIZE) == 0 )
+		{
+			sprintf(chr_h_stat_info,"Processed %d Records",int_commit_count_a);
+
+			EXEC SQL UPDATE SYS_BATCHPROC
+			SET STAT_DET =:chr_h_stat_info
+       	WHERE PROCESS_NAME=:p_argv[0]
+       	AND   PROC_INIT=:p_argv[1]
+       	AND   STARTDATE=:p_argv[2]
+       	AND   STATUS='started';
+		
+			EXEC SQL COMMIT WORK;
+			IS_ANY_ORA_ERROR	
+
+   		CO_ProcMonitor(p_logfile,"RECORD COMMITTED \n",NULL,NULL);
+			
+			EXEC SQL SELECT processing_status INTO :chr_g_restart_data:g_restart_data_i
+        	FROM SYS_BATCHPROC
+       	WHERE PROCESS_NAME  = :p_argv[0]
+       	AND   PROC_INIT       = :p_argv[1]
+       	AND   STARTDATE = :p_argv[2]
+       	AND   STATUS    = 'started'
+        	FOR UPDATE OF STATUS;
+  
+        	IS_ANY_ORA_ERROR
+	      EXEC SQL CLOSE A_Res_Dt_Cur;
+        	EXEC SQL OPEN A_Res_Dt_Cur;
+
+        	IS_ANY_ORA_ERROR;
+		}
+		 
+	}
+	EXEC SQL CLOSE A_SM_RESP_Cur;
+	IS_ANY_ORA_ERROR
+
+	/*** changes for SM event***/
+   strcpy(chr_l_c_ca_id_client, " ");  
+	
+	/**SELECT a.CORP_ID,b.CLIENT, a.CORP_ID||b.CLIENT 
+	FROM CAEVENT a, DL_SAFEK b
+	WHERE
+	((a.CA_EVENT = 'BB' AND a.STATUS = 'RA') OR (a.OP_EVT_CLASS ='PO' AND a.STATUS in ('RP','PP')))
+	AND a.RESPONSE_DATE IS NOT NULL
+	AND a.RESPONSE_DATE - TO_DATE(:chr_g_sys_date) >= 0
+	AND a.RESPONSE_DATE - TO_DATE(:chr_g_sys_date) =  (SELECT COUNT(d.H_DATE) + :int_l_i_resp_no_days
+                                        FROM MT_HOLIDAY d WHERE d.H_DATE BETWEEN
+                                        TO_DATE(:chr_g_sys_date) AND TO_DATE(a.RESPONSE_DATE) and bank_ind ='Y')
+	AND b.INSTR_CODE = a.INSTR_CODE
+   AND (b.SAFEKEEP_POS - b.val_del-b.dp_del-b.nvaldeliver) > 0
+
+
+        AND a.CORP_ID||b.CLIENT NOT IN (SELECT  distinct(y.CORP_ID||y.CLIENT) FROM DL_SAFEK x ,CAREPLY y, CAEVENT z
+                                                 WHERE x.client= y.client (+) 
+													AND y.corp_id = z.corp_id(+) 
+													AND  nvl(y.INSTR_HOLD,0)>=(select sum(safekeep_pos- val_del-dp_del-nvaldeliver) from dl_safek where client = y.client  and instr_code = z.instr_code ) AND ((z.ca_event ='BB' )OR (z.OP_EVT_CLASS ='PO')) )
+         AND a.CORP_ID||b.CLIENT > :chr_l_c_ca_id_client
+                        AND EXISTS (SELECT client FROM MT_MSGADDRESS_VEW c where c.CLN_CODE = b.CLIENT
+                                                        AND c.MSG_IDENT_NO = '3')
+                FOR UPDATE
+                ORDER BY
+                        a.CORP_ID, b.CLIENT;  **/
+
+	EXEC SQL DECLARE  A_Res_Dt_Cur_to CURSOR FOR
+   SELECT a.CORP_ID,b.CLIENT, a.corp_id||b.client
+   FROM CAEVENT a, DL_SAFEK b
+   WHERE
+   ((a.CA_EVENT = 'BB' AND a.STATUS = 'RA') OR (a.OP_EVT_CLASS ='PO' AND a.STATUS in ('RP','PP')))
+   AND a.RESPONSE_DATE IS NOT NULL
+   AND to_date(to_char(a.RESPONSE_DATE,'DD/MM/YYYY')) - TO_DATE(to_char(TO_date(:chr_g_sys_date),'DD/MM/YYYY') ) >= 0
+   AND to_date(to_char(a.RESPONSE_DATE,'DD/MM/YYYY')) - TO_DATE(to_char(TO_DATE(:chr_g_sys_date),'DD/MM/YYYY') ) =  (SELECT COUNT(d.H_DATE) + :int_l_i_resp_no_days
+	                                        FROM MT_HOLIDAY d WHERE d.H_DATE BETWEEN
+	                                         TO_DATE(:chr_g_sys_date) AND TO_DATE(a.RESPONSE_DATE) and bank_ind ='Y')
+   AND b.INSTR_CODE = a.INSTR_CODE
+   AND b.SAFEKEEP_POS - b.val_del-b.dp_del-b.nvaldeliver > 0
+   /*AND a.CORP_ID||b.CLIENT NOT IN (SELECT  distinct (y.CORP_ID||y.CLIENT) FROM DL_SAFEK x ,CAREPLY y, CAEVENT z
+								                                                   WHERE x.client= y.client (+)
+												                                      AND y.corp_id = z.corp_id(+)
+  AND  nvl(y.INSTR_HOLD,0)>=(select sum(safekeep_pos- val_del-dp_del-nvaldeliver) from dl_safek where client = y.client  and instr_code = z.instr_code ) AND (z.ca_event ='BB'  or z.OP_EVT_CLASS ='PO') )
+    changed for CS0093459 - long running BOD query */
+  AND NOT EXISTS
+	  (SELECT 1
+	  FROM CAREPLY y
+	  WHERE y.corp_id            = a.corp_id
+	  AND y.client               = b.client
+	  AND NVL (y.INSTR_HOLD, 0) >=
+		(SELECT SUM ( ( ( ( safekeep_pos - val_del) - dp_del) - nvaldeliver))
+		FROM dl_safek
+		WHERE ( client = y.client
+		AND instr_code = a.instr_code)
+		)
+	  )
+  AND a.CORP_ID||b.CLIENT > :chr_l_c_ca_id_client
+  AND EXISTS (SELECT client FROM MT_MSGADDRESS_VEW c where c.CLN_CODE = b.CLIENT
+               AND c.MSG_IDENT_NO = '3')
+  group by a.CORP_ID,b.CLIENT
+    order by a.corp_id;
+
+	IS_ANY_ORA_ERROR
+
+	printf("\n RD cur %d %s %d\n", sqlca.sqlcode , chr_g_sys_date , int_l_i_resp_no_days);		
+
+	EXEC SQL OPEN A_Res_Dt_Cur_to;
+        IS_ANY_ORA_ERROR
+        CO_ProcMonitor(p_logfile,"Opened cursor",NULL,NULL);
+        for(;;)
+        {
+		memset(chr_l_c_ca_id,APL_NULL_CHAR, sizeof(chr_l_c_ca_id));
+		memset(chr_l_c_client,APL_NULL_CHAR, sizeof(chr_l_c_client));
+		memset(chr_l_c_ca_id_client,APL_NULL_CHAR, sizeof(chr_l_c_ca_id_client));
+                
+
+                
+                EXEC SQL FETCH  A_Res_Dt_Cur_to
+                INTO
+                                :chr_l_c_ca_id,
+                                :chr_l_c_client,
+                                :chr_l_c_ca_id_client;
+
+                
+                
+                IS_ANY_ORA_ERROR_CURSOR;
+
+        CLS_LOG_ARRAY;
+                sprintf(chr_g_log_buff,"Fetching Record from DL_SAFEK table\nCA_Id :(%s)\t Account : (%s) ",chr_l_c_ca_id, chr_l_c_client);
+                CO_ProcMonitor(p_logfile,chr_g_log_buff,NULL,NULL);
+      printf("\n\n\n*********************************************************BEFORE INSSERT IMSGENT CALL ******************************************\n\n");
+
+						memset(l_param,APL_NULL_CHAR,201);
+
+                
+		printf("HERE2!!!\n");
+
+                if(APL_FAILURE == GBDbInsIMSGENT("562N01", chr_l_c_ca_id, chr_l_c_client, 'Y', l_param, l_debug_info_ptr))
+                {
+                        CO_ProcMonitor(p_logfile, "Response Date Message Could Not be sent", l_debug_info_ptr, NULL);
+                        APL_GOBACK_FAIL
+                }
+                EXEC SQL SELECT
+                     CLIENT INTO :chr_g_restart_data:g_restart_data_i /* temp into since this is not used */
+								FROM
+                      CAREPLY
+                WHERE
+                                CORP_ID = :chr_l_c_ca_id
+                                AND CLIENT = :chr_l_c_client
+                FOR UPDATE;
+
+                IS_ANY_ORA_ERROR
+
+                if(APL_ZERO_RESULT_SET)
+                {
+                        EXEC SQL INSERT INTO
+                                                CAREPLY
+                        VALUES
+                                                (       :chr_l_c_ca_id,
+                                                        :chr_l_c_client,
+                                                        NULL,
+                                                        :chr_g_sys_date,
+                                                        NULL,
+                                                        NULL,
+                                                        NULL,
+                                                        NULL,
+                                                        NULL,
+                                                        :chr_g_user_system,
+                                                        :chr_g_sys_date,
+                                                        NULL,
+                                                        NULL,
+                                                        'AA',
+                                                        :chr_g_sys_date_time,
+                                                        :chr_g_sys_date
+                                                );
+
+                        IS_ANY_ORA_ERROR
+
+                
+		}
+                else
+                {
+                        EXEC SQL UPDATE
+                                                CAREPLY
+                        SET
+                                                RES_MSG_DATE = :chr_g_sys_date,
+                                                ACCESS_STAMP = :chr_g_sys_date_time,
+                                                MAKER = :chr_g_user_system,
+                                                MAKER_DT = :chr_g_sys_date
+                        WHERE
+                                                CORP_ID = :chr_l_c_ca_id
+                                                AND CLIENT = :chr_l_c_client;
+
+                        IS_ANY_ORA_ERROR
+                }
+
+
+
+                int_commit_count_a++;
+                if( (int_commit_count_a%COMMITSIZE) == 0 )
+                {
+                        sprintf(chr_h_stat_info,"Processed %d Records",int_commit_count_a);
+
+                        EXEC SQL UPDATE SYS_BATCHPROC
+                        SET STAT_DET =:chr_h_stat_info
+       		        WHERE PROCESS_NAME=:p_argv[0]
+                        AND   PROC_INIT=:p_argv[1]
+                        AND   STARTDATE=:p_argv[2]
+                        AND   STATUS='started';
+
+                        EXEC SQL COMMIT WORK;
+                        IS_ANY_ORA_ERROR
+
+               	        CO_ProcMonitor(p_logfile,"RECORD COMMITTED \n",NULL,NULL);
+		
+			EXEC SQL SELECT processing_status INTO :chr_g_restart_data:g_restart_data_i
+                	FROM SYS_BATCHPROC
+       	        	WHERE PROCESS_NAME  = :p_argv[0]
+                	AND   PROC_INIT       = :p_argv[1]
+                	AND   STARTDATE = :p_argv[2]
+                	AND   STATUS    = 'started'
+                	FOR UPDATE OF STATUS;
+
+                	IS_ANY_ORA_ERROR
+ 
+                EXEC SQL CLOSE A_Res_Dt_Cur_to;
+
+                EXEC SQL OPEN A_Res_Dt_Cur_to;	
+
+ 					IS_ANY_ORA_ERROR;
+               
+                }
+        }
+        EXEC SQL CLOSE A_Res_Dt_Cur_to;
+
+	APL_GOBACK_SUCCESS
+	RETURN_SUCCESS  :
+	{
+		return (APL_SUCCESS);
+	}
+	RETURN_FAILURE  :
+	{
+		return (APL_FAILURE);
+	}
+}
+	
+//int CA_Proc_PayDtMsg( char **p_argv,FILE *p_logfile, INTL_ENV_DATA_STRUCT_H p_intl_envdata_struct_h,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+int CA_Proc_PayDtMsg( char **p_argv,FILE *p_logfile, INTL_ENV_DATA_STRUCT_H *p_intl_envdata_struct_h,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	int int_commit_count_a = 0;
+	int int_result = 0;
+	struct sqlca sqlca;
+	char  chr_h_stat_info[APL_STATINFO_LEN] = APL_NULL_STRING;
+	char chr_l_c_client[APL_CLIENT_LENGTH]   = APL_NULL_STRING;
+	char chr_l_c_ca_id[CORP_ID_LEN]          = APL_NULL_STRING;
+	char  chr_param_string[201] = APL_NULL_STRING;
+	char                  chr_g_restart_data[APL_RESTARTDATA_LENGTH];
+short                 g_restart_data_i;
+
+	CO_ProcMonitor(p_logfile, "Entering Payment Date Message Routine", NULL, NULL);
+	
+	EXEC SQL VAR chr_l_c_client IS STRING;
+	EXEC SQL VAR chr_l_c_ca_id IS STRING;
+	EXEC SQL VAR chr_g_restart_data is string;
+
+	EXEC SQL DECLARE A_Py_Dt_Cur CURSOR 
+	FOR 
+		SELECT 
+			a.CORP_ID, 
+			a.CLIENT 
+		FROM 
+			CAENTITLEMENT a, CAEVENT b
+		WHERE 
+			a.STATUS = 'RP'
+			AND a.CORP_ID = b.CORP_ID
+			AND b.CA_EVENT IN ('RT','SD','OP','BO')
+			AND b.DATEOF_PAYMENT IS NOT NULL
+			AND TO_DATE(:chr_g_sys_date) > b.DATEOF_PAYMENT
+			AND b.STATUS IN ('RP','PP') 
+			AND a.CORP_ID||a.CLIENT NOT IN (SELECT CAREPLY.CORP_ID||CLIENT FROM CAREPLY 
+													 WHERE CAREPLY.PYMT_MSG_DATE IS NOT NULL)
+			AND EXISTS (SELECT client FROM MT_MSGADDRESS_VEW c where c.CLN_CODE = a.CLIENT
+							AND c.MSG_IDENT_NO = '3')
+		FOR UPDATE
+		ORDER BY
+			a.CORP_ID, CLIENT;
+
+	EXEC SQL OPEN A_Py_Dt_Cur;
+	IS_ANY_ORA_ERROR	
+	CO_ProcMonitor(p_logfile,"Opened cursor",NULL,NULL);
+	strcat(chr_param_string,"NPAY;");
+	strcat(chr_param_string,APL_NULL_STRING);
+	for(;;)
+	{
+		
+
+		
+		EXEC SQL FETCH  A_Py_Dt_Cur
+		INTO
+				:chr_l_c_ca_id,
+				:chr_l_c_client;
+
+		
+		
+		IS_ANY_ORA_ERROR_CURSOR;
+
+		CLS_LOG_ARRAY;
+		sprintf(chr_g_log_buff,"Fetching Record from AENTITL table\nCA_Id :(%s)\t Account : (%s) ",chr_l_c_ca_id, chr_l_c_client);
+		CO_ProcMonitor(p_logfile,chr_g_log_buff,NULL,NULL);
+
+		
+
+		if(APL_FAILURE == GBDbInsIMSGENT("562N02", chr_l_c_ca_id, chr_l_c_client, 'Y', chr_param_string, l_debug_info_ptr))
+		{
+			CO_ProcMonitor(p_logfile, "Payment Date Message Could Not be sent", l_debug_info_ptr, NULL);
+			APL_GOBACK_FAIL
+		}
+		EXEC SQL SELECT
+				CLIENT INTO :chr_g_restart_data:g_restart_data_i /* temp into since this is not used */
+		FROM	
+				CAREPLY
+		WHERE
+				CORP_ID = :chr_l_c_ca_id
+				AND CLIENT = :chr_l_c_client
+		FOR UPDATE;
+
+		IS_ANY_ORA_ERROR
+		
+		if(APL_ZERO_RESULT_SET)
+		{
+			EXEC SQL INSERT INTO
+										CAREPLY
+			VALUES
+										(	:chr_l_c_ca_id, 
+											:chr_l_c_client, 
+											NULL, 
+											NULL, 
+											:chr_g_sys_date, 
+											NULL, 
+											NULL, 
+											NULL, 
+											NULL, 
+											:chr_g_user_system, 
+											:chr_g_sys_date, 
+											NULL,
+											NULL,
+											'AA',
+											:chr_g_sys_date_time, 
+											:chr_g_sys_date
+										);
+
+			IS_ANY_ORA_ERROR
+	
+		}
+		else
+		{
+			EXEC SQL UPDATE
+						CAREPLY
+			SET
+						PYMT_MSG_DATE = :chr_g_sys_date,
+						ACCESS_STAMP = :chr_g_sys_date_time,
+						MAKER = :chr_g_user_system,
+						MAKER_DT = :chr_g_sys_date
+			WHERE
+						CORP_ID = :chr_l_c_ca_id
+						AND CLIENT = :chr_l_c_client;
+
+			IS_ANY_ORA_ERROR
+		}
+
+
+
+		int_commit_count_a++;
+		if( (int_commit_count_a%COMMITSIZE) == 0 )
+		{
+			sprintf(chr_h_stat_info,"Processed %d Records",int_commit_count_a);
+
+			EXEC SQL UPDATE SYS_BATCHPROC
+			SET STAT_DET =:chr_h_stat_info
+  			WHERE PROCESS_NAME=:p_argv[0]
+  			AND   PROC_INIT=:p_argv[1]
+  			AND   STARTDATE=:p_argv[2]
+  			AND   STATUS='started';
+		
+			EXEC SQL COMMIT WORK;
+			IS_ANY_ORA_ERROR	
+
+			CO_ProcMonitor(p_logfile,"RECORD COMMITTED \n",NULL,NULL);
+			
+			EXEC SQL SELECT processing_status INTO :chr_g_restart_data:g_restart_data_i
+        	FROM SYS_BATCHPROC
+       	WHERE PROCESS_NAME  = :p_argv[0]
+       	AND   PROC_INIT       = :p_argv[1]
+       	AND   STARTDATE = :p_argv[2]
+       	AND   STATUS    = 'started'
+        	FOR UPDATE OF STATUS;
+  
+        	IS_ANY_ORA_ERROR
+
+        	EXEC SQL OPEN A_Py_Dt_Cur;
+
+        	IS_ANY_ORA_ERROR;
+		}
+	}
+	EXEC SQL CLOSE A_Py_Dt_Cur;
+	APL_GOBACK_SUCCESS
+	RETURN_SUCCESS  :
+	{
+		return (APL_SUCCESS);
+	}
+	RETURN_FAILURE  :
+	{
+		return (APL_FAILURE);
+	}
+}

@@ -1,0 +1,1135 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#include "CO_HostStructdef.h"
+#include "CA_InterFace.h"
+
+EXEC SQL INCLUDE SQLCA.H;
+
+#define  RTV_SYSTEM_DATA
+
+
+/* Added by kotubabu for Linux Migration -Start*/
+#ifdef OS_LINUX
+FILE*                g_inifile;
+FILE*                g_logfile;
+#else
+FILE *g_inifile = APL_OUT_FILE;
+FILE *g_logfile = APL_OUT_FILE;
+#endif
+/* Added by kotubabu  for Linux Migration -END*/
+char                 chr_g_progname        [APL_BATCH_PROGNAME_LEN]= APL_NULL_STRING;
+char                 chr_g_key             [APL_BATCH_KEY_LEN]= APL_NULL_STRING;
+char                 chr_g_start_date      [APL_DATE_LEN]= APL_NULL_STRING;
+char                 chr_g_funccode        [CA_FUNC_CD_LEN]= APL_NULL_STRING;
+char                 chr_g_sys_date        [APL_DATE_LEN]= APL_NULL_STRING;
+char                 chr_g_sys_date_time   [APL_DATE_LEN]= APL_NULL_STRING;
+char                 chr_g_client         [APL_CLIENT_LENGTH]= APL_NULL_STRING;
+char                 chr_g_log_buff[MSG_LENGTH]= APL_NULL_STRING;
+char                 chr_g_old_ccy      [4]         = APL_NULL_STRING;
+char                 chr_g_new_ccy      [4]         = APL_NULL_STRING;
+
+
+int Conv_Dec_Len( INTL_ENV_DATA_STRUCT_H *p_intlenv_data_struct_h,
+								DEBUG_INFO_STRUCT_H      **l_debug_info_ptr);
+
+ 
+
+
+//main(int argc, char **argv)
+int main(int argc,char **argv)//Changes done for AIX Migration
+{
+
+	/* Added by kotubabu for Linux Migration -Start*/
+   #ifdef OS_LINUX
+   g_inifile = APL_OUT_FILE;
+   g_logfile = APL_OUT_FILE;
+   #endif
+   /* Added by kotubabu for Linux Migration -END*/
+	struct sqlca sqlca;
+
+	
+   
+	DEBUG_INFO_STRUCT_H         **l_debug_info_ptr=NULL,
+								*l_debug_info_struct=NULL;
+	INTL_ENV_DATA_STRUCT_H   p_intlenv_data_struct_h;
+	char                 chr_inifile[PATH_LENGTH]= APL_NULL_STRING;
+	char                 chr_logfile[PATH_LENGTH]= APL_NULL_STRING;
+	char                 chr_custody_id_b[APL_USERID_LEN];
+ 
+     
+	EXEC SQL BEGIN DECLARE SECTION;
+		char chr_uname[APL_USERID_LEN];
+		char chr_passwd[APL_PASSWD_LEN];
+	EXEC SQL END DECLARE SECTION;
+
+	EXEC SQL VAR chr_uname IS STRING;
+	EXEC SQL VAR chr_passwd IS STRING;
+
+	l_debug_info_ptr = &l_debug_info_struct;
+
+	strcpy(chr_g_old_ccy, CONV_FROM_TRL);
+	strcpy(chr_g_new_ccy, CONV_TO_TRY);
+	
+	
+	strcpy(chr_inifile,getenv("INTL_ROOT_PATH"));
+	strcat(chr_inifile,"/intl_sun.cfg");
+
+	if ( ( g_inifile=fopen(chr_inifile,"r") ) == NULL)
+	exit(-1);
+
+	APL_FETCH_DB_LOGIN_DETAILS(g_inifile,chr_custody_id_b,chr_uname,chr_passwd,APL_OUT_FILE,l_debug_info_ptr)
+	EXEC SQL CONNECT :chr_uname IDENTIFIED BY :chr_passwd;
+	IS_ANY_ORA_ERROR
+
+	
+	if ( CO_Rtv_RptFileName("Dec_Len",
+								APL_LOGFILE_DESC,
+								100,
+								argv[5],
+								argv,
+								&g_logfile,
+								l_debug_info_ptr) ==APL_FAILURE)
+	{
+		APL_GOBACK_FAIL	
+	}
+
+	EXEC SQL COMMIT;
+	IS_ANY_ORA_ERROR
+
+	
+	if ( argc < 4 )
+	{
+	CO_ProcMonitor(g_logfile,"All Arguments expected by  program not passed \n",NULL
+				,NULL);
+	APL_GOBACK_FAIL
+	}
+	
+	strcpy(chr_g_progname,   argv[0]);
+	strcpy(chr_g_key,        argv[1]);
+	strcpy(chr_g_start_date, argv[2]);
+	strcpy(chr_g_funccode,argv[5]);
+	
+	
+	if ( CO_RtvSysParams(l_debug_info_ptr) == APL_FAILURE)
+	APL_GOBACK_FAIL
+	if(CO_RtvSysDt(chr_g_sys_date,l_debug_info_ptr)==APL_FAILURE)
+	APL_GOBACK_FAIL
+
+	
+   
+	if ( Conv_Dec_Len(&p_intlenv_data_struct_h,
+						 l_debug_info_ptr) == APL_FAILURE)
+      
+	APL_GOBACK_FAIL
+
+	
+	APL_GOBACK_SUCCESS
+	RETURN_SUCCESS:
+	{
+	EXEC SQL UPDATE SYS_BATCHPROC
+			SET status        = 'completed'
+			WHERE process_name    =  RTRIM(:argv[0])
+			AND   proc_init         =  RTRIM(:argv[1])
+			AND   STARTDATE   =  :argv[2]
+			AND   status      =  'started';
+	
+	IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"BATCH_IN_PROC",chr_g_progname,chr_g_key)
+
+	EXEC SQL COMMIT;
+	IS_ANY_ORA_ERROR
+
+	CO_ProcMonitor(g_logfile,"Commit Completed \n",NULL,NULL);
+
+	sprintf(chr_g_log_buff,"T:Decimel Length Conversion exiting successfully\n");
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+	
+	CO_ProcMonitor(APL_OUT_FILE,
+				"Decimel Length Conversion exiting successfully",
+				NULL,
+				NULL);
+
+	fclose(g_logfile);
+	exit(0);
+	}
+	
+	RETURN_FAILURE:
+	{
+	EXEC SQL ROLLBACK;
+	IS_ANY_ORA_ERROR
+	CO_ProcMonitor(g_logfile,"ROLLING BACK \n",NULL,NULL);
+
+	sprintf(chr_g_log_buff,"T:TRL-TRY Decimel Length Conversion exiting with failure\n");
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+	
+	CO_ProcMonitor(APL_OUT_FILE,
+				"Decimel Length Conversion exiting errors",
+				NULL,
+				NULL);
+
+	fclose(g_logfile);
+	exit(-1);
+	}
+} 
+
+
+
+int Conv_Dec_Len(INTL_ENV_DATA_STRUCT_H *p_intlenv_data_struct_h,
+					DEBUG_INFO_STRUCT_H      **l_debug_info_ptr)
+
+{
+	
+	int int_l_fmt_dec_len = 0;
+	int int_l_eqt_dec_len = 0;
+
+	short i_fmt_dec_len = 0;
+	short i_eqt_dec_len = 0;
+
+
+
+	struct sqlca sqlca;
+
+	#ifdef APL_THREADS
+	APL_SET_CONTEXT
+	EXEC SQL CONTEXT USE :my_ctx_local;
+	#endif
+
+	sqlca.sqlcode = 0;
+   
+	
+	APL_IF_DEBUG
+	{
+	CO_ProcMonitor(APL_OUT_FILE,
+				"Entered Function Conv_Dec_Len\n",
+				NULL,
+				NULL);
+	}
+
+
+	EXEC SQL SELECT FIELD_VAL 
+				INTO :int_l_fmt_dec_len:i_fmt_dec_len
+				FROM PRO_GSSPLVAL 
+				WHERE MAIN_FUN = 'QUANTITY_DEC_LEN'
+				AND SUB_PROCESS = 'DEC_FOR_BONDS'
+				AND NATION = 'TR'; 
+
+	IS_ANY_ORA_ERROR;
+
+
+	EXEC SQL SELECT FIELD_VAL
+				INTO :int_l_eqt_dec_len:i_eqt_dec_len
+				FROM PRO_GSSPLVAL
+				WHERE MAIN_FUN = 'QUANTITY_DEC_LEN'
+				AND SUB_PROCESS = 'DEC_FOR_EQUITIES'
+				AND NATION = 'TR';
+
+	IS_ANY_ORA_ERROR;
+
+
+
+	
+
+	EXEC SQL UPDATE DL_DEAL
+				SET QTY   = ROUND(QTY, :int_l_eqt_dec_len),
+				ORIG_QTY   = ROUND(ORIG_QTY, :int_l_eqt_dec_len)
+			WHERE INSTR_CODE IN ( SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTR_TYPE IN ('SHS', 'RTS') AND CURRENCY_CD = :chr_g_new_ccy) 
+			AND DEAL_STAT NOT IN ('CS'); 
+ 
+	IS_ANY_ORA_ERROR;
+
+	sprintf(chr_g_log_buff,"Updated |%d| row(s) in DL_DEAL table for SHS and RTS instrument\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+	printf("Updated |%d| row(s) in DL_DEAL table for SHS and RTS instrument\n",sqlca.sqlerrd[2]);
+
+   
+	EXEC SQL UPDATE DL_DEAL
+			SET QTY   	 = TRUNC(QTY, :int_l_fmt_dec_len),
+				 ORIG_QTY   = TRUNC(ORIG_QTY, :int_l_fmt_dec_len)
+			WHERE INSTR_CODE IN (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTR_TYPE NOT IN ('SHS', 'RTS') AND CURRENCY_CD = :chr_g_new_ccy)
+			AND DEAL_STAT NOT IN ('CS');
+
+	IS_ANY_ORA_ERROR;
+
+	sprintf(chr_g_log_buff,"Updated |%d| row(s) in DL_DEAL table for NON-SHS/RTS instrument\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+	printf("Updated |%d| row(s) in DL_DEAL table for NON-SHS instrument\n",sqlca.sqlerrd[2]);
+   
+
+
+	 
+
+	EXEC SQL UPDATE DL_DEALREPAIR
+			SET QTY  = ROUND(QTY, :int_l_eqt_dec_len)
+			WHERE INSTR_CODE IN ( SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTR_TYPE IN ('SHS', 'RTS') AND CURRENCY_CD = :chr_g_new_ccy); 
+
+	IS_ANY_ORA_ERROR;
+
+	sprintf(chr_g_log_buff,"Updated |%d| row(s) in CTRADEREPAIR table for SHS, RTS instrument\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+	printf("Updated |%d| row(s) in CTRADEREPAIR table for SHS, RTS instrument\n",sqlca.sqlerrd[2]);
+
+	EXEC SQL UPDATE DL_DEALREPAIR
+			SET QTY  = TRUNC(QTY, :int_l_fmt_dec_len)
+			WHERE INSTR_CODE IN (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTR_TYPE NOT IN ('SHS','RTS') AND CURRENCY_CD = :chr_g_new_ccy);
+
+	IS_ANY_ORA_ERROR;
+
+	sprintf(chr_g_log_buff,"Updated |%d| row(s) in CTRADEREPAIR table for NON-SHS/RTS instrument\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+	printf("Updated |%d| row(s) in CTRADEREPAIR table for NON-SHS/RTS instrument\n",sqlca.sqlerrd[2]);
+
+	
+	
+	
+	
+
+	EXEC SQL UPDATE DL_EOMDEAL
+				SET QTY = ROUND(QTY, :int_l_eqt_dec_len),
+				ORIG_QTY = ROUND(ORIG_QTY, :int_l_eqt_dec_len)
+			WHERE INSTR_CODE IN ( SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTR_TYPE IN ('SHS', 'RTS') AND CURRENCY_CD = :chr_g_new_ccy) 
+			AND DEAL_STAT NOT IN ('CS');
+	
+	IS_ANY_ORA_ERROR;
+
+	sprintf(chr_g_log_buff,"Updated |%d| row(s) in CEOMTRADE table for SHS, RTS instrument\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+	printf("Updated |%d| row(s) in CEOMTRADE table for SHS, RTS instrument\n",sqlca.sqlerrd[2]);
+
+	
+	EXEC SQL UPDATE DL_EOMDEAL
+				SET QTY    = TRUNC(QTY, :int_l_fmt_dec_len),
+				ORIG_QTY = TRUNC(ORIG_QTY, :int_l_fmt_dec_len)
+			WHERE INSTR_CODE IN ( SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTR_TYPE NOT IN ('SHS','RTS') AND CURRENCY_CD = :chr_g_new_ccy)
+			AND DEAL_STAT NOT IN ('CS');
+
+	IS_ANY_ORA_ERROR;
+
+	sprintf(chr_g_log_buff,"Updated |%d| row(s) in CEOMTRADE table for NON-SHS/RTS instrument\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+	printf("Updated |%d| row(s) in CEOMTRADE table for NON-SHS/RTS instrument\n",sqlca.sqlerrd[2]);
+
+	
+	
+	
+	
+
+	EXEC SQL UPDATE DL_MISDEAL
+			SET QTY = ROUND(QTY, :int_l_eqt_dec_len)
+			WHERE INSTR_CODE IN ( SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTR_TYPE IN ('SHS', 'RTS') AND CURRENCY_CD = :chr_g_new_ccy); 
+	
+	IS_ANY_ORA_ERROR;
+
+	sprintf(chr_g_log_buff,"Updated |%d| row(s) in CMISTXN table for SHS, RTS instrument\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+	printf("Updated |%d| row(s) in CMISTXN table for SHS, RTS instrument\n",sqlca.sqlerrd[2]);
+
+	EXEC SQL UPDATE DL_MISDEAL
+			SET QTY = TRUNC(QTY, :int_l_fmt_dec_len)
+			WHERE INSTR_CODE IN (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTR_TYPE NOT IN ('SHS','RTS') AND CURRENCY_CD = :chr_g_new_ccy);
+ 
+	IS_ANY_ORA_ERROR;
+
+	sprintf(chr_g_log_buff,"Updated |%d| row(s) in CMISTXN table for NON-SHS/RTS instrument\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+	printf("Updated |%d| row(s) in CMISTXN table for NON-SHS instrument\n",sqlca.sqlerrd[2]);
+
+	
+	
+	
+	
+	
+
+	EXEC SQL UPDATE DL_DEALAUDIT
+			SET	QTY	=	ROUND(QTY, :int_l_eqt_dec_len)
+			WHERE CLIENT||IDENTIY_NO IN ( SELECT CLIENT||IDENTIY_NO FROM DL_DEAL 
+					WHERE INSTR_CODE IN (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTR_TYPE IN ('SHS', 'RTS') 
+					AND CURRENCY_CD = :chr_g_new_ccy) 
+					AND DEAL_STAT NOT IN ('CS'));
+
+	IS_ANY_ORA_ERROR;
+
+	sprintf(chr_g_log_buff,"Updated |%d| row(s) in CTRDACCIMG table for SHS, RTS instrument\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+	printf("Updated |%d| row(s) in CTRDACCIMG table for SHS, RTS instrument\n",sqlca.sqlerrd[2]);
+
+	EXEC SQL UPDATE DL_DEALAUDIT
+			SET	QTY	=	TRUNC(QTY, :int_l_fmt_dec_len)
+			WHERE CLIENT||IDENTIY_NO IN ( SELECT CLIENT||IDENTIY_NO FROM DL_DEAL WHERE 
+					INSTR_CODE IN (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTR_TYPE NOT IN ('SHS', 'RTS') 
+					AND CURRENCY_CD = :chr_g_new_ccy) 
+					AND DEAL_STAT NOT IN ('CS'));
+
+	IS_ANY_ORA_ERROR;
+
+	sprintf(chr_g_log_buff,"Updated |%d| row(s) in CTRDACCIMG table for NON-SHS/RTS instrument\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+	printf("Updated |%d| row(s) in CTRDACCIMG table for NON-SHS/RTS instrument\n",sqlca.sqlerrd[2]);
+
+	
+	
+	
+	
+
+	EXEC SQL UPDATE DL_DEALRST
+			SET	QTY		=	ROUND(QTY, :int_l_eqt_dec_len),
+					ORIG_QTY	=	ROUND(ORIG_QTY, :int_l_eqt_dec_len)
+			WHERE INSTR_CODE IN ( SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTR_TYPE IN ('SHS', 'RTS') AND CURRENCY_CD = :chr_g_new_ccy);
+
+	IS_ANY_ORA_ERROR;
+
+	sprintf(chr_g_log_buff,"Updated |%d| row(s) in CTRADERST table for SHS, RTS instrument\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+	printf("Updated |%d| row(s) in CTRADERST table for SHS, RTS instrument\n",sqlca.sqlerrd[2]);
+
+
+	EXEC SQL UPDATE DL_DEALRST
+         SET   QTY      =  TRUNC(QTY, :int_l_fmt_dec_len),
+               ORIG_QTY  =  TRUNC(ORIG_QTY, :int_l_fmt_dec_len)
+			WHERE INSTR_CODE IN (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTR_TYPE NOT IN ('SHS','RTS') AND CURRENCY_CD = :chr_g_new_ccy);
+
+	IS_ANY_ORA_ERROR;
+
+	sprintf(chr_g_log_buff,"Updated |%d| row(s) in CTRADERST table for NON_SHS/RTS instrument\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+	printf("Updated |%d| row(s) in CTRADERST table for NON_SHS/RTS instrument\n",sqlca.sqlerrd[2]);
+
+
+
+
+	
+
+   EXEC SQL UPDATE DL_COPYHISTORY
+         SET QTY      = ROUND(QTY, :int_l_eqt_dec_len),
+            ORIG_QTY   = ROUND(ORIG_QTY, :int_l_eqt_dec_len)
+         WHERE INSTR_CODE IN ( SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTR_TYPE IN ('SHS', 'RTS') AND CURRENCY_CD = :chr_g_new_ccy);
+
+   IS_ANY_ORA_ERROR;
+
+	sprintf(chr_g_log_buff,"Updated |%d| row(s) in CCPYHISTRADE table for SHS, RTS instrument\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+	printf("Updated |%d| row(s) in CCPYHISTRADE table for SHS, RTS instrument\n",sqlca.sqlerrd[2]);
+
+
+   EXEC SQL UPDATE DL_COPYHISTORY 
+         SET QTY      = TRUNC(QTY, :int_l_fmt_dec_len),
+            ORIG_QTY   = TRUNC(ORIG_QTY, :int_l_fmt_dec_len)
+         WHERE INSTR_CODE IN (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTR_TYPE NOT IN ('SHS','RTS') AND CURRENCY_CD = :chr_g_new_ccy);
+
+   IS_ANY_ORA_ERROR; 
+
+	sprintf(chr_g_log_buff,"Updated |%d| row(s) in CCPYHISTRADE table for NON-SHS/RTS instrument\n",sqlca.sqlerrd[2]);
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+	printf("Updated |%d| row(s) in CCPYHISTRADE table for NON-SHS/RTS instrument\n",sqlca.sqlerrd[2]);
+
+
+
+
+   
+
+   EXEC SQL UPDATE CAREPLY
+         SET INSTR_HOLD = ROUND(INSTR_HOLD, :int_l_eqt_dec_len)
+         WHERE CORP_ID IN (SELECT CORP_ID FROM  CAEVENT a
+                         WHERE CA_CURRENCY = :chr_g_new_ccy
+                         AND (STATUS IN ('RP', 'PP')
+                              OR (CA_EVENT='RT'
+                                  AND STATUS='CP'
+                                  AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c
+                                                      WHERE b.INSTR_CODE=c.INSTR_CODE
+                                                      AND c.INSTR_PARENT IS NOT NULL
+                                                      AND c.MOTHER_SEC_IND <> 'Y'
+                                                      AND b.SAFEKEEP_POS>0)
+                                  AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d
+                                                WHERE d.CA_EVENT='RT'
+                                                AND d.STATUS='CP'
+                                                AND d.INSTR_CODE=a.INSTR_CODE)))
+                         AND INSTR_CODE IN
+                         (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTR_TYPE IN ('SHS','RTS') AND CURRENCY_CD=:chr_g_new_ccy));
+
+   IS_ANY_ORA_ERROR
+
+   sprintf(chr_g_log_buff,"Updated |%d| row(s) in CAREPLY table for SHS/RTS instrument\n",sqlca.sqlerrd[2]);
+   CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+   
+	EXEC SQL UPDATE CAREPLY
+         SET INSTR_HOLD = TRUNC(INSTR_HOLD, :int_l_fmt_dec_len)
+         WHERE CORP_ID IN (SELECT CORP_ID FROM  CAEVENT a
+                         WHERE CA_CURRENCY = :chr_g_new_ccy
+                         AND (STATUS IN ('RP', 'PP')
+                              OR (CA_EVENT='RT'
+                                  AND STATUS='CP'
+                                  AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c
+                                                      WHERE b.INSTR_CODE=c.INSTR_CODE
+                                                      AND c.INSTR_PARENT IS NOT NULL
+                                                      AND c.MOTHER_SEC_IND <> 'Y'
+                                                      AND b.SAFEKEEP_POS>0)
+                                  AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d
+                                                WHERE d.CA_EVENT='RT'
+                                                AND d.STATUS='CP'
+                                                AND d.INSTR_CODE=a.INSTR_CODE)))
+                         AND INSTR_CODE IN
+                         (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTR_TYPE NOT IN ('SHS','RTS') AND CURRENCY_CD =:chr_g_new_ccy));
+
+   IS_ANY_ORA_ERROR
+
+   sprintf(chr_g_log_buff,"Updated |%d| row(s) in CAREPLY table for NON-SHS/RTS instrument\n",sqlca.sqlerrd[2]);
+   CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+
+
+   
+
+   EXEC SQL UPDATE CARTSPROC SET
+            TOTAL_QUANTITY         = ROUND(TOTAL_QUANTITY, :int_l_eqt_dec_len),
+            TAKEUP_QUANTITY         = ROUND(TAKEUP_QUANTITY, :int_l_eqt_dec_len),
+            LAPSE_QTY          = ROUND(LAPSE_QTY, :int_l_eqt_dec_len)
+         WHERE SUB_CURRENCY = :chr_g_new_ccy
+         AND CORP_ID IN (SELECT CORP_ID FROM  CAEVENT a
+                         WHERE CA_CURRENCY = :chr_g_new_ccy
+                         AND (STATUS IN ('RP', 'PP')
+                              OR (CA_EVENT='RT'
+                                  AND STATUS='CP'
+                                  AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c
+                                                      WHERE b.INSTR_CODE=c.INSTR_CODE
+                                                      AND c.INSTR_PARENT IS NOT NULL
+                                                      AND c.MOTHER_SEC_IND <> 'Y'
+                                                      AND b.SAFEKEEP_POS>0)
+                                  AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d
+                                                WHERE d.CA_EVENT='RT'
+                                                AND d.STATUS='CP'
+                                                AND d.INSTR_CODE=a.INSTR_CODE)))
+         AND INSTR_CODE IN (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTR_TYPE IN ('SHS', 'RTS') AND CURRENCY_CD = :chr_g_new_ccy));
+
+   IS_ANY_ORA_ERROR
+
+   sprintf(chr_g_log_buff,"Updated |%d| row(s) in ARIGHTSPRO table for SHS/RTS instrument\n",sqlca.sqlerrd[2]);
+   CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+   
+
+	EXEC SQL UPDATE CARTSPROC SET
+            TOTAL_QUANTITY         = TRUNC(TOTAL_QUANTITY, :int_l_fmt_dec_len),
+            TAKEUP_QUANTITY         = TRUNC(TAKEUP_QUANTITY, :int_l_fmt_dec_len),
+            LAPSE_QTY          = TRUNC(LAPSE_QTY, :int_l_fmt_dec_len)
+         WHERE SUB_CURRENCY = :chr_g_new_ccy
+         AND CORP_ID IN (SELECT CORP_ID FROM  CAEVENT a
+                         WHERE CA_CURRENCY = :chr_g_new_ccy
+                         AND (STATUS IN ('RP', 'PP')
+                              OR (CA_EVENT='RT'
+                                  AND STATUS='CP'
+                                  AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c
+                                                      WHERE b.INSTR_CODE=c.INSTR_CODE
+                                                      AND c.INSTR_PARENT IS NOT NULL
+                                                      AND c.MOTHER_SEC_IND <> 'Y'
+                                                      AND b.SAFEKEEP_POS>0)
+                                  AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d
+                                                WHERE d.CA_EVENT='RT'
+                                                AND d.STATUS='CP'
+                                                AND d.INSTR_CODE=a.INSTR_CODE)))
+         AND INSTR_CODE IN (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTR_TYPE NOT IN ('SHS','RTS') AND CURRENCY_CD = :chr_g_new_ccy));
+
+   IS_ANY_ORA_ERROR
+
+   sprintf(chr_g_log_buff,"Updated |%d| row(s) in ARIGHTSPRO table for NON SHS/RTS instrument\n",sqlca.sqlerrd[2]);
+   CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+
+
+
+
+   
+
+   EXEC SQL UPDATE CAENTITLMENT_VER SET
+               ELIG_ENTITL_POS = ROUND(ELIG_ENTITL_POS, :int_l_eqt_dec_len)
+         WHERE CCY_FOR_ENTITL = :chr_g_new_ccy
+         AND CORP_ID IN (SELECT CORP_ID FROM  CAEVENT a
+                        WHERE CA_CURRENCY = :chr_g_new_ccy
+                        AND (STATUS IN ('RP', 'PP')
+                              OR (CA_EVENT='RT'
+                                  AND STATUS='CP'
+                                  AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c
+                                                      WHERE b.INSTR_CODE=c.INSTR_CODE
+                                                      AND c.INSTR_PARENT IS NOT NULL
+                                                      AND c.MOTHER_SEC_IND <> 'Y'
+                                                      AND b.SAFEKEEP_POS>0)
+                                  AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d
+                                                WHERE d.CA_EVENT='RT'
+                                                AND d.STATUS='CP'
+                                                AND d.INSTR_CODE=a.INSTR_CODE)))
+                       AND INSTR_CODE IN
+                       (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTR_TYPE IN ('SHS', 'RTS') AND CURRENCY_CD = :chr_g_new_ccy));
+   IS_ANY_ORA_ERROR
+
+   sprintf(chr_g_log_buff,"Updated |%d| row(s) in AENTITL_RECON table for SHS/RTS instrument\n",sqlca.sqlerrd[2]);
+   CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+      
+	EXEC SQL UPDATE CAENTITLMENT_VER 
+			SET ELIG_ENTITL_POS = TRUNC(ELIG_ENTITL_POS, :int_l_fmt_dec_len)
+         WHERE CCY_FOR_ENTITL = :chr_g_new_ccy
+         AND CORP_ID IN (SELECT CORP_ID FROM  CAEVENT a
+                        WHERE CA_CURRENCY = :chr_g_new_ccy
+                        AND (STATUS IN ('RP', 'PP')
+                              OR (CA_EVENT='RT'
+                                  AND STATUS='CP'
+                                  AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c
+                                                      WHERE b.INSTR_CODE=c.INSTR_CODE
+                                                      AND c.INSTR_PARENT IS NOT NULL
+                                                      AND c.MOTHER_SEC_IND <> 'Y'
+                                                      AND b.SAFEKEEP_POS>0)
+                                  AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d
+                                                WHERE d.CA_EVENT='RT'
+                                                AND d.STATUS='CP'
+                                                AND d.INSTR_CODE=a.INSTR_CODE)))
+                       AND INSTR_CODE IN
+                       (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTR_TYPE NOT IN ('SHS','RTS') AND CURRENCY_CD = :chr_g_new_ccy));
+
+       IS_ANY_ORA_ERROR
+
+
+
+   sprintf(chr_g_log_buff,"Updated |%d| row(s) in AENTITL_RECON table for NON SHS/RTS instrument\n",sqlca.sqlerrd[2]);
+   CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+
+
+
+   
+
+   EXEC SQL UPDATE CAENTITLEMENT SET
+               ELIG_ENTITL_POS  = ROUND(ELIG_ENTITL_POS, :int_l_eqt_dec_len),
+               QUANTITY_BAL  = ROUND(QUANTITY_BAL, :int_l_eqt_dec_len),
+               QUANTITY_RECEIVED = ROUND(QUANTITY_RECEIVED, :int_l_eqt_dec_len)
+         WHERE CCY_FOR_ENTITL  = :chr_g_new_ccy
+         AND CORP_ID IN (SELECT CORP_ID FROM  CAEVENT a
+                        WHERE CA_CURRENCY = :chr_g_new_ccy
+                        AND (STATUS IN ('RP', 'PP')
+                              OR (CA_EVENT='RT'
+                                  AND STATUS='CP'
+                                  AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c
+                                                      WHERE b.INSTR_CODE=c.INSTR_CODE
+                                                      AND c.INSTR_PARENT IS NOT NULL
+                                                      AND c.MOTHER_SEC_IND <> 'Y'
+                                                      AND b.SAFEKEEP_POS>0)
+                                  AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d
+                                                WHERE d.CA_EVENT='RT'
+                                                AND d.STATUS='CP'
+                                                AND d.INSTR_CODE=a.INSTR_CODE)))
+                       AND INSTR_CODE IN
+                       (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTR_TYPE IN ('SHS','RTS') AND CURRENCY_CD = :chr_g_new_ccy));
+
+   IS_ANY_ORA_ERROR
+
+   sprintf(chr_g_log_buff,"Updated |%d| row(s) in AENTITL table for SHS/RTS instrument\n",sqlca.sqlerrd[2]);
+   CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+
+   EXEC SQL UPDATE CAENTITLEMENT SET
+               ELIG_ENTITL_POS  = TRUNC(ELIG_ENTITL_POS, :int_l_fmt_dec_len),
+               QUANTITY_BAL  = TRUNC(QUANTITY_BAL, :int_l_fmt_dec_len),
+               QUANTITY_RECEIVED = TRUNC(QUANTITY_RECEIVED, :int_l_fmt_dec_len)
+         WHERE CCY_FOR_ENTITL  = :chr_g_new_ccy
+         AND CORP_ID IN (SELECT CORP_ID FROM  CAEVENT a
+                        WHERE CA_CURRENCY = :chr_g_new_ccy
+                        AND (STATUS IN ('RP', 'PP')
+                              OR (CA_EVENT='RT'
+                                  AND STATUS='CP'
+                                  AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c
+                                                      WHERE b.INSTR_CODE=c.INSTR_CODE
+                                                      AND c.INSTR_PARENT IS NOT NULL
+                                                      AND c.MOTHER_SEC_IND <> 'Y'
+                                                      AND b.SAFEKEEP_POS>0)
+                                  AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d
+                                                WHERE d.CA_EVENT='RT'
+                                                AND d.STATUS='CP'
+                                                AND d.INSTR_CODE=a.INSTR_CODE)))
+                       AND INSTR_CODE IN
+                       (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTR_TYPE NOT IN ('SHS','RTS') AND CURRENCY_CD = :chr_g_new_ccy));
+
+   IS_ANY_ORA_ERROR
+
+   sprintf(chr_g_log_buff,"Updated |%d| row(s) in AENTITL table for NON SHS/RTS instrument\n",sqlca.sqlerrd[2]);
+   CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+
+
+
+   
+
+	EXEC SQL UPDATE CAENTITLEMENTMG SET
+               ELIG_ENTITL_POS  = ROUND(ELIG_ENTITL_POS, :int_l_eqt_dec_len),
+               QUANTITY_BAL  = ROUND(QUANTITY_BAL, :int_l_eqt_dec_len),
+               QUANTITY_RECEIVED = ROUND(QUANTITY_RECEIVED, :int_l_eqt_dec_len)
+         WHERE CCY_FOR_ENTITL  = :chr_g_new_ccy
+         AND CORP_ID IN (SELECT CORP_ID FROM  CAEVENT a
+                        WHERE CA_CURRENCY = :chr_g_new_ccy
+                        AND (STATUS IN ('RP', 'PP')
+                              OR (CA_EVENT='RT'
+                                  AND STATUS='CP'
+                                  AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c
+                                                      WHERE b.INSTR_CODE=c.INSTR_CODE
+                                                      AND c.INSTR_PARENT IS NOT NULL
+                                                      AND c.MOTHER_SEC_IND <> 'Y'
+                                                      AND b.SAFEKEEP_POS>0)
+                                  AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d
+                                                WHERE d.CA_EVENT='RT'
+                                                AND d.STATUS='CP'
+                                                AND d.INSTR_CODE=a.INSTR_CODE)))
+                       AND INSTR_CODE IN
+                       (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTR_TYPE IN ('SHS','RTS') AND CURRENCY_CD = :chr_g_new_ccy));
+
+      IS_ANY_ORA_ERROR
+
+   sprintf(chr_g_log_buff,"Updated |%d| row(s) in AENTITLIMG table for SHS/RTS instrument\n",sqlca.sqlerrd[2]);
+   CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+
+
+	EXEC SQL UPDATE CAENTITLEMENTMG SET
+               ELIG_ENTITL_POS  = TRUNC(ELIG_ENTITL_POS, :int_l_fmt_dec_len),
+               QUANTITY_BAL  = TRUNC(QUANTITY_BAL, :int_l_fmt_dec_len),
+               QUANTITY_RECEIVED = TRUNC(QUANTITY_RECEIVED, :int_l_fmt_dec_len)
+         WHERE CCY_FOR_ENTITL  = :chr_g_new_ccy
+         AND CORP_ID IN (SELECT CORP_ID FROM  CAEVENT a
+                        WHERE CA_CURRENCY = :chr_g_new_ccy
+                        AND (STATUS IN ('RP', 'PP')
+                              OR (CA_EVENT='RT'
+                                  AND STATUS='CP'
+                                  AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c
+                                                      WHERE b.INSTR_CODE=c.INSTR_CODE
+                                                      AND c.INSTR_PARENT IS NOT NULL
+                                                      AND c.MOTHER_SEC_IND <> 'Y'
+                                                      AND b.SAFEKEEP_POS>0)
+                                  AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d
+                                                WHERE d.CA_EVENT='RT'
+                                                AND d.STATUS='CP'
+                                                AND d.INSTR_CODE=a.INSTR_CODE)))
+                       AND INSTR_CODE IN
+                       (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTR_TYPE NOT IN ('SHS','RTS') AND CURRENCY_CD = :chr_g_new_ccy));
+
+      IS_ANY_ORA_ERROR
+
+   sprintf(chr_g_log_buff,"Updated |%d| row(s) in AENTITLIMG table for NON SHS/RTS instrument\n",sqlca.sqlerrd[2]);
+   CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+
+
+
+
+
+   
+
+   EXEC SQL UPDATE CACHEQUE SET
+               QUANTITY_RECEIVED = ROUND(QUANTITY_RECEIVED, :int_l_eqt_dec_len),
+               QUANTITY_PAID = ROUND(QUANTITY_PAID, :int_l_eqt_dec_len)
+         WHERE PAYMENT_CCY = :chr_g_new_ccy
+         AND CORP_ID IN (SELECT CORP_ID FROM  CAEVENT a
+                        WHERE CA_CURRENCY = :chr_g_new_ccy
+                        AND (STATUS IN ('RP', 'PP')
+                              OR (CA_EVENT='RT'
+                                  AND STATUS='CP'
+                                  AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c
+                                                      WHERE b.INSTR_CODE=c.INSTR_CODE
+                                                      AND c.INSTR_PARENT IS NOT NULL
+                                                      AND c.MOTHER_SEC_IND <> 'Y'
+                                                      AND b.SAFEKEEP_POS>0)
+                                  AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d
+                                                WHERE d.CA_EVENT='RT'
+                                                AND d.STATUS='CP'
+                                                AND d.INSTR_CODE=a.INSTR_CODE)))
+                       AND INSTR_CODE IN
+                       (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTR_TYPE IN ('SHS','RTS') AND CURRENCY_CD = :chr_g_new_ccy));
+
+   IS_ANY_ORA_ERROR
+
+   sprintf(chr_g_log_buff,"Updated |%d| row(s) in CACHEQUE table for SHS/RTS instrument\n",sqlca.sqlerrd[2]);
+   CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+      
+	EXEC SQL UPDATE CACHEQUE SET
+               QUANTITY_RECEIVED = TRUNC(QUANTITY_RECEIVED, :int_l_fmt_dec_len),
+               QUANTITY_PAID = TRUNC(QUANTITY_PAID, :int_l_fmt_dec_len)
+         WHERE PAYMENT_CCY = :chr_g_new_ccy
+         AND CORP_ID IN (SELECT CORP_ID FROM  CAEVENT a
+                        WHERE CA_CURRENCY = :chr_g_new_ccy
+                        AND (STATUS IN ('RP', 'PP')
+                              OR (CA_EVENT='RT'
+                                  AND STATUS='CP'
+                                  AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c
+                                                      WHERE b.INSTR_CODE=c.INSTR_CODE
+                                                      AND c.INSTR_PARENT IS NOT NULL
+                                                      AND c.MOTHER_SEC_IND <> 'Y'
+                                                      AND b.SAFEKEEP_POS>0)
+                                  AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d
+                                                WHERE d.CA_EVENT='RT'
+                                                AND d.STATUS='CP'
+                                                AND d.INSTR_CODE=a.INSTR_CODE)))
+                        AND INSTR_CODE IN
+                        (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTR_TYPE NOT IN ('SHS','RTS') AND CURRENCY_CD = :chr_g_new_ccy));
+
+      IS_ANY_ORA_ERROR
+
+   sprintf(chr_g_log_buff,"Updated |%d| row(s) in CACHEQUE table for NON SHS/RTS instrument\n",sqlca.sqlerrd[2]);
+   CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+
+
+
+
+   
+
+   EXEC SQL UPDATE CACHEQUEMG SET
+               QUANTITY_RECEIVED = ROUND(QUANTITY_RECEIVED, :int_l_eqt_dec_len),
+               QUANTITY_PAID = ROUND(QUANTITY_PAID, :int_l_eqt_dec_len)
+         WHERE PAYMENT_CCY = :chr_g_new_ccy
+         AND CORP_ID IN (SELECT CORP_ID FROM CAEVENT a
+                        WHERE CA_CURRENCY = :chr_g_new_ccy
+                        AND (STATUS IN ('RP', 'PP')
+                              OR (CA_EVENT='RT'
+                                  AND STATUS='CP'
+                                  AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c
+                                                      WHERE b.INSTR_CODE=c.INSTR_CODE
+                                                      AND c.INSTR_PARENT IS NOT NULL
+                                                      AND c.MOTHER_SEC_IND <> 'Y'
+                                                      AND b.SAFEKEEP_POS>0)
+                                  AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d
+                                                WHERE d.CA_EVENT='RT'
+                                                AND d.STATUS='CP'
+                                                AND d.INSTR_CODE=a.INSTR_CODE)))
+                        AND INSTR_CODE IN
+                        (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTR_TYPE IN ('SHS','RTS') AND CURRENCY_CD = :chr_g_new_ccy));
+
+   IS_ANY_ORA_ERROR
+
+   sprintf(chr_g_log_buff,"Updated |%d| row(s) in APAYMENTIMG table for SHS/RTS instrument\n",sqlca.sqlerrd[2]);
+   CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+      
+   	EXEC SQL UPDATE CACHEQUEMG SET
+               QUANTITY_RECEIVED = TRUNC(QUANTITY_RECEIVED, :int_l_fmt_dec_len),
+               QUANTITY_PAID = TRUNC(QUANTITY_PAID, :int_l_fmt_dec_len)
+         WHERE PAYMENT_CCY = :chr_g_new_ccy
+         AND CORP_ID IN (SELECT CORP_ID FROM  CAEVENT a
+                        WHERE CA_CURRENCY = :chr_g_new_ccy
+                        AND (STATUS IN ('RP', 'PP')
+                              OR (CA_EVENT='RT'
+                                  AND STATUS='CP'
+                                  AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c
+                                                      WHERE b.INSTR_CODE=c.INSTR_CODE
+                                                      AND c.INSTR_PARENT IS NOT NULL
+                                                      AND c.MOTHER_SEC_IND <> 'Y'
+                                                      AND b.SAFEKEEP_POS>0)
+                                  AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d
+                                                WHERE d.CA_EVENT='RT'
+                                                AND d.STATUS='CP'
+                                                AND d.INSTR_CODE=a.INSTR_CODE)))
+                       AND INSTR_CODE IN
+                       (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTR_TYPE NOT IN ('SHS','RTS') AND CURRENCY_CD = :chr_g_new_ccy));
+
+      IS_ANY_ORA_ERROR
+
+   sprintf(chr_g_log_buff,"Updated |%d| row(s) in APAYMENTIMG table for NON SHS/RTS instrument\n",sqlca.sqlerrd[2]);
+   CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+
+
+
+
+   
+
+
+   EXEC SQL UPDATE CAGLPYMT SET
+               ELIG_ENTITL_POS = ROUND(ELIG_ENTITL_POS, :int_l_eqt_dec_len),
+               QUANTITY_BAL = ROUND(QUANTITY_BAL, :int_l_eqt_dec_len),
+               CURR_QTY_BAL = ROUND(CURR_QTY_BAL, :int_l_eqt_dec_len),
+               QUANTITY_PAID = ROUND(QUANTITY_PAID, :int_l_eqt_dec_len)
+         WHERE CORP_ID IN (SELECT CORP_ID FROM CAEVENT a
+                         WHERE CA_CURRENCY = :chr_g_new_ccy
+                         AND (STATUS IN ('RP', 'PP')
+                              OR (CA_EVENT='RT'
+                                  AND STATUS='CP'
+                                  AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c
+                                                      WHERE b.INSTR_CODE=c.INSTR_CODE
+                                                      AND c.INSTR_PARENT IS NOT NULL
+                                                      AND c.MOTHER_SEC_IND <> 'Y'
+                                                      AND b.SAFEKEEP_POS>0)
+                                  AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d
+                                                WHERE d.CA_EVENT='RT'
+                                                AND d.STATUS='CP'
+                                                AND d.INSTR_CODE=a.INSTR_CODE)))
+                       AND INSTR_CODE IN
+                       (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTR_TYPE IN ('SHS','RTS') AND CURRENCY_CD = :chr_g_new_ccy));
+
+   IS_ANY_ORA_ERROR
+
+   sprintf(chr_g_log_buff,"Updated |%d| row(s) in AGLPAYMENT table for SHS/RTS instrument\n",sqlca.sqlerrd[2]);
+   CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+
+      EXEC SQL UPDATE CAGLPYMT SET
+               ELIG_ENTITL_POS = TRUNC(ELIG_ENTITL_POS, :int_l_fmt_dec_len),
+               QUANTITY_BAL = TRUNC(QUANTITY_BAL, :int_l_fmt_dec_len),
+               CURR_QTY_BAL = ROUND(CURR_QTY_BAL, :int_l_fmt_dec_len),
+               QUANTITY_PAID = ROUND(QUANTITY_PAID, :int_l_fmt_dec_len)
+         WHERE CORP_ID IN (SELECT CORP_ID FROM  CAEVENT a
+                         WHERE CA_CURRENCY = :chr_g_new_ccy
+                         AND (STATUS IN ('RP', 'PP')
+                              OR (CA_EVENT='RT'
+                                  AND STATUS='CP'
+                                  AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c
+                                                      WHERE b.INSTR_CODE=c.INSTR_CODE
+                                                      AND c.INSTR_PARENT IS NOT NULL
+                                                      AND c.MOTHER_SEC_IND <> 'Y'
+                                                      AND b.SAFEKEEP_POS>0)
+                                  AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d
+                                                WHERE d.CA_EVENT='RT'
+                                                AND d.STATUS='CP'
+                                                AND d.INSTR_CODE=a.INSTR_CODE)))
+                        AND INSTR_CODE IN
+                        (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTR_TYPE NOT IN ('SHS','RTS') AND CURRENCY_CD = :chr_g_new_ccy));
+
+      IS_ANY_ORA_ERROR
+
+   sprintf(chr_g_log_buff,"Updated |%d| row(s) in AGLPAYMENT table for NON SHS/RTS instrument\n",sqlca.sqlerrd[2]);
+   CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+
+
+
+   
+
+   EXEC SQL UPDATE CAEVENT a SET
+               QUANTITY_BAL              = ROUND(QUANTITY_BAL, :int_l_eqt_dec_len),
+               QUANTITY_RECEIVED             = ROUND(QUANTITY_RECEIVED, :int_l_eqt_dec_len)
+         WHERE CA_CURRENCY = :chr_g_new_ccy
+         AND (STATUS IN ('RP', 'PP')
+               OR (CA_EVENT='RT'
+                  AND STATUS='CP'
+                  AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c
+                                     WHERE b.INSTR_CODE=c.INSTR_CODE
+                                     AND c.INSTR_PARENT IS NOT NULL
+                                     AND c.MOTHER_SEC_IND <> 'Y'
+                                     AND b.SAFEKEEP_POS>0)
+                  AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d
+                                WHERE d.CA_EVENT='RT'
+
+                                AND d.STATUS='CP'
+                                AND d.INSTR_CODE=a.INSTR_CODE)))
+         AND INSTR_CODE IN
+         (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTR_TYPE IN  ('SHS','RTS') AND CURRENCY_CD = :chr_g_new_ccy);
+
+   IS_ANY_ORA_ERROR
+
+   sprintf(chr_g_log_buff,"Updated |%d| row(s) in CAEVENT table for SHS/RTS instrument\n",sqlca.sqlerrd[2]);
+   CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+
+
+      EXEC SQL UPDATE CAEVENT a SET
+               QUANTITY_BAL              = TRUNC(QUANTITY_BAL, :int_l_fmt_dec_len),
+               QUANTITY_RECEIVED             = TRUNC(QUANTITY_RECEIVED, :int_l_fmt_dec_len)
+         WHERE CA_CURRENCY = :chr_g_new_ccy
+         AND (STATUS IN ('RP', 'PP')
+               OR (CA_EVENT='RT'
+                  AND STATUS='CP'
+                  AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c
+                                     WHERE b.INSTR_CODE=c.INSTR_CODE
+                                     AND c.INSTR_PARENT IS NOT NULL
+                                     AND c.MOTHER_SEC_IND <> 'Y'
+                                     AND b.SAFEKEEP_POS>0)
+                  AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d
+                                WHERE d.CA_EVENT='RT'
+                                AND d.STATUS='CP'
+                                AND d.INSTR_CODE=a.INSTR_CODE)))
+         AND INSTR_CODE IN
+         (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTR_TYPE NOT IN ('SHS','RTS') AND CURRENCY_CD = :chr_g_new_ccy);
+
+      IS_ANY_ORA_ERROR
+
+   sprintf(chr_g_log_buff,"Updated |%d| row(s) in CAEVENT table for NON SHS/RTS instrument\n",sqlca.sqlerrd[2]);
+   CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+
+
+
+   
+
+   EXEC SQL UPDATE CAEVENTMG a SET
+               QUANTITY_BAL              = ROUND(QUANTITY_BAL, :int_l_eqt_dec_len),
+               QUANTITY_RECEIVED             = ROUND(QUANTITY_RECEIVED, :int_l_eqt_dec_len)
+         WHERE CA_CURRENCY = :chr_g_new_ccy
+         AND (STATUS IN ('RP', 'PP')
+               OR (CA_EVENT='RT'
+                  AND STATUS='CP'
+                  AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c
+                                     WHERE b.INSTR_CODE=c.INSTR_CODE
+                                     AND c.INSTR_PARENT IS NOT NULL
+                                     AND c.MOTHER_SEC_IND <> 'Y'
+                                     AND b.SAFEKEEP_POS>0)
+                  AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d
+                                WHERE d.CA_EVENT='RT'
+                                AND d.STATUS='CP'
+                                AND d.INSTR_CODE=a.INSTR_CODE)))
+         AND INSTR_CODE IN
+         (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTR_TYPE IN ('SHS','RTS') AND CURRENCY_CD = :chr_g_new_ccy);
+
+   IS_ANY_ORA_ERROR
+
+   sprintf(chr_g_log_buff,"Updated |%d| row(s) in AEVENTIMG table for SHS/RTS instrument\n",sqlca.sqlerrd[2]);
+   CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+
+
+     EXEC SQL UPDATE CAEVENTMG a SET
+               QUANTITY_BAL  = TRUNC(QUANTITY_BAL, :int_l_fmt_dec_len),
+               QUANTITY_RECEIVED = TRUNC(QUANTITY_RECEIVED, :int_l_fmt_dec_len)
+         WHERE CA_CURRENCY = :chr_g_new_ccy
+         AND (STATUS IN ('RP', 'PP')
+               OR (CA_EVENT='RT'
+                  AND STATUS='CP'
+                  AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c
+                                     WHERE b.INSTR_CODE=c.INSTR_CODE
+                                     AND c.INSTR_PARENT IS NOT NULL
+                                     AND c.MOTHER_SEC_IND <> 'Y'
+                                     AND b.SAFEKEEP_POS>0)
+                  AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d
+                                WHERE d.CA_EVENT='RT'
+                                AND d.STATUS='CP'
+                                AND d.INSTR_CODE=a.INSTR_CODE)))
+         AND INSTR_CODE IN
+         (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTR_TYPE NOT IN ('SHS','RTS') AND CURRENCY_CD = :chr_g_new_ccy);
+
+      IS_ANY_ORA_ERROR
+
+   sprintf(chr_g_log_buff,"Updated |%d| row(s) in AEVENTIMG table for NON SHS/RTS instrument\n",sqlca.sqlerrd[2]);
+   CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+
+
+
+
+   
+
+   EXEC SQL UPDATE DL_SAFEK
+         SET   START_SAFEK  = ROUND(START_SAFEK, :int_l_eqt_dec_len),
+               SAFEKEEP_POS    = ROUND(SAFEKEEP_POS, :int_l_eqt_dec_len),
+               NVALRECEIVE = ROUND(NVALRECEIVE, :int_l_eqt_dec_len),
+               NVALDELIVER = ROUND(NVALDELIVER, :int_l_eqt_dec_len),
+               VAL_REC  = ROUND(VAL_REC, :int_l_eqt_dec_len),
+               VAL_DEL  = ROUND(VAL_DEL, :int_l_eqt_dec_len)
+         WHERE INSTR_CODE IN ( SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTR_TYPE IN ('SHS','RTS') AND CURRENCY_CD = :chr_g_new_ccy);
+
+   IS_ANY_ORA_ERROR;
+
+   sprintf(chr_g_log_buff,"Updated |%d| row(s) in DL_SAFEK table for SHS/RTS instrument\n",sqlca.sqlerrd[2]);
+   CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+   printf("\n %s \n",chr_g_log_buff);
+
+   EXEC SQL UPDATE DL_SAFEK
+         SET   START_SAFEK  = TRUNC(START_SAFEK, :int_l_fmt_dec_len),
+               SAFEKEEP_POS    = TRUNC(SAFEKEEP_POS, :int_l_fmt_dec_len),
+               NVALRECEIVE = TRUNC(NVALRECEIVE, :int_l_fmt_dec_len),
+               NVALDELIVER = TRUNC(NVALDELIVER, :int_l_fmt_dec_len),
+               VAL_REC  = TRUNC(VAL_REC, :int_l_fmt_dec_len),
+               VAL_DEL  = TRUNC(VAL_DEL, :int_l_fmt_dec_len)
+         WHERE INSTR_CODE IN (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTR_TYPE NOT IN ('SHS','RTS') AND CURRENCY_CD = :chr_g_new_ccy);
+
+   IS_ANY_ORA_ERROR;
+
+   sprintf(chr_g_log_buff,"Updated |%d| row(s) in DL_SAFEK table for NON-SHS/RTS instrument\n",sqlca.sqlerrd[2]);
+   CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+   printf("\n %s \n",chr_g_log_buff);
+
+
+
+   
+
+   EXEC SQL UPDATE DL_LOCNCHG
+         SET QTY = ROUND(QTY, :int_l_eqt_dec_len)
+         WHERE INSTR_CODE IN ( SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTR_TYPE IN ('SHS','RTS') AND CURRENCY_CD = :chr_g_new_ccy)
+         AND DEALSTAT NOT IN ('CS');
+
+   IS_ANY_ORA_ERROR;
+
+   sprintf(chr_g_log_buff,"Updated |%d| row(s) in CEOMSAFEK table for SHS/RTS instrument\n",sqlca.sqlerrd[2]);
+   CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+   printf("\n %s \n",chr_g_log_buff);
+
+
+   EXEC SQL UPDATE DL_LOCNCHG
+         SET QTY = TRUNC(QTY, :int_l_fmt_dec_len)
+         WHERE INSTR_CODE IN ( SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTR_TYPE NOT IN ('SHS','RTS') AND CURRENCY_CD = :chr_g_new_ccy)
+         AND DEALSTAT NOT IN ('CS');
+
+   IS_ANY_ORA_ERROR;
+
+   sprintf(chr_g_log_buff,"Updated |%d| row(s) in CLOCNCHG table for NON SHS/RTS instrument\n",sqlca.sqlerrd[2]);
+   CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+   printf("\n %s \n",chr_g_log_buff);
+
+
+
+   
+
+   EXEC SQL UPDATE DL_WEEKTXNBAL
+         SET   CLOSING_BAL  =  ROUND(CLOSING_BAL, :int_l_eqt_dec_len)
+         WHERE INSTR_CODE IN ( SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTR_TYPE IN ('SHS','RTS') AND CURRENCY_CD = :chr_g_new_ccy);
+
+   IS_ANY_ORA_ERROR;
+
+   sprintf(chr_g_log_buff,"Updated |%d| row(s) in WEEKTXNBAL table for SHS/RTS instrument\n",sqlca.sqlerrd[2]);
+   CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+   printf("\n %s \n",chr_g_log_buff);
+
+   EXEC SQL UPDATE DL_WEEKTXNBAL
+         SET   CLOSING_BAL  =  TRUNC(CLOSING_BAL, :int_l_fmt_dec_len)
+         WHERE INSTR_CODE IN (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE INSTR_TYPE NOT IN ('SHS','RTS') AND CURRENCY_CD = :chr_g_new_ccy);
+
+   IS_ANY_ORA_ERROR;
+
+   sprintf(chr_g_log_buff,"Updated |%d| row(s) in WEEKTXNBAL table for NON-SHS/RTS instrument\n",sqlca.sqlerrd[2]);
+   CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+   printf("\n %s \n",chr_g_log_buff);
+
+
+	  
+	APL_GOBACK_SUCCESS
+
+   RETURN_SUCCESS:
+   {
+      return (APL_SUCCESS);
+   }
+   RETURN_FAILURE:
+   {
+      return (APL_FAILURE);
+   }
+
+
+}
+

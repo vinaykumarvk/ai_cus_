@@ -1,0 +1,363 @@
+#include "stdio_64.h"
+#include "Intellect_Common.h"
+#include "BT_Common.h"
+#define APL_STATUS_START   "started"
+
+EXEC SQL INCLUDE SQLCA;
+main(int argc,char **argv)
+{
+	struct sqlca sqlca;
+
+	DEBUG_INFO_STRUCT_H **l_debug_info_ptr = (DEBUG_INFO_STRUCT_H **) NULL;
+	FILE                *l_logfile = (FILE *)NULL;
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+	char                         l_client_cd[11] = APL_NULL_STRING;
+	short                        l_i_client_cd = APL_NULL_STRING;
+	char                         l_instr_code[13] = APL_NULL_STRING;
+	short                        l_i_instr_code;
+	char								  l_settlemt_no[16] = APL_NULL_STRING;
+	short                        l_i_settlemt_no;
+	float                        l_dl_qty;
+	short                        l_i_dl_qty;
+	int                          l_pool_qty;
+	int 								  l_int_retval = 0;
+	short    						  l_i_qty;
+	EXEC SQL END DECLARE SECTION;
+
+	EXEC SQL VAR l_settlemt_no is string;
+	EXEC SQL VAR l_instr_code is string;
+	EXEC SQL VAR l_client_cd is string;
+
+	memset(l_client_cd,NULL,sizeof(11));
+	memset(l_instr_code,NULL,sizeof(13));
+	memset(l_settlemt_no,NULL,sizeof(16));
+
+
+	l_debug_info_ptr = (DEBUG_INFO_STRUCT_H **)calloc(1,sizeof(DEBUG_INFO_STRUCT_H *));
+
+	if(CO_Get_DBConnect(l_debug_info_ptr) == APL_FAILURE)
+	{
+		APL_GOBACK_FAIL
+	}
+
+	if (APL_FAILURE == CO_Rtv_RptFileName( "7g",
+				APL_LOGFILE_DESC,
+				100,
+				argv[5],
+				argv,
+				&l_logfile,
+				l_debug_info_ptr ) )
+	{
+		APL_GOBACK_FAIL
+	}
+	/*
+	if(BT_Status_Update(argv[0],
+				argv[1],
+				argv[2],
+				APL_STATUS_START,
+				l_debug_info_ptr) ==APL_FAILURE)
+	{
+		APL_GOBACK_FAIL
+	}
+	*/
+
+	EXEC SQL DECLARE poolacc CURSOR FOR SELECT INSTR_CODE,CLIENT_CD,SETTLEMT_NO,QTY FROM DL_POOLACCDMP WHERE STATUS='AA'; 
+	IS_ANY_ORA_ERROR
+
+		EXEC SQL OPEN poolacc;
+	IS_ANY_ORA_ERROR
+
+		for(;;)
+		{
+			EXEC SQL FETCH poolacc INTO :l_instr_code:l_i_instr_code,
+				  :l_client_cd:l_i_client_cd,
+				  :l_settlemt_no:l_i_settlemt_no,
+				  :l_pool_qty:l_i_qty;
+
+			if (APL_ZERO_RESULT_SET)
+			{
+				break;
+			}
+
+			IS_ANY_ORA_ERROR
+
+			l_int_retval=DL_PoolAcc_ShoAval(l_instr_code,l_client_cd,l_settlemt_no,l_pool_qty,l_debug_info_ptr);
+			if(l_int_retval == APL_FAILURE)
+			{
+				CO_ProcMonitor(l_logfile, "Process_EXCHGS returned failure", NULL, NULL);
+				APL_GOBACK_FAIL
+			}
+
+		}
+	APL_GOBACK_SUCCESS
+
+
+		RETURN_SUCCESS :
+		if(BT_Status_Completed(argv[0],
+					argv[1],
+					argv[2],
+					l_debug_info_ptr)   ==  APL_FAILURE )
+		{
+			APL_GOBACK_FAIL
+		}
+	CO_Proc_RptClose(l_logfile, l_debug_info_ptr);
+	EXEC SQL COMMIT WORK;
+	if(sqlca.sqlcode != 0)APL_GOBACK_FAIL
+		exit(0);
+
+RETURN_FAILURE    :
+	CO_Proc_RptClose(l_logfile, l_debug_info_ptr);
+	exit(-1);
+
+}
+int DL_PoolAcc_ShoAval(char p_instr_code[13],char p_client_cd[11],char p_settlement_no[16],int p_poolacc_qty,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	struct sqlca sqlca;
+	float       l_qty_remain = 0;
+	float       l_allot_qty =0;
+	float       l_qty = 0;
+	float       l_short_qty = 0;
+	char        l_status[3] = APL_NULL_STRING;
+	char        l_identiy_no[17] = APL_NULL_STRING;
+	char        l_pool_trans[2];
+	float       temp=0;
+	float       temp1=0;
+	float       l_poolhalqty =0;
+	float       l_half_qty = 0;
+	float       l_addqty = 0;
+	float       l_sumqty = 0;
+	short       i_client_cd;
+	short       i_instr_code;
+	short       i_identiy_no;
+	short       i_settlement_no;
+	short       i_qty;
+	short       i_qty_remain;
+	short       i_allot_qty;
+	short       i_short_qty;
+	short       i_pool_trans;
+	short       i_status;
+
+	memset(l_identiy_no,NULL,17);
+	memset(l_status,NULL,3);
+	memset(l_pool_trans,NULL,2);
+
+	EXEC SQL VAR l_identiy_no is string;
+	EXEC SQL VAR l_status is string;
+	EXEC SQL VAR l_pool_trans is string;
+
+	strcpy(l_status,"UU");
+
+	EXEC SQL DECLARE l_cur_selqty CURSOR FOR 
+		SELECT NVL(QTY ,0),IDENTIY_NO
+		FROM DL_DEAL 
+		WHERE STATUS	=	'CC' 
+		AND CLIENT	=		:p_client_cd
+		AND INSTR_CODE 	=		:p_instr_code
+		AND SETTLEMENT_NO	= 	:p_settlement_no
+		ORDER BY QTY;
+	printf("\n the sql code is |%d|",sqlca.sqlcode);
+	IS_ANY_ORA_ERROR
+
+		EXEC SQL DECLARE l_cur_halfqty CURSOR FOR
+		SELECT NVL(QTY ,0)/2,IDENTIY_NO
+		FROM DL_DEAL
+		WHERE STATUS   =  'CC'
+		AND CLIENT  =     :p_client_cd
+		AND INSTR_CODE    =     :p_instr_code
+		AND SETTLEMENT_NO =  :p_settlement_no
+		ORDER BY QTY;
+	printf("\n the sql code is |%d|",sqlca.sqlcode);
+	IS_ANY_ORA_ERROR
+
+		EXEC SQL OPEN l_cur_selqty;
+
+	for(;;)
+	{
+		EXEC SQL FETCH l_cur_selqty INTO :l_qty,
+			  :l_identiy_no;
+		
+
+		if (APL_ZERO_RESULT_SET)
+		{
+			break;
+		}
+		IS_ANY_ORA_ERROR
+
+			temp=temp+l_qty;
+
+		if(temp > p_poolacc_qty)
+		{
+			l_short_qty = temp - p_poolacc_qty;
+			l_qty_remain = l_qty - l_short_qty;
+			l_allot_qty = l_qty_remain;
+
+			if(l_qty < l_short_qty * 2)
+			{
+					EXEC SQL ROLLBACK;
+					IS_ANY_ORA_ERROR
+
+				   EXEC SQL OPEN l_cur_halfqty ;
+					IS_ANY_ORA_ERROR
+
+				for(;;)
+				{
+					EXEC SQL FETCH l_cur_halfqty INTO :l_half_qty,
+						  :l_identiy_no;
+					if (APL_ZERO_RESULT_SET)
+					{
+						break;
+					}
+	             printf("\n the sql code1 is |%d|",sqlca.sqlcode);
+					IS_ANY_ORA_ERROR
+
+						EXEC SQL SELECT (SUM(QTY)/2) INTO :l_sumqty  FROM DL_DEAL 
+						WHERE STATUS   =  'CC'
+						AND CLIENT  =     :p_client_cd
+						AND INSTR_CODE    =     :p_instr_code
+						AND SETTLEMENT_NO =  :p_settlement_no
+						ORDER BY QTY;
+	             printf("\n the sql code2 is |%d|",sqlca.sqlcode);
+					IS_ANY_ORA_ERROR
+
+						l_poolhalqty = p_poolacc_qty - l_sumqty;
+
+					temp1=temp1+l_half_qty;
+
+					if(temp1 > l_poolhalqty)
+					{
+						l_short_qty = temp1 - l_poolhalqty;
+						l_addqty = l_half_qty - l_short_qty;
+
+						if(l_addqty < 0)
+						{
+							l_short_qty = l_half_qty;
+							l_qty_remain = l_half_qty;
+							l_allot_qty = l_qty_remain;
+						}
+						else
+						{
+						l_qty_remain = l_half_qty + l_addqty;
+						l_allot_qty = l_qty_remain;
+						}
+					}
+					else
+					{
+						l_short_qty = 0;
+						l_qty_remain = 2*l_half_qty;
+						l_allot_qty = l_qty_remain;
+					}
+	            l_qty = 2*l_half_qty;
+
+					printf("Client |%s| Instrument |%s| Sett No |%s| Available |%d| Short |%d| allot_qty |%d| status |%s|\n",p_client_cd,p_instr_code,p_settlement_no,l_qty_remain,l_short_qty,l_allot_qty,l_status);
+
+					EXEC SQL INSERT INTO DL_MARKSHORTAGE (SETTLEMENT_NO,
+						DL_CLIENT,
+						DL_REF_NO,
+						INSTR_CODE,
+						QTY,
+						AVAIL_QTY,
+						ALLOT_QTY,
+						SHORTAGE_QTY,
+						POOL_TRANS,
+						STATUS) VALUES (
+							:p_settlement_no:i_settlement_no,
+							:p_client_cd:i_client_cd,
+							:l_identiy_no:i_identiy_no,
+							:p_instr_code:i_instr_code,
+							:l_qty:i_qty,
+							:l_qty_remain:i_qty_remain,
+							:l_allot_qty:i_allot_qty,
+							:l_short_qty:i_short_qty,
+							:l_pool_trans:i_pool_trans,
+							:l_status:i_status);
+
+	printf("\n the sql code is |%d|",sqlca.sqlcode);
+	
+					IS_ANY_ORA_ERROR
+
+						EXEC SQL UPDATE DL_DEAL SET AVAIL_QTY = :l_qty_remain:i_qty_remain,
+							  SHORTAGE_QTY = :l_short_qty:i_short_qty
+								  WHERE
+								  IDENTIY_NO = :l_identiy_no AND
+								  CLIENT = :p_client_cd AND
+								  SETTLEMENT_NO = :p_settlement_no;
+					IS_ANY_ORA_ERROR
+
+				}
+				EXEC SQL CLOSE l_cur_halfqty;
+				IS_ANY_ORA_ERROR
+			   break;
+			}
+
+			if(l_qty_remain < 0)
+			{
+				l_short_qty = l_qty;
+				l_qty_remain = 0;
+				l_allot_qty = 0;
+			}
+		}
+		else
+		{
+			l_short_qty = 0;
+			l_qty_remain = l_qty;
+			l_allot_qty = l_qty_remain;
+		}
+
+		printf("Client |%s| Instrument |%s| Sett No |%s| Available |%d| Short |%d| allot_qty |%d| status |%s|\n",p_client_cd,p_instr_code,p_settlement_no,l_qty_remain,l_short_qty,l_allot_qty,l_status);
+
+		EXEC SQL INSERT INTO DL_MARKSHORTAGE (SETTLEMENT_NO,
+				DL_CLIENT,
+				DL_REF_NO,
+				INSTR_CODE,
+				QTY,
+				AVAIL_QTY,
+				ALLOT_QTY,
+				SHORTAGE_QTY,
+				POOL_TRANS,
+				STATUS) VALUES (
+					:p_settlement_no:i_settlement_no,
+					:p_client_cd:i_client_cd,
+					:l_identiy_no:i_identiy_no,
+					:p_instr_code:i_instr_code,
+					:l_qty:i_qty,
+					:l_qty_remain:i_qty_remain,
+					:l_allot_qty:i_allot_qty,
+					:l_short_qty:i_short_qty,
+					:l_pool_trans:i_pool_trans,
+					:l_status:i_status);
+
+	printf("\n the sql code is |%d|",sqlca.sqlcode);
+
+		IS_ANY_ORA_ERROR
+
+			EXEC SQL UPDATE DL_DEAL SET AVAIL_QTY = :l_qty_remain:i_qty_remain,
+				  SHORTAGE_QTY = :l_short_qty:i_short_qty 
+					  WHERE 
+					  IDENTIY_NO = :l_identiy_no AND
+					  CLIENT = :p_client_cd AND
+					  SETTLEMENT_NO = :p_settlement_no; 
+		
+	printf("\n the sql code is |%d|",sqlca.sqlcode);
+
+		IS_ANY_ORA_ERROR
+
+
+	}
+
+	EXEC SQL CLOSE l_cur_selqty;
+	IS_ANY_ORA_ERROR
+
+		RETURN_SUCCESS :
+		{
+			APL_FUNCTION_RET_SUCCESS(APL_OUT_FILE)
+				return(APL_SUCCESS);
+		}
+RETURN_FAILURE :
+	{
+		APL_FUNCTION_RET_FAILURE(APL_OUT_FILE)
+			return(APL_FAILURE);
+	}
+
+}

@@ -1,0 +1,1948 @@
+
+#include <strings.h>
+#include <CA_Common.h>
+#include <CO_IndStructdef.h>
+
+EXEC SQL INCLUDE SQLCA;
+
+#define  S_YEAR_POS           6
+#define  S_YEAR_LEN           4
+#define  S_MONTH_POS          3
+#define  S_DAY_POS            0
+#define  S_MONTH_LEN          2
+#define  S_DAY_LENGTH         2
+#define  S_DEC_LENGTH         4
+#define  S_DAYS_IN_YEAR       365
+#define  S_LAST_DAY           "31/12/%s 00:00:00"
+#define  S_FIRST_DAY          "01/01/%s 00:00:00"
+
+
+/* Added by kotubabu for Linux Migration -Start*/
+#ifdef OS_LINUX
+	FILE  *l_logfil = NULL;
+	FILE  *l_usr_logfil = NULL;
+#else
+FILE *l_logfil = APL_OUT_FILE;
+FILE *l_usr_logfil = APL_OUT_FILE;
+#endif
+/* Added by kotubabu  for Linux Migration -END*/
+typedef struct FL_RT_ST
+{
+        char h_cln_code[MT_CLN_CODE_LEN];
+        char h_instr_code[MT_INSTR_CODE_LEN];
+        struct FL_RT_ST *h_next;
+}FLRT_CLN_POS;
+
+
+int Rtv_BenchMark_Int(  char *p_mibor_name,
+                        char *p_sequence,
+                        char *p_def_flrate,
+                        double *p_rate,
+                        char *p_sys_date,
+                        DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+        /** Get Details floating rate instrument **/
+        double l_mbr_float_rate = 0.0;
+        struct sqlca sqlca;
+        char l_mibor [100] = APL_NULL_STRING;
+        char l_seq [100] = APL_NULL_STRING;
+        char l_working_date[APL_DATE_LEN] = APL_NULL_STRING;
+        int l_flag = 0;
+   APL_FUNCTION_ENTER(l_logfil)
+        fprintf(l_logfil," Mibor Name Is |%s|\n",p_mibor_name);
+      fprintf(l_logfil,"Default Rate Is |%c| Trying to pick %c Float rate|\n",p_def_flrate[0],p_def_flrate[0]);
+
+        /** Check whether current Date is Holiday **/
+        if (CO_Chk_Holiday(p_sys_date,
+                           &l_flag,
+                           l_debug_info_ptr,
+                           APL_NULL_STRING) == APL_FAILURE)
+        {
+                APL_GOBACK_FAIL
+        }
+        /** If date is holiday, we have to get interest date from last working day **/
+        if(l_flag)
+	{
+
+                if (Rtv_Last_BussDate(p_sys_date,
+                                      l_working_date,
+                                      l_debug_info_ptr) == APL_FAILURE)
+                {
+                        APL_GOBACK_FAIL
+                }
+                fprintf(l_logfil,"Date is Holiday|%s|, We proceed for last Working day |%s|\n",p_sys_date,l_working_date);
+                fprintf(l_usr_logfil,"Date(%s) is Holiday , Proceeding With Last Working Day (%s) For InterestRate\n",p_sys_date,l_working_date);
+        }
+        else
+        {
+                strcpy(l_working_date,p_sys_date);
+                fprintf(l_logfil,"Date is Not Holiday|%s|, We proceed for Working day |%s|\n",p_sys_date,l_working_date);
+        }
+
+        switch(p_def_flrate[0])
+        {
+                case '1':
+                        EXEC SQL SELECT NVL(FLOAT_RATE1,0.0)
+                                INTO :l_mbr_float_rate
+                                FROM MT_DAILY_FLOAT_RATE
+                                WHERE BENCHMARK_CODE = :p_mibor_name
+                                AND to_char(RATE_DATE,'DD/MM/YYYY') = to_char(to_date(:l_working_date,'dd/mm/yyyy hh24:mi:ss'),'DD/MM/YYYY')
+                                AND STATUS = 'AA';
+                                IS_ANY_ORA_ERROR
+                                break;
+                case '2':
+			EXEC SQL SELECT NVL(FLOAT_RATE2,0.0)
+                                INTO :l_mbr_float_rate
+                                FROM MT_DAILY_FLOAT_RATE
+                                WHERE BENCHMARK_CODE = :p_mibor_name
+                                AND to_char(RATE_DATE,'DD/MM/YYYY') = to_char(to_date(:l_working_date,'dd/mm/yyyy hh24:mi:ss'),'DD/MM/YYYY')
+                                AND STATUS = 'AA';
+                                IS_ANY_ORA_ERROR
+                                break;
+                case '3':
+                        EXEC SQL SELECT NVL(FLOAT_RATE3,0.0)
+                                INTO :l_mbr_float_rate
+                                FROM MT_DAILY_FLOAT_RATE
+                                WHERE BENCHMARK_CODE = :p_mibor_name
+                                AND to_char(RATE_DATE,'DD/MM/YYYY') = to_char(to_date(:l_working_date,'dd/mm/yyyy hh24:mi:ss'),'DD/MM/YYYY')
+                                AND STATUS = 'AA';
+                                IS_ANY_ORA_ERROR
+                                break;
+        }
+
+        /** Check whether the 1st floating rate exists **/
+        if(l_mbr_float_rate == 0.0)
+	{
+                fprintf(l_logfil," Default Rate is 0 Trying to pick 1st Float rate On | %s|\n",l_working_date);
+
+                EXEC SQL SELECT NVL(FLOAT_RATE1,0.0)
+                                INTO :l_mbr_float_rate
+                                FROM MT_DAILY_FLOAT_RATE
+                                WHERE BENCHMARK_CODE = :p_mibor_name
+                                AND RATE_DATE = to_date(:l_working_date,'dd/mm/yyyy hh24:mi:ss')
+                                AND STATUS = 'AA';
+
+                                IS_ANY_ORA_ERROR
+        }
+        if(l_mbr_float_rate == 0.0)
+        {
+                /**
+                 * Now We haveA
+                 * to go through sequence **/
+                fprintf(l_logfil," Now Going As the Preferred Sequence\n");
+                fprintf(l_logfil,"Sequence |%s|\n",p_sequence);
+                strcat(p_sequence,",");
+                strncpy(l_seq,p_sequence,strlen(p_sequence) - strlen(strstr(p_sequence,",")));
+                l_seq[strlen(p_sequence) - strlen(strstr(p_sequence,","))] = APL_NULL_CHAR;
+
+                if(!strlen(l_seq))
+			APL_GOBACK_SUCCESS
+
+		fprintf(l_logfil," Checking for Description in Pro_Sgenstat for Sequence |%s|\n",l_seq);
+
+                EXEC SQL 
+		SELECT MAP_DESC
+                INTO :l_mibor
+                FROM PRO_SGENSTAT
+                WHERE MAP_TYPE = 'MIBOR'
+                AND MAP_VAL = :l_seq;
+                
+		IS_ANY_ORA_ERROR
+
+                fprintf(l_logfil," Value Got From Pro_Sgenstat |%s|\n",l_mibor);
+                if(Rtv_BenchMark_Int( l_mibor,
+                                      p_sequence + strlen(l_seq) + 1,
+                                      p_def_flrate,
+                                      &l_mbr_float_rate,
+                                      l_working_date,
+                                      l_debug_info_ptr) == APL_FAILURE)
+                {
+                        APL_GOBACK_FAIL
+                }
+
+        }
+        *p_rate = l_mbr_float_rate;
+        fprintf(l_logfil," Rate We Got is|%lf|\n",*p_rate);
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+   	APL_FUNCTION_RET_SUCCESS(l_logfil)
+
+	RETURN_FAILURE:
+   	APL_FUNCTION_RET_FAILURE(l_logfil)
+}
+
+
+int Rtv_Interest_Rate(  char *p_mibor_name,
+                        char *p_prefd_seq,
+                                                                char *p_def_flrate,
+                                                                double p_floor,
+                                                                double p_cap,
+                                                                char *p_fixed_bench,
+                                                                double p_base_margin,
+                                                                char *p_sys_date,
+                                                                double *p_rate,
+                                                                DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+        struct sqlca sqlca;
+        APL_FUNCTION_ENTER(l_logfil)
+
+
+        if(Rtv_BenchMark_Int(   p_mibor_name,
+                                p_prefd_seq,
+                                                                p_def_flrate,
+                                                                p_rate,
+                                                                p_sys_date,
+                                                                l_debug_info_ptr)== APL_FAILURE)
+                {
+                        APL_GOBACK_FAIL
+                }
+        if(*p_rate == 0.0)
+        {
+                fprintf(l_usr_logfil,"Mibor Interest Rate is 0 or Not Present\n");
+                APL_GOBACK_FAIL
+        }
+
+        fprintf(l_usr_logfil,"Mibor Interest (%lf) Used for Calculation\n", *p_rate);
+
+        if(Process_Margin_Fixed(        p_fixed_bench,
+                                                p_base_margin,
+                                                p_rate,
+						l_debug_info_ptr)== APL_FAILURE)
+                {
+                        APL_GOBACK_FAIL
+                }
+        fprintf(l_usr_logfil,"Interest Rate After Margin/Fixed (%lf) Used for Calculation\n", *p_rate);
+        if(Floor_Cap_Chk(p_floor,
+                         p_cap,
+                         p_rate,
+                         l_debug_info_ptr)== APL_FAILURE)
+                {
+                        APL_GOBACK_FAIL
+                }
+        fprintf(l_usr_logfil,"Interest Rate After Floor/Cap (%lf) Used for Calculation\n", *p_rate);
+
+APL_GOBACK_SUCCESS  // AIX -Warnings Removal
+RETURN_SUCCESS:
+
+   APL_FUNCTION_RET_SUCCESS(l_logfil)
+
+RETURN_FAILURE:
+
+
+   APL_FUNCTION_RET_FAILURE(l_logfil)
+}
+
+
+int Rtv_Base_Amount(    char *p_daily_compound,
+                                                char *p_ex_ph,
+                                                char *p_ex_wh,
+                                                char *p_instr_code,
+                                                char *p_cln_code,
+                                                char *p_calc_date,
+                                                        double p_safek,
+                                                        double *p_amount,
+                                                        double *p_prev_amount,
+                                                        double *p_prev_safek,
+                                                        double *p_facevalue,
+                                                        DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+        struct sqlca sqlca;
+        char l_last_date[APL_DATE_LEN] = APL_NULL_STRING;
+        double l_amount = 0.0;
+        double l_prev_amount = 0.0;
+        double l_prev_safek = 0.0;
+        double l_facevalue = 0.0;
+        APL_FUNCTION_ENTER(l_logfil)
+
+        EXEC SQL SELECT NVL(NOMINAL_VALUE,0.0)
+                                INTO :l_facevalue
+                                FROM MT_INSTRUMENT
+                                WHERE INSTR_CODE = :p_instr_code;
+        IS_ANY_ORA_ERROR
+
+        fprintf(l_logfil,"Daily Compound is |%c|\n",p_daily_compound[0]);
+	
+	switch(p_daily_compound[0])
+        {
+                case 'Y':
+                        if(Rtv_Prev_Date(       p_ex_ph,
+                                                                p_ex_wh,
+                                                                p_calc_date,
+                                                                l_last_date,
+                                                                l_debug_info_ptr) == APL_FAILURE)
+                {
+                        APL_GOBACK_FAIL
+                }
+
+                fprintf(l_logfil,"1Last Processed Date |%s| %lf\n",l_last_date, p_safek);
+                fprintf(l_usr_logfil,"Amount Fetched Using Last Processed Date (%s) \n",l_last_date);
+                EXEC SQL SELECT ((NVL(BaseAmount,0.0) + Nvl(Interest,0.0))/Nvl(Safek,1.0)) * Nvl(:p_safek,0.0), (Nvl(BaseAmount,0.0) + Nvl(Interest,0.0)),Safek
+                                                INTO :l_amount,
+                                                          :l_prev_amount,
+                                                          :l_prev_safek
+                                                FROM CADAILY_FLOATINTEREST
+                                                WHERE On_Date = :l_last_date
+                                                AND INSTR_CODE = :p_instr_code
+                                                AND CLN_CODE = :p_cln_code;
+                        fprintf(l_logfil,"sqlca code %d|\n",sqlca.sqlcode);
+                        IS_ANY_ORA_ERROR
+
+                        if(sqlca.sqlcode == 1403)
+                        {
+                                fprintf(l_usr_logfil,"Previous Bussiness Day Calculation Is Not Done\n");
+                                fprintf(l_logfil,"No data present in CADAILY_FLOATINTEREST for client |%s| instrument |%s| Date |%s|\n",p_cln_code,p_instr_code,l_last_date);
+                                /* APL_GOBACK_FAIL */
+			/* UAT Fix if prev day calculation not found by default return success with principal value  */
+                                l_amount = p_safek * l_facevalue;
+                                break;
+                        }
+
+                                /** we have to get last days closing amount **/
+                                fprintf(l_logfil,"Pick From CADAILY_FLOATINTEREST , sqlcode  = |%d|\n",sqlca.sqlcode);
+
+                        break;
+                case 'N':
+                        /** we have top get principal amount **/
+                        EXEC SQL SELECT NVL(NOMINAL_VALUE,0.0) * Nvl(:p_safek,0.0)
+                                        INTO :l_amount
+                                        FROM MT_INSTRUMENT
+                                        WHERE INSTR_CODE = :p_instr_code;
+
+                        IS_ANY_ORA_ERROR
+                                fprintf(l_logfil,"Pick From MT_INSTRUMENT , sqlcode  = |%d|\n",sqlca.sqlcode);
+                        break;
+
+                case 'H':
+                        EXEC SQL SELECT NVL(BASEAMOUNT,0.0)
+                                        INTO :l_amount
+                                        FROM CADAILY_FLOATINTEREST
+                                        WHERE INSTR_CODE = :p_instr_code
+                                        AND ON_DATE = (SELECT SYS_DATE FROM PRO_SYS_DATE);
+
+                        IS_ANY_ORA_ERROR
+			fprintf(l_logfil,"Pick From MT_INSTRUMENT , sqlcode  = |%d|\n",sqlca.sqlcode);
+                                fprintf(l_logfil,"Base Amount Picked For Holiday is |%lf|\n",l_amount);
+
+                        break;
+
+        }
+
+
+        *p_amount = l_amount;
+        *p_prev_amount = l_prev_amount;
+        *p_prev_safek = l_prev_safek;
+        *p_facevalue = l_facevalue;
+        fprintf(l_logfil,"Amount (%lf) Is used for calculation \n",*p_amount);
+
+APL_GOBACK_SUCCESS  // AIX -Warnings Removal
+RETURN_SUCCESS:
+
+   APL_FUNCTION_RET_SUCCESS(l_logfil)
+
+RETURN_FAILURE:
+
+   APL_FUNCTION_RET_FAILURE(l_logfil)
+}
+
+
+int Calc_Interest( char *p_calc_date,
+                                                char *p_instr_code,
+                                                char *p_cln_code,
+                                                double p_rate,
+                                                double p_safek,
+                                                double p_prev_safek,
+                                                double p_facevalue,
+                                                double p_amount,
+                                                double p_prev_amount,
+                                                char *p_sys_date,
+                                                CADAILY_FLOATINTEREST_STRUCT_H *p_cadaily_floatinterest_h,
+                                                DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+        double l_days_yr = 365.00;
+        struct sqlca sqlca;
+        APL_FUNCTION_ENTER(l_logfil)
+
+        strcpy(p_cadaily_floatinterest_h -> h_on_date,p_calc_date);
+        strcpy(p_cadaily_floatinterest_h -> h_calc_date,p_sys_date);
+        strcpy(p_cadaily_floatinterest_h -> h_instr_code,p_instr_code);
+        strcpy(p_cadaily_floatinterest_h -> h_cln_code,p_cln_code);
+        p_cadaily_floatinterest_h -> h_intrate = p_rate;
+        p_cadaily_floatinterest_h -> h_safek    = p_safek;
+        p_cadaily_floatinterest_h -> h_facevalue = p_facevalue;
+        p_cadaily_floatinterest_h -> h_baseamount        = p_amount;
+        p_cadaily_floatinterest_h -> h_interest = p_amount * p_rate;
+
+        fprintf(l_logfil,"Base Amount (%lf) before Insert \n",p_cadaily_floatinterest_h -> h_baseamount);
+
+        fprintf(l_logfil,"Interest (%lf) before Insert \n",p_cadaily_floatinterest_h -> h_interest);
+
+        p_cadaily_floatinterest_h -> h_gain_safek       = p_safek - p_prev_safek;
+        p_cadaily_floatinterest_h -> h_gain_amount = p_amount - p_prev_amount;
+        p_cadaily_floatinterest_h -> h_gain_int =       (p_amount - p_prev_amount) - (p_facevalue * (p_safek - p_prev_safek));
+
+APL_GOBACK_SUCCESS  // AIX -Warnings Removal
+RETURN_SUCCESS:
+
+   APL_FUNCTION_RET_SUCCESS(l_logfil)
+
+RETURN_FAILURE:
+
+   APL_FUNCTION_RET_FAILURE(l_logfil)
+}
+
+
+
+int Rtv_Int_Values_HB(     char *p_from_date,
+                                                        char *p_to_date,
+                                                        double *p_act_days,
+                                                        double *p_calc_days,
+                                                        double *p_days_year,
+                                                DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+        struct sqlca sqlca;
+        double l_dbl_year = 0.0;
+        double l_dbl_from_month = 0.0;
+        double l_dbl_to_month = 0.0;
+        double l_dbl_from_day = 0.0;
+        double l_dbl_to_day = 0.0;
+
+        char l_year[S_YEAR_LEN + 1] = APL_NULL_STRING;
+        char l_from_month[S_MONTH_LEN + 1] = APL_NULL_STRING;
+        char l_to_month[S_MONTH_LEN + 1] = APL_NULL_STRING;
+        char l_from_day[S_DAY_LENGTH + 1] = APL_NULL_STRING;
+        char l_to_day[S_DAY_LENGTH + 1] = APL_NULL_STRING;
+
+        APL_FUNCTION_ENTER(l_logfil)
+
+        strncpy(l_year, p_from_date + S_YEAR_POS, S_YEAR_LEN);
+        l_dbl_year =  atof(l_year);
+
+        if(CA_CalcDaysInAYear(  atoi(l_year),
+                                                                        p_days_year,
+                                                                        l_debug_info_ptr)==APL_FAILURE)
+        {
+                APL_GOBACK_FAIL
+        }
+
+        EXEC SQL SELECT NVL(TO_DATE(:p_to_date) - TO_DATE(:p_from_date),0.0)
+                                INTO :p_act_days
+                                FROM DUAL;
+
+	if (*p_act_days == 0.0) *p_act_days = 1.0;
+
+        if (strcmp(p_from_date, p_to_date) == 0 )
+        {
+                /* For same day pass calculated days as 1 */
+                *p_calc_days = 360.0/365.0;
+        }
+        else
+        {
+                strncpy(l_from_month, p_from_date+S_MONTH_POS, S_MONTH_LEN);
+                strncpy(l_to_month, p_to_date+S_MONTH_POS, S_MONTH_LEN);
+                strncpy(l_from_day, p_from_date+S_DAY_POS, S_DAY_LENGTH);
+                strncpy(l_to_day, p_to_date+S_DAY_POS, S_DAY_LENGTH);
+                l_dbl_from_month =  atof(l_from_month);
+                l_dbl_to_month    =  atof(l_to_month);
+                l_dbl_from_day      =  atof(l_from_day);
+                l_dbl_to_day      =  atof(l_to_day);
+
+                *p_calc_days = 30.0 * (l_dbl_to_month - l_dbl_from_month) + (l_dbl_to_day - l_dbl_from_day) ;
+        }
+APL_GOBACK_SUCCESS  // AIX -Warnings Removal
+RETURN_SUCCESS:
+        APL_FUNCTION_RET_SUCCESS(APL_OUT_FILE)
+
+RETURN_FAILURE:
+        APL_FUNCTION_RET_FAILURE(APL_OUT_FILE)
+
+}
+
+int Rtv_Interest_Rate_HB(  char *p_mibor_name,
+                        char *p_prefd_seq,
+                        char *p_def_flrate,
+                        double p_floor,
+                        double p_cap,
+                        char *p_fixed_bench,
+                        double p_base_margin,
+                        char *p_sys_date,
+                        double *p_rate,
+                        DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	struct sqlca sqlca;
+        APL_FUNCTION_ENTER(l_logfil)
+
+
+        if(Rtv_BenchMark_Int(   p_mibor_name,
+                                p_prefd_seq,
+                                p_def_flrate,
+                                p_rate,
+                                p_sys_date,
+                                l_debug_info_ptr)== APL_FAILURE)
+        {
+	       APL_GOBACK_FAIL
+        }
+
+	if(*p_rate == 0.0)
+        {
+                fprintf(l_usr_logfil,"Mibor Interest Rate is 0 or Not Present\n");
+                APL_GOBACK_FAIL
+        }
+
+        fprintf(l_usr_logfil,"Mibor Interest (%lf) Used for Calculation\n", *p_rate);
+
+	if(Process_Margin_Fixed(p_fixed_bench,
+                                p_base_margin,
+                                p_rate,
+                                l_debug_info_ptr)== APL_FAILURE)
+        {
+	   	APL_GOBACK_FAIL
+        }
+        fprintf(l_usr_logfil,"Interest Rate After Margin/Fixed (%lf) Used for Calculation\n", *p_rate);
+
+	if(Floor_Cap_Chk(p_floor,
+                         p_cap,
+                         p_rate,
+                         l_debug_info_ptr)== APL_FAILURE)
+        {
+        	APL_GOBACK_FAIL
+        }
+        fprintf(l_usr_logfil,"Interest Rate After Floor/Cap (%lf) Used for Calculation\n", *p_rate);
+
+	RETURN_SUCCESS:
+
+   	APL_FUNCTION_RET_SUCCESS(l_logfil)
+
+	RETURN_FAILURE:
+
+   	APL_FUNCTION_RET_FAILURE(l_logfil)
+}
+
+
+int Process_Calc_HB(char *l_calc_type,
+                double p_rate,
+                double p_act_days,
+                double p_calc_days,
+                double p_days_year,
+                double *p_value,
+                DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	struct sqlca sqlca;
+
+        APL_FUNCTION_ENTER(l_logfil)
+        Alert( "%lf %lf %lf ", p_rate ,p_act_days, p_calc_days);
+        
+	switch(l_calc_type[0])
+        {
+                case 'A':
+			*p_value = (p_rate / 100.00) * (p_act_days/360.00);
+                        fprintf(l_logfil,"A : value (%lf) = (rate (%lf) /100.00) * (Actual Days (%lf) / 360.00)\n",*p_value,p_rate,p_act_days);
+                        break;
+
+		case 'B':
+			*p_value = (p_rate / 100.00) * (p_act_days/p_days_year);
+                        fprintf(l_logfil,"B : value (%lf) = (rate (%lf) /100.00) * (Actual Days (%lf) / Days In Year (%lf) )\n",*p_value,p_rate,p_act_days,p_days_year);
+                        break;
+
+		case 'C':
+			*p_value = (p_rate / 100.00) * (p_calc_days/p_days_year);
+                        fprintf(l_logfil,"C : value (%lf) = (rate (%lf) /100.00) * (Calc Days (%lf) / Days In Year (%lf))\n",*p_value,p_rate,p_calc_days,p_days_year);
+                        break;
+
+		case 'D':
+			*p_value = (p_rate / 100.00) * (p_calc_days/360.00);
+                        fprintf(l_logfil,"D : value (%lf) = (rate (%lf) /100.00) * (Calc Days (%lf) / 360.00)\n",*p_value,p_rate,p_calc_days);
+                        break;
+
+		case 'E':
+			*p_value = (p_rate / 100.00) * (p_act_days/365.00);
+                        fprintf(l_logfil,"E : value (%lf) = (rate (%lf) /100.00) * (Actual Days (%lf) / 365.00)\n",*p_value,p_rate,p_act_days);
+                        break;
+
+		case 'F':
+			*p_value = (p_rate / 100.00) * (p_calc_days/365.00);
+                        fprintf(l_logfil,"F : value (%lf) = (rate (%lf) /100.00) * (CAlc Days (%lf) / 365.00)\n",*p_value,p_rate,p_calc_days);
+                        break;
+	}
+
+	Alert("  %lf ",*p_value);
+       	Alert("  %.10lf ",*p_value);
+
+    APL_GOBACK_SUCCESS  // AIX -Warnings Removal
+	RETURN_SUCCESS:
+        APL_FUNCTION_RET_SUCCESS(APL_OUT_FILE)
+
+	RETURN_FAILURE:
+        APL_FUNCTION_RET_FAILURE(APL_OUT_FILE)
+}
+
+
+int Process_Margin_Fixed(char *p_fixed_bench,
+                         double p_base_margin,
+                         double *p_rate,
+                         DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+        struct sqlca sqlca;
+        double l_rate = *p_rate;
+        APL_FUNCTION_ENTER(l_logfil)
+        fprintf(l_logfil,"Fixed Bench is |%c| \n",p_fixed_bench[0]);
+        fprintf(l_usr_logfil,"Fixed Bench is |%c| \n",p_fixed_bench[0]);
+
+        switch (p_fixed_bench[0])
+        {
+                case 'F':
+                        *p_rate = p_base_margin - *p_rate;
+                        fprintf(l_logfil,"Formula : Rate(%lf) = Base Margin (%lf) - Rate From Mibor(%lf) \n",*p_rate,p_base_margin,l_rate);
+                        fprintf(l_usr_logfil,"Formula : Rate(%lf) = Base Margin (%lf) - Rate From Mibor(%lf) \n",*p_rate,p_base_margin,l_rate);
+                        break;
+                case 'B':
+                        *p_rate = p_base_margin + *p_rate;
+                        fprintf(l_logfil,"Formula : Rate(%lf) = Base Margin (%lf) + Rate From Mibor(%lf) \n",*p_rate,p_base_margin,l_rate);
+                        fprintf(l_usr_logfil,"Formula : Rate(%lf) = Base Margin (%lf) + Rate From Mibor(%lf) \n",*p_rate,p_base_margin,l_rate);
+                        break;
+        }
+
+APL_GOBACK_SUCCESS  // AIX -Warnings Removal
+RETURN_SUCCESS:
+
+   APL_FUNCTION_RET_SUCCESS(l_logfil)
+
+RETURN_FAILURE:
+
+
+   APL_FUNCTION_RET_FAILURE(l_logfil)
+}
+
+
+int Floor_Cap_Chk(double p_floor,
+                  double p_cap,
+                  double *p_rate,
+                  DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+        struct sqlca sqlca;
+        APL_FUNCTION_ENTER(l_logfil)
+        if( p_floor > 0 && p_cap > 0 )
+        {
+        	if(*p_rate < p_floor)
+        	{
+                	fprintf(l_logfil,"Warning : Rate(%lf) < floor(%lf) \n",*p_rate,p_floor);
+                	fprintf(l_logfil,"Proceeding with Rate as Floor rate (%lf) \n",p_floor);
+
+                	fprintf(l_usr_logfil,"Warning : Rate(%lf) < floor(%lf) \n",*p_rate,p_floor);
+                	fprintf(l_usr_logfil,"Proceeding with Rate as Floor rate (%lf) \n",p_floor);
+
+                	*p_rate = p_floor;
+        	}
+        	
+		if(*p_rate > p_cap)
+        	{
+                	fprintf(l_logfil,"Warning : Rate(%lf) > Cap(%lf)\n",*p_rate,p_cap);
+                	fprintf(l_logfil,"Proceeding with Rate as Cap rate (%lf) \n",p_cap);
+                	fprintf(l_usr_logfil,"Warning : Rate(%lf) > Cap(%lf)\n",*p_rate,p_cap);
+                	fprintf(l_usr_logfil,"Proceeding with Rate as Cap rate (%lf) \n",p_cap);
+
+                	*p_rate = p_cap;
+        	}
+        	fprintf(l_logfil," Rate (%lf) is between floor(%lf) and Cap(%lf)\n",*p_rate,p_floor,p_cap);
+        	fprintf(l_usr_logfil,"Rate (%lf) is between floor(%lf) and Cap(%lf)\n",*p_rate,p_floor,p_cap);
+        }
+
+RETURN_SUCCESS:
+
+   APL_FUNCTION_RET_SUCCESS(l_logfil)
+
+RETURN_FAILURE:
+
+
+   APL_FUNCTION_RET_FAILURE(l_logfil)	
+}
+
+
+int Rtv_FlRateInstr_HB(char *p_instr_code,
+                    MT_FLRATEINST_STRUCT_H *p_mt_flrate_instrument_struct_h,
+                    DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+        struct sqlca sqlca;
+        MT_FLRATEINST_STRUCT_I *l_mt_flrate_instrument_struct_i = (MT_FLRATEINST_STRUCT_I *)NULL;
+        l_mt_flrate_instrument_struct_i = (MT_FLRATEINST_STRUCT_I *)calloc(1,sizeof(MT_FLRATEINST_STRUCT_I));
+        APL_FUNCTION_ENTER(l_logfil)
+
+
+        EXEC SQL SELECT *
+        INTO :p_mt_flrate_instrument_struct_h:l_mt_flrate_instrument_struct_i
+        FROM MT_FLRATE_INSTRUMENT
+        WHERE INSTR_CODE = :p_instr_code
+        AND STATUS = 'AA';
+        IS_ANY_ORA_ERROR
+
+        if(sqlca.sqlcode == 1403)
+        {
+                fprintf(l_logfil,"No Record in MT_FLRATE_INSTRUMENT for Instr |%s|\n",p_instr_code);
+                fprintf(l_usr_logfil,"No Record Present In Float Instrument Table For Instrument(%s)\n",p_instr_code);
+                APL_GOBACK_FAIL
+        }
+
+	RETURN_SUCCESS:
+        APL_FREE(l_mt_flrate_instrument_struct_i)
+   	APL_FUNCTION_RET_SUCCESS(l_logfil)
+
+	RETURN_FAILURE:
+        APL_FREE(l_mt_flrate_instrument_struct_i)
+   	APL_FUNCTION_RET_FAILURE(l_logfil)
+}
+
+int Float_Rate_Calc(char *p_instr_code,
+                        char *p_cln_code,
+                                        char *p_calc_date,
+                                        char *p_sys_date,
+                                        char *daily_comp_flg,/*Chirag for processing Holidays without compounding*/
+                                        DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+        double l_amount                 = 0.0;
+        double l_prev_amount            = 0.0;
+        double l_rate = 0.0;
+        double l_safek = 0.0;
+        double l_prev_safek = 0.0;
+        double l_facevalue = 0.0;
+        /* PJ */
+        double l_act_days       =       0.0;
+        double l_calc_days      =       0.0;
+        double l_days_year      =       0.0;
+        double l_value = 0.0;
+        char p_basis[2];
+
+        int  l_date_diff = 0;
+        char l_next_date[APL_DATE_LEN] = APL_NULL_STRING;
+        CADAILY_FLOATINTEREST_STRUCT_H *l_cadaily_floatinterest_h = (CADAILY_FLOATINTEREST_STRUCT_H *)NULL;
+
+        struct sqlca sqlca;
+
+        MT_FLRATEINST_STRUCT_H *l_mt_flrate_instrument_struct_h = (MT_FLRATEINST_STRUCT_H *)NULL;
+        l_mt_flrate_instrument_struct_h = (MT_FLRATEINST_STRUCT_H *)calloc(1,sizeof(MT_FLRATEINST_STRUCT_H));
+        l_cadaily_floatinterest_h = (CADAILY_FLOATINTEREST_STRUCT_H *)calloc(1,sizeof(CADAILY_FLOATINTEREST_STRUCT_H));
+
+        APL_FUNCTION_ENTER(l_logfil)
+
+        fprintf(l_usr_logfil,"-----\n");
+	fprintf(l_usr_logfil,"Calculating For Client(%s) Instr (%s) For Date(%s) On Date(%s)\n",p_cln_code,p_instr_code,p_calc_date,p_sys_date);
+        fprintf(l_usr_logfil,"-----\n");
+
+
+        if(Rtv_FlRateInstr( p_instr_code,
+                                                l_mt_flrate_instrument_struct_h,
+                                                l_debug_info_ptr) == APL_FAILURE)
+        {
+                APL_GOBACK_FAIL
+        }
+
+        if(Rtv_Safek(   p_instr_code,
+                                                p_cln_code,
+                                                p_calc_date,
+                                                p_sys_date,
+                                                &l_safek,
+                                                l_debug_info_ptr  )== APL_FAILURE)
+        {
+                        APL_GOBACK_FAIL
+        }
+        fprintf(l_usr_logfil,"Safek(%lf) Got For Client (%s) On Instrument (%s)\n",l_safek,p_cln_code,p_instr_code);
+        fprintf(l_logfil,"Calculating For |%s| safek %lf Instr |%s| For |%s| On |%s|\n",p_cln_code,l_safek,p_instr_code,p_calc_date,p_sys_date);
+        fprintf(l_logfil,"|%s||%s|\n",l_mt_flrate_instrument_struct_h -> h_benchmark_code,l_mt_flrate_instrument_struct_h -> h_prefd_seq);
+        if(Rtv_Interest_Rate(   l_mt_flrate_instrument_struct_h -> h_benchmark_code,
+                                l_mt_flrate_instrument_struct_h -> h_prefd_seq,
+				l_mt_flrate_instrument_struct_h -> h_default_float_rate,
+                                l_mt_flrate_instrument_struct_h -> h_floor_rate,
+                                l_mt_flrate_instrument_struct_h -> h_cap_rate,
+                                l_mt_flrate_instrument_struct_h -> h_fixed_bench,
+                                l_mt_flrate_instrument_struct_h -> h_base_margin,
+                                p_calc_date,
+                                &l_rate,
+                        l_debug_info_ptr        )== APL_FAILURE)
+                {
+                        APL_GOBACK_FAIL
+                }
+        Alert(" 703 Interest rate =%lf \n", l_rate);
+        /* UAT PJ */
+        if(Rtv_Int_Values(      p_sys_date,
+                                                                p_sys_date,
+                                                                &l_act_days,
+                                                                &l_calc_days,
+                                                                &l_days_year,
+                                                                l_debug_info_ptr) == APL_FAILURE)
+        {
+                APL_GOBACK_FAIL
+        }
+        Alert(" 693 %lf %lf %lf %s\n", l_act_days,l_calc_days,l_days_year, p_instr_code);
+        EXEC SQL SELECT INT_ACCTYP INTO :p_basis FROM MT_INSTRUMENT WHERE INSTR_CODE = :p_instr_code ;
+        Alert( "p_basis %s ", p_basis);
+	if(Process_Calc(        &p_basis,
+                                                        l_rate,
+                                                        l_act_days,
+                                                        l_calc_days,
+                                                        l_days_year,
+                                                        &l_value,
+                                                        l_debug_info_ptr) == APL_FAILURE)
+        {
+                APL_GOBACK_FAIL
+        }
+        Alert(" 727 Interest rate =%lf %lf \n", l_rate, l_value);
+        fprintf(l_usr_logfil,"Interest Rate(%lf) Used For Calculation\n",l_rate);
+        fprintf(l_logfil,"Calculating For |%s| Instr |%s| For |%s| On |%s| Interest Rate(%lf)\n",p_cln_code,p_instr_code,p_calc_date,p_sys_date,l_rate);
+        /*Chirag For Processing holidays Without Compounding*/
+        fprintf(l_logfil,"Daily Compound Flag is |%s|\n",daily_comp_flg);
+        if(!strcmp(daily_comp_flg,"H"))
+                strcpy(l_mt_flrate_instrument_struct_h -> h_daily_compound,daily_comp_flg);
+        /*Chirag For Processing holidays Without Compounding*/
+        if(Rtv_Base_Amount(     l_mt_flrate_instrument_struct_h -> h_daily_compound,
+                                                l_mt_flrate_instrument_struct_h -> h_excl_holidays,
+                                                l_mt_flrate_instrument_struct_h -> h_compounding_wdays,
+                                                p_instr_code,
+                                                p_cln_code,
+                                                p_calc_date,
+                                                l_safek,
+                                                &l_amount,
+                                                &l_prev_amount,
+                                                &l_prev_safek,
+                                                &l_facevalue,
+                                                l_debug_info_ptr)== APL_FAILURE)
+                {
+                        APL_GOBACK_FAIL
+                }
+	fprintf(l_usr_logfil,"Base Amount(%lf) Used For Calculation\n",l_amount);
+        fprintf(l_logfil,"Calculating For |%s| Instr |%s| For |%s| On |%s| %lf\n",p_cln_code,p_instr_code,p_calc_date,p_sys_date, l_amount);
+        if(Calc_Interest(       p_calc_date,
+                                                        p_instr_code,
+                                                        p_cln_code,
+                                                        l_value,
+                                                        l_safek,
+                                                        l_prev_safek,
+                                                        l_facevalue,
+                                                        l_amount,
+                                                        l_prev_amount,
+                                                        p_sys_date,
+                                                        l_cadaily_floatinterest_h,
+                                                        l_debug_info_ptr)== APL_FAILURE)
+                {
+                        APL_GOBACK_FAIL
+                }
+
+
+
+        if(Upd_CA_Daily_Flrt(   l_cadaily_floatinterest_h,
+                                l_debug_info_ptr) == APL_FAILURE)
+                        {
+                        APL_GOBACK_FAIL
+                        }
+
+APL_GOBACK_SUCCESS  // AIX -Warnings Removal
+RETURN_SUCCESS:
+        APL_FREE(l_mt_flrate_instrument_struct_h)
+        APL_FREE(l_cadaily_floatinterest_h)
+   APL_FUNCTION_RET_SUCCESS(l_logfil)
+
+RETURN_FAILURE:
+APL_FREE(l_mt_flrate_instrument_struct_h)
+        APL_FREE(l_cadaily_floatinterest_h)
+	APL_FUNCTION_RET_FAILURE(l_logfil)
+}
+
+int Rtv_Clients(FLRT_CLN_POS **p_cln_safek,
+                                        DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+        FLRT_CLN_POS **l_temp_ptr = p_cln_safek;
+        char l_cln_code[MT_CLN_CODE_LEN] = APL_NULL_STRING;
+        char l_instr_code[MT_INSTR_CODE_LEN] = APL_NULL_STRING;
+
+        APL_FUNCTION_ENTER(l_logfil)
+
+        EXEC SQL DECLARE sel_cln_cur CURSOR FOR
+        select a.cln_code,b.instr_code
+        from mt_client a, dl_safek b,mt_instrument c
+        where a.status = 'AA'
+                              and c.status = 'AA'
+                                              and c.int_typ = 'L'
+                                                        and b.instr_code = c.instr_code
+                                                        and b.client = a.cln_code
+                                                        group by cln_code,b.instr_code;
+        IS_ANY_ORA_ERROR
+
+
+        EXEC SQL OPEN sel_cln_cur;
+        IS_ANY_ORA_ERROR
+
+        for(;;)
+        {
+                EXEC SQL FETCH sel_cln_cur INTO :l_cln_code,l_instr_code;
+                IS_ANY_ORA_ERROR
+                if(sqlca.sqlcode == 1403)break;
+                while((*l_temp_ptr) != NULL)
+                {
+                        l_temp_ptr = &((*l_temp_ptr)->h_next);
+                }
+                if(((*l_temp_ptr) = (FLRT_CLN_POS *)calloc(1,sizeof(FLRT_CLN_POS))) == NULL)
+		{
+                        APL_GOBACK_FAIL
+                }
+                strcpy((*l_temp_ptr) -> h_cln_code , l_cln_code);
+                strcpy((*l_temp_ptr) -> h_instr_code , l_instr_code);
+                (*l_temp_ptr) -> h_next = (FLRT_CLN_POS *)NULL;
+        }
+        EXEC SQL CLOSE sel_cln_cur;
+        IS_ANY_ORA_ERROR
+APL_GOBACK_SUCCESS  // AIX -Warnings Removal
+RETURN_SUCCESS:
+
+   APL_FUNCTION_RET_SUCCESS(l_logfil)
+
+RETURN_FAILURE:
+
+   APL_FUNCTION_RET_FAILURE(l_logfil)
+}
+
+int Process_BackDtSetl(         char *p_sys_date,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+        struct sqlca sqlca;
+        char l_dealdt[APL_DATE_LEN] = APL_NULL_STRING;
+        char l_cln_code[MT_CLN_CODE_LEN] = APL_NULL_STRING;
+        char l_instr_code[MT_INSTR_CODE_LEN] = APL_NULL_STRING;
+        char l_instr_date[APL_DATE_LEN] = APL_NULL_STRING;
+        char l_next_date[APL_DATE_LEN] = APL_NULL_STRING;
+        char comp_flg[2] = " ";/*Chirag*/
+        int l_date_diff = 0;
+        MT_FLRATEINST_STRUCT_H *l_mt_flrate_instrument_struct_h = (MT_FLRATEINST_STRUCT_H *)NULL;
+
+
+        l_mt_flrate_instrument_struct_h = (MT_FLRATEINST_STRUCT_H *)calloc(1,sizeof(MT_FLRATEINST_STRUCT_H));
+
+        APL_FUNCTION_ENTER(l_logfil)
+
+
+        EXEC SQL DECLARE l_sel_bksetl_cur CURSOR FOR
+                                SELECT A.DEALDT,
+                                                 A.CLIENT,
+                                                 A.INSTR_CODE,
+                                                 A.INSTRUMENT_DT
+                                FROM CABACKSETTLE A, MT_INSTRUMENT B
+                                WHERE A.INSTR_CODE = B.INSTR_CODE
+                                AND B.INT_TYP = 'V';
+
+        EXEC SQL OPEN l_sel_bksetl_cur;
+        for(;;)
+	{
+                EXEC SQL FETCH l_sel_bksetl_cur
+                                        INTO  :l_dealdt,
+                                                        :l_cln_code,
+                                                        :l_instr_code,
+                                                        :l_instr_date;
+                if(sqlca.sqlcode == 1403)break;
+                IS_ANY_ORA_ERROR
+
+                fprintf(l_logfil,"-----------------------------------------------------------------\n\n");
+                fprintf(l_logfil,"Back Dated Calculation For Client(%s) Instrument(%s) From Date(%s)\n",l_cln_code,l_instr_code,l_instr_date);
+                EXEC SQL SELECT TO_DATE(:p_sys_date) - TO_DATE(:l_instr_date)
+                        INTO :l_date_diff
+                        FROM DUAL;
+                IS_ANY_ORA_ERROR
+
+                while(l_date_diff > 1)
+                {
+                        fprintf(l_usr_logfil,"-------------------------------------------------------\n\n");
+                        fprintf(l_usr_logfil,"Back Dated Calculation For Client(%s) Instrument(%s) For Date(%s)\n",l_cln_code,l_instr_code,l_instr_date);
+                        memset(l_mt_flrate_instrument_struct_h,NULL,sizeof(l_mt_flrate_instrument_struct_h));
+                        if(Rtv_FlRateInstr( l_instr_code,
+                                                l_mt_flrate_instrument_struct_h,
+                                                l_debug_info_ptr) == APL_FAILURE)
+                                {
+                                        APL_GOBACK_FAIL
+                                }
+			if(Float_Rate_Calc(     l_instr_code,
+                                                l_cln_code,
+                                                l_instr_date,
+                                                p_sys_date,
+                                                comp_flg,/*Chirag*/
+                                                l_debug_info_ptr) == APL_FAILURE)
+                                APL_GOBACK_FAIL
+                        if(Rtv_Nxt_Date(l_mt_flrate_instrument_struct_h -> h_excl_holidays,
+                                        l_mt_flrate_instrument_struct_h -> h_compounding_wdays,
+                                        l_next_date,
+                                        l_instr_date,
+                                        l_debug_info_ptr) == APL_FAILURE)
+                        {
+                                APL_GOBACK_FAIL
+                        }
+                        strcpy(l_instr_date,l_next_date);
+                        EXEC SQL SELECT TO_DATE(:p_sys_date) - TO_DATE(:l_next_date)
+                                INTO :l_date_diff
+                                FROM DUAL;
+                        IS_ANY_ORA_ERROR
+                        fprintf(l_usr_logfil,"------------------------------------------------\n\n");
+                }
+                fprintf(l_logfil,"------------------------------------------------------------------\n\n");
+        }
+
+APL_GOBACK_SUCCESS  // AIX -Warnings Removal
+RETURN_SUCCESS:
+APL_FREE(l_mt_flrate_instrument_struct_h)
+   APL_FUNCTION_RET_SUCCESS(l_logfil)
+
+RETURN_FAILURE:
+APL_FREE(l_mt_flrate_instrument_struct_h)
+   APL_FUNCTION_RET_FAILURE(l_logfil)
+}
+
+int Process_ReCalc(char *p_sys_date,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+        APL_FUNCTION_ENTER(l_logfil)
+        if(Process_BackDtSetl(p_sys_date,l_debug_info_ptr) == APL_FAILURE)
+                APL_GOBACK_FAIL
+
+APL_GOBACK_SUCCESS  // AIX -Warnings Removal
+RETURN_SUCCESS:
+   APL_FUNCTION_RET_SUCCESS(l_logfil)
+
+RETURN_FAILURE:
+   APL_FUNCTION_RET_FAILURE(l_logfil)
+}
+
+int Process_Holiday(    char *p_instr_code,
+                                                char *p_cln_code ,
+                                                char *p_sys_date,
+                                                DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+        char l_nxt_buss_day[APL_DATE_LEN] = APL_NULL_STRING;
+        char l_nxt_proc_day[APL_DATE_LEN] = APL_NULL_STRING;
+        char l_curr_date[APL_DATE_LEN] = APL_NULL_STRING;
+        int l_date_diff = 0;
+        struct sqlca sqlca;
+        /*Chirag*/
+        char comp_flg[2] = APL_NULL_STRING;
+        double b_amt = 0;
+        double tot_amt = 0;
+        double interest = 0;
+        double tot_interest = 0;
+        double holiday_interest = 0;
+        /*Chirag*/
+        MT_FLRATEINST_STRUCT_H *l_mt_flrate_instrument_struct_h = (MT_FLRATEINST_STRUCT_H *)NULL;
+
+
+        APL_FUNCTION_ENTER(l_logfil)
+        l_mt_flrate_instrument_struct_h = (MT_FLRATEINST_STRUCT_H *)calloc(1,sizeof(MT_FLRATEINST_STRUCT_H));
+
+        if(Rtv_Nxt_BussDate(    p_sys_date,
+                                                l_nxt_buss_day,
+                                                APL_NULL_STRING,
+                                                l_debug_info_ptr) == APL_FAILURE)
+        {
+
+                APL_GOBACK_FAIL
+        }
+
+        fprintf(l_logfil,"|%s|Next Buss Date |%s|... \n",p_sys_date,l_nxt_buss_day);
+	if(Rtv_FlRateInstr( p_instr_code,
+                                                l_mt_flrate_instrument_struct_h,
+                                                l_debug_info_ptr) == APL_FAILURE)
+        {
+                APL_GOBACK_FAIL
+        }
+/*Chirag */
+        if(!strcmp(l_mt_flrate_instrument_struct_h -> h_compounding_wdays,"Y") && !strcmp(l_mt_flrate_instrument_struct_h -> h_daily_compound,"Y"))
+        {
+
+                EXEC SQL SELECT BASEAMOUNT,INTEREST INTO :b_amt,:interest
+                        FROM CADAILY_FLOATINTEREST
+                        WHERE ON_DATE =:p_sys_date
+                        AND INSTR_CODE =:p_instr_code
+                        AND CLN_CODE=: p_cln_code;
+
+                IS_ANY_ORA_ERROR
+
+/*                      tot_amt = b_amt + interest;*/
+                fprintf(l_logfil,"Base Amount is |%lf| & Interest is |%lf| on Date |%s| \n",b_amt,interest,p_sys_date);
+/*              fprintf(l_logfil,"Total Amount is |%lf| on Date |%s| \n",tot_amt,p_sys_date);*/
+        }
+/*Chirag*/
+        strcpy(l_curr_date,p_sys_date);
+        while(1)
+        {
+
+                if(Rtv_Nxt_Date (l_mt_flrate_instrument_struct_h -> h_excl_holidays,
+                                 l_mt_flrate_instrument_struct_h -> h_compounding_wdays,
+                                 l_curr_date,
+                                 l_nxt_proc_day,
+                                 l_debug_info_ptr) == APL_FAILURE)
+                {
+                        APL_GOBACK_FAIL
+		}
+                fprintf(l_logfil,"|%s||%s|Next Proc Date |%s|... \n",p_sys_date,l_nxt_buss_day,l_nxt_proc_day);
+
+                EXEC SQL SELECT TO_DATE(:l_nxt_buss_day) - TO_DATE(:l_nxt_proc_day)
+                                INTO :l_date_diff
+                                FROM DUAL;
+                IS_ANY_ORA_ERROR
+
+                fprintf(l_logfil,"Exclude Holiday Flag is |%s|\n",l_mt_flrate_instrument_struct_h -> h_excl_holidays);
+
+                fprintf(l_logfil,"Exclude Holidays For Compounding Flag is |%s|\n",l_mt_flrate_instrument_struct_h -> h_compounding_wdays);
+
+        if(l_date_diff > 0)
+                {
+                        /*To Chk whether Holiday Should be included or not*/
+                        if(!strcmp(l_mt_flrate_instrument_struct_h -> h_excl_holidays,APL_NULL_STRING)) /*Chirag
+*/
+                        {
+                                fprintf(l_usr_logfil,"-----------------------------------------------\n\n");
+                                fprintf(l_usr_logfil,"Processing For Holiday(%s)\n",l_nxt_proc_day);
+                                /*Chirag*/
+                                if(!strcmp(l_mt_flrate_instrument_struct_h -> h_compounding_wdays,"Y") && !strcmp(l_mt_flrate_instrument_struct_h -> h_daily_compound,"Y"))
+                                {
+                                        fprintf(l_logfil,"Processing Holiday |%s| without Compounding........\n",l_nxt_proc_day);
+                                        strcpy(comp_flg,"H");
+                                }
+                                if(!strcmp(l_mt_flrate_instrument_struct_h -> h_compounding_wdays,"N") && !strcmp(l_mt_flrate_instrument_struct_h -> h_daily_compound,"Y"))
+                                {
+                                        fprintf(l_logfil,"Processing Holiday |%s|  with Compounding........\n",l_nxt_proc_day);
+					strcpy(comp_flg,"Y");
+                                }
+                                /*Chirag*/
+
+                                if(Float_Rate_Calc(     p_instr_code,
+                                                        p_cln_code,
+                                                        l_nxt_proc_day,
+                                                        p_sys_date,
+                                                        comp_flg,/*Chirag*/
+                                                        l_debug_info_ptr) == APL_FAILURE)
+                                        APL_GOBACK_FAIL
+                                /*Chirag*/
+
+                                if(!strcmp(l_mt_flrate_instrument_struct_h -> h_compounding_wdays,"Y") && !strcmp(l_mt_flrate_instrument_struct_h -> h_daily_compound,"Y"))
+                                {
+                                        EXEC SQL UPDATE CADAILY_FLOATINTEREST
+                                        SET BASEAMOUNT =:b_amt,
+                                                INTEREST =:interest
+                                                WHERE ON_DATE =:l_curr_date
+                                                AND INSTR_CODE =:p_instr_code
+                                                AND CLN_CODE =:p_cln_code;
+
+
+                                        IS_ANY_ORA_ERROR
+
+                                        fprintf(l_logfil,"Holiday Interest is |%lf| on Holiday |%s| \n",holiday_interest,l_nxt_proc_day);
+                                        fprintf(l_logfil,"Taotal Interest is |%lf| on |%s| \n",tot_interest,l_nxt_proc_day);
+                                }
+
+
+				strcpy(l_curr_date,l_nxt_proc_day);
+                                fprintf(l_usr_logfil,"------------------------------------------------------------\n\n");
+                        }
+                        else/*Chirag*/
+                        {
+                                fprintf(l_logfil,"Holiday |%s| is  excluded from processing.......\n",l_nxt_proc_day);
+                                break;
+                        }/*Chirag*/
+
+                }
+                else
+                {
+                        /*Chirag*/
+                        if(l_date_diff == 0)
+                        {
+                                if(!strcmp(l_mt_flrate_instrument_struct_h -> h_compounding_wdays,"Y") && !strcmp(l_mt_flrate_instrument_struct_h -> h_daily_compound,"Y"))
+                                {
+                                        /*tot_interest = tot_interest - holiday_interest;*/
+
+                                        EXEC SQL SELECT TO_DATE(:l_nxt_buss_day) - TO_DATE(:p_sys_date)
+                                        INTO :l_date_diff
+                                        FROM DUAL;
+                                        IS_ANY_ORA_ERROR
+
+                                        tot_interest = interest * (l_date_diff-1);
+                                        b_amt = b_amt + tot_interest;
+
+					/*fprintf(l_logfil,"Interest minused for Last Holiday is |%lf|\n",holiday_interest);*/
+
+                                        fprintf(l_logfil,"Total Interest on Last Holiday is |%lf|\n",tot_interest);
+                                        fprintf(l_logfil,"Total Base Amount on Last Holiday is |%lf|\n",b_amt);
+
+                                        EXEC SQL UPDATE CADAILY_FLOATINTEREST
+                                                SET BASEAMOUNT =:b_amt
+                                                WHERE ON_DATE =:l_curr_date
+                                                AND INSTR_CODE =:p_instr_code
+                                                AND CLN_CODE =:p_cln_code;
+                                        IS_ANY_ORA_ERROR
+
+                                        fprintf(l_logfil,"Sucessfully Updated Base Amount |%lf for last holiday |%s| \n",b_amt,l_curr_date);
+
+                                }
+                                /*Chirag*/
+                                break;
+                        }
+                }
+
+        }
+
+APL_GOBACK_SUCCESS  // AIX -Warnings Removal
+RETURN_SUCCESS:
+APL_FREE(l_mt_flrate_instrument_struct_h)
+   APL_FUNCTION_RET_SUCCESS(l_logfil)
+
+RETURN_FAILURE:
+APL_FREE(l_mt_flrate_instrument_struct_h)
+   APL_FUNCTION_RET_FAILURE(l_logfil)
+}
+
+int Process_FloatRt(DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+        FLRT_CLN_POS **l_flrt_cln_pos = (FLRT_CLN_POS **)NULL;
+        FLRT_CLN_POS *l_temp_ptr = (FLRT_CLN_POS *)NULL;
+        char l_sys_date[APL_DATE_LEN] = APL_NULL_STRING;
+        char comp_flg[2] = " ";
+        APL_FUNCTION_ENTER(l_logfil)
+
+        l_flrt_cln_pos = (FLRT_CLN_POS **)calloc(1,sizeof(FLRT_CLN_POS *));
+
+        EXEC SQL SELECT SYS_DATE INTO :l_sys_date
+                FROM PRO_SYS_DATE;
+        IS_ANY_ORA_ERROR
+
+        if(Process_ReCalc(l_sys_date,l_debug_info_ptr) == APL_FAILURE)
+                APL_GOBACK_FAIL
+
+        fprintf(l_logfil," 991 sys date is |%s|\n",l_sys_date);
+        if(Rtv_Clients(l_flrt_cln_pos,
+                                                l_debug_info_ptr) == APL_FAILURE)
+                APL_GOBACK_FAIL
+
+        l_temp_ptr = *l_flrt_cln_pos;
+        while(l_temp_ptr)
+        {
+                fprintf(l_usr_logfil,"-----------------------------------------------------------------------\n\n");
+                fprintf(l_usr_logfil,"Processing for Client(%s) Instrument(%s) \n",l_temp_ptr -> h_cln_code,l_temp_ptr -> h_instr_code );
+		if(Float_Rate_Calc(     l_temp_ptr -> h_instr_code,
+                                                                        l_temp_ptr -> h_cln_code ,
+                                                                        l_sys_date,
+                                                                        l_sys_date,
+                                                                        comp_flg,/*Chirag*/
+                                                                        l_debug_info_ptr) == APL_FAILURE)
+                {
+                        fprintf(l_usr_logfil,"Skipping Client (%s) Instrument (%s) \n",l_temp_ptr -> h_cln_code,l_temp_ptr -> h_instr_code);
+                        l_temp_ptr = l_temp_ptr -> h_next;
+                        continue;
+                }
+                fprintf(l_logfil,"Processing Completed for Client(%s) Instrument(%s)For Today(%s)\n\n",l_temp_ptr -> h_cln_code,l_temp_ptr -> h_instr_code,l_sys_date );
+                if(Process_Holiday(     l_temp_ptr -> h_instr_code,
+                                                        l_temp_ptr -> h_cln_code ,
+                                                        l_sys_date,
+                                                        l_debug_info_ptr) == APL_FAILURE)
+                {
+                        fprintf(l_usr_logfil,"Skipping Client (%s) Instrument (%s) \n",l_temp_ptr -> h_cln_code,l_temp_ptr -> h_instr_code);
+                        l_temp_ptr = l_temp_ptr -> h_next;
+                        continue;
+                }
+                l_temp_ptr = l_temp_ptr -> h_next;
+
+                fprintf(l_logfil,"----------------------------------------------------------------\n\n");
+        }
+	/** Freeing the mem **/
+
+        while(*l_flrt_cln_pos)
+        {
+                l_temp_ptr = (*l_flrt_cln_pos) -> h_next;
+                APL_FREE(*l_flrt_cln_pos);
+                l_flrt_cln_pos = &(l_temp_ptr);
+        }
+
+APL_GOBACK_SUCCESS  // AIX -Warnings Removal
+RETURN_SUCCESS:
+   APL_FUNCTION_RET_SUCCESS(l_logfil)
+
+RETURN_FAILURE:
+   APL_FUNCTION_RET_FAILURE(l_logfil)
+
+}
+
+
+
+int Upd_CA_Daily_Flrt( CADAILY_FLOATINTEREST_STRUCT_H *p_cadaily_floatinterest_h,
+                       DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+
+{
+        struct sqlca sqlca;
+        int l_count  = 0;
+        CADAILY_FLOATINTEREST_STRUCT_I *l_cadaily_floatinterest_i;
+
+        APL_FUNCTION_ENTER(l_logfil)
+        l_cadaily_floatinterest_i = (CADAILY_FLOATINTEREST_STRUCT_I *)calloc(1,sizeof(CADAILY_FLOATINTEREST_STRUCT_I));
+        memset(l_cadaily_floatinterest_i,NULL,sizeof(CADAILY_FLOATINTEREST_STRUCT_I));
+
+        EXEC SQL SELECT NVL(COUNT(*),0)
+        INTO :l_count
+        FROM CADAILY_FLOATINTEREST
+        WHERE On_Date = :p_cadaily_floatinterest_h -> h_on_date
+        AND INSTR_CODE  = :p_cadaily_floatinterest_h -> h_instr_code
+        AND CLN_CODE    =       :p_cadaily_floatinterest_h -> h_cln_code;
+        IS_ANY_ORA_ERROR
+
+        fprintf(l_logfil,"Valie |%d|\n",l_count);
+
+        if(!l_count)
+        {
+
+                EXEC SQL 
+		INSERT INTO CADAILY_FLOATINTEREST Values(:p_cadaily_floatinterest_h:l_cadaily_floatinterest_i);
+        }
+        else
+        {
+
+                EXEC SQL 
+		UPDATE CADAILY_FLOATINTEREST
+		SET calc_date = :p_cadaily_floatinterest_h -> h_calc_date,
+                IntRate = :p_cadaily_floatinterest_h -> h_intrate,
+                Safek = :p_cadaily_floatinterest_h -> h_safek,
+                FaceVal = :p_cadaily_floatinterest_h -> h_facevalue,
+                BaseAmount = :p_cadaily_floatinterest_h -> h_baseamount,
+                Interest = :p_cadaily_floatinterest_h -> h_interest,
+                Gain_Safek = :p_cadaily_floatinterest_h -> h_gain_safek,
+                Gain_Amount = :p_cadaily_floatinterest_h -> h_gain_amount,
+                Gain_Interest = :p_cadaily_floatinterest_h -> h_gain_int
+                WHERE On_Date = :p_cadaily_floatinterest_h -> h_on_date
+                AND INSTR_CODE  = :p_cadaily_floatinterest_h -> h_instr_code
+                AND CLN_CODE    =       :p_cadaily_floatinterest_h ->   h_cln_code ;
+                IS_ANY_ORA_ERROR
+        }
+
+
+        IS_ANY_ORA_ERROR
+
+APL_GOBACK_SUCCESS  // AIX -Warnings Removal
+RETURN_SUCCESS:
+
+   APL_FUNCTION_RET_SUCCESS(l_logfil)
+
+RETURN_FAILURE:
+
+   APL_FUNCTION_RET_FAILURE(l_logfil)
+}
+
+int Rtv_Safek(          char *p_instr_code,
+                                                char *p_cln_code,
+                                                char *p_calc_date,
+                                                char *p_sys_date,
+                                                double *p_safek,
+                                                DEBUG_INFO_STRUCT_H **l_debug_info_ptr  )
+{
+        struct sqlca sqlca;
+        int l_date_diff = 0;
+        int l_flag  = 0;
+        char l_working_date[APL_DATE_LEN] = APL_NULL_STRING;
+
+        /** We Have to Take the safek of previous working date if calculating date is Holiday **/
+
+
+        /** Check whether current Date is Holiday **/
+        if (CO_Chk_Holiday(     p_calc_date,
+                                                &l_flag,
+                                                l_debug_info_ptr,
+                                                APL_NULL_STRING) == APL_FAILURE)
+        {
+                APL_GOBACK_FAIL
+        }
+        /** If date is holiday, we have to get interest date from last working day **/
+        if(l_flag)
+        {
+
+                if (Rtv_Last_BussDate(  p_calc_date,
+                                                                l_working_date,
+                                                                l_debug_info_ptr) == APL_FAILURE)
+                {
+                        APL_GOBACK_FAIL
+                }
+                fprintf(l_logfil,"Date is Holiday|%s|, We proceed for last Working day |%s|\n",p_calc_date,l_working_date);
+		fprintf(l_usr_logfil,"Date is Holiday(%s), Using Last Working Day(%s) For Safek\n",p_calc_date,l_working_date);
+        }
+        else
+        {
+                strcpy(l_working_date,p_calc_date);
+                fprintf(l_logfil,"Date is Not Holiday|%s|, We proceed for Working day |%s|\n",p_calc_date,l_working_date);
+        }
+
+        EXEC SQL SELECT TO_DATE(:p_sys_date) - TO_DATE(:l_working_date)
+                        INTO :l_date_diff
+                        FROM DUAL;
+        IS_ANY_ORA_ERROR
+/* SGS ADDED VALREC / VALDEL / DPREC / DPDEL*/
+        if(l_date_diff > 0)
+        {
+                EXEC SQL SELECT nvl(sum(nvalreceive),0.0)
+                                                -nvl(sum(nvaldeliver),0.0)
+                                                +nvl(sum(val_rec),0.0)
+                                                -nvl(sum(val_del),0.0)
+                                                +nvl(sum(dp_rec),0.0)
+                                                -nvl(sum(dp_del),0.0)
+                                                +nvl(sum(safekeep_pos),0.0)
+                                INTO :p_safek
+                                FROM    DL_HISSAFEK
+                                WHERE CLIENT = :p_cln_code
+                                AND INSTR_CODE = :p_instr_code
+                                AND POSIT_DATE = :l_working_date;
+                fprintf(l_logfil,"1 Safek |%lf| %d|\n",*p_safek,sqlca.sqlcode);
+
+        IS_ANY_ORA_ERROR
+        }
+	else
+        {
+                EXEC SQL SELECT nvl(sum(nvalreceive),0.0)
+                                                -nvl(sum(nvaldeliver),0.0)
+                                                +nvl(sum(val_rec),0.0)
+                                                -nvl(sum(val_del),0.0)
+                                                +nvl(sum(dp_rec),0.0)
+                                                -nvl(sum(dp_del),0.0)
+                                                +nvl(sum(safekeep_pos),0.0)
+                                INTO :p_safek
+                                FROM    DL_SAFEK
+                                WHERE CLIENT = :p_cln_code
+                                AND INSTR_CODE = :p_instr_code;
+                fprintf(l_logfil,"2 Safek |%lf| %d|%s %s\n",*p_safek,sqlca.sqlcode, p_cln_code,p_instr_code);
+        IS_ANY_ORA_ERROR
+        }
+
+APL_GOBACK_SUCCESS  // AIX -Warnings Removal
+RETURN_SUCCESS:
+
+   APL_FUNCTION_RET_SUCCESS(l_logfil)
+
+RETURN_FAILURE:
+
+   APL_FUNCTION_RET_FAILURE(l_logfil)
+}
+
+int Rtv_FlRateInstr(    char *p_instr_code,
+                                                MT_FLRATEINST_STRUCT_H *p_mt_flrate_instrument_struct_h,
+                                                DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+        struct sqlca sqlca;
+        MT_FLRATEINST_STRUCT_I *l_mt_flrate_instrument_struct_i = (MT_FLRATEINST_STRUCT_I *)NULL;
+        l_mt_flrate_instrument_struct_i = (MT_FLRATEINST_STRUCT_I *)calloc(1,sizeof(MT_FLRATEINST_STRUCT_I));
+        APL_FUNCTION_ENTER(l_logfil)
+
+
+        EXEC SQL SELECT *
+                                INTO :p_mt_flrate_instrument_struct_h:l_mt_flrate_instrument_struct_i
+                                FROM MT_FLRATE_INSTRUMENT
+                                WHERE INSTR_CODE = :p_instr_code
+                                AND STATUS = 'AA';
+        IS_ANY_ORA_ERROR
+
+        if(sqlca.sqlcode == 1403)
+        {
+                fprintf(l_logfil,"No Record in MT_FLRATE_INSTRUMENT for Instr |%s|\n",p_instr_code);
+                fprintf(l_usr_logfil,"No Record Present In Float Instrument Table For Instrument(%s)\n",p_instr_code);
+                APL_GOBACK_FAIL
+        }
+
+APL_GOBACK_SUCCESS  // AIX -Warnings Removal
+RETURN_SUCCESS:
+        APL_FREE(l_mt_flrate_instrument_struct_i)
+   APL_FUNCTION_RET_SUCCESS(l_logfil)
+
+RETURN_FAILURE:
+        APL_FREE(l_mt_flrate_instrument_struct_i)
+   APL_FUNCTION_RET_FAILURE(l_logfil)
+}
+
+int  CA_CalcDaysInAYear(int chr_p_year,
+                        double *p_no_days,
+                        DEBUG_INFO_STRUCT_H  **l_debug_info_ptr)
+
+{
+        APL_FUNCTION_ENTER(l_logfil)
+   	*p_no_days = (!(chr_p_year%4)?(!(chr_p_year%100)?(!(chr_p_year%400)?366:365):366):365);
+   	APL_GOBACK_SUCCESS
+
+RETURN_SUCCESS:
+        APL_FUNCTION_RET_SUCCESS(APL_OUT_FILE)
+
+RETURN_FAILURE:
+        APL_FUNCTION_RET_FAILURE(APL_OUT_FILE)
+}
+
+int Calc_Interest_HB( char *p_calc_date,
+                   char *p_instr_code,
+                   char *p_cln_code,
+                   double *p_rate,
+                   double p_safek,
+                   double p_prev_safek,
+                   double p_facevalue,
+                   double p_amount,
+                   double p_prev_amount,
+                   char *p_sys_date,
+                   CADAILY_FLOATINTEREST_STRUCT_H *p_cadaily_floatinterest_h,
+                   DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+        double l_days_yr = 365.00;
+        struct sqlca sqlca;
+        APL_FUNCTION_ENTER(l_logfil)
+
+        strcpy(p_cadaily_floatinterest_h -> h_on_date,p_calc_date);
+        strcpy(p_cadaily_floatinterest_h -> h_calc_date,p_sys_date);
+        strcpy(p_cadaily_floatinterest_h -> h_instr_code,p_instr_code);
+        strcpy(p_cadaily_floatinterest_h -> h_cln_code,p_cln_code);
+        p_cadaily_floatinterest_h -> h_intrate = *p_rate;
+        p_cadaily_floatinterest_h -> h_safek    = p_safek;
+        p_cadaily_floatinterest_h -> h_facevalue = p_facevalue;
+        p_cadaily_floatinterest_h -> h_baseamount        = p_amount;
+        p_cadaily_floatinterest_h -> h_interest = p_amount * (*p_rate);
+
+		printf("RATE RATE RATE RATE ========= %lf\n",*p_rate);
+
+        fprintf(l_logfil,"Base Amount (%lf) before Insert \n",p_cadaily_floatinterest_h -> h_baseamount);
+
+        fprintf(l_logfil,"Interest (%lf) before Insert \n",p_cadaily_floatinterest_h -> h_interest);
+
+        p_cadaily_floatinterest_h -> h_gain_safek = p_safek - p_prev_safek;
+	p_cadaily_floatinterest_h -> h_gain_amount = p_amount - p_prev_amount;
+        p_cadaily_floatinterest_h -> h_gain_int=(p_amount-p_prev_amount)-(p_facevalue*(p_safek-p_prev_safek));
+
+
+APL_GOBACK_SUCCESS  // AIX -Warnings Removal
+RETURN_SUCCESS:
+
+   APL_FUNCTION_RET_SUCCESS(l_logfil)
+
+RETURN_FAILURE:
+
+   APL_FUNCTION_RET_FAILURE(l_logfil)
+}
+
+
+
+int Float_Rate_Calc_HB(char *p_instr_code,
+                    char *p_cln_code,
+                    char *p_calc_date,
+                    char *p_sys_date,
+                    char *daily_comp_flg,/*Chirag for processing Holidays without compounding*/
+		double *int_rate, 
+		double *p_interest_amt, 
+		double *p_base_amount, 
+		double *p_prev_base_amount,
+		int l_date_diff,
+                DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	/* Commented by JC - HBCA_004
+        double l_amount                 = 0.0;
+        double l_prev_amount            = 0.0;
+        double l_safek 			= 0.0;
+        double l_prev_safek 		= 0.0;
+	*/
+        double l_facevalue 		= 0.0;
+	double l_rate 			= 0.0;
+	/* PJ */
+        double l_act_days       =       0.0;
+        double l_calc_days      =       0.0;
+        double l_days_year      =       0.0;
+        double l_value = 0.0;
+        char p_basis[2];
+
+	l_value = *int_rate;	/* JC - HBCA_004	*/
+		
+        char l_next_date[APL_DATE_LEN] = APL_NULL_STRING;
+        CADAILY_FLOATINTEREST_STRUCT_H *l_cadaily_floatinterest_h = (CADAILY_FLOATINTEREST_STRUCT_H *)NULL;
+
+        struct sqlca sqlca;
+
+        MT_FLRATEINST_STRUCT_H *l_mt_flrate_instrument_struct_h = (MT_FLRATEINST_STRUCT_H *)NULL;
+        l_mt_flrate_instrument_struct_h = (MT_FLRATEINST_STRUCT_H *)calloc(1,sizeof(MT_FLRATEINST_STRUCT_H));
+        l_cadaily_floatinterest_h = (CADAILY_FLOATINTEREST_STRUCT_H *)calloc(1,sizeof(CADAILY_FLOATINTEREST_STRUCT_H));
+
+        APL_FUNCTION_ENTER(l_logfil)
+		fprintf(l_usr_logfil,"-----\n");
+        fprintf(l_usr_logfil,"Calculating For Client(%s) Instr (%s) For Date(%s) On Date(%s)\n",p_cln_code,p_instr_code,p_calc_date,p_sys_date);
+        fprintf(l_usr_logfil,"-----\n");
+	printf("Base amt at the start of Float_Rate_Calc = %lf\n",*p_base_amount);
+
+
+        if(Rtv_FlRateInstr_HB(p_instr_code,
+                           l_mt_flrate_instrument_struct_h,
+                           l_debug_info_ptr) == APL_FAILURE)
+        {
+                APL_GOBACK_FAIL
+        }
+
+	printf("\n\t\t Before Rtv_Interest_Rate_HB  %lf\n",l_value);	
+	if(Rtv_Interest_Rate_HB(l_mt_flrate_instrument_struct_h -> h_benchmark_code,
+                             l_mt_flrate_instrument_struct_h -> h_prefd_seq,
+                             l_mt_flrate_instrument_struct_h -> h_default_float_rate,
+                             l_mt_flrate_instrument_struct_h -> h_floor_rate,
+                             l_mt_flrate_instrument_struct_h -> h_cap_rate,
+                             l_mt_flrate_instrument_struct_h -> h_fixed_bench,
+                             l_mt_flrate_instrument_struct_h -> h_base_margin,
+                             p_calc_date,
+                             &l_value,
+                             l_debug_info_ptr) == APL_FAILURE)
+                {
+                        APL_GOBACK_FAIL
+                }
+	Alert(" 703 Interest rate = %lf \n", l_value);
+
+	printf("\n\t\t After Rtv_Interest_Rate_HB & before Rtv_Int_Values_HB %lf\n",l_value);
+
+	
+	if(Rtv_Int_Values_HB(p_sys_date,
+                          p_sys_date,
+                          &l_act_days,
+                          &l_calc_days,
+                          &l_days_year,
+                          l_debug_info_ptr) == APL_FAILURE)
+        {
+                APL_GOBACK_FAIL
+        }
+        Alert(" 693 %lf %lf %lf %s\n", l_act_days,l_calc_days,l_days_year, p_instr_code);
+
+	printf("\n\t\t After Rtv_Int_Values_HB & before Process_Calc_HB %lf\n",l_value);
+        
+	EXEC SQL SELECT INT_ACCTYP,NOMINAL_VALUE 
+		INTO :p_basis,:l_facevalue 
+		FROM MT_INSTRUMENT 
+		WHERE INSTR_CODE = :p_instr_code ;
+        
+		Alert( "p_basis %s ", p_basis);
+		Alert("l_facevalue %lf", l_facevalue);	/* JC - HBCA_004 */
+
+        /* OPT:AIX if(Process_Calc_HB(&p_basis, */
+        if(Process_Calc_HB(p_basis,
+                        l_value,
+                        l_act_days,
+                        l_calc_days,
+                        l_days_year,
+                        &l_rate,
+                        l_debug_info_ptr) == APL_FAILURE)
+		{
+			APL_GOBACK_FAIL
+		}
+
+		printf("\n\t\t Process_Calc_HB %lf\n",l_rate);
+
+		Alert(" 727 Interest rate =%lf %lf \n", l_rate, l_value);
+        fprintf(l_usr_logfil,"Interest Rate(%lf) Used For Calculation\n",l_rate);
+        fprintf(l_logfil,"Calculating For |%s| Instr |%s| For |%s| On |%s| Interest Rate(%lf)\n",p_cln_code,p_instr_code,p_calc_date,p_sys_date,l_rate);
+        /*Chirag For Processing holidays Without Compounding*/
+        fprintf(l_logfil,"Daily Compound Flag is |%s|\n",daily_comp_flg);
+        if(!strcmp(daily_comp_flg,"H"))
+                strcpy(l_mt_flrate_instrument_struct_h -> h_daily_compound,daily_comp_flg);
+        /*Chirag For Processing holidays Without Compounding*/
+
+		/* JC - HBCA_004	~Start~	*/
+		if(Rtv_Base_Amount_HB(l_mt_flrate_instrument_struct_h -> h_daily_compound,
+					p_base_amount,
+					p_interest_amt,
+					&l_rate,
+					p_prev_base_amount,
+					l_date_diff,
+					l_debug_info_ptr) == APL_FAILURE)
+		{
+			APL_GOBACK_FAIL
+		}
+		/* JC - HBCA_004	~End~	*/
+
+		*int_rate = l_rate;
+		printf("RAAAAATEEEEE at the end of Float_Rate_Calc_HB  -----> %lf \n",*int_rate);
+		printf("BASEEEEEEE Amt at the end of Float_Rate_Calc_HB ----> %lf \n", *p_base_amount);
+		printf("Interest Amt at the end of Float_Rate_Calc_HB ------> %lf \n", *p_interest_amt);
+		printf("*****************************************************************************\n");
+		printf("****************End of Float_Rate_Calc_HB for |%s|******************\n",p_calc_date);
+
+      APL_GOBACK_SUCCESS  // AIX -Warnings Removal
+	RETURN_SUCCESS:
+        APL_FREE(l_mt_flrate_instrument_struct_h)
+	APL_FREE(l_cadaily_floatinterest_h)
+   	APL_FUNCTION_RET_SUCCESS(l_logfil)
+
+	RETURN_FAILURE:
+	APL_FREE(l_mt_flrate_instrument_struct_h)
+        APL_FREE(l_cadaily_floatinterest_h)
+   	APL_FUNCTION_RET_FAILURE(l_logfil)
+}
+
+
+int Rtv_Base_Amount_HB(char *p_daily_compound,
+                      double *p_base_amount,
+                      double *p_interest_amt,
+		double *p_interest_rate,
+		double *p_prev_base_amount,
+                      int p_date_diff,
+                      DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+        struct sqlca sqlca;
+		/* Commented by JC - HBCA_004
+        char l_last_date[APL_DATE_LEN] = APL_NULL_STRING;
+        double l_amount = 0.0;
+        double l_prev_amount = 0.0;
+        double l_prev_safek = 0.0;
+        double l_facevalue = 0.0;
+		*/
+
+	double l_base_amount = 0.0;	/* JC - HBCA_004 */
+	double l_interest_amt = 0.0;	/* JC - HBCA_004 */
+	printf("\n |%lf| |%lf| |%lf| \n",*p_base_amount,*p_interest_amt,*p_interest_rate);    // AIX -Warnings Removal
+        APL_FUNCTION_ENTER(l_logfil)
+
+        fprintf(l_logfil,"Daily Compound is |%c|\n",p_daily_compound[0]);
+	
+		switch(p_daily_compound[0])
+        {
+                case 'Y':
+
+			/* JC - HBCA_004	~Start~	*/
+			*p_prev_base_amount = *p_base_amount;
+			l_interest_amt = (*p_base_amount) * (*p_interest_rate);
+			*p_interest_amt = *p_interest_amt + l_interest_amt;
+			*p_base_amount = (*p_base_amount) + (l_interest_amt);
+			printf("\n\t\t YYYYYYY INTERESTTTTT ========== %lf\n",l_interest_amt);
+			printf("\n\t\t YYYYYYY TOT INTEREST ========== %lf\n",*p_interest_amt);
+			printf("\n\t\t YYYYYYY BASEEEEE amt ====== %lf\n",*p_base_amount);
+			/* JC - HBCA_004	~End~	*/
+                    break;
+
+                case 'N':
+
+			/* JC - HBCA_004	~Start~	*/
+			l_interest_amt = (*p_base_amount) * (*p_interest_rate);
+			*p_interest_amt = *p_interest_amt + l_interest_amt;
+			printf("\n\t\t NNNNNNN INTERESTTTTT ========== %lf\n",l_interest_amt);
+                	printf("\n\t\t NNNNNNN TOT INTEREST ========== %lf\n",*p_interest_amt);
+                	printf("\n\t\t NNNNNNN BASEEEEE amt ====== %lf\n",*p_base_amount);
+			/* JC - HBCA_004	~End~	*/
+                    break;
+
+                case 'H':
+
+			/* JC - HBCA_004	~Start~	*/
+			l_interest_amt = (p_date_diff) * (*p_prev_base_amount) * (*p_interest_rate);
+			*p_base_amount = (*p_base_amount) + (l_interest_amt);
+			*p_interest_amt = *p_interest_amt + l_interest_amt;
+			printf("\n\t\t HHHHHHHH INTERESTTTTT ========== %lf\n",l_interest_amt);
+                        printf("\n\t\t HHHHHHHH TOT INTERESTTTTT ========== %lf\n",*p_interest_amt);
+                        printf("\n\t\t HHHHHHHH BASEEEEE amt ====== %lf\n",*p_base_amount);
+			/* JC - HBCA_004	~End~	*/
+                    break;
+
+        }
+
+APL_GOBACK_SUCCESS //AIX -Warning Removal
+RETURN_SUCCESS:
+
+   APL_FUNCTION_RET_SUCCESS(l_logfil)
+
+RETURN_FAILURE:
+
+   APL_FUNCTION_RET_FAILURE(l_logfil)
+}
+
+
+int Process_Holiday_HB(char *p_instr_code,
+                    char *p_cln_code ,
+                    char *p_sys_date,
+		double *int_rate, 
+		double *p_interest_amt, 
+		double *p_base_amount, 
+		double *p_prev_base_amount, 
+                    DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+        char l_nxt_buss_day[APL_DATE_LEN] = APL_NULL_STRING;
+        char l_nxt_proc_day[APL_DATE_LEN] = APL_NULL_STRING;
+        char l_curr_date[APL_DATE_LEN] = APL_NULL_STRING;
+        int l_date_diff = 0;
+        struct sqlca sqlca;
+        /*Chirag*/
+        char comp_flg[2] = APL_NULL_STRING;
+        double b_amt = 0;
+        double tot_amt = 0;
+        double interest = 0;
+        double tot_interest = 0;
+        double holiday_interest = 0;
+        /*Chirag*/
+        MT_FLRATEINST_STRUCT_H *l_mt_flrate_instrument_struct_h = (MT_FLRATEINST_STRUCT_H *)NULL;
+
+        APL_FUNCTION_ENTER(l_logfil)
+        l_mt_flrate_instrument_struct_h = (MT_FLRATEINST_STRUCT_H *)calloc(1,sizeof(MT_FLRATEINST_STRUCT_H));
+		printf("^^^^^^^^ Recd by Process_Holiday RATE == %lf",*int_rate);
+        if(Rtv_Nxt_BussDate(p_sys_date,
+                            l_nxt_buss_day,
+                            APL_NULL_STRING,
+                            l_debug_info_ptr) == APL_FAILURE)
+        {
+                APL_GOBACK_FAIL
+        }
+
+		fprintf(l_logfil,"|%s|Next Buss Date |%s|... \n",p_sys_date,l_nxt_buss_day);
+        if(Rtv_FlRateInstr_HB(p_instr_code,
+                           l_mt_flrate_instrument_struct_h,
+                           l_debug_info_ptr) == APL_FAILURE)
+        {
+                APL_GOBACK_FAIL
+        }
+
+
+        strcpy(l_curr_date,p_sys_date);
+	while(1)
+	{
+		if(Rtv_Nxt_Date (l_mt_flrate_instrument_struct_h -> h_excl_holidays,
+				l_mt_flrate_instrument_struct_h -> h_compounding_wdays,
+				l_curr_date,
+				l_nxt_proc_day,
+				l_debug_info_ptr) == APL_FAILURE)
+		{
+			APL_GOBACK_FAIL
+		}
+		fprintf(l_logfil,"|%s||%s|Next Proc Date |%s|... \n",p_sys_date,l_nxt_buss_day,l_nxt_proc_day);
+
+		EXEC SQL
+		SELECT TO_DATE(:l_nxt_buss_day) - TO_DATE(:l_nxt_proc_day)
+		INTO :l_date_diff
+		FROM DUAL;
+		IS_ANY_ORA_ERROR
+
+		fprintf(l_logfil,"Exclude Holiday Flag is |%s|\n",l_mt_flrate_instrument_struct_h -> h_excl_holidays);
+
+		fprintf(l_logfil,"Exclude Holidays For Compounding Flag is |%s|\n",l_mt_flrate_instrument_struct_h -> h_compounding_wdays);
+
+		if(l_date_diff > 0)
+		{
+			/*To Chk whether Holiday Should be included or not*/
+			if(!strcmp(l_mt_flrate_instrument_struct_h -> h_excl_holidays,APL_NULL_STRING))/*Chirag*/
+			{
+				fprintf(l_usr_logfil,"Processing For Holiday(%s)\n",l_nxt_proc_day);
+				/*Chirag*/
+				if(!strcmp(l_mt_flrate_instrument_struct_h -> h_compounding_wdays,"Y") && !strcmp(l_mt_flrate_instrument_struct_h -> h_daily_compound,"Y"))
+				{
+					fprintf(l_logfil,"Processing Holiday |%s| without Compounding........\n",l_nxt_proc_day);
+					strcpy(comp_flg,"H");
+				}
+				if(!strcmp(l_mt_flrate_instrument_struct_h -> h_compounding_wdays,"N") && !strcmp(l_mt_flrate_instrument_struct_h -> h_daily_compound,"Y"))
+				{
+					fprintf(l_logfil,"Processing Holiday |%s|  with Compounding........\n",l_nxt_proc_day);
+					strcpy(comp_flg,"Y");
+				}
+				/*Chirag*/
+
+				if(Float_Rate_Calc_HB(p_instr_code,
+						  p_cln_code,
+						  l_nxt_proc_day,
+						  p_sys_date,
+						  comp_flg,/*Chirag*/
+						  int_rate,  //AIX -Warning Removal
+						  p_interest_amt, 
+						  p_base_amount, 
+						  p_prev_base_amount, 
+						  l_date_diff, 
+						  l_debug_info_ptr) == APL_FAILURE)
+				APL_GOBACK_FAIL
+
+				/* JC - HBCA_004 */
+				EXEC SQL
+				SELECT TO_DATE(:p_sys_date,'dd/mm/yyyy hh24:mi:ss')+:l_date_diff
+				INTO :p_sys_date
+				FROM DUAL;
+				IS_ANY_ORA_ERROR
+
+				printf("^^^^^^^^^^^^^^^^^^calc dateeeeeee aftr addddd = |%s| \n",p_sys_date);
+
+				break;
+			}
+			else/*Chirag*/
+			{
+				fprintf(l_logfil,"Holiday |%s| is  excluded from processing.......\n",l_nxt_proc_day);
+				break;
+			}/*Chirag*/
+
+		}
+		else
+		{
+			/*Chirag*/
+			if(l_date_diff == 0)
+			{
+				/*p_sys_date = l_nxt_buss_day;*/ /* Commented by JC - HBCA_004	*/
+				break;
+			}
+		}
+
+	}
+
+APL_GOBACK_SUCCESS //AIX -Warning Removal
+RETURN_SUCCESS:
+APL_FREE(l_mt_flrate_instrument_struct_h)
+   APL_FUNCTION_RET_SUCCESS(l_logfil)
+
+RETURN_FAILURE:
+APL_FREE(l_mt_flrate_instrument_struct_h)
+   APL_FUNCTION_RET_FAILURE(l_logfil)
+}
+
+
+int Process_FloatRt_HB(char *p_instr_code,
+			char *p_cln_code,
+			char *p_calc_date,
+			double *p_interest_amt, 
+			double *p_base_amount, 
+			double *p_prev_base_amount, 
+			DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+        char l_sys_date[APL_DATE_LEN] = APL_NULL_STRING;
+        char comp_flg[2] = " ";
+		double int_rate =  0.0;		/* JC - HBCA_004 */
+		int l_date_diff = 0;	   /* JC - HBCA_004 */
+        APL_FUNCTION_ENTER(l_logfil)
+
+        EXEC SQL SELECT SYS_DATE INTO :l_sys_date
+                FROM PRO_SYS_DATE;
+        IS_ANY_ORA_ERROR
+
+        fprintf(l_usr_logfil,"----------------------------------------------------------------\n\n");
+        fprintf(l_usr_logfil,"Processing for Date (%s) ",p_calc_date);
+	printf("Base amt at the start of Process_FloatRt_HB = %lf\n",*p_base_amount);
+        
+        if(Float_Rate_Calc_HB(p_instr_code,
+                           p_cln_code ,
+                           p_calc_date,
+                           l_sys_date,
+                           comp_flg,/*Chirag*/
+			&int_rate, 
+			p_interest_amt, 
+			p_base_amount, 
+			p_prev_base_amount, 
+			l_date_diff, 
+                        l_debug_info_ptr) == APL_FAILURE)
+        {
+		fprintf(l_usr_logfil,"Skipping Date (%s) \n",p_calc_date);
+        }
+
+			 printf("%%%%% Interest Rate = |%lf|",int_rate);	
+        fprintf(l_logfil,"Processing Completed for Date (%s)\n\n",p_calc_date );
+
+        if(Process_Holiday_HB(p_instr_code,
+                           	p_cln_code ,
+                           	p_calc_date,
+				&int_rate, 
+				p_interest_amt, 
+				p_base_amount, 
+				p_prev_base_amount, 
+                           	l_debug_info_ptr) == APL_FAILURE)
+        {
+        	fprintf(l_usr_logfil,"Skipping Date (%s) because it is a Holiday \n",p_calc_date);
+        }
+
+		printf("$$$$$$$$$ After function Process_Holiday.......... Interest Rate = |%lf|\n",int_rate);
+
+		fprintf(l_logfil,"------------------------------------------------------------\n\n");
+
+APL_GOBACK_SUCCESS  // AIX -Warnings Removal
+RETURN_SUCCESS:
+   APL_FUNCTION_RET_SUCCESS(l_logfil)
+
+RETURN_FAILURE:
+   APL_FUNCTION_RET_FAILURE(l_logfil)
+
+}

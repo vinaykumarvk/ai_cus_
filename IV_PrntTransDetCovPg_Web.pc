@@ -1,0 +1,189 @@
+
+
+
+#include "IV_Control_A.h"
+EXEC SQL INCLUDE SQLCA.H;
+
+#define STYLE "<STYLE>.heading{background:#e8eff9;; font-family: Arial, Helvetica, sans-serif; font-size: 9pt; color: #021882; font-weight: bold;}.lableblue{color: #000090; font-family: Arial, Helvetica, sans-serif; font-size: 8pt; font-weight: bold; text-decoration: none}.normalbold{font-family: Arial, Helvetica, sans-serif; font-size: 8pt; font-weight: bold; text-decoration: none}.normal{font-family: Arial, Helvetica, sans-serif; font-size: 8pt; color: #000000}.lablered{font-family: Arial, Helvetica, sans-serif; font-size: 8pt; color: #aa1133; font-weight: bold;}.ez1{background:#e8eff9;; color: #000090; font-family: Arial, Helvetica, sans-serif; font-size: 8pt; font-weight: normal; text-decoration: none}.ez4{background:#e8eff9; color: #000090; font-family: Arial, Helvetica, sans-serif; font-size: 8pt; font-weight: bold; text-decoration: none text-align: center}.lableredbg{background:#ffeeef; font-family: Arial, Helvetica, sans-serif; font-size: 8pt; color: #aa1133; font-weight: bold;}.tablerecord{background:#F2FDFF;; color:#000090; font-family: Arial, Helvetica, sans-serif; font-size: 8pt; font-weight: normal; text-decoration: none} @page Section1 {size:8.5in 11.0in;margin:1.0in 1.25in 1.0in 1.25in;} div.Section1 {page:Section1;} H3 {page-break-before: always }</STYLE>"
+
+int IV_PrntTransDetCovPg_Web(FILE *bill,
+		FILE *fl_techlog,	
+		FILE *fl_userlog,	
+		char *chr_p_billdt,
+		char *chr_p_client,
+		SYS_IVCONTROLPARAM_STRUCT l_sys_ivcntl_param_struct,
+		IV_CLIENTSETUP_STRUCT l_iv_clt_setup_struct,			
+		DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	char    chr_l_inifile[PATH_LENGTH]        = APL_NULL_STRING;
+	FILE    *l_finifile                       = (FILE *) NULL;
+
+
+	char chr_t_billdt[11]= APL_NULL_STRING;
+	char l_prev_date[20] = APL_NULL_STRING;
+	char l_upto_date[20] = APL_NULL_STRING;
+	char l_client_name[1000] = APL_NULL_STRING;
+	char l_image_path[2000] = APL_NULL_STRING;
+	char l_subclient_query[4000] = APL_NULL_STRING;
+	char l_client[20] = APL_NULL_STRING;
+	char b_ccycd[10] = APL_NULL_STRING;
+	char l_mst_sub_ind[2] = APL_NULL_STRING;
+
+	char l_address1[500] = APL_NULL_STRING;
+	char l_address2[500] = APL_NULL_STRING;
+	char l_city[200] = APL_NULL_STRING;
+	char l_state[200] = APL_NULL_STRING;
+	char l_country[200] = APL_NULL_STRING;
+
+	double g_tot_trans = 0.0;
+	double g_tot_provcust = 0.0;
+	double g_tot_ca = 0.0;
+	double g_tot_oth = 0.0;
+	double g_tot_comm = 0.0;
+	double g_tot_tax = 0.0;
+	double g_tot_educess = 0.0;
+	double g_final_total = 0.0;
+
+	double p_tot_trans = 0.0;
+	double p_tot_provcust = 0.0;
+	double p_tot_ca = 0.0;
+	double p_tot_oth = 0.0;
+	double p_tot_comm = 0.0;
+	double p_tot_tax = 0.0;
+	double p_tot_educess = 0.0;
+	double p_final_total = 0.0;
+
+	double roundedamount = 0.0;
+	char chr_l_amtstr[30]; 
+	int int_totamtret = 0;
+	char chr_tot_comm_amt[20] = APL_NULL_STRING;
+
+
+	strncpy(l_prev_date,l_sys_ivcntl_param_struct.b_prev_date,10);
+	strncpy(l_upto_date,l_sys_ivcntl_param_struct.b_upto_date,10);
+
+	strcpy(b_ccycd,l_iv_clt_setup_struct.b_ccycd);
+
+	memset(l_subclient_query,APL_NULL_CHAR,4000);
+	memset(chr_tot_comm_amt, APL_NULL_CHAR, 20);
+
+	EXEC SQL SELECT A.CLN_NAME,A.CLN_ADD_1,A.CLN_ADD_2
+		INTO :l_client_name,:l_address1,:l_address2
+		FROM MT_CLIENT A
+		WHERE A.CLN_CODE=:chr_p_client;
+
+	EXEC SQL SELECT B.MAP_DESC,C.MAP_DESC,DECODE(A.COUNTRY,'IN',',INDIA',','||A.COUNTRY) 
+		INTO :l_city,:l_state,:l_country
+		FROM MT_CLIENT A,PRO_SGENSTAT B,PRO_SGENSTAT C
+		WHERE A.CLN_CODE=:chr_p_client
+		AND A.CITY=B.MAP_VAL AND B.MAP_TYPE='CITY'
+		AND A.STATE=C.MAP_VAL AND C.MAP_TYPE='STATE';
+
+	fprintf(fl_userlog,"After General Query Ora Error -- :|%d|\n",sqlca.sqlcode);
+
+	strcpy(chr_l_inifile,getenv("INTL_ROOT_PATH") );
+	strcat(chr_l_inifile,"intl_sun.cfg");
+
+	 fprintf(fl_userlog,"chr_l_inifile:|%s|\n",chr_l_inifile);
+	 if ( (l_finifile = fopen(chr_l_inifile,"r") ) == (FILE *) NULL )
+	 {
+		 fprintf(fl_userlog,"Error : Failed to Open File \n");
+		 APL_GOBACK_FAIL
+	 }
+
+
+	 fprintf(fl_userlog,"Entering CO_ReadToken Function\n");
+	 if (APL_FAILURE == CO_ReadToken(l_finifile,"INTL_IMG_PATH",l_image_path,					l_debug_info_ptr))
+	 {
+		   fprintf(fl_userlog,"Error : Cann't Read INTL_IMG_PATH \n");
+		   APL_GOBACK_FAIL
+	 }
+
+	Alert("l_image_path :|%s|\n",l_image_path);
+
+	IS_ANY_ORA_ERROR
+	
+	fprintf(bill,"<HTML><HEAD><META http-equiv='Content-Type' content='text/html; charset=UTF-16'></META>\n");
+
+	fprintf(bill,"%s",STYLE);
+	fprintf(bill,"</HEAD><BODY>\n\n");
+
+	fprintf(bill,"<TABLE id=\'Table3\' borderColor=\'#000000\' cellSpacing=\'0\' cellPadding=\'1\' width='100%%' border=\'0\'><tr><td borderColor='#ffffff' border='0'>&nbsp;</td><td borderColor='#ffffff' border=\'0\'><BR>\n\n");
+
+	fprintf(bill,"<TABLE cellSpacing='0' cellPadding='0' width='100%%' border='0' ><TR><TD class=\'heading\' width='25%%'><img src=\"%s\" width=\"150\" height=\"60\" ALIGN=\"LEFT\"></TD><TD class=\'heading\' width='5%%'>&nbsp;</TD><td class=\'heading\' width=\'70%%\' align='left'>%s<br>%s",l_image_path,g_mt_commonsys_params_struct_h.ca_identname,g_mt_commonsys_params_struct_h.ca_address);
+	fprintf(bill,"</TD></TR></TABLE><BR>\n\n");
+
+	fprintf(bill,"<table class='normal' cellSpacing='0' cellPadding='0' width='100%%' border='0'><tr><td class='lableblue' width='15%%'>Client Code</td><td class='normalbold' width='85%%' align='LEFT' >%s</td></tr><tr><td class='lableblue' width='15%%'>Client Name</td><td class='normalbold' width='85%%' align='LEFT' >%s</td></tr><tr><td>&nbsp;</td></tr><tr><td class='lableblue' width='15%%'>Client Address</td><td class='normalbold' width='85%%' align='LEFT' >%s<br>%s<br>%s<br>%s%s</td></tr></table><br><br>\n\n",chr_p_client,l_client_name,l_address1,l_address2,l_city,l_state,l_country);
+
+	fprintf(bill,"<table class='normal' cellSpacing='0' cellPadding='0' width='100%%' border='0'><tr><td>Dear Sir/Madam,</td></TR><TR><td>Please Find Enclosed The Transaction Charges Bill For Billing Period <b>&nbsp;&nbsp;%s - %s</b></td></TR></TABLE><br>\n\n",l_prev_date,l_upto_date);
+
+	fprintf(bill,"<table class=\'normal\' cellSpacing='0' cellPadding='0' width='100%%' border='0'><tr><td class=\'heading\'>Transaction Details</td></tr></table><br>\n");
+
+	strcpy(l_subclient_query,"(SELECT DISTINCT(A.CLIENT),B.CLN_MST_IND ");
+	strcat(l_subclient_query,"FROM IV_SERVICE_CHRG A,MT_CLIENT B,IV_CLIENTSETUP C ");
+	strcat(l_subclient_query,"WHERE A.DATEOF_BILLING='");
+	strcat(l_subclient_query,chr_p_billdt);
+	strcat(l_subclient_query,"' AND A.MASTER_CLT = '");
+	strcat(l_subclient_query,chr_p_client);
+	strcat(l_subclient_query,"' AND A.MASTER_CLT = B.CLN_CODE");
+	strcat(l_subclient_query," AND A.CLIENT = C.CLIENT");
+	strcat(l_subclient_query," AND C.SEND_TO_MASTER_IND ='M'");
+	strcat(l_subclient_query," UNION SELECT '");
+	strcat(l_subclient_query,chr_p_client);
+	strcat(l_subclient_query,"',1 FROM DUAL ) ORDER BY 2 ");
+
+	printf("l_subclient_query :|%s|\n",l_subclient_query);
+
+	EXEC SQL PREPARE SUBCLIENT FROM :l_subclient_query;
+
+	EXEC SQL DECLARE subbill CURSOR FOR SUBCLIENT;	
+		
+	printf("After subbill ORA ERROR :|%d|\n",sqlca.sqlcode);
+
+	IS_ANY_ORA_ERROR
+
+	EXEC SQL OPEN subbill;
+
+	for(;;)
+	{
+		EXEC SQL FETCH subbill INTO :l_client,:l_mst_sub_ind;
+
+		if(sqlca.sqlcode == 1403)
+		break;
+
+		if (APL_FAILURE == IV_PrntTransDetBill_Web(bill,
+					fl_techlog,
+					fl_userlog,
+					chr_p_billdt,
+					l_client,
+					l_sys_ivcntl_param_struct,
+					l_iv_clt_setup_struct,
+					'I',
+					l_debug_info_ptr))
+		{
+			fprintf(fl_userlog,"Failed in IV_PrntTransDetBill_Web For Account:%s\n",l_client);	
+			APL_GOBACK_FAIL
+		}
+
+	}
+	EXEC SQL CLOSE subbill;	
+
+	fprintf(bill,"</table>");
+
+	fflush(bill);
+
+
+fclose(l_finifile);
+
+RETURN_SUCCESS:
+		CO_ProcMonitor(APL_OUT_FILE,"Exiting out of IV_PrntTransDetCovPg_Web Successfully\n",NULL,NULL);
+		return(APL_SUCCESS);
+
+RETURN_FAILURE:
+
+		CO_ProcMonitor(APL_OUT_FILE,"Exiting out of IV_PrntTransDetCovPg_Web UnSuccessfully\n",NULL,NULL);
+		return (APL_FAILURE);
+
+}
+

@@ -1,0 +1,501 @@
+
+
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+
+   
+
+#include "stdio_64.h"
+#include "CR_Common.h"
+EXEC SQL INCLUDE SQLCA;
+
+#define	COMMIT_COUNT_B	300
+#define PAGE_SIZE_CUSTODY		40//AIX Warning Removal
+#define GL_ACCOUNT_LEN	11
+
+int EM_ConvAcc(	char **p_argv,
+		FILE *fl_userlog,
+		FILE *fl_repfile,
+		char *chr_l_genreponly,
+		INTL_ENV_DATA_STRUCT_H	*p_intl_envdatastruct_h,
+		DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	char	chr_h_restart_data[50]			=	APL_NULL_STRING;
+	char	chr_h_batch_in_proc_progname[40]		=	APL_NULL_STRING;
+	char	chr_h_batch_in_proc_statinfo[71]		=	APL_NULL_STRING;
+	char	chr_h_batch_in_proc_startdate[APL_DATE_LEN]	=	APL_NULL_STRING;
+	char	chr_h_batch_in_proc_rowid[APL_ROWID_LEN]	=	APL_NULL_STRING;
+	char	chr_h_batch_in_proc_status[15]		=	APL_NULL_STRING;
+	short 	i_restart_info 				=	0;
+	short	int_i_batch_in_proc_rowid 			=	0;
+	short	i_dl_client				=	0;
+	short	i_ccy_code				=	0;
+	short	i_ibbs_account				=	0;
+	int	int_l_fetch_cnt				=	0;
+	int	int_l_batch_cnt				=	0;
+	int	int_l_retstat				=	0;
+	int	int_l_pg_num				=	1;
+	char	chr_h_ccy_code[APL_CCYCODE_LEN]		=	APL_NULL_STRING;
+	char	h_sys_dt[APL_DATE_LEN]		=	APL_NULL_STRING;
+	char	h_dl_client[APL_CLIENT_LENGTH]		=	APL_NULL_STRING;
+	char	chr_h_gl_account[GL_ACCOUNT_LEN]	=	APL_NULL_STRING;
+	char	h_maker[APL_USERID_LEN]			=	APL_NULL_STRING;
+	struct	sqlca	sqlca;
+
+	EXEC SQL BEGIN DECLARE SECTION;
+	EXEC SQL VAR chr_h_batch_in_proc_progname IS STRING;
+	EXEC SQL VAR chr_h_batch_in_proc_startdate IS STRING;
+	EXEC SQL VAR chr_h_batch_in_proc_rowid IS STRING;
+	EXEC SQL VAR chr_h_batch_in_proc_status IS STRING;
+	EXEC SQL VAR chr_h_restart_data IS STRING;
+	EXEC SQL VAR chr_h_ccy_code IS STRING;
+	EXEC SQL VAR h_dl_client IS STRING;
+	EXEC SQL VAR chr_h_gl_account IS STRING;
+	EXEC SQL VAR h_maker IS STRING;	
+
+	EXEC SQL END DECLARE SECTION;
+
+
+	strcpy(chr_h_batch_in_proc_progname,p_argv[0]);
+	strcpy(chr_h_batch_in_proc_startdate,p_argv[2]);
+
+	EXEC SQL SELECT ROWID, PROCESSING_STATUS
+	INTO :chr_h_batch_in_proc_rowid :int_i_batch_in_proc_rowid,:chr_h_restart_data :i_restart_info
+	FROM SYS_BATCHPROC
+	WHERE PROCESS_NAME = :chr_h_batch_in_proc_progname
+	AND STARTDATE	= :chr_h_batch_in_proc_startdate
+	AND STATUS		= 'started'
+	FOR UPDATE OF PROCESSING_STATUS ,STATUS;
+
+
+	if (sqlca.sqlcode <0)
+	{
+		fprintf(fl_userlog,"Batch_in_proc table cannot be locked.\n");
+		APL_GOBACK_FAIL
+	}
+
+	if (APL_ZERO_RESULT_SET)
+	{
+		fprintf(fl_userlog,"No entry for this process_name %s ,start_dt %s in batch table\n",chr_h_batch_in_proc_progname,chr_h_batch_in_proc_startdate);
+		CO_InsertErr(	l_debug_info_ptr,
+				DB_ERR_NO,
+				ltoa(sqlca.sqlcode),
+				APL_NULL_STRING,
+				APL_NULL_STRING,
+				__LINE__,
+				__FILE__);
+		APL_GOBACK_FAIL
+	}
+
+	strcpy(chr_h_batch_in_proc_statinfo,APL_NULL_STRING);
+
+	EXEC SQL UPDATE SYS_BATCHPROC
+	SET STAT_DET	=	:chr_h_batch_in_proc_statinfo
+	WHERE PROCESS_NAME	=	:chr_h_batch_in_proc_progname
+	AND STARTDATE	=	:chr_h_batch_in_proc_startdate
+	AND STATUS	=	'started';
+
+	if (sqlca.sqlcode <0)
+	{
+		fprintf(fl_userlog,"Batch_in_proc table cannot be locked.\n");
+		
+		CO_InsertErr(	l_debug_info_ptr,
+				DB_ERR_NO,
+				ltoa(sqlca.sqlcode),
+				APL_NULL_STRING,
+				APL_NULL_STRING,
+				__LINE__,
+				__FILE__);
+		APL_GOBACK_FAIL
+	}
+	
+		if (i_restart_info == -1)
+		{
+			strcpy(chr_h_restart_data," ");
+		}
+
+		EXEC SQL DECLARE cur_caccount CURSOR FOR
+		SELECT CLN_CODE,CLN_CURRENCY,CLN_GL_ACCOUNT
+		FROM MT_CLIENT
+		WHERE 
+		CLN_CODE > :chr_h_restart_data
+		ORDER BY CLN_CODE;
+	
+
+
+
+	
+	EXEC SQL OPEN cur_caccount;
+	fprintf(fl_repfile,"\n---------------------------------------------------------------------\n");
+	fprintf(fl_repfile," Reports for the EMU Conversion of Accounts               Page : %d",int_l_pg_num); //AIX - Warnings Removal
+	fprintf(fl_repfile,"\n---------------------------------------------------------------------\n");
+	fprintf(fl_repfile,"   ACCOUNT    CCYCODE  IBBSACCOUNT\n");
+	fprintf(fl_repfile,"------------------------------------\n");
+
+	for(;;)
+	{
+		EXEC SQL FETCH cur_caccount
+		INTO	:h_dl_client :i_dl_client,
+			:chr_h_ccy_code :i_ccy_code,
+			:chr_h_gl_account :i_ibbs_account;
+
+		IS_ANY_ORA_ERROR
+
+		if (APL_ZERO_RESULT_SET)
+		{
+			EXEC SQL CLOSE cur_caccount;
+			if (int_l_fetch_cnt == 0)
+			{
+				fprintf(fl_userlog,"EM_ConvAcc: No records to be processed\n");
+				APL_GOBACK_SUCCESS
+			}
+			else
+			{
+				if (!strcmp(chr_l_genreponly,"N"))
+				{
+
+				
+
+					EXEC SQL UPDATE SYS_BATCHPROC
+					SET PROCESSING_STATUS = :h_dl_client
+					WHERE PROCESS_NAME  = :chr_h_batch_in_proc_progname
+					AND STARTDATE   = :chr_h_batch_in_proc_startdate
+					AND STATUS      = 'started';
+
+					IS_ANY_ORA_ERROR
+
+					EXEC SQL COMMIT;
+					IS_ANY_ORA_ERROR
+					fprintf(fl_userlog,"EM_ConvAcc: %d records were inserted to ccashacc table Successfully\n",int_l_fetch_cnt);//AIX Warning Removal
+					EXEC SQL SELECT ROWID
+					INTO :chr_h_batch_in_proc_rowid
+					FROM SYS_BATCHPROC
+					WHERE PROCESS_NAME = :chr_h_batch_in_proc_progname
+					AND STARTDATE   = :chr_h_batch_in_proc_startdate
+					AND STATUS              = 'started'
+					FOR UPDATE OF PROCESSING_STATUS ,STATUS;
+					
+					if ((sqlca.sqlcode <0) || (APL_ZERO_RESULT_SET))
+					{
+						fprintf(fl_userlog,"Batch_in_proc table cannot be locked.\n");
+						CO_InsertErr( l_debug_info_ptr,
+								DB_ERR_NO,
+								ltoa(sqlca.sqlcode),
+								APL_NULL_STRING,
+								APL_NULL_STRING,
+								__LINE__,
+								__FILE__);
+	
+						APL_GOBACK_FAIL
+					}
+
+
+					APL_GOBACK_SUCCESS
+				}
+				else
+				{
+					fprintf(fl_userlog,"EM_ConvAcc: Reports generated successfully without committing the changes to the database\n");
+					APL_GOBACK_SUCCESS
+				}
+			}
+		}
+		
+ 
+	
+		
+		fprintf(fl_repfile,"%10s      %3s     %10s\n",h_dl_client,chr_h_ccy_code,chr_h_gl_account);
+
+
+		if (!strcmp(chr_l_genreponly,"N"))
+		{
+		
+
+			EXEC SQL INSERT INTO DL_CASHCLT 
+			VALUES (	:h_dl_client,:chr_h_ccy_code,
+					:chr_h_gl_account,'Y',null,null);
+					
+			if(sqlca.sqlcode == -1)
+			{
+				EXEC SQL UPDATE DL_CASHCLT
+				SET DEFAULT_CCY = 'Y'
+				WHERE CLIENT = :h_dl_client
+				AND   CURRENCY_CD = :chr_h_ccy_code
+				AND   GL_ACCOUNT = :chr_h_gl_account;
+			}		
+
+
+			IS_ANY_ORA_ERROR
+
+			if (int_l_batch_cnt == COMMIT_COUNT_B)
+			{
+				int_l_batch_cnt = 0;
+
+			
+
+				EXEC SQL UPDATE SYS_BATCHPROC
+				SET PROCESSING_STATUS = :h_dl_client
+				WHERE PROCESS_NAME	= :chr_h_batch_in_proc_progname
+				AND STARTDATE	= :chr_h_batch_in_proc_startdate
+				AND STATUS	= 'started';
+				
+				IS_ANY_ORA_ERROR
+
+				EXEC SQL COMMIT;
+
+				IS_ANY_ORA_ERROR
+
+				EXEC SQL SELECT ROWID
+				INTO :chr_h_batch_in_proc_rowid
+				FROM SYS_BATCHPROC
+				WHERE PROCESS_NAME = :chr_h_batch_in_proc_progname
+				AND STARTDATE   = :chr_h_batch_in_proc_startdate
+				AND STATUS              = 'started'
+				FOR UPDATE OF PROCESSING_STATUS ,STATUS;
+
+				if ((sqlca.sqlcode <0) || (APL_ZERO_RESULT_SET))
+				{
+					fprintf(fl_userlog,"Batch_in_proc table cannot be locked.\n");
+					CO_InsertErr( l_debug_info_ptr,
+							DB_ERR_NO,
+							ltoa(sqlca.sqlcode),
+							APL_NULL_STRING,
+							APL_NULL_STRING,
+							__LINE__,
+							__FILE__);
+							APL_GOBACK_FAIL
+				}
+
+			}
+
+			int_l_batch_cnt++;
+		}
+		if(( int_l_fetch_cnt >= PAGE_SIZE_CUSTODY) && (((int_l_fetch_cnt-1)%PAGE_SIZE_CUSTODY)==0)) /* Bageshri -- 10GM */ //AIX - Warnings Removal
+		{
+			fprintf(fl_repfile,"\n\n.......End of int_page %d.........\n",int_l_pg_num);
+			int_l_pg_num++;
+			fprintf(fl_repfile,"\f");
+			fprintf(fl_repfile,"\n--------------------------------------------------------------------\n");
+			fprintf(fl_repfile," Reports for the EMU Conversion of Accounts               Page : %d",int_l_pg_num);//AIX Warning Removal
+			fprintf(fl_repfile,"\n--------------------------------------------------------------------\n");
+			fprintf(fl_repfile,"------------------------------------\n");
+			fprintf(fl_repfile,"   ACCOUNT    CCYCODE IBBSACCOUNT\n");
+			fprintf(fl_repfile,"------------------------------------\n");
+		}
+
+		int_l_fetch_cnt++;
+
+	}	
+
+	RETURN_SUCCESS:
+	EXEC SQL UPDATE SYS_BATCHPROC
+	SET STATUS = 'completed',
+	    STAT_DET = :int_l_fetch_cnt,
+	    PROCESSING_STATUS = NULL
+	WHERE PROCESS_NAME = :chr_h_batch_in_proc_progname
+	AND STARTDATE  = :chr_h_batch_in_proc_startdate
+	AND STATUS     = 'started';
+
+	IS_ANY_ORA_ERROR
+	EXEC SQL COMMIT;
+	IS_ANY_ORA_ERROR
+	return APL_SUCCESS;
+
+	RETURN_FAILURE:
+	EXEC SQL ROLLBACK;
+	EXEC SQL CLOSE cur_caccount;
+	return APL_FAILURE;
+}
+
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+
+   
+
+
+
+//main(int argc,char **argv)
+int main(int argc,char **argv)//Changes done for AIX Migration
+{
+	int EM_ConvAcc(char **,FILE *,FILE *,char *,INTL_ENV_DATA_STRUCT_H *,DEBUG_INFO_STRUCT_H **);
+	struct sqlca sqlca;
+	DEBUG_INFO_STRUCT_H *l_error_node = (DEBUG_INFO_STRUCT_H *)NULL;
+	DEBUG_INFO_STRUCT_H		**l_debug_info_ptr		= &l_error_node;
+	INTL_ENV_DATA_STRUCT_H	*p_intlenv_data_struct_h	= (INTL_ENV_DATA_STRUCT_H *) NULL;
+	/* Added by kotubabu for Linux Migration -Start*/
+    #ifdef OS_LINUX
+	FILE			*l_finifile		= (FILE *) NULL;
+	FILE			*fl_userlog		= (FILE *) NULL;
+	FILE			*fl_repfile		= (FILE *) NULL;
+   #else
+    FILE *l_finifile = APL_OUT_FILE;
+    FILE *fl_userlog = APL_OUT_FILE;
+	FILE *fl_repfile = APL_OUT_FILE;
+   #endif
+    #ifdef OS_LINUX
+	 l_finifile = APL_OUT_FILE;
+     fl_userlog = APL_OUT_FILE;
+     fl_repfile = APL_OUT_FILE;
+	#endif
+   /*Added by kotubabu for Linux Migration-End*/
+	char			chr_l_inifile[PATH_LENGTH]	= APL_NULL_STRING;
+	char			usr[APL_USERID_LEN]	= APL_NULL_STRING;
+	char			chr_custody_id_b[APL_USERID_LEN]	= APL_NULL_STRING;
+	char			chr_pwd[APL_PASSWD_LEN]	= APL_NULL_STRING;
+	char			chr_l_genreponly[2];
+	short			int_l_condexists_A		= 0;
+
+	EXEC SQL BEGIN DECLARE SECTION;
+	EXEC SQL VAR usr IS STRING;
+	EXEC SQL VAR chr_pwd IS STRING;
+	EXEC SQL END DECLARE SECTION;
+	sqlca.sqlcode = 0;
+
+
+	p_intlenv_data_struct_h	= (INTL_ENV_DATA_STRUCT_H*)calloc(1,sizeof(INTL_ENV_DATA_STRUCT_H));
+	APL_MALLOC_FAIL(p_intlenv_data_struct_h);
+
+
+
+	strcpy(chr_l_inifile,getenv("INTL_ROOT_PATH"));
+	strcat(chr_l_inifile,"intl_sun.cfg");
+	
+	if ((l_finifile = fopen(chr_l_inifile,"r")) == NULL)
+	{
+		exit(-1);
+	}
+
+
+
+
+
+	APL_FETCH_DB_LOGIN_DETAILS(l_finifile, chr_custody_id_b, usr, chr_pwd, APL_OUT_FILE,
+								l_debug_info_ptr)
+
+	EXEC SQL CONNECT :usr IDENTIFIED BY :chr_pwd;
+	IS_ANY_ORA_ERROR
+
+
+
+
+
+
+	if (APL_FAILURE == CO_Rtv_RptFileName(	"5B",
+						APL_LOGFILE_DESC,
+						100,
+						argv[5],
+						argv,
+						&fl_userlog,
+						l_debug_info_ptr))
+	{
+		exit(-1);
+	}
+
+
+
+
+	if (APL_FAILURE == CO_Rtv_RptFileName(     "CA",
+						"ACC_REPORT_FILE",
+						100,
+						argv[5],
+						argv,
+						&fl_repfile,
+						l_debug_info_ptr))
+	{
+		exit(-1);
+	}
+
+	EXEC SQL COMMIT WORK;
+	IS_ANY_ORA_ERROR
+
+
+	strcpy(chr_l_genreponly,argv[9]);
+	strcpy(p_intlenv_data_struct_h->usr, argv[3]);
+	strcpy(p_intlenv_data_struct_h->h_mode,argv[4]);
+
+
+	if (APL_FAILURE == CO_RtvSysParams(l_debug_info_ptr))
+	{
+		fprintf(fl_userlog,"Failed To Get System Parameters\n");
+		APL_GOBACK_FAIL
+	}
+
+
+
+	if (APL_FAILURE == CO_Chk_CntryEnabled(   "EMUCONV",
+						"EMU_CONV_ACC",
+						&int_l_condexists_A,
+						l_debug_info_ptr))
+	{
+		fprintf(fl_userlog,"Failed while checking the country conditions\n");
+		APL_GOBACK_FAIL
+	}
+
+	if(int_l_condexists_A <= 0)
+	{
+		fprintf(fl_userlog,"No entry for EMU_CONV_ACC in cntry_sys_params\n");
+		APL_GOBACK_SUCCESS
+	}
+
+
+	fprintf(fl_userlog,"Calling the Accounts conversion processtion\n");
+		
+		
+
+
+	if (APL_FAILURE == EM_ConvAcc(	argv,
+					fl_userlog,
+					fl_repfile,
+					chr_l_genreponly,
+					p_intlenv_data_struct_h,
+					l_debug_info_ptr))
+	{
+		fprintf(fl_userlog,"The Accounts conversion processtion returned failure \n");
+
+		CO_FreeErrLst(l_debug_info_ptr);
+		EXEC SQL ROLLBACK WORK RELEASE;
+		IS_ANY_ORA_ERROR
+		APL_GOBACK_FAIL
+	}
+	else
+	{
+		EXEC SQL COMMIT WORK RELEASE;
+		IS_ANY_ORA_ERROR
+		fprintf(fl_userlog,"EM_ConvAcc: The Accounts conversion processtion returned success \n");
+		APL_GOBACK_SUCCESS
+	}
+
+	APL_GOBACK_SUCCESS
+
+
+	RETURN_SUCCESS:
+	CO_Proc_RptClose(fl_userlog,l_debug_info_ptr);
+	CO_Proc_RptClose(fl_repfile,l_debug_info_ptr);
+	exit(0);
+
+	RETURN_FAILURE:
+	CO_Proc_RptClose(fl_userlog,l_debug_info_ptr);
+	CO_Proc_RptClose(fl_repfile,l_debug_info_ptr);
+	exit(-1);
+
+}

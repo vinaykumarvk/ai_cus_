@@ -1,0 +1,439 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#include "stdio_64.h"
+#include <time.h>
+#include "Intellect_Common.h"
+#include "Intellect_Error.h"
+#include "CR_Common.h"
+#include "CCS.h"
+#include "cmqc.h"
+#include "CO_HostStructdef.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+
+
+DEBUG_INFO_STRUCT_H **l_debug_info_ptr;
+DEBUG_INFO_STRUCT_H *l_debuginfo 				= (DEBUG_INFO_STRUCT_H *)NULL;
+
+DL_DEALAUDIT_STRUCT_H *l_dl_dealaudit_struct_h = NULL;
+
+
+main(int argc,char **argv)
+{
+
+	
+
+	extern int MS_Rtv_CCSPendTxn(DL_CCSMSG_STRUCT_H *,EI_MQ_DATA_STRUCT_H *,DEBUG_INFO_STRUCT_H **);
+	extern int MS_Proc_CCSMsgPut(EI_MQ_DATA_STRUCT_H *,MQHCONN,MQHOBJ,FILE *,MQLONG *,DEBUG_INFO_STRUCT_H **);
+	extern int MQGetConn(char *, char *, MQHCONN *, MQHOBJ *, char *);
+
+	
+	struct sqlca sqlca;
+	struct timespec interval,int_remainder;
+	char chr_l_sys_date_time[APL_DATE_LEN] 			= {APL_NULL_STRING};
+	FILE *chr_finifile;
+	char chr_inifile[PATH_LENGTH],chr_l_uname[APL_USERID_LEN],chr_l_passwd[APL_PASSWD_LEN],chr_custody_id_b[APL_USERID_LEN],chr_buffer[KEY_LENGTH];
+   char	chr_l_eodflag[2],chr_mtemp[100],chr_l_ccsflag[2];
+   int int_l_seqno;
+	EI_MQ_DATA_STRUCT_H l_ei_mq_data_struct_h;
+	float flt_l_sleep_interval	= 0.25;	
+	int	int_l_count;
+   DL_CCSMSG_STRUCT_H l_dl_ccsmsg_struct_h;
+   DL_CCSMSG_STRUCT_I l_dl_ccsmsg_struct_i;
+
+	
+	MQHCONN	Hcon;
+	MQHOBJ	Hobj;
+	MQLONG	Reason;
+	MQLONG	CompCode;
+	char     chr_qmname[QUEUE_MANAGER_LEN]        =  {APL_NULL_STRING};
+   char     queue_name[QUEUE_LEN]                 =  {APL_NULL_STRING};
+
+	
+	
+	memset(chr_inifile,APL_NULL_CHAR,PATH_LENGTH);
+	memset(chr_buffer,APL_NULL_CHAR,KEY_LENGTH);
+	memset(chr_l_uname,APL_NULL_CHAR,40);
+	memset(chr_l_passwd,APL_NULL_CHAR,40);
+	memset(chr_l_eodflag,APL_NULL_CHAR,2);
+	memset(&l_ei_mq_data_struct_h,NULL,sizeof(EI_MQ_DATA_STRUCT_H));
+	memset(&l_dl_ccsmsg_struct_h,NULL,sizeof(DL_CCSMSG_STRUCT_H));
+	memset(&l_dl_ccsmsg_struct_i,NULL,sizeof(DL_CCSMSG_STRUCT_I));
+
+	EXEC SQL VAR chr_l_sys_date_time IS STRING;
+	EXEC SQL VAR chr_l_eodflag IS STRING;
+	EXEC SQL VAR l_dl_ccsmsg_struct_h.office_for_booking IS STRING;
+	EXEC SQL VAR l_dl_ccsmsg_struct_h.msg_class IS STRING;
+	EXEC SQL VAR l_dl_ccsmsg_struct_h.identity IS STRING;
+	EXEC SQL VAR l_dl_ccsmsg_struct_h.tlc_deal_type IS STRING;
+	EXEC SQL VAR l_dl_ccsmsg_struct_h.deal_code IS STRING;
+	EXEC SQL VAR l_dl_ccsmsg_struct_h.client IS STRING;
+	EXEC SQL VAR l_dl_ccsmsg_struct_h.master_clt IS STRING;
+	EXEC SQL VAR l_dl_ccsmsg_struct_h.clnt_ident IS STRING;
+	EXEC SQL VAR l_dl_ccsmsg_struct_h.brk IS STRING;
+	EXEC SQL VAR l_dl_ccsmsg_struct_h.gl_clt IS STRING;
+	EXEC SQL VAR l_dl_ccsmsg_struct_h.instr_code IS STRING;
+	EXEC SQL VAR l_dl_ccsmsg_struct_h.signature IS STRING;
+	EXEC SQL VAR l_dl_ccsmsg_struct_h.deal_date IS STRING;
+	EXEC SQL VAR l_dl_ccsmsg_struct_h.setl_date IS STRING;
+	EXEC SQL VAR l_dl_ccsmsg_struct_h.exp_setldate IS STRING;
+	EXEC SQL VAR l_dl_ccsmsg_struct_h.location_cd IS STRING;
+	EXEC SQL VAR l_dl_ccsmsg_struct_h.mkrt_dl_class IS STRING;
+	EXEC SQL VAR l_dl_ccsmsg_struct_h.cp_clt IS STRING;
+	EXEC SQL VAR l_dl_ccsmsg_struct_h.failreason_cd IS STRING;
+	EXEC SQL VAR l_dl_ccsmsg_struct_h.DETAIL IS STRING;
+	EXEC SQL VAR l_dl_ccsmsg_struct_h.actual_setldt IS STRING;
+	EXEC SQL VAR l_dl_ccsmsg_struct_h.processdt IS STRING;
+	EXEC SQL VAR l_dl_ccsmsg_struct_h.access_stamp IS STRING;
+	EXEC SQL VAR l_dl_ccsmsg_struct_h.status_ind IS STRING;
+	EXEC SQL VAR l_dl_ccsmsg_struct_h.depo IS STRING;
+	EXEC SQL VAR l_dl_ccsmsg_struct_h.currency_cd IS STRING;
+	EXEC SQL VAR l_dl_ccsmsg_struct_h.status_qual_ind IS STRING;
+	EXEC SQL VAR l_dl_ccsmsg_struct_h.status_cd IS STRING;
+	EXEC SQL VAR l_dl_ccsmsg_struct_h.reason_ql IS STRING;
+	EXEC SQL VAR l_dl_ccsmsg_struct_h.reason_cd IS STRING;
+   EXEC SQL VAR l_dl_ccsmsg_struct_h.fail_det IS STRING;
+   EXEC SQL VAR l_dl_ccsmsg_struct_h.h_cust_ext_ind IS STRING;
+
+	l_dl_dealaudit_struct_h = (DL_DEALAUDIT_STRUCT_H *)calloc(1, sizeof(DL_DEALAUDIT_STRUCT_H));
+	
+	strcpy(chr_inifile,getenv("INTL_ROOT_PATH"));
+	strcat(chr_inifile,"/intl_sun.cfg");
+	if ((chr_finifile = fopen(chr_inifile,"r")) == NULL)
+      APL_GOBACK_FAIL;
+
+	sqlca.sqlcode = 0;
+	APL_FETCH_DB_LOGIN_DETAILS(chr_finifile, chr_custody_id_b, chr_l_uname, chr_l_passwd , APL_OUT_FILE , &l_debuginfo)
+	EXEC SQL CONNECT :chr_l_uname IDENTIFIED BY :chr_l_passwd;
+	if(sqlca.sqlcode < 0)
+	{
+		ltoa_r(sqlca.sqlcode,chr_buffer,KEY_LENGTH-1); 
+   	CO_InsertErr(&l_debuginfo,DB_ERR_NO,chr_buffer,
+              APL_NULL_STRING,APL_NULL_STRING,
+              __LINE__,__FILE__);
+		printf("Database Connection Failed with sqlcode %d\n",sqlca.sqlcode);
+		APL_GOBACK_FAIL
+	}
+
+	sqlca.sqlcode - 0;
+	EXEC SQL COMMIT WORK;
+   if(sqlca.sqlcode < 0)
+   {
+     ltoa_r(sqlca.sqlcode,chr_buffer,KEY_LENGTH-1);
+     CO_InsertErr(&l_debuginfo,DB_ERR_NO,chr_buffer,
+     APL_NULL_STRING,APL_NULL_STRING,
+                __LINE__,__FILE__);
+     APL_GOBACK_FAIL
+	}
+	
+	sqlca.sqlcode = 0;
+	EXEC SQL SELECT to_char(SYS_DATE,'ddmmyyyy') INTO :chr_l_sys_date_time FROM PRO_SYS_DATE;
+	if(sqlca.sqlcode < 0)
+   {
+      ltoa_r(sqlca.sqlcode,chr_buffer,KEY_LENGTH-1);
+      CO_InsertErr(&l_debuginfo,DB_ERR_NO,chr_buffer,
+              APL_NULL_STRING,APL_NULL_STRING,
+              __LINE__,__FILE__);
+		printf("Database Query Failed with sqlcode %d\n",sqlca.sqlcode);
+      APL_GOBACK_FAIL
+   }
+	
+	
+
+	if (CO_ReadToken(chr_finifile,"CCS_MQMANAGER",chr_qmname,l_debug_info_ptr) == APL_FAILURE)
+      APL_GOBACK_FAIL
+   if(!strlen(chr_qmname))
+      APL_GOBACK_FAIL
+
+	EXEC SQL SELECT	QUEUE_NAME 
+							INTO :queue_name 
+							FROM PRO_MQNAMES 
+							WHERE EVENT_CLASS='OT' 
+							AND NATION_CODE=(select NATION_CODE from MT_COMMON_SYS_PARAMS);
+
+	IS_ANY_ORA_ERROR
+
+   if(!strlen(queue_name))
+	{
+		printf("QNAME info found");
+      APL_GOBACK_FAIL
+	}
+
+	if (MQGetConn(chr_qmname,queue_name,&Hcon,&Hobj,"OT") == APL_FAILURE)
+	{
+		printf("CONN info found");
+      APL_GOBACK_FAIL
+	}
+
+	
+EXEC SQL Declare cspendingccs cursor for select e.office_for_booking,
+a.MSG_CLASS,
+a.IDENTITY,      
+a.TLC_DEAL_TYPE,   
+a.DEAL_CODE,      
+a.CLIENT,        
+a.MASTER_CLT,         
+a.CLNT_IDENT,       
+a.BRK,         
+a.INSTR_CODE,         
+a.QTY,            
+a.CURRENCY_CD,        
+a.AMOUNT,            
+a.SIGNATURE,           
+to_char(rtrim(a.GL_CLT)),       
+to_char(to_date(a.DEAL_DATE),'YYYYMMDD'),
+to_char(to_date(a.SETL_DATE),'YYYYMMDD'),
+to_char(to_date(a.EXP_SETLDATE),'YYYYMMDD'),
+a.LOCATION_CD,       
+a.MKRT_DL_CLASS,   
+a.CP_CLT,       
+a.FAILREASON_CD,       
+a.SUB_FAIL_CD,    
+a.FAIL_DET,       
+a.FAILREASON_INDEX,   
+a.DESCRIPTION,      
+to_char(to_date(a.ACTUAL_SETLDT),'YYYYMMDD'),
+to_char(to_date(a.PROCESSDT),'YYYYMMDD'),
+to_char(to_date(a.ACCESS_STAMP),'YYYYMMDD'),
+a.STATUS,         
+a.IDEN_NO,
+b.depo,
+c.currency_cd,
+d.status_qual_ind,
+d.status_cd,
+d.reason_ql,
+d.reason_cd,
+decode(instr(nvl(a.DETAIL,' '),'CUSTODY'),0,'N','Y') 
+from DL_CCSPENDTXN a, MT_LOCATION b, PRO_FAILCODES d , MT_INSTRUMENT c, MT_COMMON_SYS_PARAMS e 
+where a.iden_no = (select min(iden_no) from DL_CCSPENDTXN where status_ind ='P')
+and  a.location_cd = b.location_cd (+)
+and a.instr_code = c.instr_code(+)
+and a.failreason_cd = d.failreason_cd (+)
+and nvl(a.sub_fail_cd,0) = d.sub_fail_cd (+);
+
+       IS_ANY_ORA_ERROR
+
+
+	printf("****************************************************\n");
+  	printf(" CCS Trans Server started with sleep interval %s.....\n",argv[1]);
+	printf("****************************************************\n");
+	int_l_count = 0;		
+
+	
+	sqlca.sqlcode = 0;
+	EXEC SQL SELECT ccs_ind INTO :chr_l_ccsflag FROM MT_COMMON_SYS_PARAMS;
+     IS_ANY_ORA_ERROR
+      if (sqlca.sqlcode < 0)
+      {
+         ltoa_r(sqlca.sqlcode,chr_buffer,KEY_LENGTH-1);
+         CO_InsertErr(&l_debuginfo,DB_ERR_NO,chr_buffer,
+                APL_NULL_STRING,APL_NULL_STRING,
+                          __LINE__,__FILE__);
+			printf("Database Query Failed with sqlca h_code %d\n",sqlca.sqlcode);
+			APL_GOBACK_FAIL
+      }
+     if (strcmp(chr_l_ccsflag,"Y"))
+     { 
+        CO_ProcMonitor(APL_OUT_FILE,"CCS IS NOT INSTALLED",NULL,NULL);
+        APL_GOBACK_FAIL
+     } 
+
+	while(1)
+	{
+
+      sqlca.sqlcode = 0;
+
+      EXEC SQL SELECT eod_ind INTO :chr_l_eodflag FROM PRO_SYS_DATE;
+      if (sqlca.sqlcode < 0)
+      {
+         ltoa_r(sqlca.sqlcode,chr_buffer,KEY_LENGTH-1);
+         CO_InsertErr(&l_debuginfo,DB_ERR_NO,chr_buffer,
+                APL_NULL_STRING,APL_NULL_STRING,
+                          __LINE__,__FILE__);
+			printf("Database Query Failed with sqlca h_code %d\n",sqlca.sqlcode);
+			APL_GOBACK_FAIL
+      }
+      if (strcmp(chr_l_eodflag,"O") != 0)
+      {
+         
+         
+	 		sleep(300); 
+      }
+		else
+		{
+
+
+       EXEC SQL OPEN cspendingccs ;
+       IS_ANY_ORA_ERROR
+
+      for( ; ; )
+      {
+			memset(&l_dl_ccsmsg_struct_h,NULL,sizeof(DL_CCSMSG_STRUCT_H));
+			memset(l_dl_ccsmsg_struct_h.office_for_booking, APL_NULL_CHAR,APL_BOOKING_OFFICE_LEN);
+			memset(l_dl_ccsmsg_struct_h.msg_class, APL_NULL_CHAR,APL_MESSAGE_TYPE_LEN);
+			memset(l_dl_ccsmsg_struct_h.identity, APL_NULL_CHAR,APL_REFERENCE_LENGTH);
+			memset(l_dl_ccsmsg_struct_h.tlc_deal_type, APL_NULL_CHAR,APL_TLC_TRD_TYPE_LEN);
+			memset(l_dl_ccsmsg_struct_h.deal_code, APL_NULL_CHAR,APL_DEAL_CODE_LEN);
+			memset(l_dl_ccsmsg_struct_h.client, APL_NULL_CHAR,APL_CLIENT_LENGTH);
+			memset(l_dl_ccsmsg_struct_h.master_clt, APL_NULL_CHAR,APL_CLIENT_LENGTH);
+			memset(l_dl_ccsmsg_struct_h.clnt_ident, APL_NULL_CHAR,17);
+			memset(l_dl_ccsmsg_struct_h.brk, APL_NULL_CHAR,APL_CLIENT_LENGTH);
+			memset(l_dl_ccsmsg_struct_h.instr_code, APL_NULL_CHAR,APL_INSTRUMENTCODE_LEN);
+			l_dl_ccsmsg_struct_h.quantity=0.0;
+			memset(l_dl_ccsmsg_struct_h.currency_cd, APL_NULL_CHAR,APL_CCYCODE_LEN);
+			memset(l_dl_ccsmsg_struct_h.signature, APL_NULL_CHAR,APL_SIGN_LEN);
+			memset(l_dl_ccsmsg_struct_h.gl_clt, APL_NULL_CHAR,APL_CASH_ACC_LEN);
+			memset(l_dl_ccsmsg_struct_h.deal_date, APL_NULL_CHAR,APL_DT_LEN);
+			memset(l_dl_ccsmsg_struct_h.setl_date, APL_NULL_CHAR,APL_DT_LEN);
+			memset(l_dl_ccsmsg_struct_h.exp_setldate, APL_NULL_CHAR,APL_DT_LEN);
+			memset(l_dl_ccsmsg_struct_h.location_cd, APL_NULL_CHAR,APL_LOCNCODE_LENGTH);
+			memset(l_dl_ccsmsg_struct_h.mkrt_dl_class, APL_NULL_CHAR,APL_MKT_DEAL_TYPE_LEN);
+			memset(l_dl_ccsmsg_struct_h.cp_clt, APL_NULL_CHAR,APL_CLIENT_LENGTH);
+			memset(l_dl_ccsmsg_struct_h.failreason_cd, APL_NULL_CHAR,APL_FAILCODE_LEN);
+			memset(l_dl_ccsmsg_struct_h.fail_det, APL_NULL_CHAR,APL_FAILNOTE_LEN);
+			memset(l_dl_ccsmsg_struct_h.description, APL_NULL_CHAR,APL_NARRATIVE_LEN);
+			memset(l_dl_ccsmsg_struct_h.actual_setldt, APL_NULL_CHAR,APL_DT_LEN);
+			memset(l_dl_ccsmsg_struct_h.processdt, APL_NULL_CHAR,APL_DT_LEN);
+			memset(l_dl_ccsmsg_struct_h.access_stamp, APL_NULL_CHAR,APL_DT_LEN);
+			memset(l_dl_ccsmsg_struct_h.status_ind, APL_NULL_CHAR,APL_STATUS_LEN);
+			memset(l_dl_ccsmsg_struct_h.iden_no, APL_NULL_CHAR,APL_SEQNO_LEN);
+			memset(l_dl_ccsmsg_struct_h.depo, APL_NULL_CHAR,APL_DEPOSITORY_LEN);
+			memset(l_dl_ccsmsg_struct_h.currencycodecurr, APL_NULL_CHAR,APL_CCYCODE_LEN);
+			memset(l_dl_ccsmsg_struct_h.status_qual_ind, APL_NULL_CHAR,APL_STATUS_QUAL_LEN);
+			memset(l_dl_ccsmsg_struct_h.status_cd, APL_NULL_CHAR,APL_STATUS_CODE_LEN);
+			memset(l_dl_ccsmsg_struct_h.reason_cd, APL_NULL_CHAR,APL_REAS_QUAL_LEN);
+			memset(l_dl_ccsmsg_struct_h.reason_ql, APL_NULL_CHAR,APL_REAS_CODE_LEN);
+         memset(l_dl_ccsmsg_struct_h.h_cust_ext_ind, APL_NULL_CHAR,2);
+			l_dl_ccsmsg_struct_h.amount=0;
+
+         EXEC SQL FETCH cspendingccs into :l_dl_ccsmsg_struct_h:l_dl_ccsmsg_struct_i;
+			
+			IS_ANY_ORA_ERROR
+			
+
+         		if(APL_ZERO_RESULT_SET)
+			{
+				sleep(60); 
+         			break ;
+			}
+			memset(&l_ei_mq_data_struct_h,NULL,sizeof(EI_MQ_DATA_STRUCT_H));
+   
+			if (APL_FAILURE == MS_Rtv_CCSPendTxn(&l_dl_ccsmsg_struct_h, &l_ei_mq_data_struct_h,&l_debuginfo))
+			{
+					printf("failed from MS_Rtv_CCSPendTxn\n");
+               APL_GOBACK_FAIL
+			}
+       
+					CO_ProcMonitor(APL_OUT_FILE,"Record successfully retrieved from CCS_Pendtxn table",NULL,NULL);
+
+					CO_ProcMonitor(APL_OUT_FILE,chr_mtemp,NULL,NULL);
+					strcpy(chr_mtemp,APL_NULL_STRING);
+					CO_ProcMonitor(APL_OUT_FILE,chr_mtemp,NULL,NULL);
+					strcpy(chr_mtemp,APL_NULL_STRING);
+               printf("MESSAGE FROM THE SERVER : %s\n",l_ei_mq_data_struct_h.msg);
+					if (APL_FAILURE == MS_Proc_CCSMsgPut(&l_ei_mq_data_struct_h,Hcon,Hobj,chr_finifile,&Reason,&l_debuginfo))
+					{	
+						CO_ProcMonitor(APL_OUT_FILE,"Message delivery to MQ Queue failed\n\n",NULL,NULL);
+            		if (flt_l_sleep_interval >= 1)
+						{
+              			sleep((int)flt_l_sleep_interval);
+						}
+            		else
+						{
+        					nanosleep(&interval,&int_remainder);
+						}
+						if ((Reason == MQRC_CONNECTION_BROKEN) || (Reason == MQRC_HCONN_ERROR) || (Reason == MQRC_HOBJ_ERROR))
+            		{
+               		MQCLOSE(Hcon,&Hobj,MQCO_NONE,&CompCode,&Reason);
+               		{
+                  		sprintf(chr_mtemp,"MQ Close ended with reason %ld",Reason);
+                  		CO_ProcMonitor(APL_OUT_FILE,chr_mtemp,NULL,NULL);
+               		}
+               		MQDISC(&Hcon,&CompCode,&Reason);
+               		{
+                  		sprintf(chr_mtemp,"MQ Disc ended with reason %ld",Reason);
+                  		CO_ProcMonitor(APL_OUT_FILE,chr_mtemp,NULL,NULL);
+               		}
+							sleep(10);
+               		CO_ProcMonitor(APL_OUT_FILE,"Attempting to reconnect to MQ Server...",NULL,NULL);
+               		if (MQGetConn(chr_qmname,queue_name,&Hcon,&Hobj,"O") == APL_FAILURE)
+                  		APL_GOBACK_FAIL
+            		}
+					}
+					else
+					{
+                 printf("I AM HERE ABOVE UPDATE STATMENT\n");
+						sqlca.sqlcode = 0;
+						EXEC SQL UPDATE DL_CCSPENDTXN SET status_ind = 'T' WHERE 
+					   iden_no= :l_dl_ccsmsg_struct_h.iden_no
+						AND status_ind = 'P';
+                  
+                  IS_ANY_ORA_ERROR
+
+                  printf("I AM HERE AFTER UPDATE STATEMENT\n"); 
+						printf(" l_dl_ccsmsg_struct_h.client is %s\n",l_dl_ccsmsg_struct_h.client);
+
+                  CO_ProcMonitor(APL_OUT_FILE,"STATUS UPDATED IN CCS_PENDTXN\n\n",NULL,NULL);
+						sqlca.sqlcode = 0;
+                
+                    
+                  if(strcmp(l_dl_ccsmsg_struct_h.msg_class,"II"))
+                  {
+                    if (APL_FAILURE == MS_Mod_CCSTrail(&l_dl_ccsmsg_struct_h, l_dl_dealaudit_struct_h,&l_debuginfo))
+                    {
+                      CO_ProcMonitor(APL_OUT_FILE,"ERROR IN UPDATING AUDIT TRAIL\n\n",NULL,NULL);
+                      APL_GOBACK_FAIL
+                    }
+                 } 
+						EXEC SQL COMMIT ;
+						IS_ANY_ORA_ERROR
+						CO_ProcMonitor(APL_OUT_FILE,"Transaction commited in the  CCS_Pendtxn table\n\n",NULL,NULL);
+            		if (flt_l_sleep_interval >= 1)
+						{
+              			sleep(flt_l_sleep_interval);
+						}
+            		else
+						{
+        					nanosleep(&interval,&int_remainder);
+						}
+			
+              }
+        EXEC SQL OPEN cspendingccs;
+        IS_ANY_ORA_ERROR
+		}
+	}
+}
+
+	APL_GOBACK_SUCCESS
+
+	RETURN_SUCCESS:
+		EXEC SQL COMMIT ;
+		CO_ProcMonitor(APL_OUT_FILE,"Exiting successfully from CCS_Trans Server\n\n",NULL,NULL);
+      MQCLOSE(Hcon,&Hobj,MQCO_NONE,&CompCode,&Reason);
+      MQDISC(&Hcon,&CompCode,&Reason);
+   	fclose(chr_finifile);
+   	exit(0);
+
+	RETURN_FAILURE:
+   	EXEC SQL ROLLBACK;
+		CO_ProcMonitor(APL_OUT_FILE,"Exiting unsuccessfully from CCS_Trans Server\n\n",NULL,NULL);
+      MQCLOSE(Hcon,&Hobj,MQCO_NONE,&CompCode,&Reason);
+      MQDISC(&Hcon,&CompCode,&Reason);
+   	fclose(chr_finifile);
+   	exit(-1);
+}
+

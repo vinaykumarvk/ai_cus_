@@ -1,0 +1,268 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ 
+#include "stdio_64.h"
+#include <time.h>
+#include "Intellect_Common.h"
+#include "Intellect_Error.h"
+#include "CR_Common.h"
+#include "SMP_InterFace.h"
+#include "cmqc.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+
+DEBUG_INFO_STRUCT_H *l_debuginfo = (DEBUG_INFO_STRUCT_H *)NULL;
+DEBUG_INFO_STRUCT_H **l_debug_info_ptr = NULL;
+
+main(int argc,char **argv)
+{
+
+	extern int MS_Rtv_SMPMsg(MQHCONN,MQHOBJ,FILE *,MQLONG *,DEBUG_INFO_STRUCT_H **);
+	extern int MQGetConn(char *, char *, MQHCONN *, MQHOBJ *,char *);
+
+	struct sqlca sqlca;
+	struct timespec interval,int_remainder;
+
+	FILE *chr_finifile;
+	char chr_inifile[PATH_LENGTH],chr_l_uname[APL_USERID_LEN],chr_l_passwd[APL_PASSWD_LEN],chr_custody_id_b[APL_USERID_LEN],chr_buffer[KEY_LENGTH];
+	char chr_l_sys_date_time[APL_DATE_LEN] = {APL_NULL_STRING};
+	char chr_mtemp[100],chr_l_eodflag[2];
+	float flt_l_sleep_interval = 0.25;
+	int int_l_count,int_l_daemonstatus;
+
+	
+
+   MQHCONN  Hcon;
+   MQHOBJ   Hobj;
+	MQLONG	CompCode;
+	MQLONG	Reason;
+   char     chr_qmname[QUEUE_MANAGER_LEN]        =  {APL_NULL_STRING};
+   char     queue_name[QUEUE_LEN]                 =  {APL_NULL_STRING};
+
+	memset(chr_inifile,APL_NULL_CHAR,PATH_LENGTH);
+	memset(chr_buffer,APL_NULL_CHAR,KEY_LENGTH);
+	memset(chr_l_uname,APL_NULL_CHAR,40);
+	memset(chr_l_passwd,APL_NULL_CHAR,40);
+	memset(chr_l_eodflag,APL_NULL_CHAR,2);
+	memset(chr_mtemp,APL_NULL_CHAR,100);
+	
+	EXEC SQL VAR chr_l_sys_date_time					IS STRING;
+	EXEC SQL VAR chr_l_eodflag							IS STRING;
+
+	strcpy(chr_inifile,getenv("INTL_ROOT_PATH"));
+	strcat(chr_inifile,"/intl_sun.cfg");
+	if ((chr_finifile = fopen(chr_inifile,"r")) == NULL)
+        APL_GOBACK_FAIL;
+
+	interval.tv_sec = 0.0;
+   if (argc > 1)
+   {
+      interval.tv_nsec = atof(argv[1]) * 1000000000;
+      flt_l_sleep_interval = atof(argv[1]);
+   }
+   else
+   {
+      CO_ProcMonitor(APL_OUT_FILE,"Invalid Polling Interval...",NULL,NULL);
+      APL_GOBACK_FAIL
+      
+   }
+	
+   APL_FETCH_DB_LOGIN_DETAILS(chr_finifile, chr_custody_id_b, chr_l_uname, chr_l_passwd , APL_OUT_FILE , &l_debuginfo)
+   EXEC SQL CONNECT :chr_l_uname IDENTIFIED BY :chr_l_passwd;
+   if(sqlca.sqlcode < 0)
+   {
+     	ltoa_r(sqlca.sqlcode,chr_buffer,KEY_LENGTH-1); 
+     	CO_InsertErr(&l_debuginfo,DB_ERR_NO,chr_buffer,
+                 APL_NULL_STRING,APL_NULL_STRING,
+                 __LINE__,__FILE__);
+		printf("Database Connection Failed with sqlcode %d\n",sqlca.sqlcode);
+     	APL_GOBACK_FAIL
+
+   }
+
+	 sqlca.sqlcode = 0;
+    EXEC SQL COMMIT WORK;
+    if(sqlca.sqlcode < 0)
+    {
+    	ltoa_r(sqlca.sqlcode,chr_buffer,KEY_LENGTH-1);
+      CO_InsertErr(&l_debuginfo,DB_ERR_NO,chr_buffer,
+      APL_NULL_STRING,APL_NULL_STRING,
+                 __LINE__,__FILE__);
+		printf("Database Query failed with sqlcode %d\n",sqlca.sqlcode);
+      APL_GOBACK_FAIL
+    }
+
+	sqlca.sqlcode = 0;
+	EXEC SQL SELECT to_char(SYS_DATE,'dd-chr_mm-yyyy') INTO :chr_l_sys_date_time FROM PRO_SYS_DATE;
+	if(sqlca.sqlcode < 0)
+   {
+     	ltoa_r(sqlca.sqlcode,chr_buffer,KEY_LENGTH-1);
+     	CO_InsertErr(&l_debuginfo,DB_ERR_NO,chr_buffer,
+     	APL_NULL_STRING,APL_NULL_STRING,
+                __LINE__,__FILE__);
+		printf("Database Query failed with sqlcode %d\n",sqlca.sqlcode);
+     	APL_GOBACK_FAIL
+   }
+
+	
+
+	if (CO_ReadToken(chr_finifile,"INTL_EI_SMI_ADM",chr_qmname,l_debug_info_ptr) == APL_FAILURE)
+      APL_GOBACK_FAIL
+   if(!strlen(chr_qmname))
+      APL_GOBACK_FAIL
+
+   if (CO_ReadToken(chr_finifile,"INTL_MS_INC_Q",queue_name,l_debug_info_ptr) == APL_FAILURE)
+      APL_GOBACK_FAIL
+   if(!strlen(queue_name))
+      APL_GOBACK_FAIL
+	
+	if (MQGetConn(chr_qmname,queue_name,&Hcon,&Hobj,"I") == APL_FAILURE)
+		APL_GOBACK_FAIL
+
+
+
+
+
+	printf("****************************************************\n");
+   printf("SMP In Server started with sleep interval %s.....\n",argv[1]);
+   printf("****************************************************\n");	
+   int_l_count = 0;   																						
+	while(1)
+   {
+		sqlca.sqlcode = 0;
+      EXEC SQL SELECT eod_ind INTO :chr_l_eodflag FROM PRO_SYS_DATE;
+		if(sqlca.sqlcode < 0)
+   	{
+     		ltoa_r(sqlca.sqlcode,chr_buffer,KEY_LENGTH-1);
+     		CO_InsertErr(&l_debuginfo,DB_ERR_NO,chr_buffer,
+     		APL_NULL_STRING,APL_NULL_STRING,
+         	       __LINE__,__FILE__);
+			printf("Database Query failed with sqlcode %d\n",sqlca.sqlcode);
+     		APL_GOBACK_FAIL
+   	}
+      if (strcmp(chr_l_eodflag,"O") != 0)								
+      {
+         CO_ProcMonitor(APL_OUT_FILE,"SYSTEM IS NOT ONLINE",NULL,NULL);
+         if (flt_l_sleep_interval >= 1.0)
+			{
+            sleep((int)flt_l_sleep_interval);
+			}
+         else
+			{
+            nanosleep(&interval,&int_remainder);
+			}
+      }
+      else
+      {
+			sqlca.sqlcode = 0;
+			EXEC SQL SELECT status_ind INTO :int_l_daemonstatus FROM PRO_DAEMON_STATUS WHERE PROC_NAME = 'Trd_Server';
+			if(sqlca.sqlcode < 0)
+   		{
+     			ltoa_r(sqlca.sqlcode,chr_buffer,KEY_LENGTH-1);
+ 	    		CO_InsertErr(&l_debuginfo,DB_ERR_NO,chr_buffer,
+     			APL_NULL_STRING,APL_NULL_STRING,
+            	    __LINE__,__FILE__);
+				printf("Database Query failed with sqlcode %d\n",sqlca.sqlcode);
+     			APL_GOBACK_FAIL
+   		}
+			if (int_l_daemonstatus == 0)						
+			{
+				CO_ProcMonitor(APL_OUT_FILE,"TRADE SERVER NOT ONLINE....",NULL,NULL);
+				if (flt_l_sleep_interval >= 1.0)
+         	{
+            	sleep((int)flt_l_sleep_interval);
+         	}
+         	else
+         	{
+            	nanosleep(&interval,&int_remainder);
+         	}
+			}
+			else
+			{
+				if (APL_FAILURE == MS_Rtv_SMPMsg(Hcon,Hobj,chr_finifile,&Reason,&l_debuginfo))
+				{
+					if (int_l_count >= 5)
+            	{
+               	CO_ProcMonitor(APL_OUT_FILE,"Error...Ending SMP_In Server process\n\n",NULL,NULL);
+               	APL_GOBACK_FAIL
+            	}
+
+					if ((Reason == MQRC_CONNECTION_BROKEN) || (Reason == MQRC_HCONN_ERROR) || (Reason == MQRC_HOBJ_ERROR))
+					{
+						MQCLOSE(Hcon,&Hobj,MQCO_NONE,&CompCode,&Reason);
+						{
+                  	sprintf(chr_mtemp,"MQ Close ended with reason %ld",Reason);
+                  	CO_ProcMonitor(APL_OUT_FILE,chr_mtemp,NULL,NULL);
+               	}
+         			MQDISC(&Hcon,&CompCode,&Reason);	
+						{
+							sprintf(chr_mtemp,"MQ Disc ended with reason %ld",Reason);
+							CO_ProcMonitor(APL_OUT_FILE,chr_mtemp,NULL,NULL);
+						}
+						sleep(10);
+						CO_ProcMonitor(APL_OUT_FILE,"Attempting to reconnect to MQ Server...",NULL,NULL);
+						if (MQGetConn(chr_qmname,queue_name,&Hcon,&Hobj,"I") == APL_FAILURE)
+      					APL_GOBACK_FAIL
+					}
+
+         		else
+         		{
+            		int_l_count += 1;
+            		if (flt_l_sleep_interval >= 1.0)
+						{
+               		sleep((int)flt_l_sleep_interval);
+						}
+            		else
+						{
+               		nanosleep(&interval,&int_remainder);
+						}
+         		}
+				}
+				else
+				{
+					int_l_count = 0;
+        			if (flt_l_sleep_interval >= 1)
+					{
+        				sleep((int)flt_l_sleep_interval);
+					}
+         		else
+					{
+           			nanosleep(&interval,&int_remainder);
+					}
+    			}
+   		}
+		}
+	}
+
+
+	 APL_GOBACK_SUCCESS;
+
+	 RETURN_SUCCESS:
+    EXEC SQL COMMIT ;
+			MQCLOSE(Hcon,&Hobj,MQCO_NONE,&CompCode,&Reason);	
+      	MQDISC(&Hcon,&CompCode,&Reason);
+        	CO_ProcMonitor(APL_OUT_FILE,"Exiting succesfully out of SMP_In Server\n\n",NULL,NULL);
+        	fclose(chr_finifile);
+        	exit(0);
+
+	 RETURN_FAILURE:
+    EXEC SQL ROLLBACK;
+			MQCLOSE(Hcon,&Hobj,MQCO_NONE,&CompCode,&Reason);	
+      	MQDISC(&Hcon,&CompCode,&Reason);
+        	CO_ProcMonitor(APL_OUT_FILE,"Exiting unsuccesfully out of SMP_In Server\n\n",NULL,NULL);
+        	fclose(chr_finifile);
+        	exit(-1);
+}

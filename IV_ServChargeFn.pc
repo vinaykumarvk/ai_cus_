@@ -1,0 +1,280 @@
+ /*
+  *   COPYRIGHT NOTICE
+  *
+  *   Copyright 2005 Polaris Software Lab Limited. All rights reserved.
+  *
+  *   These materials are confidential and proprietary to
+  *   Polaris Software Lab Limited and no part of these materials should
+  *   be reproduced, published, transmitted or distributed in any form or
+  *   by any means, electronic, mechanical, photocopying, recording or
+  *   otherwise, or stored in any information storage or retrieval system
+  *   of any nature nor should the materials be disclosed to third parties
+  *   or used in any other manner for which this is not authorized, without
+  *   the prior express written authorization of Polaris Software Lab Limited.
+  */
+ /*******************************************************************************
+  *
+  *    Module Name         :         Billing Module
+  *
+  *    File Name           :         IV_ServChargeFn.pc
+  *
+  *
+  *                Version Control Block
+  *
+  *    Date        Version     Author              Description     RFS No.
+  *   ---------   --------  ---------------  ----------------------------------
+  *   19-Oct-2011  1.0.1.2   Sana Bhatkar    Retro for aix mig for Changes done for ISKB_2470 -- UAT Issue
+  *
+  *******************************************************************************/
+
+#include "IV_Control_A.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+
+
+
+int IV_Mod_IVSRVCHRGNew(char *p_system_date,char *chr_p_client,double p_nilfee,
+                        double p_minfee,double p_maxfee,double p_fee,
+                        char *p_blccycode,char p_cons_ind,long p_serv_code,
+                        char *p_mstclt_a,char p_incl_in_annminfee_flg,int *int_p_retstat,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+double l_roundedamount_a = 0.0; 
+EXEC SQL BEGIN DECLARE SECTION;
+int int_h_decimallenccy = 0; 
+short int int_i_decimallenccy = 0;
+int l_dec_len=0;
+IV_SERVICE_CHRG_STRUCT l_iv_service_chrg_struct;
+EXEC SQL END DECLARE SECTION;
+
+struct sqlca sqlca;
+#ifdef APL_THREADS
+        APL_SET_CONTEXT
+        EXEC SQL CONTEXT USE :my_ctx_local;
+#endif
+	memset(&l_iv_service_chrg_struct, NULL, sizeof(IV_SERVICE_CHRG_STRUCT));
+          /*** Added %ld for AIX Migration***/
+
+		/* Added by Gouse for Kotak AIX Prod Issue SR_344 - Start */
+		IF_COND_EXISTS("IV_BILLGEN","BILL_GEN_DEC_LEN")
+		{
+			EXEC SQL SELECT FIELD_VAL INTO :l_dec_len
+						FROM PRO_GSSPLVAL 
+						WHERE MAIN_FUN = 'IV_BILLGEN' 
+						AND SUB_PROCESS = 'BILL_GEN_DEC_LEN' 
+						AND NATION = :g_mt_commonsys_params_struct_h.nation_code;	
+			printf("sqlca.sqlcode after getting l_dec_len is |%d|\n",sqlca.sqlcode);
+			printf("l_dec_len is |%d|\n",l_dec_len);
+
+			EXEC SQL SELECT ROUND(:p_nilfee,:l_dec_len),ROUND(:p_minfee,:l_dec_len),ROUND(:p_maxfee,:l_dec_len),ROUND(:p_fee,:l_dec_len) INTO 
+						:p_nilfee,:p_minfee,:p_maxfee,:p_fee FROM DUAL;
+			printf("sqlca.sqlcode after round off is |%d|\n",sqlca.sqlcode);
+			printf("p_nilfee is |%lf|\n",p_nilfee);
+			printf("p_minfee is |%lf|\n",p_minfee);
+			printf("p_maxfee is |%lf|\n",p_maxfee);
+			printf("p_fee is |%lf|\n",p_fee);
+			printf("p_incl_in_annminfee_flg is |%c|\n",p_incl_in_annminfee_flg);
+		}	
+		/* Added by Gouse for Kotak AIX Prod Issue SR_344 - End */
+
+	printf("\nService Fee for Client |%s| of service |%ld| is |%lf| nil fee is |%lf|\n",chr_p_client,p_serv_code,p_fee,p_nilfee);
+        strcpy(l_iv_service_chrg_struct.dateof_billing,p_system_date);
+        strcpy(l_iv_service_chrg_struct.client,chr_p_client);
+        l_iv_service_chrg_struct.nil_fees_adj = p_nilfee;
+        l_iv_service_chrg_struct.minimumfee_adj = p_minfee;
+        l_iv_service_chrg_struct.maximum_fee_adj = p_maxfee;
+        l_iv_service_chrg_struct.comm_amt = p_fee; 
+        strcpy(l_iv_service_chrg_struct.b_ccycd,p_blccycode);
+        l_iv_service_chrg_struct.cons_flag = p_cons_ind;
+        l_iv_service_chrg_struct.service_cd = p_serv_code;
+        strcpy(l_iv_service_chrg_struct.master_clt,p_mstclt_a);
+		l_iv_service_chrg_struct.incld_in_ann_min_fee = p_incl_in_annminfee_flg;
+          /*** Added %ld for AIX Migration***/
+	printf("Service Fee for Client |%s| of service |%ld| is |%lf|\n",l_iv_service_chrg_struct.client,l_iv_service_chrg_struct.service_cd,l_iv_service_chrg_struct.comm_amt);
+         /* Retro done for AIX mig */
+	/*Changes done by siva.ganapthi for ISKB_2470 UAT Issue -- started*/
+
+	if ((p_minfee+p_maxfee+p_fee+p_nilfee) > 0 )
+	{
+
+        EXEC SQL INSERT INTO IV_SERVICE_CHRG VALUES(:l_iv_service_chrg_struct);
+			IS_ANY_ORA_ERROR
+        if(sqlca.sqlcode < 0)
+                *int_p_retstat = IV_CRITCAL_ERROR_IND;
+
+		printf("\n sql error after inserting into the IV_SERVICE_CHRG is %d",sqlca.sqlcode);
+		fflush(stdout);
+	}
+
+	/*Changes done by siva.ganapthi for ISKB_2470 UAT Issue -- Ended*/
+
+	/* Commented for Kotak UAT fix IS_ANY_ORA_ERROR; */
+
+        *int_p_retstat = IV_SUCCESS;
+        APL_GOBACK_SUCCESS;
+
+   	RETURN_SUCCESS:
+                return APL_SUCCESS;
+
+        RETURN_FAILURE:
+                return APL_FAILURE;
+
+
+}    
+
+
+int IV_Rtv_IVSRVCHRG(	char 						*p_dt,
+								char 						*chr_p_client,
+								char		 				p_cons_ind,
+								long 		 				p_serv_code,
+								IV_SERVICE_CHRG_STRUCT 	*p_iv_service_chrg_struct,
+								int 						*int_p_retstat,		
+								DEBUG_INFO_STRUCT_H			**l_debug_info_ptr)
+{
+EXEC SQL BEGIN DECLARE SECTION;
+
+char chr_h_date[APL_DATE_LEN];
+char h_dl_client[APL_CLIENT_LENGTH];
+char chr_h_cons_ind;
+long int_h_serv_code =0;
+
+IV_SERVICE_CHRG_STRUCT l_iv_service_chrg_struct;
+struct {
+	short i_billdate;
+	short i_dl_client;
+	short i_nilfeeadj;
+	short i_minfeeadj;
+	short i_maxfeeadj;
+	short i_cm_amount;
+	short i_bl_currencycode;
+	short i_cons_flag;
+	short i_service_cd;
+	short i_mstclt;
+	}i_bservcharge_struct;
+
+EXEC SQL VAR h_dl_client IS STRING;
+EXEC SQL VAR chr_h_date IS STRING;
+EXEC SQL VAR l_iv_service_chrg_struct.b_ccycd IS STRING;
+EXEC SQL VAR l_iv_service_chrg_struct.client IS STRING;
+EXEC SQL VAR l_iv_service_chrg_struct.master_clt IS STRING;
+EXEC SQL VAR l_iv_service_chrg_struct.dateof_billing IS STRING;
+
+EXEC SQL END DECLARE SECTION;
+
+struct sqlca sqlca;
+#ifdef APL_THREADS
+	APL_SET_CONTEXT
+	EXEC SQL CONTEXT USE :my_ctx_local;
+#endif
+
+
+strcpy(h_dl_client,chr_p_client);
+strcpy(chr_h_date,p_dt);
+chr_h_cons_ind = p_cons_ind;
+int_h_serv_code = p_serv_code;
+
+
+
+memset(&l_iv_service_chrg_struct, NULL, sizeof(IV_SERVICE_CHRG_STRUCT));
+memset(&i_bservcharge_struct, NULL, sizeof(i_bservcharge_struct));
+memset(p_iv_service_chrg_struct, NULL, sizeof(IV_SERVICE_CHRG_STRUCT));
+
+	EXEC SQL SELECT dateof_billing, client, nil_fees_adj,minimumfee_adj,maximum_fee_adj,comm_amt,
+			b_ccycd,cons_flag,service_cd,master_clt,incld_in_ann_min_fee
+			INTO :l_iv_service_chrg_struct:i_bservcharge_struct
+			FROM IV_SERVICE_CHRG
+			WHERE CLIENT = :h_dl_client 
+			AND DATEOF_BILLING = :chr_h_date AND CONS_FLAG=:chr_h_cons_ind
+			AND SERVICE_CD = :int_h_serv_code;  
+	if (sqlca.sqlcode < 0)
+	{
+		*int_p_retstat =IV_CRITCAL_ERROR_IND;
+		CO_InsertErr(l_debug_info_ptr,DB_ERR_NO,APL_NULL_STRING,
+							APL_NULL_STRING,APL_NULL_STRING,
+							__LINE__,__FILE__);
+		APL_GOBACK_FAIL
+	}
+	if (sqlca.sqlcode == 1403)
+	{	
+		*int_p_retstat = IV_NO_DATA_FOUND_ERR;	
+		APL_GOBACK_FAIL;
+	}
+	else
+	{
+		if(i_bservcharge_struct .i_billdate == -1)
+		{
+			strcpy(l_iv_service_chrg_struct.dateof_billing,APL_NULL_STRING);
+			*int_p_retstat = IV_COLUMN_NULL_ERR;
+		}
+		if (i_bservcharge_struct.i_dl_client == -1)
+		{
+			strcpy(l_iv_service_chrg_struct.client,APL_NULL_STRING);
+			*int_p_retstat = IV_COLUMN_NULL_ERR;
+		}
+		if (i_bservcharge_struct.i_nilfeeadj == -1)
+		{
+			l_iv_service_chrg_struct.nil_fees_adj =0 ;
+			*int_p_retstat = IV_COLUMN_NULL_ERR;
+		}
+		if (i_bservcharge_struct.i_minfeeadj == -1)
+		{
+			l_iv_service_chrg_struct.minimumfee_adj = 0;
+			*int_p_retstat = IV_COLUMN_NULL_ERR;
+		}
+		if (i_bservcharge_struct.i_maxfeeadj == -1)
+		{
+			l_iv_service_chrg_struct.maximum_fee_adj =0;
+			*int_p_retstat = IV_COLUMN_NULL_ERR;
+		}
+		if (i_bservcharge_struct.i_cm_amount == -1)
+		{
+			l_iv_service_chrg_struct.comm_amt = 0;
+			*int_p_retstat = IV_COLUMN_NULL_ERR;
+		}
+		if (i_bservcharge_struct.i_bl_currencycode == -1)
+		{
+			strcpy(l_iv_service_chrg_struct.b_ccycd,APL_NULL_STRING);
+			*int_p_retstat = IV_COLUMN_NULL_ERR;
+		}
+		if (i_bservcharge_struct.i_cons_flag == -1)
+		{
+			l_iv_service_chrg_struct.cons_flag = ' ';
+			*int_p_retstat = IV_COLUMN_NULL_ERR;
+		}
+		if (i_bservcharge_struct.i_service_cd== -1)
+		{
+			l_iv_service_chrg_struct.service_cd = 0 ;
+			*int_p_retstat = IV_COLUMN_NULL_ERR;
+		}
+		if (i_bservcharge_struct.i_mstclt== -1)
+		{
+			strcpy(l_iv_service_chrg_struct.master_clt,APL_NULL_STRING);
+			*int_p_retstat = IV_COLUMN_NULL_ERR;
+		}
+		
+		/*added by shruthi kumbla for ISKB_1901*/
+			if((l_iv_service_chrg_struct.incld_in_ann_min_fee)!='N')
+					l_iv_service_chrg_struct.incld_in_ann_min_fee = 'N';
+	}
+	*int_p_retstat =IV_SUCCESS;
+	*p_iv_service_chrg_struct = l_iv_service_chrg_struct;
+
+APL_GOBACK_SUCCESS;
+
+
+	
+RETURN_SUCCESS:
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"exiting out of  IV_Rtv_IVSRVCHRG successfully\n",NULL,NULL);
+	}
+	return APL_SUCCESS;
+									
+RETURN_FAILURE:
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"exiting out of  IV_Rtv_IVSRVCHRG unsuccessfully\n",NULL,NULL);
+	}
+	return APL_FAILURE;
+}

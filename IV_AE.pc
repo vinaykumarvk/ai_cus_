@@ -1,0 +1,297 @@
+
+
+
+
+
+#include "IV_Control_A.h"
+#include "CR_Common.h"
+
+EXEC SQL INCLUDE SQLCA.H;
+
+
+
+SYS_IVCONTROLPARAM_STRUCT g_sys_ivcontrolparam_struct;	/* Bageshri HB_IV_005 */
+
+
+int main (int argc,char **argv) //AIX - Warnings Removal
+{
+	
+
+	struct					sqlca sqlca;
+	DEBUG_INFO_STRUCT_H			*l_debug_info_struct				= NULL;
+	DEBUG_INFO_STRUCT_H			**l_debug_info_ptr					= &l_debug_info_struct;
+	INTL_ENV_DATA_STRUCT_H	*p_intlenv_data_struct_h 			= NULL;
+	int 						int_retval							= 0;
+	int 						i									= 0;
+	FILE   					*fl_techlog 					= (FILE *) NULL;
+	FILE						*fl_userlog 					= (FILE *) NULL;
+	FILE						*chr_finifile 						= (FILE *) NULL;
+	char						chr_inifile[PATH_LENGTH]	 		= APL_NULL_STRING;
+	char						chr_l_sys_date[APL_DATE_LEN]	= APL_NULL_STRING;
+	char						chr_l_techlog[PATH_LENGTH]		= APL_NULL_STRING;
+	char						chr_l_userlog[PATH_LENGTH]	   = APL_NULL_STRING;
+	char						chr_logfile[PATH_LENGTH]			= APL_NULL_STRING;
+	char						chr_custody_id_b[APL_USERID_LEN];
+	char						chr_uname[APL_USERID_LEN];
+	char						chr_passwd[APL_PASSWD_LEN];
+	char chr_gen_flg = APL_NULL_CHAR;	/* Bageshri HB_IV_005 */
+	char *chr_pass_str=NULL;		/* Bageshri HB_IV_005 */
+	int int_retstat=0;			/* Bageshri HB_IV_005 */
+	short 					int_l_cond_exists							= 0;
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+	char chr_h_bl_upto_dt[APL_DATE_LEN] = APL_NULL_STRING;	/* Bageshri HB_IV_005 */
+
+	EXEC SQL VAR chr_uname IS STRING;
+	EXEC SQL VAR chr_passwd IS STRING;
+	EXEC SQL VAR chr_h_bl_upto_dt IS STRING;
+
+	EXEC SQL END DECLARE SECTION;
+
+	p_intlenv_data_struct_h   =  (INTL_ENV_DATA_STRUCT_H*)calloc(1,sizeof(INTL_ENV_DATA_STRUCT_H));
+   APL_MALLOC_FAIL(p_intlenv_data_struct_h);
+
+	chr_pass_str = (char *)calloc(strlen(argv[9]),sizeof(char));
+        APL_MALLOC_FAIL(chr_pass_str);
+
+	memset(chr_h_bl_upto_dt,'\0',APL_DATE_LEN);	
+
+	strcpy(chr_inifile,getenv("INTL_ROOT_PATH"));
+	strcat(chr_inifile,"/intl_sun.cfg");
+
+	if ( (chr_finifile = fopen(chr_inifile,"r") ) == NULL )
+		exit(-1);
+
+   APL_FETCH_DB_LOGIN_DETAILS(chr_finifile, chr_custody_id_b, chr_uname, chr_passwd , APL_OUT_FILE , l_debug_info_ptr)
+   EXEC SQL CONNECT :chr_uname IDENTIFIED BY :chr_passwd;
+   IS_ANY_ORA_ERROR
+	
+	if (APL_FAILURE == CO_Rtv_RptFileName("1C",
+													"User Log",
+													100,
+													argv[5],
+													argv,
+													&fl_userlog,
+													l_debug_info_ptr) )
+	{
+		exit(-1);
+	}
+				
+	if (APL_FAILURE == CO_Rtv_RptFileName("1c",
+													"Technical Log",
+													100,
+													argv[5],	
+													argv,
+													&fl_techlog,
+													l_debug_info_ptr) )
+	{
+		exit(-1);	
+	}
+	EXEC SQL COMMIT;
+	IS_ANY_ORA_ERROR
+	
+	if ( argc < 10 )
+   {
+      fprintf(fl_userlog,"All Arguments expeced by the program are not passed\n");
+      APL_GOBACK_FAIL
+   }
+
+   
+
+   strcpy(p_intlenv_data_struct_h->usr, argv[3]);
+   strcpy(p_intlenv_data_struct_h->h_mode,	argv[4]);
+	
+
+	if (APL_FAILURE  == CO_RtvSysParams(l_debug_info_ptr))
+	{
+		fprintf(fl_userlog,"Failed To Get System Parameters\n");
+		APL_GOBACK_FAIL
+	}
+
+	/* Bageshri HB_IV_005 : For providing Reset Functionality for Billing Acc Ent -- END */
+
+	memset(g_sys_ivcontrolparam_struct.b_prev_date, APL_NULL_CHAR, APL_DATE_LEN);
+        memset(g_sys_ivcontrolparam_struct.b_upto_date, APL_NULL_CHAR, APL_DATE_LEN);
+        memset(g_sys_ivcontrolparam_struct.b_processdt, APL_NULL_CHAR, APL_DATE_LEN);
+        memset(g_sys_ivcontrolparam_struct.b_dlv_date, APL_NULL_CHAR, APL_DATE_LEN);
+        memset(g_sys_ivcontrolparam_struct.last_dlv_date, APL_NULL_CHAR, APL_DATE_LEN);
+        memset(g_sys_ivcontrolparam_struct.archival_dt, APL_NULL_CHAR, APL_DATE_LEN);
+        memset(g_sys_ivcontrolparam_struct.last_rpt_date, APL_NULL_CHAR, APL_DATE_LEN);
+
+        g_sys_ivcontrolparam_struct.generate_ind = NULL;
+        g_sys_ivcontrolparam_struct.b_gen_ind = NULL;
+        g_sys_ivcontrolparam_struct.ae_ind = NULL;
+
+        int_retstat = IV_SUCCESS;
+
+        if(APL_FAILURE == IV_Rtv_IVCNTLPARAM(&g_sys_ivcontrolparam_struct,&int_retstat,l_debug_info_ptr))
+        {
+                if(int_retstat != IV_COLUMN_NULL_ERR)
+                {
+			fprintf(fl_userlog,"Error : Billing control parameters not found\n");
+			fprintf(fl_techlog,"Error : Billing control parameters not found\n");
+			CO_ProcMonitor(fl_techlog,
+						APL_NULL_STRING,
+						l_debug_info_ptr,
+						p_intlenv_data_struct_h);
+                        CO_FreeErrLst(l_debug_info_ptr);
+                        APL_GOBACK_FAIL
+                }
+        }
+
+	strcpy(chr_h_bl_upto_dt,g_sys_ivcontrolparam_struct.b_upto_date);
+
+
+	if(g_sys_ivcontrolparam_struct.generate_ind == 'N')
+        {
+                fprintf(fl_userlog,"Bills are not generated.\n");
+                APL_GOBACK_FAIL
+        }
+
+	Alert(" Bagee ******************** argv[9] |%s|",argv[9]);
+ 	strcpy(chr_pass_str,argv[9]);	
+
+        if( !strlen(chr_pass_str) )
+        {
+                fprintf(fl_userlog,"Error in generation flag passed to Billing Accounting entries.\n");
+                APL_GOBACK_FAIL
+        }
+
+ 	chr_gen_flg = chr_pass_str[0];
+
+	if(chr_gen_flg == 'Y' && g_sys_ivcontrolparam_struct.ae_ind == 'G')
+        {
+                fprintf(fl_userlog,"Billing Accounting Entries are already generated.\n");
+                APL_GOBACK_FAIL
+        }
+
+	if(chr_gen_flg == 'N' && g_sys_ivcontrolparam_struct.ae_ind == 'N')
+        {
+                fprintf(fl_userlog,"Billing Accounting Entries are not generated.\n");
+                APL_GOBACK_FAIL
+        }
+
+	if(chr_gen_flg == 'N' && g_sys_ivcontrolparam_struct.ae_ind == 'G')
+	{
+		fprintf(fl_userlog,"Calling Billing Accounting Entries Reset\n");
+		fprintf(fl_techlog,"Calling Billing Accounting Entries Reset\n");
+		int_retstat = IV_SUCCESS;
+		if(APL_FAILURE  == IV_AccResBill(argv,fl_techlog,fl_userlog,&int_retstat, l_debug_info_ptr))
+                {
+			fprintf(fl_userlog,"Billing Accounting Entries Reset Returned Failure\n");
+			fprintf(fl_techlog,"Billing Accounting Entries Reset Returned Failure\n");
+			CO_ProcMonitor(fl_techlog,
+						APL_NULL_STRING,
+						l_debug_info_ptr,
+						p_intlenv_data_struct_h);
+			CO_FreeErrLst(l_debug_info_ptr);
+			EXEC SQL ROLLBACK WORK RELEASE;
+			IS_ANY_ORA_ERROR
+			APL_GOBACK_FAIL
+		}
+		EXEC SQL COMMIT WORK;
+		if ( sqlca.sqlcode < 0 )
+		{
+			int_retstat = IV_CRITCAL_ERROR_IND;
+
+
+			CO_InsertErr(l_debug_info_ptr, DB_ERR_NO, ltoa(sqlca.sqlcode),
+				 APL_NULL_STRING, APL_NULL_STRING,__LINE__, __FILE__);
+							
+			CO_ProcMonitor(fl_techlog,"Could not Commit\n",NULL,NULL);
+
+			APL_GOBACK_FAIL
+		}
+
+		IS_ANY_ORA_ERROR
+
+		fprintf(fl_userlog,"Billing Accounting Entries Reset Returned Success\n");
+		fprintf(fl_techlog,"Billing Accounting Entries Reset Returned Success\n");
+		APL_GOBACK_SUCCESS
+	}
+
+	/* Bageshri HB_IV_005 : For providing Reset Functionality for Billing Acc Ent -- END */
+	
+	if(CO_Chk_CntryEnabled("ACC_ENTRIES",
+							  "GR_ACC_ENTRIES",
+							  &int_l_cond_exists,
+							  l_debug_info_ptr)==APL_FAILURE)
+			APL_GOBACK_FAIL
+
+	if ( int_l_cond_exists > 0 )
+	{
+		fprintf(fl_userlog,"Calling Billing Accounting Entries Generation for GR\n");
+		if (	APL_FAILURE == B_BlGrAccGenFn(argv,
+														fl_userlog,
+														p_intlenv_data_struct_h,
+														l_debug_info_ptr)
+					)
+
+		{
+			fprintf(fl_userlog,"Billing Accounting Entries Generation for GR Returned Failure\n");
+			CO_ProcMonitor(fl_techlog,
+						APL_NULL_STRING,
+						l_debug_info_ptr,
+						p_intlenv_data_struct_h);
+			CO_FreeErrLst(l_debug_info_ptr);
+			EXEC SQL ROLLBACK WORK RELEASE;
+			IS_ANY_ORA_ERROR
+			APL_GOBACK_FAIL
+		}
+		else
+		{
+			EXEC SQL COMMIT WORK;
+			IS_ANY_ORA_ERROR
+			fprintf(fl_userlog,"Billing Accounting Entries Generation for GR Returned Success\n");
+			APL_GOBACK_SUCCESS
+		}
+	}
+	else
+	{
+		fprintf(fl_userlog,"Calling Billing Accounting Entries Generation\n");
+		if (	APL_FAILURE == IV_AccGenBill( argv,
+														fl_techlog,
+														fl_userlog,
+														p_intlenv_data_struct_h,
+														l_debug_info_ptr)
+					)
+
+		{
+			fprintf(fl_userlog,"Billing Accounting Entries Generation Returned Failure\n");
+			CO_ProcMonitor(fl_techlog,
+						APL_NULL_STRING,
+						l_debug_info_ptr,
+						p_intlenv_data_struct_h);
+			CO_FreeErrLst(l_debug_info_ptr);
+			EXEC SQL ROLLBACK WORK RELEASE;
+			IS_ANY_ORA_ERROR
+			APL_GOBACK_FAIL
+		}
+		else
+		{
+			EXEC SQL COMMIT WORK;
+			IS_ANY_ORA_ERROR
+			fprintf(fl_userlog,"Billing Accounting Entries Generation Returned Success\n");
+			APL_GOBACK_SUCCESS
+		}
+	}
+
+	APL_GOBACK_SUCCESS
+
+	
+
+	RETURN_SUCCESS:
+	fclose(chr_finifile);
+	CO_Proc_RptClose(fl_techlog,l_debug_info_ptr); 
+	CO_Proc_RptClose(fl_userlog,l_debug_info_ptr); 
+	APL_FREE(chr_pass_str);
+	exit(0); 
+
+	RETURN_FAILURE:
+	fclose(chr_finifile);
+	CO_Proc_RptClose(fl_techlog,l_debug_info_ptr); 
+	CO_Proc_RptClose(fl_userlog,l_debug_info_ptr); 
+	APL_FREE(chr_pass_str);
+	exit(1); 
+}

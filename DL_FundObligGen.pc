@@ -1,0 +1,852 @@
+/*
+ *    COPYRIGHT NOTICE
+ *
+ *   Copyright 2005 Polaris Software Lab Limited. All rights reserved.
+ *
+ *   These materials are confidential and proprietary to 
+ *    Polaris Software Lab Limited and no part of these materials should
+ *    be reproduced, published, transmitted or distributed in any form or
+ *    by any means, electronic, mechanical, photocopying, recording or 
+ *    otherwise, or stored in any information storage or retrieval system
+ *    of any nature nor should the materials be disclosed to third parties
+ *    or used in any other manner for which this is not authorized, without
+ *    the prior express written authorization of Polaris Software Lab Limited.
+ */
+/*******************************************************************************
+ *
+ * Module Name         :         Deal	
+ *
+ * File Name           :         DL_FundObligGen.pc
+ *
+ * Description         :         This file contains all functions for Fund Obligation Generation.
+ *
+ *            Version Control Block
+ *
+ * Date        Version		Author              Description		RFS No.
+ * ---------   --------	 ---------------  ----------------------------------
+ * 20/02/2006   1.0        Amit Bhosale			New File		HDFCDL_016
+
+ * *****************************************************************************/
+#include "DL_Interface.h"
+#include "BT_Common.h"
+#include "CO_IndStructdef.h"
+#include "string.h"
+#include "strings.h"
+#include "CCS.h"
+#include "CO_Commdef.h"
+
+#define  RTV_SYSTEM_DATA
+
+#define DATA_FIELD_SEPRTR ''
+#define DATA_VALUE_SEPRTR ''
+#define narration_crd	"Net Proceeds will be credited to your a/c # "
+#define narration_dbt	"Net Proceeds will be debited from your a/c # "
+
+#define  COMMIT_FREQ_LOGAUTOEVNT 2
+#define  APL_STATINFO_LEN  100
+
+
+EXEC SQL INCLUDE SQLCA.H;
+
+
+int   commit_count   =  0;
+char  h_stat_info[APL_STATINFO_LEN] = APL_NULL_STRING;
+
+/* Added by kotubabu for Linux Migration -Start*/
+#ifdef OS_LINUX
+FILE *g_flogfile= NULL;
+#else
+FILE *g_flogfile = APL_OUT_FILE;
+#endif
+/* Added by kotubabu  for Linux Migration -END*/
+char  chr_g_log_buffer[BUFFER_LEN] = APL_NULL_STRING;
+
+
+	int Proc_ApplFundPattern(char *p_settlement_no,
+							char *p_mkt_type,
+							char *p_exchange,
+							char *p_process_name,
+							char *p_process_key,
+							char *p_start_date,
+							FILE *g_flogfile,
+							INTL_ENV_DATA_STRUCT_H *l_intl_env_data_h,
+							DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+	{
+	
+		char chr_l_oblg_lvl[21]=APL_NULL_STRING;
+		char chr_l_oblg_typ[21]=APL_NULL_STRING;
+		char chr_l_cln_master[11]=APL_NULL_STRING;
+		short i_oblg_lvl=0;
+		short i_oblg_typ=0;
+		short i_cln_master=0;
+
+		int counter=0;
+		int l_int_payinday=0;
+		int l_int_payoutday=0;
+		
+		char l_chr_summary_rep[2]=APL_NULL_STRING;
+		char l_chr_calc_basis[2]=APL_NULL_STRING;
+		char l_chr_oblig_seq_no[5]=APL_NULL_STRING;
+		char l_chr_uniq_no[20]=APL_NULL_STRING;
+
+		char l_chr_dist_client[12]=APL_NULL_STRING;
+		char l_acc_type[3]=APL_NULL_STRING;
+		char l_net_amt[21]=APL_NULL_STRING;
+		char l_chr_indicator;
+		char l_chr_final_narr[200]=APL_NULL_STRING;
+		char l_chr_tempnarr[100]=APL_NULL_STRING;
+		char l_chr_settlement_no[16]=APL_NULL_STRING;
+		double l_int_net_payable=0;
+		int int_rec_cnt=0;
+
+		short i_payinday=0;
+		short i_payoutday=0;
+		short i_summary_rep=0;
+		short i_calc_basis=0;
+		short i_dist_client=0;
+		short i_net_amt=0;
+		short i_indicator=0;
+			
+
+		
+		SYS_DL_FUNDOBL_STRUCT_H *l_dl_fundobl_struct_h = NULL;
+		SYS_DL_FUNDOBL_STRUCT_I *l_dl_fundobl_struct_i = NULL;
+
+	    EXEC SQL BEGIN DECLARE SECTION;	
+
+			EXEC SQL VAR l_dl_fundobl_struct_h->h_client IS STRING;
+			EXEC SQL VAR l_dl_fundobl_struct_h->h_identiy_no IS STRING;
+			EXEC SQL VAR l_dl_fundobl_struct_h->h_deal_date IS STRING;
+			EXEC SQL VAR l_dl_fundobl_struct_h->h_exch_code IS STRING;
+			EXEC SQL VAR l_dl_fundobl_struct_h->h_brk_no IS STRING;
+			EXEC SQL VAR l_dl_fundobl_struct_h->h_deal_cd IS STRING;
+			EXEC SQL VAR l_dl_fundobl_struct_h->h_instr_code IS STRING;
+			EXEC SQL VAR l_dl_fundobl_struct_h->h_settlement_no IS STRING;
+			EXEC SQL VAR l_dl_fundobl_struct_h->h_mkt_type IS STRING;
+
+			EXEC SQL VAR l_dl_fundobl_struct_h->h_payable_acc IS STRING;
+			EXEC SQL VAR l_dl_fundobl_struct_h->h_start_date IS STRING;
+			EXEC SQL VAR l_dl_fundobl_struct_h->h_end_date IS STRING;
+			EXEC SQL VAR l_dl_fundobl_struct_h->h_pay_out_dt IS STRING;
+			EXEC SQL VAR l_dl_fundobl_struct_h->h_pay_in_dt IS STRING;
+			EXEC SQL VAR l_dl_fundobl_struct_h->h_cln_name IS STRING;
+			EXEC SQL VAR l_dl_fundobl_struct_h->h_cln_add_1 IS STRING;
+			EXEC SQL VAR l_dl_fundobl_struct_h->h_cln_add_2 IS STRING;
+			EXEC SQL VAR l_dl_fundobl_struct_h->h_cln_add_pin IS STRING;
+			
+			EXEC SQL VAR l_chr_summary_rep IS STRING;
+			EXEC SQL VAR l_chr_calc_basis IS STRING;
+			EXEC SQL VAR l_chr_oblig_seq_no IS STRING;
+			EXEC SQL VAR l_chr_uniq_no IS STRING;
+			EXEC SQL VAR l_chr_dist_client IS STRING;
+			EXEC SQL VAR l_acc_type IS STRING;
+			EXEC SQL VAR l_chr_final_narr IS STRING;
+			EXEC SQL VAR l_chr_tempnarr IS STRING;
+			EXEC SQL VAR l_chr_settlement_no IS STRING;
+
+
+						
+	    EXEC SQL END DECLARE SECTION;	
+
+			
+		l_dl_fundobl_struct_h=(SYS_DL_FUNDOBL_STRUCT_H *)calloc(1,sizeof(SYS_DL_FUNDOBL_STRUCT_H));
+		APL_MALLOC_FAIL(l_dl_fundobl_struct_h)
+		l_dl_fundobl_struct_i=(SYS_DL_FUNDOBL_STRUCT_I *)calloc(1,sizeof(SYS_DL_FUNDOBL_STRUCT_I));
+		APL_MALLOC_FAIL(l_dl_fundobl_struct_i)
+
+		memset(l_dl_fundobl_struct_h, NULL, sizeof(SYS_DL_FUNDOBL_STRUCT_H));
+		memset(l_dl_fundobl_struct_i, NULL, sizeof(SYS_DL_FUNDOBL_STRUCT_I));
+
+
+
+	printf("\n************************************************************ \n");
+	printf("\n *******  OBLIGATION PROCESSING STARTS ***********	\n");
+	printf("\n************************************************************ \n");
+	
+	
+	sprintf(chr_g_log_buffer,"\n *****************************************************");
+	CO_ProcMonitor(g_flogfile,chr_g_log_buffer,NULL, NULL);
+	sprintf(chr_g_log_buffer,"\n *******  OBLIGATION PROCESSING STARTS ***********   ");
+	CO_ProcMonitor(g_flogfile,chr_g_log_buffer,NULL, NULL);
+	sprintf(chr_g_log_buffer,"\n *****************************************************\n");
+	CO_ProcMonitor(g_flogfile,chr_g_log_buffer,NULL, NULL);
+	
+
+	strcpy(l_chr_settlement_no,p_settlement_no);
+
+		
+		EXEC SQL DECLARE l_cur_mst_oblg CURSOR FOR
+			SELECT  DISTINCT(a.client),b.oblg_lvl,b.oblg_typ
+				FROM dl_fundobl a,iv_clientsetup b
+				WHERE a.client=b.client;
+
+
+	  EXEC SQL OPEN l_cur_mst_oblg;
+		
+	  IS_ANY_ORA_ERROR
+	  
+	  sprintf(chr_g_log_buffer,"\n Opened Cursor ! \n");
+	   
+	  for(;;)
+	   {
+
+		EXEC SQL FETCH l_cur_mst_oblg INTO :l_chr_dist_client:i_dist_client,
+											:chr_l_oblg_lvl:i_oblg_lvl,
+											:chr_l_oblg_typ:i_oblg_typ;
+
+
+			if(APL_ZERO_RESULT_SET)
+		   {
+				if(counter==0)
+				{
+					CO_ProcMonitor(g_flogfile,"No Records Found in the l_cur_mst_oblg CURSOR" ,NULL,NULL);
+				}
+				break;
+			   
+			}
+		
+		  	IS_ANY_ORA_ERROR
+			
+		
+			counter++;
+		
+			CO_ProcMonitor(g_flogfile,chr_g_log_buffer,NULL, NULL);
+			
+		sprintf(chr_g_log_buffer,"\n Processing for Client=|%s| Oblig_Level=|%s| Oblig_Type=|%s| \n",l_chr_dist_client,chr_l_oblg_lvl,chr_l_oblg_typ);
+		CO_ProcMonitor(g_flogfile,chr_g_log_buffer,NULL, NULL);
+		
+			EXEC SQL SELECT DL_FUNDOBLIGSEQ.NEXTVAL INTO :l_chr_oblig_seq_no FROM DUAL;
+
+			IS_ANY_ORA_ERROR
+
+				strcpy(l_chr_uniq_no,"UNQ");
+				strcat(l_chr_uniq_no,l_chr_oblig_seq_no);
+
+			
+
+/*				EXEC SQL SELECT a.start_date,a.end_date,b.pay_in_day,b.pay_out_day,'F' INTO
+								:l_dl_fundobl_struct_h->h_start_date:l_dl_fundobl_struct_i->i_start_date,
+								:l_dl_fundobl_struct_h->h_end_date:l_dl_fundobl_struct_i->i_end_date,
+								:l_int_payinday:i_payinday,
+								:l_int_payoutday:i_payoutday,
+								:l_chr_summary_rep:i_summary_rep
+								FROM mt_settl_cal a,iv_clientsetup b
+									WHERE a.settl_no=:l_chr_settlement_no
+									AND b.CLIENT=:l_chr_dist_client
+									AND a.EXCH_CODE=:p_exchange
+									AND b.stat_ind='A'
+									AND rownum=1;
+
+				IS_ANY_ORA_ERROR
+				
+*/			
+				EXEC SQL SELECT a.start_date,a.end_date INTO
+							:l_dl_fundobl_struct_h->h_start_date:l_dl_fundobl_struct_i->i_start_date,
+							:l_dl_fundobl_struct_h->h_end_date:l_dl_fundobl_struct_i->i_end_date
+								FROM mt_settl_cal a
+								WHERE a.settl_no=:l_chr_settlement_no
+								AND a.exch_code=:p_exchange
+								AND a.status='AA'
+								AND ROWNUM=1;
+
+				IS_ANY_ORA_ERROR
+
+				EXEC SQL SELECT a.pay_in_day,a.pay_out_day,'F' INTO
+							:l_int_payinday:i_payinday,
+							:l_int_payoutday:i_payoutday,
+							:l_chr_summary_rep:i_summary_rep
+							FROM iv_clientsetup a	
+							WHERE a.client=:l_chr_dist_client
+							AND stat_ind='A';
+							
+				IS_ANY_ORA_ERROR
+		
+				
+				EXEC SQL SELECT exch_code,
+								to_char(TRUNC(deal_date+:l_int_payinday),'DD/MM/YYYY'),
+								to_char(TRUNC(deal_date+:l_int_payoutday),'DD/MM/YYYY')	INTO
+								:l_dl_fundobl_struct_h->h_exch_code:l_dl_fundobl_struct_i->i_exch_code,
+								:l_dl_fundobl_struct_h->h_pay_in_dt:l_dl_fundobl_struct_i->i_pay_in_dt,
+								:l_dl_fundobl_struct_h->h_pay_out_dt:l_dl_fundobl_struct_i->i_pay_out_dt
+						FROM dl_deal
+						WHERE client=:l_chr_dist_client
+						AND settlement_no=:l_chr_settlement_no
+						AND exch_code=:p_exchange
+						AND rownum=1;
+
+				IS_ANY_ORA_ERROR
+	
+
+				EXEC SQL SELECT cln_name,cln_add_1,cln_add_2,city,cln_add_pin INTO
+							:l_dl_fundobl_struct_h->h_cln_name:l_dl_fundobl_struct_i->i_cln_name,
+							:l_dl_fundobl_struct_h->h_cln_add_1:l_dl_fundobl_struct_i->i_cln_add_1,
+							:l_dl_fundobl_struct_h->h_cln_add_2:l_dl_fundobl_struct_i->i_cln_add_2,
+							:l_dl_fundobl_struct_h->h_city:l_dl_fundobl_struct_i->i_city,
+							:l_dl_fundobl_struct_h->h_cln_add_pin:l_dl_fundobl_struct_i->i_cln_add_pin
+							FROM mt_client
+							WHERE cln_code=:l_chr_dist_client
+							AND rownum=1;
+
+				IS_ANY_ORA_ERROR						
+
+
+			    /* SNOW- CS0046501 Changes by Shradha for Stamp Duty Enh. Starts*/
+				EXEC SQL SELECT NVL(SUM(DECODE(deal_cd,'4',NVL((NVL(amount,0)+NVL(brokercomm,0)+NVL(stx_comm,0)+NVL(stamp_duty,0)),0),'2',NVL((NVL(amount,0)+NVL(brokercomm,0)+NVL(stx_comm,0)+NVL(stamp_duty,0)),0))),0) "PURCHASE AMOUNT",
+							NVL(SUM(DECODE(deal_cd,'3',NVL((NVL(amount,0)-NVL(brokercomm,0)-NVL(stx_comm,0)-NVL(stamp_duty,0)),0),'1',NVL((NVL(amount,0)-NVL(brokercomm,0)-NVL(stx_comm,0)-NVL(stamp_duty,0)),0))),0)"SALE AMOUNT",
+							(NVL(SUM(DECODE(deal_cd,'4',NVL((NVL(amount,0)+NVL(brokercomm,0)+NVL(stx_comm,0)+NVL(stamp_duty,0)),0),'2',NVL((NVL(amount,0)+NVL(brokercomm,0)+NVL(stx_comm,0)+NVL(stamp_duty,0)),0))),0)-
+							NVL(SUM(DECODE(deal_cd,'3',NVL((NVL(amount,0)-NVL(brokercomm,0)-NVL(stx_comm,0)-NVL(stamp_duty,0)),0),'1',NVL((NVL(amount,0)-NVL(brokercomm,0)-NVL(stx_comm,0)-NVL(stamp_duty,0)),0))),0)) "NET AMOUNT"
+							INTO :l_dl_fundobl_struct_h->h_purchase:l_dl_fundobl_struct_i->i_purchase,
+								 :l_dl_fundobl_struct_h->h_sale:l_dl_fundobl_struct_i->i_sale,
+								 :l_dl_fundobl_struct_h->h_net_amt:l_dl_fundobl_struct_i->i_net_amt
+/*							(NVL(SUM(DECODE(deal_cd,'4', NVL((qty),0))),0)-
+							NVL(SUM(DECODE(deal_cd,'3', NVL((qty),0))),0)) "NET QTY"		*/
+						FROM dl_fundobl
+							WHERE client =:l_chr_dist_client;
+				
+				IS_ANY_ORA_ERROR	
+				/* SNOW- CS0046501 Changes by Shradha for Stamp Duty Enh. Ends*/
+
+				strcpy(l_net_amt,(char *)ltoa(l_dl_fundobl_struct_h->h_net_amt));
+				
+				l_int_net_payable=atof(l_net_amt);
+
+				
+				if(l_int_net_payable < 0)
+				{
+					strcpy(l_acc_type,"PI");
+				}
+				else if(l_int_net_payable > 0)
+				{
+					strcpy(l_acc_type,"PO");
+				}
+				//else if(l_int_net_payable = 0)
+				else if(l_int_net_payable == 0) // AIX - Warnings
+				{
+					strcpy(l_acc_type,"XX");
+				}	
+
+				sprintf(chr_g_log_buffer,"\n PAYIN/PAYOUT=|%s|\n",l_acc_type);
+				CO_ProcMonitor(g_flogfile,chr_g_log_buffer,NULL, NULL);	
+				
+				EXEC SQL SELECT DECODE(:l_acc_type,'PI',PAY_IN_ACC,'PO',PAY_OUT_ACC) INTO
+							:l_dl_fundobl_struct_h->h_payable_acc:l_dl_fundobl_struct_i->i_payable_acc
+							FROM iv_clientsetup a
+							WHERE a.client =:l_chr_dist_client;
+
+				IS_ANY_ORA_ERROR
+				
+
+			if(strcmp(l_acc_type,"PI")==0)
+			{
+			
+				sprintf(l_chr_tempnarr,"%s%s on %s",narration_crd,l_dl_fundobl_struct_h->h_payable_acc,l_dl_fundobl_struct_h->h_pay_in_dt);
+				strcat(l_chr_final_narr,l_chr_tempnarr);
+				strcpy(l_chr_tempnarr,APL_NULL_STRING);
+			}
+			if(strcmp(l_acc_type,"PO")==0)
+			{
+				sprintf(l_chr_tempnarr,"%s%s on %s",narration_dbt,l_dl_fundobl_struct_h->h_payable_acc,l_dl_fundobl_struct_h->h_pay_out_dt);
+				strcat(l_chr_final_narr,l_chr_tempnarr);
+				strcpy(l_chr_tempnarr,APL_NULL_STRING);
+			}
+		
+			
+			if(strcmp(chr_l_oblg_lvl,"MASTER")==0)
+				{	
+					EXEC SQL SELECT cln_master INTO :chr_l_cln_master 
+							FROM mt_client
+							WHERE cln_code=:l_chr_dist_client;
+
+					IS_ANY_ORA_ERROR
+				
+					printf("\n MASTER IS=|%s| \n",chr_l_cln_master);
+
+					sprintf(chr_g_log_buffer,"\n Master For Client|%s| is=|%s|\n",l_chr_dist_client,chr_l_cln_master);
+			CO_ProcMonitor(g_flogfile,chr_g_log_buffer,NULL, NULL);
+					
+				}
+
+
+/*		First Deleting from Obligation Details table & then Summary table 	*/
+		
+			EXEC SQL SELECT COUNT(*)INTO :int_rec_cnt FROM dl_fundobl_dtls
+						WHERE deal_link_no=(SELECT deal_link FROM dl_fundoblsum
+													WHERE client_code=:l_chr_dist_client
+															  AND settlement_no=:l_chr_settlement_no);
+
+		
+			IS_ANY_ORA_ERROR
+
+			if(int_rec_cnt > 0)
+			{
+				EXEC SQL DELETE FROM dl_fundobl_dtls WHERE deal_link_no=
+					   (SELECT deal_link FROM dl_fundoblsum
+							  WHERE client_code=:l_chr_dist_client
+								AND settlement_no=:l_chr_settlement_no);
+
+					
+				IS_ANY_ORA_ERROR
+			}
+
+			EXEC SQL SELECT COUNT(*)INTO :int_rec_cnt FROM dl_fundoblsum
+							WHERE client_code=:l_chr_dist_client
+							AND settlement_no=:l_chr_settlement_no;
+
+			
+			IS_ANY_ORA_ERROR
+			
+			if(int_rec_cnt > 0)
+			{
+				EXEC SQL DELETE FROM dl_fundoblsum 
+						WHERE client_code=:l_chr_dist_client
+						AND settlement_no=:l_chr_settlement_no;
+
+					
+				IS_ANY_ORA_ERROR
+			}
+
+				EXEC SQL INSERT INTO dl_fundoblsum VALUES(
+								sysdate,:l_dl_fundobl_struct_h->h_exch_code,
+								:l_chr_settlement_no,								
+								:l_chr_dist_client,
+								:l_dl_fundobl_struct_h->h_exch_code||'#'||:l_chr_settlement_no,
+								:l_dl_fundobl_struct_h->h_payable_acc,
+								:l_dl_fundobl_struct_h->h_cln_name,
+								:l_acc_type,
+								:l_chr_summary_rep,
+								:l_dl_fundobl_struct_h->h_purchase,
+								:l_dl_fundobl_struct_h->h_sale,
+								:l_dl_fundobl_struct_h->h_net_amt,
+								:l_dl_fundobl_struct_h->h_cln_add_1,
+								:l_dl_fundobl_struct_h->h_cln_add_2,
+								:l_dl_fundobl_struct_h->h_city,
+								:l_dl_fundobl_struct_h->h_cln_add_pin,
+								:l_dl_fundobl_struct_h->h_start_date,
+								:l_dl_fundobl_struct_h->h_end_date,
+								:l_dl_fundobl_struct_h->h_pay_in_dt,
+								:l_dl_fundobl_struct_h->h_pay_out_dt,
+								:l_chr_uniq_no,
+								:l_chr_final_narr,
+								:chr_l_oblg_lvl,
+								DECODE(:chr_l_oblg_lvl,'MASTER',:chr_l_cln_master,NULL),
+								:l_dl_fundobl_struct_h->h_stamp_duty);
+
+				IS_ANY_ORA_ERROR
+				
+			
+			if(APL_FAILURE == DL_Inst_OblDtls(l_chr_dist_client,
+											  l_chr_uniq_no,
+											  chr_l_oblg_lvl,
+											  chr_l_cln_master,
+											  g_flogfile,	
+											  l_debug_info_ptr))
+			{
+					APL_GOBACK_FAIL
+			}
+			
+/*			strcpy(l_chr_tempnarr,APL_NULL_STRING);
+*/			strcpy(l_chr_final_narr,APL_NULL_STRING);
+			strcpy(chr_l_cln_master,APL_NULL_STRING);
+
+			commit_count++;
+		
+/*		  if (  (commit_count%COMMIT_FREQ_LOGAUTOEVNT) == 0  )
+		  {
+			
+
+				sprintf(h_stat_info,"Processed %d Records for MasterWise Obligation",commit_count);
+
+				if(APL_FAILURE == BT_Status_Update(p_process_name,
+									                    p_process_key,
+										                 p_start_date,
+															  h_stat_info,																									                                 l_debug_info_ptr))
+				{
+					APL_GOBACK_FAIL
+				}
+			  	
+			 	CO_ProcMonitor(g_flogfile,"RECORD COMMITTED \n",NULL,NULL);
+				
+				EXEC SQL OPEN l_cur_mst_oblg;
+				IS_ANY_ORA_ERROR
+
+		  }
+*/
+	   }
+
+	EXEC SQL CLOSE l_cur_mst_oblg;
+	
+	IS_ANY_ORA_ERROR
+
+	counter=0;
+	commit_count=0;
+	
+
+
+	APL_GOBACK_SUCCESS							
+
+	  RETURN_SUCCESS:
+	  {
+		CO_ProcMonitor(g_flogfile," Leaving Proc_ApplFundPattern() With Success",NULL,NULL);
+		return(APL_SUCCESS);
+	  }
+	   
+ 	  RETURN_FAILURE:
+ 	  { 	
+	    CO_ProcMonitor(g_flogfile,"Leaving Proc_ApplFundPattern() with Failure",NULL,NULL);
+	    printf("\n Leaving Proc_ApplFundPattern() with Failure == ORA|%d|\n",sqlca.sqlcode);
+	    return(APL_FAILURE);
+	 }
+
+
+
+    }
+
+
+
+int main(int argc,char *argv[]) //AIX-Warnings Removal
+{
+
+  DEBUG_INFO_STRUCT_H **l_debug_info_ptr=NULL;
+  INTL_ENV_DATA_STRUCT_H *l_intl_env_data_h;
+
+     /* Added by kotubabu for Linux Migration-Start*/
+    #ifdef OS_LINUX
+     g_flogfile = APL_OUT_FILE;
+    #endif
+   /* Added by kotubabu for Linux Migration-End*/
+   
+  char l_chr_exchange[10] = APL_NULL_STRING;
+  char l_chr_settlement_no[16] = APL_NULL_STRING;
+  char l_chr_mkt_type[3]= APL_NULL_STRING;
+  int l_int_num = 0;
+  char **l_chr_arglist=NULL;
+  int int_l_rec_cnt=0;
+  char chr_l_process_name[BT_PROCESS_NAME_LEN]=APL_NULL_STRING;
+  char chr_l_process_key[BT_PROCESS_KEY_LEN]=APL_NULL_STRING;
+  char chr_l_start_date[20]=APL_NULL_STRING;
+
+
+	l_debug_info_ptr = (DEBUG_INFO_STRUCT_H **)calloc(1,sizeof(DEBUG_INFO_STRUCT_H *));
+
+  
+    if(CO_Get_DBConnect(l_debug_info_ptr) == APL_FAILURE)
+  	 {
+		APL_GOBACK_FAIL
+    }
+
+
+/*	******  processing Input Parameters	Start	*******   */
+
+	if (APL_FAILURE == CO_Rtv_RptFileName( "FUNDOBLIG",
+				APL_LOGFILE_DESC,
+				100,
+				argv[5],
+				argv,
+				&g_flogfile,
+				l_debug_info_ptr ) ) 
+	{
+		CO_ProcMonitor(g_flogfile, "Failure from CO_Rtv_RptFileName",NULL,NULL);
+		APL_GOBACK_FAIL
+	}  
+
+
+	strcpy(chr_l_process_name,argv[0]);
+	strcpy(chr_l_process_key,argv[1]);
+	strcpy(chr_l_start_date,argv[2]);
+	
+/*	if(APL_FAILURE == BT_Status_Lock(   chr_l_process_name,
+				        							chr_l_process_key,
+							         			chr_l_start_date,
+										         l_debug_info_ptr))
+		   			{
+				      	APL_GOBACK_FAIL
+						}
+	
+*/
+	
+	if(APL_FAILURE == CO_SplitStr(argv[9],
+				'|',
+				&l_int_num,&l_chr_arglist))
+	{
+		CO_ProcMonitor(g_flogfile, "Failure from StrSplitFn", NULL, NULL);
+		APL_GOBACK_FAIL
+
+		}
+		
+
+   if (l_int_num != 3)
+		{
+			printf("\n Total no of arguments are |%d|", l_int_num);
+			CO_ProcMonitor(g_flogfile, "Improper Number of arguements", NULL, NULL);
+			APL_GOBACK_FAIL
+		}
+	   
+		strcpy(l_chr_settlement_no, l_chr_arglist[0]);
+		strcpy(l_chr_exchange, l_chr_arglist[1]);
+		strcpy(l_chr_mkt_type, l_chr_arglist[2]);
+
+		sprintf(chr_g_log_buffer,"\n Selected Exchange Code is  |%s|",l_chr_exchange);
+		CO_ProcMonitor(g_flogfile,chr_g_log_buffer,NULL, NULL);
+		sprintf(chr_g_log_buffer,"\n Selected settlment Number is  |%s|",l_chr_settlement_no);
+		CO_ProcMonitor(g_flogfile,chr_g_log_buffer,NULL, NULL);
+		sprintf(chr_g_log_buffer,"\n Selected Market Type is  |%s|",l_chr_mkt_type);
+		CO_ProcMonitor(g_flogfile,chr_g_log_buffer,NULL, NULL);
+
+		printf("\n Selected Exchange Code is  |%s|",l_chr_exchange);
+		printf("\n Selected settlment Number is  |%s|",l_chr_settlement_no);
+		printf("\n Selected Market Type is  |%s|", l_chr_mkt_type);
+		
+	
+
+		if (!strlen(l_chr_arglist[0]))
+			{
+				
+				CO_ProcMonitor(g_flogfile, "Mandatory Data Missing: Settlment Number", NULL, NULL);
+				APL_GOBACK_FAIL
+			} 
+	
+        if(strcmp(l_chr_mkt_type,APL_NULL_STRING) == 0)
+			strcpy(l_chr_mkt_type,"%");
+
+	    if(strcmp(l_chr_exchange,APL_NULL_STRING) == 0)
+		    strcpy(l_chr_exchange,"%");
+		
+
+
+	    EXEC SQL SELECT COUNT(*) INTO :int_l_rec_cnt FROM dl_deal
+					WHERE exch_code LIKE :l_chr_exchange
+					AND mkt_type LIKE :l_chr_mkt_type
+					AND settlement_no= :l_chr_settlement_no;
+
+	   IS_ANY_ORA_ERROR
+		
+	   if(int_l_rec_cnt <=0)
+	   {
+			CO_ProcMonitor(g_flogfile, "NO Record found matching your Criteria !",NULL,NULL);
+			printf("\n\n No Records found matching your Criteria !\n\n");
+			APL_GOBACK_FAIL
+	   }
+		
+		/***************  PROCESSING FOR CLEARING HOUSE DEALS 		**************/		
+
+		EXEC SQL SELECT COUNT(*) INTO :int_l_rec_cnt
+				FROM dl_deal a,mt_instrument b
+				WHERE a.exch_code like :l_chr_exchange
+				AND a.mkt_type like :l_chr_mkt_type
+				AND a.settlement_no =:l_chr_settlement_no
+				AND a.instr_code=b.instr_code
+				AND b.instr_type NOT IN('BON','DEB')
+				AND EXISTS (SELECT b.cln_code from mt_client b WHERE a.client=b.cln_code AND STATUS='AA')
+				AND (((deal_cd IN('2','4') AND deal_stat='CC') OR  (deal_cd IN('1','3') AND  deal_stat='SS')) AND  clh_Flg='C')
+				AND a.mkt_type not in ('7','18','19','20','23','24','25'); /*  03-04-2008 to skip SLB trades  */
+/*				AND (a.DL_MNYSTATUS IS NULL OR a.DL_MNYSTATUS ='IR');		*/
+		
+		IS_ANY_ORA_ERROR
+
+	 if(int_l_rec_cnt <= 0)
+	 {
+			CO_ProcMonitor(g_flogfile, "NO Clearing House Records Found for Selected Criteria !",NULL,NULL);
+			
+	 }
+	 else if(int_l_rec_cnt > 0)
+	 {
+			
+ 		 sprintf(chr_g_log_buffer,"\n Found |%d|	Clearing House Records!\n",int_l_rec_cnt);
+		 CO_ProcMonitor(g_flogfile,chr_g_log_buffer,NULL, NULL);
+
+		
+		EXEC SQL TRUNCATE TABLE dl_fundobl;
+		IS_ANY_ORA_ERROR
+		/* SNOW- CS0046501 Changes by Shradha for Stamp Duty Enh. Starts*/
+		EXEC SQL INSERT INTO dl_fundobl
+				SELECT client,identiy_no,deal_date,cost,exch_code,amount,brokercomm,stx_comm,qty,
+					   domestic_cpclt,deal_cd,a.instr_code,settlement_no,mkt_type,NULL,net_amt,stamp_duty
+				FROM dl_deal a,mt_instrument b
+				WHERE a.exch_code like :l_chr_exchange
+				AND a.mkt_type like :l_chr_mkt_type
+				AND a.settlement_no =:l_chr_settlement_no
+				AND a.instr_code=b.instr_code
+				AND b.instr_type NOT IN('BON','DEB')
+				AND EXISTS (SELECT b.cln_code from mt_client b WHERE a.client=b.cln_code AND STATUS='AA')
+				AND (((deal_cd IN('2','4') AND deal_stat='CC') OR  (deal_cd IN('1','3') AND  deal_stat='SS')) AND  clh_Flg='C')
+				AND a.mkt_type not in ('7','18','19','20','23','24','25'); /*  03-04-2008 to skip SLB trades  */;
+/*				AND (a.DL_MNYSTATUS IS NULL OR a.DL_MNYSTATUS ='IR');*/
+
+		IS_ANY_ORA_ERROR
+
+		/* SNOW- CS0046501 Changes by Shradha for Stamp Duty Enh. Ends*/
+	
+		if(APL_FAILURE ==Proc_ApplFundPattern(l_chr_settlement_no,
+														  l_chr_mkt_type,
+														  l_chr_exchange,
+														  chr_l_process_name,
+														  chr_l_process_key,
+														  chr_l_start_date,
+														  g_flogfile,
+														  l_intl_env_data_h,
+														  l_debug_info_ptr))
+		{	
+			CO_ProcMonitor(g_flogfile, "Proc_ApplFundPattern returned failure", NULL, NULL);
+			APL_GOBACK_FAIL
+		}
+		
+	 }
+
+	
+
+/*		CODE FOR PROCESSING DVP DEALS	*/
+
+		EXEC SQL SELECT COUNT(*) into :int_l_rec_cnt
+				FROM dl_deal a,mt_instrument b
+				WHERE a.exch_code like :l_chr_exchange
+				AND a.mkt_type like :l_chr_mkt_type
+				AND a.settlement_no =:l_chr_settlement_no
+				AND a.instr_code=b.instr_code
+				AND b.instr_type NOT IN('BON','DEB')
+				AND EXISTS (SELECT b.cln_code from mt_client b WHERE a.client=b.cln_code AND STATUS='AA')
+				AND (((deal_cd IN('2','4') AND deal_stat='SS') OR  (deal_cd IN('1','3') AND  deal_stat='CC')) AND  clh_Flg='D');		
+/*				AND (a.DL_MNYSTATUS IS NULL OR a.DL_MNYSTATUS ='IR');*/
+		
+		IS_ANY_ORA_ERROR
+	
+
+	  if(int_l_rec_cnt <= 0)
+     {
+          CO_ProcMonitor(g_flogfile, "NO DVP Records Found for Selected Criteria !",NULL,NULL);
+
+	  }		 	
+	  else if(int_l_rec_cnt >0)
+	  {
+		  sprintf(chr_g_log_buffer,"\n Found |%d| DVP Records!\n",int_l_rec_cnt);
+		  CO_ProcMonitor(g_flogfile,chr_g_log_buffer,NULL, NULL);
+	
+		EXEC SQL TRUNCATE TABLE dl_fundobl;
+		IS_ANY_ORA_ERROR
+		/* SNOW- CS0046501 Changes by Shradha for Stamp Duty Enh. Starts*/
+		EXEC SQL INSERT INTO dl_fundobl
+				SELECT client,identiy_no,deal_date,cost,exch_code,amount,brokercomm,stx_comm,qty,
+					   domestic_cpclt,deal_cd,a.instr_code,settlement_no,mkt_type,NULL,net_amt,stamp_duty
+				FROM dl_deal a,mt_instrument b
+				WHERE a.exch_code like :l_chr_exchange
+				AND a.mkt_type like :l_chr_mkt_type
+				AND a.settlement_no =:l_chr_settlement_no
+				AND a.instr_code=b.instr_code
+				AND b.instr_type NOT IN('BON','DEB')
+				AND EXISTS (SELECT b.cln_code from mt_client b WHERE a.client=b.cln_code AND STATUS='AA')
+				AND (((deal_cd IN('2','4') AND deal_stat='SS') OR  (deal_cd IN('1','3') AND  deal_stat='CC')) AND  clh_Flg='D');		
+/*				AND (a.DL_MNYSTATUS IS NULL OR a.DL_MNYSTATUS ='IR');	*/
+		
+		IS_ANY_ORA_ERROR
+		/* SNOW- CS0046501 Changes by Shradha for Stamp Duty Enh. Ends*/
+		
+
+		if(APL_FAILURE ==Proc_ApplFundPattern(l_chr_settlement_no,
+														  l_chr_mkt_type,
+														  l_chr_exchange,
+														  chr_l_process_name,
+														  chr_l_process_key,
+														  chr_l_start_date,
+														  g_flogfile,
+														  l_intl_env_data_h,
+														  l_debug_info_ptr))
+		{	
+			CO_ProcMonitor(g_flogfile, "Proc_ApplFundPattern returned failure", NULL, NULL);
+			APL_GOBACK_FAIL
+		}
+	
+	}
+	
+		
+
+/*		CODE FOR PROCESSING DEBT DEALS		*/
+
+	EXEC SQL SELECT COUNT(*) into :int_l_rec_cnt
+				FROM dl_deal a,mt_instrument b
+				WHERE a.exch_code like :l_chr_exchange
+				AND a.mkt_type like :l_chr_mkt_type
+				AND a.settlement_no =:l_chr_settlement_no
+				AND a.instr_code=b.instr_code
+				AND b.instr_type IN('BON','DEB')
+				AND EXISTS (SELECT b.cln_code from mt_client b WHERE a.client=b.cln_code AND STATUS='AA')
+			AND ((deal_cd IN('2','4') AND deal_stat='SS') OR  (deal_cd IN('1','3') AND  deal_stat='CC'));
+/*			AND (a.DL_MNYSTATUS IS NULL OR a.DL_MNYSTATUS ='IR');*/
+		
+		IS_ANY_ORA_ERROR
+	
+
+	if(int_l_rec_cnt <= 0)
+	{
+			CO_ProcMonitor(g_flogfile, "NO DEBT Deal Records Found for Selected Criteria !",NULL,NULL);
+
+	}		
+	else if(int_l_rec_cnt > 0)
+	{
+	
+		sprintf(chr_g_log_buffer,"\n Found |%d| DEBT Records!\n",int_l_rec_cnt);
+		CO_ProcMonitor(g_flogfile,chr_g_log_buffer,NULL, NULL);
+			
+		EXEC SQL TRUNCATE TABLE dl_fundobl;
+		IS_ANY_ORA_ERROR
+		/* SNOW- CS0046501 Changes by Shradha for Stamp Duty Enh. Starts*/
+		EXEC SQL INSERT INTO dl_fundobl
+				SELECT client,identiy_no,deal_date,cost,exch_code,amount,brokercomm,stx_comm,qty,
+					   domestic_cpclt,deal_cd,a.instr_code,settlement_no,mkt_type,NULL,net_amt,stamp_duty
+				FROM dl_deal a,mt_instrument b
+				WHERE a.exch_code like :l_chr_exchange
+				AND a.mkt_type like :l_chr_mkt_type
+				AND a.settlement_no =:l_chr_settlement_no
+				AND a.instr_code=b.instr_code
+				AND b.instr_type IN('BON','DEB')
+				AND EXISTS (SELECT b.cln_code from mt_client b WHERE a.client=b.cln_code AND STATUS='AA')
+				AND ((deal_cd IN('2','4') AND deal_stat='SS') OR  (deal_cd IN('1','3') AND  deal_stat='CC'));
+/*				AND (a.DL_MNYSTATUS IS NULL OR a.DL_MNYSTATUS ='IR');	*/
+		
+		IS_ANY_ORA_ERROR
+		/* SNOW- CS0046501 Changes by Shradha for Stamp Duty Enh. Ends*/
+		
+
+		if(APL_FAILURE ==Proc_ApplFundPattern(l_chr_settlement_no,
+														  l_chr_mkt_type,
+														  l_chr_exchange,
+														  chr_l_process_name,
+														  chr_l_process_key,
+														  chr_l_start_date,
+														  g_flogfile,
+														  l_intl_env_data_h,
+														  l_debug_info_ptr))
+		{	
+			CO_ProcMonitor(g_flogfile, "Proc_ApplFundPattern returned failure", NULL, NULL);
+			APL_GOBACK_FAIL
+		}
+	
+	}
+
+APL_GOBACK_SUCCESS // AIX - Warnings
+
+	RETURN_SUCCESS :
+	{
+
+	  if(APL_FAILURE == BT_Status_Completed(argv[0],argv[1],argv[2],l_debug_info_ptr))
+	  {
+		APL_GOBACK_FAIL
+	  }
+	  EXEC SQL COMMIT WORK;
+	  if(sqlca.sqlcode != 0)
+	 	 APL_GOBACK_FAIL
+		 exit(0);
+	}
+	RETURN_FAILURE :
+	{
+//AIX Warning Removal	
+	  if(BT_Status_Update(argv[0], argv[1], argv[2],"Failed", l_debug_info_ptr) == APL_FAILURE)
+	  {
+		APL_GOBACK_FAIL
+	  }
+		CO_ProcMonitor(g_flogfile, "Failed To Generate FundObligation", NULL, NULL);
+		printf("\n Failed To Generate FundObligation : ORA Error=|%d|\n\n",sqlca.sqlcode);
+		exit(-1);
+	}
+
+
+}
+

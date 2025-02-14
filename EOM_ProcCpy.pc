@@ -1,0 +1,424 @@
+/*
+ *   COPYRIGHT NOTICE
+ *
+ *   Copyright 2016 Intellect Design Arena Limited. All rights reserved.
+ *
+ *    These materials are confidential and proprietary to 
+ *    Intellect Design Arena Limited and no part of these materials should
+ *    be reproduced, published, transmitted or distributed in any form or
+ *    by any means, electronic, mechanical, photocopying, recording or 
+ *    otherwise, or stored in any information storage or retrieval system
+ *    of any nature nor should the materials be disclosed to third parties
+ *    or used in any other manner for which this is not authorized, without
+ *    the prior express written authorization of Intellect Design Arena Limited.
+ */
+/*******************************************************************************
+ *
+ * Module Name         :         Archival
+ *
+ * File Name           :         EOM_ProcCpy.pc
+ *
+ * Description         :         
+ *
+ *            Version Control Block
+ *
+ * Date        Version       Author           Description								 RFS No.
+ * ---------   --------   ---------------  -----------------						--------------
+ * 19/12/2016   1.0.0.1    Prateek Singh    Re-Initiation of Archival Enhancement	ISKB_2071 (Old IsolveIds 2244 and 2469)
+ * ***********************************************************************************************/
+
+
+
+
+
+#include "CO_HostStructdef.h"
+EXEC SQL INCLUDE SQLCA.H;
+
+
+
+int EOM_Proc_ArchCp(	char **argv,
+							FILE *p_logfile,
+							INTL_ENV_DATA_STRUCT_H *p_intl_envdatastruct_h,
+							DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+	
+
+	struct sqlca sqlca;	
+	char		chr_l_h_restart_data[APL_RESTARTDATA_LENGTH]	=	APL_NULL_STRING;
+	char		chr_l_h_instrcode_A[APL_INSTRUMENTCODE_LEN]					=	APL_NULL_STRING;
+	char		chr_l_buf[BUFFER_LEN]								=	APL_NULL_STRING;
+	int		int_l_cnt_missmktprc								=	0;
+	short		l_i_instr_code										=	0;
+	short		l_i_restart_data								=	0;
+	
+
+	EXEC SQL VAR 	chr_l_h_restart_data	IS STRING;
+	EXEC SQL VAR 	chr_l_h_instrcode_A			IS STRING;
+
+	sqlca.sqlcode = 0;
+
+	int int_l_DL_EOM_ARCH=0; // Amit Nair (issue log 263)
+
+	#ifdef SYS_DEBUG
+		printf( "Entered Function EOM_Proc_ArchCp\n"); 
+	#endif
+	
+	
+
+   EXEC SQL SELECT PROCESSING_STATUS  
+				INTO	:chr_l_h_restart_data:l_i_restart_data
+   			FROM 	SYS_BATCHPROC
+   			WHERE PROCESS_NAME		=	:argv[0]
+   			AND   PROC_INIT			=	:argv[1]
+   			AND   STARTDATE	=	:argv[2]
+   			AND   STATUS		=	'started'
+   			FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+	IS_ANY_ORA_ERROR
+
+   if(APL_ZERO_RESULT_SET) 
+	{
+      CO_ProcMonitor(	p_logfile,
+						"E:No entry in batch_in_proc",
+						NULL,
+						NULL);
+      APL_GOBACK_FAIL;
+   }
+
+	
+
+	
+
+	EXEC SQL UPDATE MT_MTHLYMKTPRC a SET a.CLOSING_PR = ( SELECT b.CLOSING_PR
+																		FROM	MT_DLYMKTPRC b
+																		WHERE	b.INSTR_CODE =	a.INSTR_CODE
+																		AND	b.PRICE_DATE = ( SELECT SYS_DATE FROM PRO_SYS_DATE ) )
+				WHERE	EXISTS (	SELECT INSTR_CODE FROM MT_DLYMKTPRC c 
+									WHERE c.INSTR_CODE = a.INSTR_CODE
+									AND c.PRICE_DATE = (SELECT SYS_DATE FROM PRO_SYS_DATE));
+   
+	
+	      EXEC SQL COMMIT;
+	
+
+	IS_ANY_ORA_ERROR;
+
+	EXEC SQL INSERT INTO MT_MTHLYMKTPRC 
+				(SELECT INSTR_CODE, CLOSING_PR, CLOSING_PR FROM MT_DLYMKTPRC b 
+					WHERE NOT EXISTS (SELECT INSTR_CODE FROM MT_MTHLYMKTPRC WHERE INSTR_CODE = b.INSTR_CODE) 
+					AND b.PRICE_DATE = (SELECT SYS_DATE FROM PRO_SYS_DATE));
+	
+	
+  			EXEC SQL COMMIT;
+	
+
+	IS_ANY_ORA_ERROR;
+
+/*	Commented by Gouse for ISKB_2469 - This would take more time 
+	EXEC SQL DELETE DL_EOMDEAL;
+	
+	
+			EXEC SQL COMMIT;
+	
+
+	IS_ANY_ORA_ERROR;
+
+	
+
+	EXEC SQL DELETE DL_EOMSAFEK;
+	
+	
+			EXEC SQL COMMIT;
+	
+
+	IS_ANY_ORA_ERROR; */
+
+	EXEC SQL DELETE MT_EOMSYSDATE;
+	IS_ANY_ORA_ERROR;
+
+	
+	EXEC SQL DELETE MT_EOMMTHLYMKTPRC;
+	IS_ANY_ORA_ERROR;
+
+	
+	EXEC SQL COMMIT WORK;
+	
+/*	Commented by Gouse for ISKB_2469 - This would take more time 
+
+	EXEC SQL INSERT INTO DL_EOMDEAL (SELECT * FROM DL_DEAL);
+	IS_ANY_ORA_ERROR;
+
+	
+	EXEC SQL COMMIT WORK;
+	
+
+	EXEC SQL INSERT INTO DL_EOMSAFEK (SELECT * FROM DL_SAFEK);
+	
+	
+			EXEC SQL COMMIT;
+	
+
+	IS_ANY_ORA_ERROR; */
+
+	
+
+	EXEC SQL INSERT INTO MT_EOMSYSDATE (SELECT * FROM PRO_SYS_DATE);
+	IS_ANY_ORA_ERROR;
+	
+	
+
+	EXEC SQL INSERT INTO MT_EOMMTHLYMKTPRC (SELECT * FROM MT_MTHLYMKTPRC);
+			EXEC SQL COMMIT;
+	
+	IS_ANY_ORA_ERROR;
+
+/*	Commented by Gouse for ISKB_2469 - This would take more time 
+	EXEC SQL UPDATE DL_DEAL SET REPORT_AT_EOM_IND = 'Y' 
+				WHERE CLIENT||IDENTIY_NO IN ( SELECT CLIENT||IDENTIY_NO 
+															FROM DL_EOMSTM_CURR_VEW
+												  UNION ALL
+												  SELECT CLIENT||IDENTIY_NO
+															FROM DL_EOMSTM_ADJ_VEW );
+   
+			EXEC SQL COMMIT;
+	
+
+	IS_ANY_ORA_ERROR;
+														*/
+
+       /*	
+	Author	: Amit Nair
+	Date		: 01/02/2008
+	Purpose	: Fetching archival period for moving to Archival table ( Issue Log 263 )
+	*/
+
+	// [Start] Fetching archival period for moving to Archival table ( Issue Log 263 )
+
+	EXEC SQL SELECT to_number(FIELD_VAL)
+   INTO :int_l_DL_EOM_ARCH
+	FROM PRO_GSSPLVAL
+   WHERE MAIN_FUN='ARCHIVAL'
+   and SUB_PROCESS='DL_EOM_ARCH'
+   and NATION=:g_mt_commonsys_params_struct_h.nation_code;
+            
+   IS_ANY_ORA_ERROR;
+
+	if ( APL_ZERO_RESULT_SET)
+	{
+		int_l_DL_EOM_ARCH =1;
+	}
+
+	// prompt INSERT RECORDS IN HISTORY Table :|DL_HISDPINSTRS|
+
+	EXEC SQL INSERT INTO DL_HISDPINSTRS 
+	(SELECT * FROM DL_DPINSTRS WHERE TO_CHAR(ACCESS_STAMP,'MM/YYYY') <= 
+	TO_CHAR(ADD_MONTHS(ACCESS_STAMP,-:int_l_DL_EOM_ARCH),'MM/YYYY'));
+
+	IS_ANY_ORA_ERROR;
+
+	if ((sqlca.sqlcode != 0) && (sqlca.sqlcode != 1403))
+	{
+		printf("SQL ERROR ! Database l_debuglist cannot update  : %d\n",sqlca.sqlcode);
+		//APL_GOBACK_FAIL
+	}
+
+	// prompt DELETE RECORDS IN LIVE Table :|DL_HISDPINSTRS|
+
+	EXEC SQL DELETE FROM DL_DPINSTRS WHERE TO_CHAR(ACCESS_STAMP,'MM/YYYY') <= 
+	TO_CHAR(ADD_MONTHS(ACCESS_STAMP,-:int_l_DL_EOM_ARCH),'MM/YYYY');
+
+	IS_ANY_ORA_ERROR;
+
+	if ((sqlca.sqlcode != 0) && (sqlca.sqlcode != 1403))
+	{
+		printf("SQL ERROR ! Database l_debuglist cannot update  : %d\n",sqlca.sqlcode);
+		//APL_GOBACK_FAIL
+	}
+
+	/* Added by Gouse for ISKB_2469 - Archival of DL_DPGEN_DET - Start */
+	
+	EXEC SQL INSERT INTO DL_ARCHDPGEN_DET 
+				( SELECT * FROM DL_DPGEN_DET WHERE TO_CHAR(ACCESS_STAMP,'MM/YYYY') <=
+								TO_CHAR(ADD_MONTHS(ACCESS_STAMP,-:int_l_DL_EOM_ARCH),'MM/YYYY'));
+
+	IS_ANY_ORA_ERROR;
+
+	if ((sqlca.sqlcode != 0) && (sqlca.sqlcode != 1403))
+	{
+		printf("SQL ERROR ! while inserting into DL_HISDPGEN_DET  : %d\n",sqlca.sqlcode);
+	}
+
+	EXEC SQL DELETE FROM DL_DPGEN_DET WHERE TO_CHAR(ACCESS_STAMP,'MM/YYYY') <=
+								TO_CHAR(ADD_MONTHS(ACCESS_STAMP,-:int_l_DL_EOM_ARCH),'MM/YYYY');	
+	IS_ANY_ORA_ERROR;
+
+	if ((sqlca.sqlcode != 0) && (sqlca.sqlcode != 1403))
+	{
+		printf("SQL ERROR ! while deleting from DL_DPGEN_DET : %d\n",sqlca.sqlcode);
+	}
+
+	/* Added by Gouse for ISKB_2469 - Archival of DL_DPGEN_DET - End */
+
+	EXEC SQL COMMIT;
+
+	IS_ANY_ORA_ERROR;
+	// [End] Fetching archival period for moving to Archival table ( Issue Log 263 )
+	
+	APL_GOBACK_SUCCESS;
+
+   RETURN_SUCCESS :
+
+		CO_FreeErrLst(l_debug_info_ptr);
+
+		fprintf(	p_logfile, 
+					"Exiting EOM Copy Data Function successfully\n");
+
+      #ifdef SYS_DEBUG
+         printf( "Leaving Function EOM_Proc_ArchCp with success\n");
+		#endif
+
+      return(APL_SUCCESS);
+
+   RETURN_FAILURE :
+
+		if (APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+		{
+			CO_ProcMonitor(p_logfile, 
+						"Got Errors : ", 
+						l_debug_info_ptr, 
+						p_intl_envdatastruct_h);
+			CO_FreeErrLst(l_debug_info_ptr);
+		}
+
+		fprintf(	p_logfile, 
+					"Exiting EOM Copy Data Function with errors\n");
+
+      #ifdef SYS_DEBUG
+         printf( "Leaving Function EOM_Proc_ArchCp with errors\n");
+		#endif
+
+      return(APL_FAILURE);
+
+}
+
+
+
+main(int argc,char **argv)
+{
+	struct sqlca sqlca;
+   DEBUG_INFO_STRUCT_H *l_debug_info_ptr 				= 	NULL;
+	INTL_ENV_DATA_STRUCT_H l_intl_env_data_h;
+	FILE 	*l_finifile								=	NULL;
+	FILE 	*l_logfile    							= 	NULL;
+	char	chr_l_logfile_name[PATH_LENGTH] 		= 	APL_NULL_STRING;
+   int	int_l_retval									=	0;
+   char 	chr_uname[APL_USERID_LEN] 				= 	APL_NULL_STRING;
+   char 	chr_custody_id_b[APL_USERID_LEN] 				= 	APL_NULL_STRING;
+   char 	chr_passwd[APL_PASSWD_LEN] 				= 	APL_NULL_STRING;
+	char 	chr_l_logdir[PATH_LENGTH] 				= 	APL_NULL_STRING;
+	char 	chr_l_inifile[PATH_LENGTH] 				= 	APL_NULL_STRING;
+
+   EXEC SQL VAR chr_uname IS STRING;
+   EXEC SQL VAR chr_custody_id_b IS STRING;
+   EXEC SQL VAR chr_passwd IS STRING;
+
+	sqlca.sqlcode = 0;
+
+	strcpy(chr_l_inifile,getenv("INTL_ROOT_PATH"));
+	strcat(chr_l_inifile,"intl_sun.cfg");
+
+	if ( ( l_finifile=fopen(chr_l_inifile,"r") ) == NULL)
+	{
+		APL_GOBACK_FAIL
+	}
+
+	
+
+	
+
+	APL_FETCH_DB_LOGIN_DETAILS(l_finifile, chr_custody_id_b, chr_uname, chr_passwd, APL_OUT_FILE, &l_debug_info_ptr)
+
+   EXEC SQL CONNECT :chr_uname IDENTIFIED BY :chr_passwd;
+
+   if (sqlca.sqlcode)
+   {
+      APL_GOBACK_FAIL
+   }
+   else
+   {
+		
+
+		if (APL_FAILURE == CO_Rtv_RptFileName(	"3I",
+														APL_LOGFILE_DESC,
+														100,
+														argv[5],
+														argv,
+														&l_logfile,
+														&l_debug_info_ptr ) )
+		{
+			APL_GOBACK_FAIL
+		}
+
+		
+
+		EXEC SQL COMMIT WORK;
+
+		if (sqlca.sqlcode)
+		{
+			CO_ProcMonitor(l_logfile, "Could not commit after opening chr_log file", NULL, NULL);
+			CO_Proc_RptClose(l_logfile, &l_debug_info_ptr);
+			APL_GOBACK_FAIL
+		}
+
+		strcpy(l_intl_env_data_h.usr, argv[3]);
+		strcpy(l_intl_env_data_h.h_mode, argv[4]);
+		strcpy(l_intl_env_data_h.processtion, argv[5]);
+		strcpy(l_intl_env_data_h.auth_req, argv[6]);
+		strcpy(l_intl_env_data_h.subprocess, argv[7]);
+		strcpy(l_intl_env_data_h.h_process, argv[8]);
+
+		
+
+		CO_ProcMonitor(l_logfile, "Calling CDBEomCpyDataFn", NULL, NULL);
+
+      int_l_retval = EOM_Proc_ArchCp( 	argv, 
+												l_logfile, 
+												&l_intl_env_data_h, 
+												&l_debug_info_ptr);
+
+		CO_ProcMonitor(l_logfile, "Returned From CDBEomCpyDataFn", NULL, NULL);
+
+      if ( int_l_retval == APL_FAILURE )
+      {
+			CO_ProcMonitor(l_logfile, "CDBEomCpyDataFn returned failure : Rolling Back", NULL, NULL);
+			CO_Proc_RptClose(l_logfile, &l_debug_info_ptr);
+			EXEC SQL ROLLBACK WORK RELEASE;
+         APL_GOBACK_FAIL
+      }
+      else
+      {
+         EXEC SQL UPDATE SYS_BATCHPROC
+         SET  status = 'completed'
+         WHERE PROCESS_NAME=:argv[0]
+         AND   PROC_INIT=:argv[1]
+         AND   STARTDATE=:argv[2]
+         AND   STATUS='started';
+
+         EXEC SQL COMMIT WORK RELEASE;
+			if (sqlca.sqlcode)
+			{
+				CO_ProcMonitor(l_logfile, "Could not do final commit", NULL, NULL);
+				CO_Proc_RptClose(l_logfile, &l_debug_info_ptr);
+				EXEC SQL ROLLBACK WORK RELEASE;
+				APL_GOBACK_FAIL
+			}
+			CO_ProcMonitor(l_logfile, "Done Final Commit", NULL, NULL);
+			CO_Proc_RptClose(l_logfile, &l_debug_info_ptr);
+         APL_GOBACK_SUCCESS
+      }
+   }
+
+	RETURN_SUCCESS : exit(0);
+	RETURN_FAILURE : exit(-1);
+}

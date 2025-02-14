@@ -1,0 +1,369 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ 
+#include "IV_Control_A.h"
+#define APL_FILE_LENGTH 50
+EXEC SQL INCLUDE SQLCA.H;
+
+/* Bageshri-- 10GM */
+#include "CO_LenConstdef.h"
+
+int CR_Mod_BaseNoDel(	char						**argv,
+						FILE 						*fl_techlog,
+						FILE						*fl_userlog, 	
+						DEBUG_INFO_STRUCT_H         **l_debug_info_ptr)
+{
+
+	struct 		sqlca sqlca;
+	int 			int_retstat 					= 0;
+	char 			chr_isopen_addr_cur[2]	= APL_NULL_STRING;
+	int 			count 					= 0;
+	int 			int_commit_count 			= 0;
+	int			int_l_fetch_ctr				= 0;
+	char        chr_l_buf[BUFFER_LEN]		= APL_NULL_STRING;
+	char			chr_todel 					= APL_NULL_CHAR;
+	FILE 			*reconrpt				= NULL;
+
+	EXEC SQL BEGIN DECLARE SECTION;
+	char 		h_ora_rowid[APL_ROWID_LEN]		= APL_NULL_STRING;
+	char		chr_h_key[50]						= APL_NULL_STRING;
+	char 		chr_b_rowid[APL_ROWID_LEN]		= APL_NULL_STRING;
+	char 		chr_a_rowid[APL_ROWID_LEN]		= APL_NULL_STRING;
+	char 		chr_l_restart_data[51]			= APL_NULL_STRING;	 
+	int 		int_h_count							= 0;					
+	short 	i_restart_info					= 0;
+	short 	i_ora_rowid 							= 0;
+	short 	i_swift_tlx_gcn 						= 0;
+	short 	i_contactinfo 						= 0;
+	short 	i_baseid							= 0;
+	char 		h_swift_tlx_gcn 						= APL_NULL_CHAR;
+	char 		h_contactinfo[201]					= APL_NULL_STRING;
+	char 		chr_h_baseno[7]						= APL_NULL_STRING;
+	char 		p_ora_rowid[APL_ROWID_LEN]		= APL_NULL_STRING;
+	char		chr_l_stat_info[71]				= APL_NULL_STRING;
+
+	EXEC SQL VAR h_ora_rowid 			IS STRING;
+	EXEC SQL VAR chr_h_key 				IS STRING;
+	EXEC SQL VAR chr_b_rowid 			IS STRING;
+	EXEC SQL VAR chr_a_rowid 			IS STRING;
+	EXEC SQL VAR chr_l_restart_data 	IS STRING;
+	EXEC SQL VAR h_contactinfo 			IS STRING;
+	EXEC SQL VAR chr_h_baseno  			IS STRING;
+	EXEC SQL VAR chr_l_stat_info		IS STRING;
+	EXEC SQL END DECLARE SECTION;
+
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Entering Function I_DelBasNBoFn \n", NULL , NULL );
+	}
+
+
+
+
+	EXEC SQL SELECT ROWID INTO :chr_b_rowid 
+	FROM SYS_BATCHPROC
+	WHERE PROCESS_NAME 		= :argv[0]	
+			AND STARTDATE 	= :argv[2]
+			AND PROC_INIT			= :argv[1]
+			AND STATUS 		= 'started' 
+	FOR UPDATE OF STATUS,PROCESSING_STATUS;
+
+
+	if (sqlca.sqlcode < 0)
+	{
+		fprintf(fl_userlog,"Failed To Lock Batch Table \n");
+		APL_GOBACK_FAIL
+	}
+
+	if (sqlca.sqlcode == 1403)
+	{
+ 		fprintf(fl_userlog,"No Record Found In Batch Table For Progname %s, Startdate %s and Status as started \n",argv[0], argv[2]);
+   	CO_InsertErr(l_debug_info_ptr,
+      	            ERR_REC_NOTFND,
+         	         ltoa(sqlca.sqlcode),
+            	      APL_NULL_STRING,
+               	   APL_NULL_STRING,
+                  	__LINE__,
+                  	__FILE__);
+   	APL_GOBACK_FAIL
+	}
+	
+
+
+	if (APL_FAILURE == CO_Rtv_RptFileName("IB",
+   	                                 "Reconciliation Report For Base NUmber Delete",
+      	                              100,
+         	                           argv[5],
+            	                        argv,
+               	                     &reconrpt,
+                  	                  l_debug_info_ptr) )
+	{
+		fprintf(fl_userlog,"Failed To Generate Report For Base Number Reconcilition\n");
+		APL_GOBACK_FAIL
+	}
+
+
+
+	fprintf(reconrpt,"\nBASE NUMBER RECONCILIATION REPORT\n");
+	fprintf(reconrpt,"\nLIST OF BASE NUMBERS DELETED\n");
+	fprintf(reconrpt,"\nBASE NO%6sMESSAGE TYPE%12sADDRESS\n"," "," ");
+
+
+
+	EXEC SQL DECLARE addr_cur CURSOR
+	FOR SELECT ROWID,SWIFT_TLX_GCN,CONTACT_DETAILS,BASEID
+	FROM MS_BASE 
+	FOR UPDATE OF SWIFT_TLX_GCN,CONTACT_DETAILS;
+	
+	IS_ANY_ORA_ERROR
+
+	EXEC SQL OPEN addr_cur;
+	
+	IS_ANY_ORA_ERROR
+	for(;;)
+	{
+		strcpy(chr_isopen_addr_cur,"Y");
+		EXEC SQL FETCH addr_cur
+		INTO :h_ora_rowid:i_ora_rowid,:h_swift_tlx_gcn:i_swift_tlx_gcn,:h_contactinfo:i_contactinfo,:chr_h_baseno:i_baseid;
+
+		if (sqlca.sqlcode == 1403)
+		{
+			if (int_l_fetch_ctr == 0)
+			{
+				fprintf(reconrpt,"\nNO RECORDS TO DELETE FROM IBASE TABLE\n");
+				
+			}
+			break; 
+		}
+		printf("\nsqlca |%d| l_fetch |%d| h_swift_tlx_gcn |%c|\n\n\n",sqlca.sqlcode,int_l_fetch_ctr,h_swift_tlx_gcn);
+		sleep(3);
+
+		int_l_fetch_ctr++;
+
+		if (h_swift_tlx_gcn == 'S' )
+		{
+			if(APL_FAILURE ==MS_Rtv_SWFMsgAddr(h_swift_tlx_gcn,
+																h_contactinfo,
+																&int_retstat,
+																l_debug_info_ptr))
+			{
+				
+				count++;
+
+				
+				chr_todel = 'Y';
+
+				if (APL_FAILURE == MT_Prnt_ReconRpt(	reconrpt,
+																&count,
+																h_swift_tlx_gcn,
+														  		h_contactinfo,
+																chr_h_baseno,
+														  		&int_retstat,
+																l_debug_info_ptr))
+					APL_GOBACK_FAIL
+			}
+		}
+		else if (h_swift_tlx_gcn == 'T' )
+		{
+			if(APL_FAILURE ==MS_Rtv_TelxMsgAddr(h_swift_tlx_gcn,
+																	h_contactinfo,
+																	&int_retstat,
+																	l_debug_info_ptr))
+			{
+				count++;
+				
+				chr_todel ='Y';
+
+				if (APL_FAILURE == MT_Prnt_ReconRpt( reconrpt,
+																&count,
+																h_swift_tlx_gcn,
+															  	h_contactinfo,
+																chr_h_baseno,
+														  		&int_retstat,
+																l_debug_info_ptr))
+					APL_GOBACK_FAIL
+			}
+		}
+		else if (h_swift_tlx_gcn == 'C' )
+		{
+			if(APL_FAILURE == MS_Rtv_GCNMsgAddr(	h_swift_tlx_gcn,
+																	h_contactinfo,
+															 		&int_retstat,
+																	l_debug_info_ptr))
+			{
+				count++;
+				
+				chr_todel ='Y';
+
+				if (APL_FAILURE == MT_Prnt_ReconRpt(	reconrpt,
+																&count,
+																h_swift_tlx_gcn,
+																h_contactinfo,
+																chr_h_baseno,
+																&int_retstat,
+																l_debug_info_ptr))
+					APL_GOBACK_FAIL
+			}
+		}
+		else if (h_swift_tlx_gcn == 'F' )
+		{
+			if(APL_FAILURE == MS_Rtv_FaxMsgAddr(	h_swift_tlx_gcn,
+																	h_contactinfo,
+															 		&int_retstat,
+																	l_debug_info_ptr))
+			{
+				count++;
+
+				
+				chr_todel ='Y';
+
+				if (APL_FAILURE == MT_Prnt_ReconRpt(	reconrpt,
+																&count,
+																h_swift_tlx_gcn,
+																h_contactinfo,
+																chr_h_baseno,
+																&int_retstat,
+																l_debug_info_ptr))
+					APL_GOBACK_FAIL
+			}
+		}
+
+
+		
+	
+		if (chr_todel == 'Y')
+		{
+			if (APL_FAILURE == MT_Mod_BaseDel(	h_ora_rowid,
+														&int_retstat,
+														l_debug_info_ptr))
+				APL_GOBACK_FAIL
+	
+			
+
+			sprintf(chr_l_restart_data,"%c",h_swift_tlx_gcn);
+			strcat(chr_l_restart_data,h_contactinfo);
+
+			
+			int_commit_count++;
+	
+			if (int_commit_count%COMMITSIZE == 0) /* Bageshri-- 10GM */
+			{
+				sprintf(chr_l_stat_info, "Record %d Committed",int_commit_count);
+						
+				EXEC SQL UPDATE SYS_BATCHPROC 
+					  SET  PROCESSING_STATUS  = :chr_l_restart_data,
+							 STAT_DET		= :chr_l_stat_info
+			  		WHERE ROWID 			= :chr_b_rowid;
+		
+				if (sqlca.sqlcode <0)
+				{
+					CO_InsertErr(l_debug_info_ptr,
+										DB_ERR_NO,
+										ltoa(sqlca.sqlcode),
+										APL_NULL_STRING,
+										APL_NULL_STRING,
+										__LINE__,
+										__FILE__);
+					APL_GOBACK_FAIL
+				}
+
+				EXEC SQL COMMIT WORK;
+				IS_ANY_ORA_ERROR;
+
+				
+
+				EXEC SQL SELECT ROWID INTO :chr_b_rowid 
+				FROM SYS_BATCHPROC
+				WHERE PROCESS_NAME 		= :argv[0]	
+						AND STARTDATE 	= :argv[2]
+						AND PROC_INIT			= :argv[1]
+						AND STATUS 		= 'started' 
+				FOR UPDATE OF STATUS,PROCESSING_STATUS;
+
+				if (sqlca.sqlcode < 0)
+				{
+					fprintf(fl_userlog,"Failed To Lock Batch Table \n");
+					APL_GOBACK_FAIL
+				}
+
+				if (sqlca.sqlcode == 1403)
+				{
+ 					fprintf(fl_userlog,"No Record Found In Batch Table For Progname %s, Startdate %s and Status as started \n",argv[0], argv[2]);
+   				CO_InsertErr(l_debug_info_ptr,
+      	   			         ERR_REC_NOTFND,
+         	      			   ltoa(sqlca.sqlcode),
+            	      			APL_NULL_STRING,
+               	   			APL_NULL_STRING,
+                  				__LINE__,
+                  				__FILE__);
+   				APL_GOBACK_FAIL
+				}
+	
+				EXEC SQL OPEN addr_cur ;
+				IS_ANY_ORA_ERROR;
+			} 
+		}		 	
+
+		chr_todel = 'N';
+
+	}
+
+	
+	
+	sprintf(chr_l_stat_info,"Record %d Committed",int_commit_count);
+
+	EXEC SQL UPDATE SYS_BATCHPROC
+			SET STATUS 		= 'completed',
+				 STAT_DET	=	:chr_l_stat_info 
+			WHERE ROWID 	= :chr_b_rowid;
+
+	IS_ANY_ORA_ERROR	
+	EXEC SQL COMMIT WORK;
+	IS_ANY_ORA_ERROR
+
+	fprintf(reconrpt,"----------------------------------------------------------\n");
+
+	fprintf(reconrpt,"NUMBER OF RECORDS DELETED:\t\t");
+	fprintf(reconrpt,"%d\n",count);
+
+	
+
+	if (APL_FAILURE == CO_Proc_RptClose(	reconrpt,
+													l_debug_info_ptr) )
+	{
+		fprintf(fl_userlog,"Failed To Close The Recon Report File\n");
+		APL_GOBACK_FAIL
+	}
+
+
+	APL_GOBACK_SUCCESS
+
+	
+	RETURN_SUCCESS  :
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"\nExiting I_DelbasNoFn successfully\n",NULL,NULL);
+	}
+	return (APL_SUCCESS);
+
+	RETURN_FAILURE  :
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"\nExiting I_DelBasNoFn unsuccessfully\n",NULL,NULL);
+	}
+	return (APL_FAILURE);
+
+}	
+

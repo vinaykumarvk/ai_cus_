@@ -1,0 +1,656 @@
+
+
+
+	
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+
+
+
+#include "CR_Common.h"
+#include "CA_Common.h"
+#include <strings.h>
+#include "Intellect_Common.h"
+#include "Intellect_Interface.h"
+#include "CO_IndStructdef.h"
+#include "CO_OthStructdef.h"
+#include "CO_Commdef.h"
+EXEC SQL INCLUDE SQLCA.H;
+
+#define  RTV_SYSTEM_DATA
+
+char *strtok(char *s1, const char *s2); /** Biju For removing warnings **/
+char *strtok_r(char *s1, const char *s2, char **lasts); /** Biju For removing warnings **/
+
+
+#define	APL_BATCHSTATUS_LEN	16
+#define	APL_STATUS_BATCH_COMPLETED "completed"
+#define	APL_STATUS_BATCH_STARTED "started"
+#define  CLS_LOG_ARRAY  memset(chr_log_buff,NULL,sizeof(chr_log_buff));
+#define  APL_STATINFO_LEN  71
+#define  FILEPATH_LEN   200
+#define  FILENAME_LEN   150
+#define  APL_BOD_DESC   "BODALERTS"
+#ifdef OS_LINUX
+FILE *g_logfile;
+#else
+FILE* g_logfile = APL_OUT_FILE;
+#endif
+
+
+
+char  chr_g_progname        [APL_BATCH_PROGNAME_LEN]=APL_NULL_STRING;
+char  chr_g_key             [APL_BATCH_KEY_LEN] = APL_NULL_STRING;
+char  chr_g_start_date      [APL_DATE_LEN] = APL_NULL_STRING;
+char	chr_g_sys_date[APL_DATE_LEN] = APL_NULL_STRING;
+char	chr_g_sys_date_time[APL_DATE_LEN] = APL_NULL_STRING;
+char	chr_g_status_started [APL_BATCHSTATUS_LEN] = {APL_STATUS_BATCH_STARTED};
+char	chr_g_status_completed [APL_BATCHSTATUS_LEN] = {APL_STATUS_BATCH_COMPLETED};
+char	chr_g_func_code [CA_FUNC_CD_LEN] = APL_NULL_STRING ;
+
+
+
+/* company level limit monitoring start */
+
+
+int InsSubty(char *p_logfile,char **argv,DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	Alert("Entered function  InsSubty \n");
+	
+ FILE  *l_insubtyfile     =  NULL;
+
+
+ char l_instrcode[9]=APL_NULL_STRING;
+ char l_instrisin[13]=APL_NULL_STRING;
+ char l_instrtype[4]=APL_NULL_STRING;
+ char  chr_l_inifile[PATH_LENGTH]=  APL_NULL_STRING;
+ char  l_insbty[300]=  APL_NULL_STRING;
+ char  chr_l_intl_dir[FILEPATH_LEN] = APL_NULL_STRING;
+ char  chr_l_rep_file_name[FILENAME_LEN]   = APL_NULL_STRING;
+ char  chr_l_sysdate[APL_DATE_LEN]                              =  APL_NULL_STRING;
+ int l_insbty_remain = 0;
+ int l_count = 0;
+ 
+ FILE  *l_ptr_ini_file = NULL;
+ FILE  *l_ptr_regexp_rep_file  =  NULL;
+
+  INTL_REPT_STRUCT_H            *l_intl_rept_struct_ha  =NULL;
+	memset(chr_l_intl_dir,NULL,sizeof(chr_l_intl_dir));
+
+	l_intl_rept_struct_ha   = (INTL_REPT_STRUCT_H *)calloc(1, sizeof(INTL_REPT_STRUCT_H));
+
+	APL_IF_DEBUG
+		printf("Entered function InsSubty \n");
+
+	EXEC SQL BEGIN DECLARE SECTION;
+	EXEC SQL VAR l_instrcode IS STRING;
+	EXEC SQL VAR l_instrisin IS STRING;
+	EXEC SQL VAR l_instrtype IS STRING;
+	
+	EXEC SQL END DECLARE SECTION;
+
+		printf("\n sql error11 for cursor inssubty_details is %d ",sqlca.sqlcode);
+		fflush(stdout);
+		
+		
+		
+	EXEC SQL DECLARE inssubty_details CURSOR FOR SELECT INSTR_CODE,INSTR_ISIN,INSTR_TYPE FROM MT_INSTRUMENT where INSTR_SUB_TYPE in (select MAP_VAL from PRO_SGENSTAT where MAP_TYPE ='CONVERTBLE_BON_TO_SH') and INSTR_PARENT is NULL and INSTR_DILUTED_RATIO_OLD is NULL and INSTR_DILUTED_RATIO_NEW is NULL;
+
+	printf("\n sql error for cursor inssubty_details is %d ",sqlca.sqlcode);
+	fflush(stdout);
+    IS_ANY_ORA_ERROR;
+	
+	printf("Before memset chr_l_inifile \n"); fflush(stdout);
+    /*memset(chr_l_inifile,APL_NULL_STRING,sizeof(chr_l_inifile));*/
+	memset(chr_l_inifile,NULL,sizeof(chr_l_inifile));
+ 
+    printf("Value of chr_l_inifile after memset== |%s|\n",chr_l_inifile);fflush(stdout);
+
+	strcpy(chr_l_inifile,getenv("INTL_ROOT_PATH"));
+	
+	 printf("Value of chr_l_inifile after copy== |%s|\n",chr_l_inifile);
+	 fflush(stdout);
+	 strcat(chr_l_inifile,"intl_sun.cfg");
+	
+	 printf("Value of chr_l_inifile after Concat== |%s|\n",chr_l_inifile);
+	 fflush(stdout);
+
+	if ((l_ptr_ini_file = fopen(chr_l_inifile,"r")) == NULL)
+		return(APL_FAILURE);
+	printf("After if block");
+	fflush(stdout);
+	
+	if (CO_ReadToken(l_ptr_ini_file,"INTL_REP_PATH",chr_l_intl_dir,l_debug_info_ptr) != APL_SUCCESS)
+		return(APL_FAILURE);
+    printf("Value of chr_l_intl_dir after Co_ReadToken== |%s|\n",chr_l_intl_dir);
+	fflush(stdout);
+
+	EXEC SQL SELECT to_char(SYS_DATE,'DDMMYY') INTO :chr_l_sysdate FROM PRO_SYS_DATE;
+	printf("\n sql error for SYS_DATE is %d ",sqlca.sqlcode); fflush(stdout);
+	IS_ANY_ORA_ERROR
+		
+	 printf("Before  memset l_insbty \n");
+	 fflush(stdout);
+    /*memset(l_insbty,APL_NULL_STRING,sizeof(l_insbty));*/
+	
+	memset(l_insbty,NULL,sizeof(300));
+	
+	printf("After  memset l_insbty == |%s|\n",l_insbty);
+	
+	
+	
+	fflush(stdout);
+	
+	strcpy(l_insbty,chr_l_intl_dir);
+	printf("Value of l_insbty after copy chr_l_intl_dir== |%s|\n",l_insbty); fflush(stdout);
+	strcat(l_insbty,"INSTRSUBTYPE");
+	printf("Value of l_insbty after concat INSTRSUBTYPE== |%s|\n",l_insbty); fflush(stdout);
+	strcat(l_insbty,chr_l_sysdate);
+	printf("Value of l_insbty after concat chr_l_sysdate== |%s|\n",l_insbty); fflush(stdout);
+	strcat(l_insbty,".txt");
+	printf("Value of l_insbty after concat txt == |%s|\n",l_insbty);
+fflush(stdout);
+
+	APL_IF_DEBUG
+		printf("FILE IS |%s|\n",l_insbty);fflush(stdout);
+
+	if ((l_insubtyfile = fopen(l_insbty,"w")) == NULL)
+	{
+		return(APL_FAILURE);
+	}
+
+   		fprintf(l_insubtyfile," Instr Code  Instr ISIN 	Instr Type \n");	
+		fprintf(l_insubtyfile,"---------------------------------------------------------------------------------------------------------------------\n");
+
+	EXEC SQL OPEN inssubty_details;
+
+	for(;;)
+	{
+		APL_IF_DEBUG
+			printf("Entered Cursor For Loop\n"); fflush(stdout);
+
+		EXEC SQL FETCH inssubty_details INTO :l_instrcode,:l_instrisin,l_instrtype;
+
+		printf("KS -- values fetched : sqlca [%d]\n",sqlca.sqlcode);fflush(stdout);
+		printf("KS --  l_instrcode  :%s\n", l_instrcode);fflush(stdout);
+		printf("KS --  l_instrisin :%s\n",l_instrisin);fflush(stdout);
+		printf("KS --  l_instrtype :%s\n",l_instrtype);fflush(stdout);
+		//printf("KS --  l_txntype :%s\n",l_txntype);fflush(stdout);
+		//printf("KS --  l_sr_fr_no :%d\n",l_sr_fr_no);fflush(stdout);
+		//printf("KS --  l_sr_to_no :%d\n",l_sr_to_no);fflush(stdout);
+		//printf("KS --  l_avail_qty :%d\n",l_avail_qty);fflush(stdout);
+
+		/*if(APL_ZERO_RESULT_SET)
+			break; */
+
+		if(APL_ZERO_RESULT_SET)
+           {
+               
+			   fprintf(l_insubtyfile,"-------------------------------------------------END-----------------------------------------------------------------\n");
+			   if(l_count == 0)
+			   {
+					
+					fprintf(l_insubtyfile,"-----------------------------ALL  ENTRY WITHIN THE LIMITS-----------------------------------------------------\n");
+			   }
+			   break;
+           }
+
+		l_count++;
+		
+		fprintf(l_insubtyfile,"%-10s ",l_instrcode);
+        fprintf(l_insubtyfile,"%-15s ",l_instrisin);
+		fprintf(l_insubtyfile,"%-16s ",l_instrtype);
+		fprintf(l_insubtyfile,"\n");
+
+
+	}
+        printf("Going to close the cursor\n"); fflush(stdout);
+		EXEC SQL CLOSE inssubty_details;
+		printf("After close the cursor\n"); fflush(stdout);
+		fclose(l_insubtyfile);
+        printf("After fclose the l_insubtyfile\n"); fflush(stdout);
+
+        fflush(stdout);
+		memset(l_intl_rept_struct_ha,NULL,sizeof(INTL_REPT_STRUCT_H));
+        printf("memset l_intl_rept_struct_ha\n"); fflush(stdout);
+
+		strcpy(l_intl_rept_struct_ha->report_name, l_insbty+strlen(chr_l_intl_dir));
+		
+		printf("strcpy(l_intl_rept_struct_ha->report_name, l_insbty+strlen(chr_l_intl_dir)); \n"); fflush(stdout);
+		strcpy(l_intl_rept_struct_ha->report_desc, APL_BOD_DESC);
+		printf("strcpy(l_intl_rept_struct_ha->report_desc, APL_BOD_DESC);\n"); fflush(stdout);
+		strcpy(l_intl_rept_struct_ha->report_date, argv[2]);
+		printf("strcpy(l_intl_rept_struct_ha->report_date, argv[2]);"); fflush(stdout);
+		l_intl_rept_struct_ha->report_width = 100;
+		printf("l_intl_rept_struct_ha->report_width = 100;\n"); fflush(stdout);
+		strcpy(l_intl_rept_struct_ha->task_desc, argv[5]);
+		printf("strcpy(l_intl_rept_struct_ha->task_desc, argv[5]);\n"); fflush(stdout);
+		strcpy(l_intl_rept_struct_ha->fe_be_ind, APL_BE_IND);
+		printf("strcpy(l_intl_rept_struct_ha->fe_be_ind, APL_BE_IND);\n"); fflush(stdout);
+		strcpy(l_intl_rept_struct_ha->usr, argv[3]);
+		printf("strcpy(l_intl_rept_struct_ha->usr, argv[3]);\n"); fflush(stdout);
+
+
+		printf(" Callin CO_Proc_DBRptIns function\n");fflush(stdout);
+		if (APL_FAILURE == CO_Proc_DBRptIns( l_intl_rept_struct_ha, l_debug_info_ptr))
+		{
+			APL_GOBACK_FAIL
+		}
+
+	 	APL_GOBACK_SUCCESS
+	 	RETURN_SUCCESS:
+	 	{
+			 return (APL_SUCCESS);
+	 	}
+
+		RETURN_FAILURE:
+ 		{
+	  		return (APL_FAILURE);
+ 		}
+}
+
+/* company level limit monitoring end */
+
+
+
+
+
+int  CA_Proc_GenrateAlerts ( 	FILE               *p_flogfile,
+							INTL_ENV_DATA_STRUCT_H *p_intlenv_data_struct_h,
+							DEBUG_INFO_STRUCT_H		 **l_debug_info_ptr
+                 		 ) 
+{
+	struct sqlca sqlca;
+	char chr_batch_in_proc_rowid[APL_ROWID_LEN] = APL_NULL_STRING;
+	char stat_det[APL_STATINFO_LEN] = APL_NULL_STRING;
+	int  int_no_alerts_logged = 0; 
+	char chr_warn_cd_eventunauth[CA_ALERT_CODE_LEN] ={ALERT_EVT_UAUTH}; 
+	char chr_warn_cd_ent_unauth[CA_ALERT_CODE_LEN] ={ALERT_ENTL_UAUTH}; 
+	char chr_warn_cd_pymt_unauth[CA_ALERT_CODE_LEN] ={ALERT_PYMT_UAUTH}; 
+	char chr_warn_cd_eventfrz[CA_ALERT_CODE_LEN] ={ALERT_EVT_FRZ};
+	char chr_warn_cd_eventunin[CA_ALERT_CODE_LEN] =  {ALRT_CD_EVNTUNIN} ;
+	char chr_warn_cd_entnotgen[CA_ALERT_CODE_LEN]=  {ALERT_ENTL_NOTGEN};
+	char chr_warn_cd_pymtnorproc[CA_ALERT_CODE_LEN] = {ALERT_PYMT_NOTPROC};
+	char chr_warn_cd_trd[CA_ALERT_CODE_LEN] = {ALERT_TRDT_AFT_RECDT};
+	char chr_warn_cd_nowarn[CA_ALERT_CODE_LEN] = {BIDS_CONF_FILE_START};
+	char chr_sys_sts_unauth[APL_STATUS_LEN]= {APL_STATUS_UNAUTH};
+	char chr_event_sts_frz_in[APL_STATUS_LEN]= {STATUS_FROZ_IN};
+	char chr_event_sts_frz_re[APL_STATUS_LEN]= {STATUS_FROZ_RE};
+	char chr_event_sts_frz_sn[APL_STATUS_LEN]= {STATUS_FROZ_SN};
+	char chr_event_sts_rdy_int[APL_STATUS_LEN] = {STATUS_RDY_INT};
+	char chr_event_sts_rdy_int_unauth[APL_STATUS_LEN] = {STATUS_CHNG_RDY_INT};
+	char chr_event_sts_rdy_entl[APL_STATUS_LEN] = {STATUS_RDY_ENTL};
+	char chr_event_sts_rdy_pymt[APL_STATUS_LEN] = {STATUS_RDY_PYMT};
+	char chr_event_sts_part_paid[APL_STATUS_LEN] = {STATUS_PART_PAID};
+	char chr_event_type_meeting[EVT_CLASS_] = {EVT_MEETING};
+	char chr_event_type_others[EVT_CLASS_] = {EVT_OTH};
+	char chr_pymt_sts_rdy_pymt[APL_STATUS_LEN] = {STATUS_RDY_PYMT};
+	char chr_pymt_sts_rdy_pymt_unauth[APL_STATUS_LEN] = {STATUS_CHNG_RDY_PYMT};
+	char chr_entl_basis_traded[APL_FLAG_LENGTH] = {ENTL_BASE_DL};
+	char chr_warn_cd_ent_frozen[CA_ALERT_CODE_LEN] ={ALERT_ENTL_FRZ}; 
+	char chr_ent_sts_frz_rdy_rp[APL_STATUS_LEN]= {STATUS_FROZ_RP};
+	char chr_ent_sts_frz_rdy_pp[APL_STATUS_LEN]= {STATUS_FROZ_PP};
+
+	
+	EXEC SQL SELECT ROWID
+	INTO :chr_batch_in_proc_rowid
+	FROM SYS_BATCHPROC
+	WHERE
+			    PROCESS_NAME =:chr_g_progname 
+			and PROC_INIT = :chr_g_key
+			and STARTDATE =:chr_g_start_date
+			and STATUS =:chr_g_status_started
+	FOR UPDATE;
+
+	IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"BATCH_IN_PROC",chr_g_progname,chr_g_key)
+
+	 
+			
+			/*Smita - Changed Col Names - HDFCCA_BaseVer*/ 
+	EXEC SQL INSERT INTO CANOTIFY
+	(  select (:chr_g_sys_date_time),(:chr_g_func_code),DECODE(STATUS,:chr_sys_sts_unauth,:chr_warn_cd_eventunauth,:chr_event_sts_rdy_int,:chr_warn_cd_eventunin,:chr_event_sts_rdy_int_unauth,:chr_warn_cd_eventunin,:chr_event_sts_rdy_entl,:chr_warn_cd_entnotgen,:chr_warn_cd_eventfrz),CORP_ID,NULL,INSTR_CODE,NULL,NULL 
+		from CAEVENT 
+		where  
+				 STATUS in (:chr_sys_sts_unauth,:chr_event_sts_rdy_int,:chr_event_sts_frz_in,
+						 :chr_event_sts_frz_re,:chr_event_sts_frz_sn,:chr_event_sts_rdy_int_unauth)
+					OR
+				 (STATUS = :chr_event_sts_rdy_entl AND REC_DATE < :chr_g_sys_date)
+	);
+	IS_ANY_ORA_ERROR
+	
+	int_no_alerts_logged = sqlca.sqlerrd[2];
+
+	 
+			
+			
+				
+	EXEC SQL INSERT INTO CANOTIFY
+	( select :chr_g_sys_date_time,:chr_g_func_code,:chr_warn_cd_pymtnorproc,CORP_ID,CLIENT,NULL,SEQNUM_PAY,NULL 
+		from CACHEQUE 
+		where  
+				 STAT_PYMT in (:chr_pymt_sts_rdy_pymt)
+			and ( :chr_g_sys_date > ( select dateof_payment from CAEVENT where CAEVENT.corp_id = 
+																				CACHEQUE.corp_id)
+				)
+
+	);
+	IS_ANY_ORA_ERROR
+
+	int_no_alerts_logged = int_no_alerts_logged + sqlca.sqlerrd[2];
+
+	if	( sqlca.sqlerrd[2] > 0 )
+	{
+		EXEC SQL UPDATE CANOTIFY
+		SET INSTR_CODE = ( select instr_code from CAEVENT
+							where CAEVENT.corp_id = CANOTIFY.corp_id
+						 )
+		where 
+				CANOTIFY.NOTIFY_CD = :chr_warn_cd_pymtnorproc
+				and DEALDT =:chr_g_sys_date_time
+				and instr_code is NULL;
+		IS_ANY_ORA_ERROR
+	}
+
+	 
+			
+			
+			
+
+		EXEC SQL INSERT INTO CANOTIFY
+		( select :chr_g_sys_date_time,
+					:chr_g_func_code,
+					:chr_warn_cd_trd,
+					CAEVENT.corp_id,
+					dl_deal.client,
+					CAEVENT.instr_code,
+					NULL,
+					dl_deal.IDENTIY_NO 	
+		 from CAEVENT,dl_deal,CASECEVENT
+		 where TO_CHAR(CAEVENT.REC_DATE,'DD/MM/YYYY') >= TO_CHAR(dl_deal.deal_date,'DD/MM/YYYY')
+   				and TO_CHAR(CAEVENT.REC_DATE,'DD/MM/YYYY') < TO_CHAR(dl_deal.DATEOF_INPUT,'DD/MM/YYYY')
+					and CAEVENT.CA_EVENT <> :chr_event_type_meeting
+					and CAEVENT.CA_EVENT <> :chr_event_type_others 
+					and CAEVENT.STATUS in (:chr_event_sts_rdy_pymt,:chr_event_sts_part_paid )
+					and CASECEVENT.CA_EVENT=CAEVENT.CA_EVENT
+					and CASECEVENT.INSTR_TYPE = ( select INSTR_TYPE from MT_INSTRUMENT where
+               					         instr_code = CAEVENT.instr_code )
+					and CASECEVENT.entitl_base = :chr_entl_basis_traded
+					and dl_deal.instr_code = CAEVENT.instr_code
+					and  dl_deal.client not in ( select client from CANOTIFY where NOTIFY_CD=:chr_warn_cd_trd and INFORMATION=dl_deal.IDENTIY_NO
+                        					 )
+					and  ((to_date(:chr_g_sys_date) - CAEVENT.REC_DATE ) <= 4)
+					and  ((to_date(:chr_g_sys_date) - CAEVENT.REC_DATE ) >=1)
+
+		);
+		IS_ANY_ORA_ERROR
+	int_no_alerts_logged = int_no_alerts_logged + sqlca.sqlerrd[2];
+
+	
+	 
+	EXEC SQL INSERT INTO CANOTIFY
+	( select :chr_g_sys_date_time,
+				:chr_g_func_code,
+				:chr_warn_cd_ent_unauth,			
+				CAEVENT.corp_id,
+				CAENTITLEMENT.client,
+				CAEVENT.instr_code,
+				NULL,
+				NULL
+		from
+				CAEVENT, CAENTITLEMENT
+		where CAENTITLEMENT.CHECKER_DT is NULL
+				and CAENTITLEMENT.corp_id = CAEVENT.corp_id
+	)	;	
+	IS_ANY_ORA_ERROR
+	int_no_alerts_logged = int_no_alerts_logged + sqlca.sqlerrd[2];
+ 
+	 
+	EXEC SQL INSERT INTO CANOTIFY
+	( select :chr_g_sys_date_time,
+				:chr_g_func_code,
+				:chr_warn_cd_pymt_unauth,			
+				CAEVENT.corp_id,
+				CACHEQUE.client,
+				CAEVENT.instr_code,
+				CACHEQUE.SEQNUM_PAY,
+				NULL
+		from
+				CAEVENT, CACHEQUE
+		where CACHEQUE.CHECKER_DT is NULL
+				and CACHEQUE.corp_id = CAEVENT.corp_id
+	);		
+	IS_ANY_ORA_ERROR
+	int_no_alerts_logged = int_no_alerts_logged + sqlca.sqlerrd[2];
+
+	
+	
+
+	EXEC SQL INSERT INTO CANOTIFY
+	( SELECT :chr_g_sys_date_time,
+				:chr_g_func_code,
+				:chr_warn_cd_ent_frozen,			
+				CAEVENT.corp_id,
+				CAENTITLEMENT.client,
+				CAEVENT.instr_code,
+				NULL,
+				NULL
+		FROM 	CAEVENT, CAENTITLEMENT
+		WHERE CAENTITLEMENT.STATUS IN (:chr_ent_sts_frz_rdy_rp, /*Smita - Changed Col Name - HDFCCA Base Ver*/
+										  	:chr_ent_sts_frz_rdy_pp)
+		AND 	CAENTITLEMENT.corp_id = CAEVENT.corp_id
+		AND	CAENTITLEMENT.maker = 'SYSTEM'
+		AND	CAENTITLEMENT.checker = 'SYSTEM'
+	)	;	
+	IS_ANY_ORA_ERROR
+	int_no_alerts_logged = int_no_alerts_logged + sqlca.sqlerrd[2];
+
+	 
+				
+
+	if ( APL_DOUBLE_EQUAL(int_no_alerts_logged,0) )
+	{
+		EXEC SQL INSERT INTO CANOTIFY
+		VALUES	( :chr_g_sys_date_time,:chr_g_func_code,:chr_warn_cd_nowarn,NULL,NULL,NULL,NULL,NULL);
+		IS_ANY_ORA_ERROR
+		int_no_alerts_logged = int_no_alerts_logged + sqlca.sqlerrd[2];
+		CO_ProcMonitor(p_flogfile,"No alerts to be logged.An alert has logged this fact",NULL,NULL);
+	}
+
+	
+	sprintf(stat_det,"Totally Logged %d Alerts",int_no_alerts_logged);
+	CO_ProcMonitor(p_flogfile,stat_det,NULL,NULL);
+
+	
+	EXEC SQL UPDATE SYS_BATCHPROC
+	SET STATUS =:chr_g_status_completed,
+		 STAT_DET =:stat_det
+	WHERE ROWID=:chr_batch_in_proc_rowid;
+
+	IS_ANY_ORA_ERROR
+
+	
+   APL_GOBACK_SUCCESS
+ 
+   RETURN_SUCCESS:
+	{
+   	return(APL_SUCCESS);
+	}
+   RETURN_FAILURE:
+   {
+		CO_ProcMonitor(p_flogfile,NULL,l_debug_info_ptr,NULL);
+		CO_FreeErrLst(l_debug_info_ptr);
+   	return(APL_FAILURE);
+	}
+
+} 
+
+int main(int argc , char ** argv)  // AIX -Warnings Removal
+{
+	DEBUG_INFO_STRUCT_H	**l_debug_info_ptr=NULL,
+						*l_debug_info_struct = NULL;
+	FILE				*chr_finifile=NULL;
+	FILE				*flogfile=NULL;
+	FILE *l_logfile = NULL;
+	char				chr_inifile[PATH_LENGTH]	=	APL_NULL_STRING;
+	char				chr_logfile[PATH_LENGTH]	=	APL_NULL_STRING;
+   char 				chr_uname[APL_USERID_LEN] = APL_NULL_STRING;
+   char 				chr_passwd[APL_PASSWD_LEN]= APL_NULL_STRING;
+	char				chr_log_buff[MSG_LENGTH]	=	APL_NULL_STRING;
+	struct			sqlca sqlca;	
+	INTL_ENV_DATA_STRUCT_H   *l_intlenv_datastruct_h =  NULL;
+   char                 chr_custody_id_b[APL_USERID_LEN];
+	char				*int_pos;
+
+	
+ 	EXEC SQL VAR chr_uname IS STRING;
+   EXEC SQL VAR chr_passwd IS STRING;  
+
+	l_debug_info_ptr = &l_debug_info_struct;
+	
+	
+	strcpy(chr_inifile,getenv("INTL_ROOT_PATH"));
+   strcat(chr_inifile,"/intl_sun.cfg");
+
+	if ( ( chr_finifile=fopen(chr_inifile,"r") ) == NULL)
+  	{
+     exit(-1);	
+  	}
+
+   APL_FETCH_DB_LOGIN_DETAILS(chr_finifile,chr_custody_id_b,chr_uname,chr_passwd,APL_OUT_FILE,l_debug_info_ptr)
+   EXEC SQL CONNECT :chr_uname IDENTIFIED BY :chr_passwd;
+   IS_ANY_ORA_ERROR
+   
+   
+   /* company level limit monitoring start */
+   int l_pro_inter=0;
+	
+	EXEC SQL select count(*) into :l_pro_inter
+    from PRO_SGENSTAT where MAP_TYPE ='CONVERTBLE_BON_TO_SH';
+	
+		
+		//EXEC SQL SELECT to_char(SYS_DATE,'DDMMYY') INTO :chr_l_sysdate FROM PRO_SYS_DATE;
+		if(l_pro_inter > 0)
+		{
+			printf("Before PRO_SGENSTAT function  \n");
+	
+	if(InsSubty(l_logfile,argv,l_debug_info_ptr) == APL_FAILURE)
+	{
+	    printf("Failure from InsSubty line 73\n");
+	    fflush(stdout);
+		CO_ProcMonitor(g_logfile, "Failure from InsSubty", NULL, NULL);
+		APL_GOBACK_FAIL	
+	} 
+		}
+	
+/* company level limit monitoring end */
+
+
+   if ( CO_Rtv_RptFileName("2I",
+								APL_LOGFILE_DESC,
+								100,
+								argv[5],
+								argv,
+								&flogfile,
+								l_debug_info_ptr) == APL_FAILURE ) 
+	{
+		exit(-1);
+	}
+	EXEC SQL COMMIT;
+	IS_ANY_ORA_ERROR
+
+	
+   if ( CO_RtvSysDtTime(chr_g_sys_date_time,l_debug_info_ptr) == APL_FAILURE )
+         APL_GOBACK_FAIL
+   CLS_LOG_ARRAY
+   sprintf(chr_log_buff,"\nAlert Generation  started on :[%s]\n",chr_g_sys_date_time);
+   CO_ProcMonitor(flogfile,chr_log_buff,NULL,NULL);
+
+	strcpy(chr_g_sys_date,chr_g_sys_date_time);
+   strcpy(chr_g_sys_date,strtok_r(chr_g_sys_date," ",&int_pos));
+   strcat(chr_g_sys_date,APL_NULL_TIME);
+
+	if ( CO_RtvSysParams(l_debug_info_ptr) == APL_FAILURE)
+      APL_GOBACK_FAIL
+
+	
+	l_intlenv_datastruct_h   =  (INTL_ENV_DATA_STRUCT_H*)calloc(1,sizeof(INTL_ENV_DATA_STRUCT_H));
+	APL_MALLOC_FAIL(l_intlenv_datastruct_h);
+
+	
+   if ( argc < 6 )
+   {
+      CO_ProcMonitor(flogfile,"All Arguments expected by  program not passed \n",NULL
+,NULL);
+      APL_GOBACK_FAIL
+   }
+
+	strcpy(chr_g_progname,   argv[0]);
+   strcpy(chr_g_key,        argv[1]);
+   strcpy(chr_g_start_date, argv[2]);
+   strcpy(l_intlenv_datastruct_h->usr, argv[3]);
+	strcpy(chr_g_func_code,argv[5]);
+
+	
+	if ( CA_Proc_GenrateAlerts ( 	flogfile,
+								l_intlenv_datastruct_h,
+								l_debug_info_ptr
+                 		 )  == APL_FAILURE
+      )
+  	 	{	
+     		EXEC SQL ROLLBACK;
+			IS_ANY_ORA_ERROR	
+      	CO_ProcMonitor(flogfile,"ROLLING BACK \n",NULL,NULL);
+			APL_GOBACK_FAIL
+   	}
+   	else
+   	{
+			EXEC SQL COMMIT;
+   		CO_ProcMonitor(flogfile,"RECORD COMMITTED \n",NULL,NULL);
+			IS_ANY_ORA_ERROR	
+			APL_GOBACK_SUCCESS
+		}
+   
+	
+   APL_GOBACK_SUCCESS
+ 
+   RETURN_SUCCESS:
+	{
+   	CLS_LOG_ARRAY
+	   sprintf(chr_log_buff,"T:Alert Generation exiting successfully\n");
+      CO_ProcMonitor(flogfile,chr_log_buff,l_debug_info_ptr,NULL);
+		CO_FreeErrLst(l_debug_info_ptr);
+      
+		APL_FREE(l_intlenv_datastruct_h);
+	
+		fclose(chr_finifile);
+		fclose(flogfile);
+		
+		exit(0);
+   }
+   RETURN_FAILURE:
+   {
+   	CLS_LOG_ARRAY
+      sprintf(chr_log_buff,"T:Alert Generation exiting unsuccessfully\n");
+      CO_ProcMonitor(flogfile,chr_log_buff,l_debug_info_ptr,NULL);
+		CO_FreeErrLst(l_debug_info_ptr);
+      
+		APL_FREE(l_intlenv_datastruct_h);
+	
+		fclose(chr_finifile);
+		fclose(flogfile);
+      
+		exit(-1);
+   }
+}
+		
+
+

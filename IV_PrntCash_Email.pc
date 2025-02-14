@@ -1,0 +1,642 @@
+
+
+
+#include<string.h>
+#include "IV_Control_A.h"
+
+EXEC SQL INCLUDE SQLCA.H;
+
+int IV_Proc_PrnCashEMINV(	FILE *bill,
+					FILE *fl_userlog,
+			     	char *chr_p_billdt,
+             	char *chr_p_client,
+	     			IV_CLIENTSETUP_STRUCT l_iv_clt_setup_struct,	
+	     			char p_mastsub,
+	     			double *p_totcash,
+					int *int_currpos,
+	    		 	DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+struct sqlca sqlca;
+char *y,*v,*a,*b;
+double dbl_cashcharge =0;
+IV_SERV_MAST_STRUCT l_ivservmast_struct;
+IV_SERV_OTH_STRUCT l_iv_serv_oth_structb;
+PRO_SGENSTAT_STRUCT l_pro_sgenstat_struct;
+IV_SERVICE_CHRG_STRUCT l_iv_service_chrg_struct;
+SYS_IVCONTROLPARAM_STRUCT     l_sys_ivcntl_param_struct;
+IV_CLIENTSETUP_STRUCT l_iv_clientsetup_struct;  				
+IV_CLIENT_SERV_BASIS_STRUCT l_iv_client_serv_basis_structa;					
+
+double dbl_l_convothcharge = 0.0,l_convnil_fees = 0.0,l_convminimumfee = 0.0;
+double l_convmaximum_feeabs = 0.0,dbl_l_convtotothcharge = 0.0;
+double l_convcmamount = 0.0;									
+
+int int_retstat;
+int int_headerlen = 8;
+int int_counter;
+int i;
+int int_ret;
+int int_newlen;
+int int_cmret =0;
+int int_othchargeret =0;
+int int_retval =0;
+int int_l_retstat =0;
+
+
+EXEC SQL BEGIN DECLARE SECTION;
+
+
+
+ int     h_chargequantity=0;             
+ int        int_h_intchargeqty = 0;
+ int        int_h_templength = 0;
+	double  h_cmamount=0.0;
+	char chr_h_mstclient[11];
+	char h_dl_client[11];
+	double  dbl_comm=0.0;
+	char    h_ccy[4];
+	int     int_h_servcode;
+	int     int_t_servcode =0;
+   char chr_h_serv_desc[IV_DESC_LEN];  				
+   double dbl_h_schfee=0.0;
+
+	int 	int_l_pagelength = 0;
+	short int_l_condexists = 0;
+
+
+	short i_chargeqty;
+	short i_cmamt;
+	short i_mstaccount;
+	short i_dl_client;
+	short i_ccy;
+	short i_chargebasis;
+	short i_servcode;
+	short i_serv_detail;								
+   short i_schfee;
+
+
+EXEC SQL VAR l_iv_clt_setup_struct.b_ccycd IS STRING;
+EXEC SQL VAR l_ivservmast_struct.service_det IS STRING;
+EXEC SQL VAR l_pro_sgenstat_struct.map_desc IS  STRING;
+EXEC SQL VAR chr_h_mstclient IS STRING;
+EXEC SQL VAR h_dl_client IS STRING;
+EXEC SQL VAR h_ccy IS STRING;
+EXEC SQL VAR chr_h_serv_desc IS STRING;				
+
+EXEC SQL END DECLARE SECTION;
+
+
+
+
+double l_underbill = UNDERBILLING;          	
+double l_overbill = OVERBILLING;					
+double l_splbill = SPECIALBILLING;				
+
+char chr_s_chargeqty[13],chr_s_tmpchargeqty[13];
+char chr_s_chargeqty1[13];
+
+double l_othcharge = 0.0;
+double TotOthCharge = 0.0;
+double l_minimumfee = 0.0;
+double l_nil_fees = 0.0;
+double l_maximum_fee = 0.0;
+double maximum_feeabs = 0.0;
+
+
+double tot_oth_min = 0.0;				
+double tot_oth_nil = 0.0;			
+double tot_oth_max = 0.0;		
+double l_exchg_rt_fee_bl=1.0;
+
+double tot_oth_cm_amount = 0.0;
+
+double dbl_l_cashfee = CASH_ITEMS ;
+
+int int_maxfeeret = 0;
+int int_minfeeret = 0;
+int int_nilfeeret = 0;
+
+char chr_f_cmamt[20], chr_f_othcharge[30], chr_f_totothcharge[30];
+char chr_f_cmamt1[20];
+char chr_f_minfee[30], chr_f_nilfee[30], chr_f_maxfee[30];
+char chr_l_amtstr[30], chr_l_chgqtystr[30];
+double roundedamount = 0.0; 
+double   l_roundedamount = 0.0,l_cumroundedamount = 0.0;
+int      int_rndfeeret =0;
+char     chr_l_cod_roundedamt[22] = APL_NULL_STRING;
+
+memset(chr_f_cmamt, APL_NULL_CHAR, 20);
+memset(chr_f_cmamt1, APL_NULL_CHAR, 20);
+memset(chr_f_othcharge, APL_NULL_CHAR, 30);
+memset(chr_f_totothcharge, APL_NULL_CHAR, 30);
+memset(chr_f_minfee, APL_NULL_CHAR, 30);
+memset(chr_f_nilfee, APL_NULL_CHAR, 30);
+memset(chr_l_amtstr, APL_NULL_CHAR, 30);
+memset(chr_l_chgqtystr, APL_NULL_CHAR, 30);
+
+#	ifdef SYS_DEBUG
+	fprintf(APL_OUT_FILE,"Entering IV_Proc_PrnOth\n");
+	fprintf(APL_OUT_FILE,"Inside IV_Proc_PrnFooter\n");
+   fprintf(APL_OUT_FILE,"the billdt  is  %s\n",chr_p_billdt);
+	fprintf(APL_OUT_FILE,"the mastsub is  %s\n",p_mastsub);
+	fprintf(APL_OUT_FILE,"the client is  %s\n",chr_p_client);
+	fprintf(APL_OUT_FILE,"are the pointers geting too much\n");
+	fprintf(APL_OUT_FILE,"the country h_code is (%s)\n",g_mt_commonsys_params_struct_h.nation_code);
+	#	endif
+
+   
+   if ( APL_FAILURE == CO_Chk_CntryEnabled( "BILL_PRINTING",
+                                          "PAGE_LENGTH",
+                                          &int_l_condexists,
+                                          l_debug_info_ptr) )
+   {
+      APL_GOBACK_FAIL
+   }
+
+   if (int_l_condexists)
+      int_l_pagelength = 70;
+   else  int_l_pagelength = 58;
+
+if ((*int_currpos) + int_headerlen >int_l_pagelength)
+{
+	fprintf(bill,"^pg\n");
+	(*int_currpos) = 1;
+	if (APL_FAILURE == IV_Proc_PrnCashHdrEMINV(bill,int_currpos,l_iv_clt_setup_struct,&int_retval,l_debug_info_ptr))
+	{
+		fprintf(fl_userlog,"Could not print Other Services chr_header\n");
+		APL_GOBACK_FAIL
+	}
+
+}
+else
+{
+
+if (APL_FAILURE == IV_Proc_PrnCashHdrEMINV(bill,int_currpos,l_iv_clt_setup_struct,&int_retval,l_debug_info_ptr))
+{
+	fprintf(fl_userlog,"Could not print Other Services chr_header\n");
+	APL_GOBACK_FAIL
+}
+
+}
+
+
+int_retstat = IV_SUCCESS;
+
+IV_Rtv_IVCUSTSETUP(chr_p_client,&l_iv_clientsetup_struct,&int_retstat,l_debug_info_ptr);
+if (int_retstat == IV_SUCCESS || int_retstat == IV_COLUMN_NULL_ERR)
+	{   
+     l_exchg_rt_fee_bl = 1.0;
+     if (strcmp( l_iv_clientsetup_struct.fees_ccy, l_iv_clientsetup_struct.b_ccycd) != 0)
+        {
+           int_retstat = IV_SUCCESS;
+	   
+           if(APL_FAILURE == ConvToFxFn_GR(l_iv_clientsetup_struct.fees_ccy,l_iv_clientsetup_struct.b_ccycd,g_mt_commonsys_params_struct_h.dom_ccy,chr_p_billdt,&l_exchg_rt_fee_bl, &int_retstat,l_debug_info_ptr))   
+           {
+              fprintf(fl_userlog,"Error : Exchange Rate not int_found for currency %s %s\n",l_iv_clientsetup_struct.fees_ccy,l_iv_clientsetup_struct.b_ccycd); 
+              fflush(fl_userlog);
+           }
+		  }
+	 }		
+ else if(int_retstat == IV_CRITCAL_ERROR_IND)
+    {
+       fprintf(fl_userlog,"Error : Account %s  not int_found in billing system\n",l_iv_client_serv_basis_structa.client);
+       fflush(fl_userlog);
+       int_retstat = IV_CRITCAL_ERROR_IND;
+       if(APL_SUCCESS == CO_ChkErr(*l_debug_info_ptr))
+         {
+            CO_ProcMonitor(APL_OUT_FILE,APL_NULL_STRING,l_debug_info_ptr,NULL);
+            CO_FreeErrLst(l_debug_info_ptr);
+         }
+
+       APL_GOBACK_FAIL
+    }
+  
+
+ 
+	memset(&l_sys_ivcntl_param_struct, NULL, sizeof(SYS_IVCONTROLPARAM_STRUCT));
+   if (APL_FAILURE == IV_Rtv_IVCNTLPARAM(&l_sys_ivcntl_param_struct,
+                                       &int_l_retstat,
+                                       l_debug_info_ptr))
+   {
+      if (int_l_retstat == IV_NO_DATA_FOUND_ERR)
+      {
+         fprintf(fl_userlog,"Billing Control Parameters Have Not Been Set Up\n");
+         CO_InsertErr(l_debug_info_ptr,
+                        ERR_BILLCNTRL_PARAM_NOTFND,
+                        APL_NULL_STRING,
+                        APL_NULL_STRING,
+                        APL_NULL_STRING,
+                        __LINE__,
+                        __FILE__);
+         APL_GOBACK_FAIL
+      }
+   }
+
+
+
+
+
+
+
+
+
+EXEC SQL DECLARE curcash CURSOR FOR
+SELECT NVL(SCHDL_FEE,0),NVL(CHRG_QUANT,0),NVL(COMM_AMT,0),IV_SERV_MAST.SERVICE_CD,NVL(SERVICE_DET,NULL)
+FROM IV_DEAL_FEE,IV_SERV_MAST
+WHERE DATEOF_BILLING = :chr_p_billdt
+AND CLIENT  = :chr_p_client
+AND CONS_FLAG = :p_mastsub
+AND IV_DEAL_FEE.SERVICE_CD = IV_SERV_MAST.SERVICE_CD
+AND IV_DEAL_FEE.SERVICE_CD =:dbl_l_cashfee;
+
+
+dbl_cashcharge = *p_totcash;
+
+EXEC SQL OPEN curcash;
+if (sqlca.sqlcode <0)
+{
+	fprintf(fl_userlog,"db Error(BTRANSFEE)\n");
+	APL_GOBACK_FAIL
+}
+
+int_counter =0;
+for(;;)
+{
+	EXEC SQL FETCH curcash INTO :dbl_h_schfee:i_schfee,:h_chargequantity:i_chargeqty,
+	:h_cmamount:i_cmamt,:int_h_servcode:i_servcode,:chr_h_serv_desc:i_serv_detail;
+	IS_ANY_ORA_ERROR	
+
+	if (sqlca.sqlcode ==1403)
+	{
+		 break;
+	}
+	int_counter++;
+
+	h_cmamount *= l_exchg_rt_fee_bl;
+	dbl_h_schfee *=l_exchg_rt_fee_bl;
+   
+	if(APL_FAILURE == CO_PadString(chr_h_serv_desc,'R',21," ",l_debug_info_ptr))
+      APL_GOBACK_FAIL
+
+   memset(chr_s_chargeqty,'\0',13);
+	memset(chr_s_chargeqty1,'\0',13);
+	memset(chr_s_tmpchargeqty,'\0',13);
+	sprintf(chr_s_tmpchargeqty,"%d",h_chargequantity);
+	printf("\n [%s],",chr_s_tmpchargeqty);
+	fflush(stdout);
+	CO_Trim(chr_s_tmpchargeqty,' ','L',chr_s_chargeqty1,l_debug_info_ptr);
+	if(APL_FAILURE == CO_PadString(chr_s_chargeqty1,'L',5," ",l_debug_info_ptr))
+		APL_GOBACK_FAIL
+  
+   l_convcmamount = (dbl_h_schfee / l_exchg_rt_fee_bl);	
+	int_cmret = IV_Proc_Round (&l_convcmamount,l_iv_clt_setup_struct.fees_ccy,chr_f_cmamt,l_debug_info_ptr); 
+	if (int_cmret ==1)
+	{
+		
+
+		roundedamount = 0.0;
+		memset(chr_l_amtstr, APL_NULL_CHAR, 30);
+
+		sscanf(chr_f_cmamt, "%lf", &roundedamount);
+		CO_Rtv_FormatAmtCcy(roundedamount, chr_l_amtstr, 'Y', 'Y', l_iv_clt_setup_struct.fees_ccy,l_debug_info_ptr);
+		strcpy(chr_f_cmamt, chr_l_amtstr + 10);
+   	CO_Trim(chr_f_cmamt,' ','L',chr_f_cmamt1,l_debug_info_ptr);
+   	if(APL_FAILURE == CO_PadString(chr_f_cmamt1,'L',25," ",l_debug_info_ptr))
+   		APL_GOBACK_FAIL
+
+	}
+		else
+			APL_GOBACK_FAIL
+   
+	fprintf(bill,"%s\t%s\t%s",chr_s_chargeqty1,chr_h_serv_desc,chr_f_cmamt1);
+
+	
+	l_convcmamount = (h_cmamount / l_exchg_rt_fee_bl);	
+	int_cmret = IV_Proc_Round (&l_convcmamount,l_iv_clt_setup_struct.fees_ccy,chr_f_cmamt,l_debug_info_ptr); 
+	if (int_cmret ==1)
+	{
+		
+
+		roundedamount = 0.0;
+		memset(chr_l_amtstr, APL_NULL_CHAR, 30);
+
+		sscanf(chr_f_cmamt, "%lf", &roundedamount);
+		CO_Rtv_FormatAmtCcy(roundedamount, chr_l_amtstr, 'Y', 'Y', l_iv_clt_setup_struct.fees_ccy,l_debug_info_ptr);
+		strcpy(chr_f_cmamt, chr_l_amtstr + 10);
+   	CO_Trim(chr_f_cmamt,' ','L',chr_f_cmamt1,l_debug_info_ptr);
+   	if(APL_FAILURE == CO_PadString(chr_f_cmamt1,'L',25," ",l_debug_info_ptr))
+   		APL_GOBACK_FAIL
+
+	}
+		else
+			APL_GOBACK_FAIL
+   
+	fprintf(bill,"\t%s\n",chr_f_cmamt1);
+	(*int_currpos)++;
+
+	if ((*int_currpos) + 1 >int_l_pagelength)
+	{
+		fprintf(bill,"^pg\n");
+		(*int_currpos) = 1;
+		if (APL_FAILURE == IV_Proc_PrnCashHdrEMINV(bill,int_currpos,l_iv_clt_setup_struct,&int_retval,l_debug_info_ptr))
+		{
+			fprintf(fl_userlog,"Could not print Other Services chr_header\n");
+			APL_GOBACK_FAIL
+		}
+   }
+
+
+	
+	dbl_cashcharge=dbl_cashcharge + h_cmamount;
+
+} 
+
+EXEC SQL CLOSE curcash;  
+
+if (int_counter ==0 )
+{
+	fprintf(bill,"\n\tNO CASH CHARGES FOR ACCOUNT %s\n\n",chr_p_client);
+	(*int_currpos)++;
+	(*int_currpos)++;
+	(*int_currpos)++;
+}
+
+
+
+
+if ((*int_currpos) + 1 >int_l_pagelength)
+{
+	fprintf(bill,"^pg\n");
+	(*int_currpos) = 1;
+	if (APL_FAILURE == IV_Proc_PrnCashHdrEMINV(bill,int_currpos,l_iv_clt_setup_struct,&int_retval,l_debug_info_ptr))
+	{
+		fprintf(fl_userlog,"Could not print Other Services chr_header\n");
+		APL_GOBACK_FAIL
+	}
+
+}
+
+l_othcharge = dbl_cashcharge;
+
+fprintf(bill,"\tCOMMISSION");
+   
+dbl_l_convothcharge = (dbl_cashcharge / l_exchg_rt_fee_bl);
+int_othchargeret = IV_Proc_Round(&dbl_l_convothcharge,l_iv_clt_setup_struct.fees_ccy,chr_f_othcharge,l_debug_info_ptr);
+if (int_othchargeret == 1)
+{
+		
+
+		roundedamount = 0.0;
+		memset(chr_l_amtstr, APL_NULL_CHAR, 30);
+
+		sscanf(chr_f_othcharge, "%lf", &roundedamount);
+		CO_Rtv_FormatAmtCcy(roundedamount, chr_l_amtstr, 'Y', 'Y', l_iv_clt_setup_struct.fees_ccy,l_debug_info_ptr);
+		strcpy(chr_f_othcharge, chr_l_amtstr + 10); 
+
+	if ( roundedamount != 0 )
+	   fprintf(bill,"\t\t%s\n",chr_f_othcharge);
+	else
+	   fprintf(bill,"\t\t%s\n",chr_f_othcharge);
+	(*int_currpos)++;
+
+	if ((*int_currpos) + 1 >int_l_pagelength)
+	{
+		fprintf(bill,"^pg\n");
+		(*int_currpos) = 1;
+		if (APL_FAILURE == IV_Proc_PrnCashHdrEMINV(bill,int_currpos,l_iv_clt_setup_struct,&int_retval,l_debug_info_ptr))
+		{
+			fprintf(fl_userlog,"Could not print Cash Services chr_header\n");
+			APL_GOBACK_FAIL
+		}
+
+	}
+
+}
+else
+	APL_GOBACK_FAIL
+	
+
+
+EXEC SQL SELECT SUM(NVL(MINIMUMFEE_ADJ,0)),
+          SUM(NVL(NIL_FEES_ADJ,0)),
+      SUM(NVL(MAXIMUM_FEE_ADJ,0)),
+      SUM(NVL(COMM_AMT,0))
+         INTO  :tot_oth_min,
+        :tot_oth_nil,
+      :tot_oth_max,
+      :tot_oth_cm_amount
+         FROM  IV_SERVICE_CHRG
+         WHERE CLIENT = :chr_p_client
+       AND   DATEOF_BILLING = :chr_p_billdt
+         AND   CONS_FLAG = :p_mastsub
+         AND   SERVICE_CD =:dbl_l_cashfee;
+
+l_minimumfee = l_minimumfee + tot_oth_min;
+l_nil_fees = l_nil_fees + tot_oth_nil;
+l_maximum_fee = l_maximum_fee + tot_oth_max;
+
+
+
+   
+
+   l_roundedamount   =  tot_oth_min +
+                     tot_oth_nil +
+                     tot_oth_max +
+                     tot_oth_cm_amount;
+
+   
+   int_rndfeeret  = IV_Proc_Round(&l_roundedamount,
+                        l_iv_clt_setup_struct.b_ccycd,
+                        chr_l_cod_roundedamt,
+                        l_debug_info_ptr);
+   if (int_rndfeeret== 1)
+   {
+      l_roundedamount = 0.0;
+      sscanf(chr_l_cod_roundedamt, "%lf", &l_roundedamount);
+      l_cumroundedamount = (l_cumroundedamount + l_roundedamount);
+   }
+   else
+   {
+      APL_GOBACK_FAIL
+   }
+
+
+
+fprintf(bill,"\tNIL FEE ADJUSTMENT");
+l_convnil_fees = (l_nil_fees / l_exchg_rt_fee_bl);
+int_nilfeeret  = IV_Proc_Round(&l_convnil_fees,l_iv_clt_setup_struct.fees_ccy,chr_f_nilfee,l_debug_info_ptr);
+if (int_nilfeeret== 1)
+{
+      
+
+      roundedamount = 0.0;
+      memset(chr_l_amtstr, APL_NULL_CHAR, 30);
+
+      sscanf(chr_f_nilfee, "%lf", &roundedamount);
+      CO_Rtv_FormatAmtCcy(roundedamount, chr_l_amtstr, 'Y', 'Y', l_iv_clt_setup_struct.fees_ccy,l_debug_info_ptr);
+      strcpy(chr_f_nilfee, chr_l_amtstr + 10); 
+
+   fprintf(bill,"\t\t%s\n",chr_f_nilfee);
+   (*int_currpos)++;
+
+   
+
+            if ((*int_currpos) + 1 > int_l_pagelength )
+            {
+               fprintf(bill,"^pg\n");
+               (*int_currpos) =1;
+
+               if (APL_FAILURE == IV_Proc_PrnCashHdrEMINV(bill,int_currpos,l_iv_clt_setup_struct,&int_retval,l_debug_info_ptr))
+               {
+                  fprintf(fl_userlog,"Could not print chr_header for Other  charges\n");
+                  APL_GOBACK_FAIL;
+
+               }
+            }
+}
+else 
+   APL_GOBACK_FAIL;
+
+fprintf(bill,"\tMIN FEE ADJUSTMENT");
+l_convminimumfee = (l_minimumfee / l_exchg_rt_fee_bl);
+int_minfeeret  = IV_Proc_Round(&l_convminimumfee,l_iv_clt_setup_struct.fees_ccy,chr_f_minfee,l_debug_info_ptr);
+if (int_minfeeret== 1)
+{
+   
+
+   roundedamount = 0.0;
+   memset(chr_l_amtstr, APL_NULL_CHAR, 30);
+
+   sscanf(chr_f_minfee, "%lf", &roundedamount);
+   CO_Rtv_FormatAmtCcy(roundedamount, chr_l_amtstr, 'Y', 'Y', l_iv_clt_setup_struct.fees_ccy,l_debug_info_ptr);
+   strcpy(chr_f_minfee, chr_l_amtstr + 10); 
+
+   fprintf(bill,"\t\t%s\n",chr_f_minfee);
+   (*int_currpos)++;
+   
+
+            if ((*int_currpos) + 1 > int_l_pagelength )
+            {
+               fprintf(bill,"^pg\n");
+               (*int_currpos) =1;
+
+               if (APL_FAILURE == IV_Proc_PrnCashHdrEMINV(bill,int_currpos,l_iv_clt_setup_struct,&int_retval,l_debug_info_ptr))
+               {
+                  fprintf(fl_userlog,"Could not print chr_header for Other charges\n");
+                  APL_GOBACK_FAIL;
+
+               }
+            }
+
+}
+else 
+{
+   APL_GOBACK_FAIL
+}
+
+fprintf(bill,"\tMAX FEE ADJUSTMENT");
+maximum_feeabs   = fabs(l_maximum_fee);
+l_convmaximum_feeabs = (maximum_feeabs / l_exchg_rt_fee_bl);
+int_maxfeeret  = IV_Proc_Round(&l_convmaximum_feeabs,l_iv_clt_setup_struct.fees_ccy,chr_f_maxfee,l_debug_info_ptr);
+if (int_maxfeeret== 1)
+{
+   
+
+   roundedamount = 0.0;
+   memset(chr_l_amtstr, APL_NULL_CHAR, 30);
+
+   sscanf(chr_f_maxfee, "%lf", &roundedamount);
+   CO_Rtv_FormatAmtCcy(roundedamount, chr_l_amtstr, 'Y', 'Y', l_iv_clt_setup_struct.fees_ccy,l_debug_info_ptr);
+   strcpy(chr_f_maxfee, chr_l_amtstr + 10); 
+
+   fprintf(bill,"\t\t%s\n",chr_f_maxfee);
+   (*int_currpos)++;
+   
+
+            if ((*int_currpos) + 1 > int_l_pagelength )
+            {
+               fprintf(bill,"^pg\n");
+               (*int_currpos) =1;
+
+               if (APL_FAILURE == IV_Proc_PrnCashHdrEMINV(bill,int_currpos,l_iv_clt_setup_struct,&int_retval,l_debug_info_ptr))
+               {
+                  fprintf(fl_userlog,"Could not print chr_header for Other charges\n");
+                  APL_GOBACK_FAIL;
+
+               }
+            }
+
+}
+else 
+{
+   APL_GOBACK_FAIL
+
+}
+
+
+
+TotOthCharge = l_othcharge + l_minimumfee + l_nil_fees + l_maximum_fee;
+
+fprintf(bill,"\tTOTAL COMMISSION");
+dbl_l_convtotothcharge = (TotOthCharge / l_exchg_rt_fee_bl);
+int_othchargeret = IV_Proc_Round(&dbl_l_convtotothcharge,l_iv_clt_setup_struct.fees_ccy,chr_f_totothcharge,l_debug_info_ptr);
+if (int_othchargeret == 1)
+{
+   
+
+   roundedamount = 0.0;
+   memset(chr_l_amtstr, APL_NULL_CHAR, 30);
+
+   sscanf(chr_f_totothcharge, "%lf", &roundedamount);
+   CO_Rtv_FormatAmtCcy(roundedamount, chr_l_amtstr, 'Y', 'Y', l_iv_clt_setup_struct.fees_ccy,l_debug_info_ptr);
+   strcpy(chr_f_totothcharge, chr_l_amtstr + 10); 
+
+   
+   if ( roundedamount != 0 )
+      fprintf(bill,"\t\t%s\n",chr_f_totothcharge);
+   else
+      fprintf(bill,"\t\t%s\n",chr_f_totothcharge);
+   (*int_currpos)++;
+   
+
+   if ((*int_currpos) + 1 >int_l_pagelength)
+   {
+      fprintf(bill,"^pg\n");
+      (*int_currpos) = 1;
+      if (APL_FAILURE == IV_Proc_PrnCashHdrEMINV(bill,int_currpos,l_iv_clt_setup_struct,&int_retval,l_debug_info_ptr))
+      {
+         fprintf(fl_userlog,"Could not print Other Services chr_header\n");
+         APL_GOBACK_FAIL
+      }
+
+   }
+
+}
+else
+   APL_GOBACK_FAIL
+
+
+
+*p_totcash = l_cumroundedamount;
+
+        {
+
+        RETURN_SUCCESS:
+					APL_IF_DEBUG
+					{
+						CO_ProcMonitor(APL_OUT_FILE,"Exiting out of IV_Proc_PrnCash sucessfully\n",NULL,NULL);
+
+					}
+                return(APL_SUCCESS);
+
+        RETURN_FAILURE:
+					APL_IF_DEBUG
+					{
+						CO_ProcMonitor(APL_OUT_FILE,"Exiting out of IV_Proc_PrnCash unsucessfully\n",NULL,NULL);
+
+					}
+
+                return(APL_FAILURE);
+			 }
+}

@@ -1,0 +1,660 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#include "CO_HostStructdef.h"
+#include "CA_InterFace.h"
+#include "Intellect_Common.h"
+
+EXEC SQL INCLUDE SQLCA.H;
+
+#define  RTV_SYSTEM_DATA
+
+
+int data_rep( INTL_ENV_DATA_STRUCT_H *p_intlenv_data_struct_h,
+						DEBUG_INFO_STRUCT_H      **l_debug_info_ptr);
+
+/* Added by kotubabu for Linux Migration -Start*/
+#ifdef OS_LINUX
+FILE*                g_inifile;
+FILE*                g_logfile;
+#else
+FILE *g_inifile = APL_OUT_FILE;
+FILE *g_logfile = APL_OUT_FILE;
+#endif
+/* Added by kotubabu  for Linux Migration -END*/
+char                 chr_g_progname        [APL_BATCH_PROGNAME_LEN]= APL_NULL_STRING;
+char                 chr_g_key             [APL_BATCH_KEY_LEN]= APL_NULL_STRING;
+char                 chr_g_start_date      [APL_DATE_LEN]= APL_NULL_STRING;
+char                 chr_g_funccode        [CA_FUNC_CD_LEN]= APL_NULL_STRING;
+char                 chr_g_sys_date        [APL_DATE_LEN]= APL_NULL_STRING;
+char                 chr_g_sys_date_time   [APL_DATE_LEN]= APL_NULL_STRING;
+char                 chr_g_client         [APL_CLIENT_LENGTH]= APL_NULL_STRING;
+char                 chr_g_log_buff[MSG_LENGTH]= APL_NULL_STRING;
+char                 chr_g_old_ccy      [4]         = APL_NULL_STRING;
+char                 chr_g_new_ccy      [4]         = APL_NULL_STRING;
+
+
+
+main(int argc, char **argv)
+{
+	/* Added by kotubabu for Linux Migration -Start*/
+   #ifdef OS_LINUX
+    g_inifile = APL_OUT_FILE;
+    g_logfile = APL_OUT_FILE;
+   #endif
+   /* Added by kotubabu for Linux Migration -END*/
+	struct sqlca sqlca;
+
+	
+   
+	DEBUG_INFO_STRUCT_H         **l_debug_info_ptr=NULL,
+								*l_debug_info_struct=NULL;
+	INTL_ENV_DATA_STRUCT_H   p_intlenv_data_struct_h;
+	char                 chr_inifile[PATH_LENGTH]= APL_NULL_STRING;
+	char                 chr_logfile[PATH_LENGTH]= APL_NULL_STRING;
+	char                 chr_custody_id_b[APL_USERID_LEN];
+ 
+     
+	EXEC SQL BEGIN DECLARE SECTION;
+	char chr_uname[APL_USERID_LEN];
+	char chr_passwd[APL_PASSWD_LEN];
+	EXEC SQL END DECLARE SECTION;
+
+	EXEC SQL VAR chr_uname IS STRING;
+	EXEC SQL VAR chr_passwd IS STRING;
+
+	l_debug_info_ptr = &l_debug_info_struct;
+	
+	
+	strcpy(chr_inifile,getenv("INTL_ROOT_PATH"));
+	strcat(chr_inifile,"/intl_sun.cfg");
+
+	if ( ( g_inifile=fopen(chr_inifile,"r") ) == NULL)
+	exit(-1);
+
+	APL_FETCH_DB_LOGIN_DETAILS(g_inifile,chr_custody_id_b,chr_uname,chr_passwd,APL_OUT_FILE,l_debug_info_ptr)
+	EXEC SQL CONNECT :chr_uname IDENTIFIED BY :chr_passwd;
+	IS_ANY_ORA_ERROR
+
+	
+	if ( CO_Rtv_RptFileName("Pre_Data",
+								APL_LOGFILE_DESC,
+								100,
+								argv[5],
+								argv,
+								&g_logfile,
+								l_debug_info_ptr) ==APL_FAILURE)
+	{
+		APL_GOBACK_FAIL	
+	}
+
+	EXEC SQL COMMIT;
+	IS_ANY_ORA_ERROR
+
+	
+	if ( argc < 4 )
+	{
+	CO_ProcMonitor(g_logfile,"All Arguments expected by  program not passed \n",NULL
+				,NULL);
+	APL_GOBACK_FAIL
+	}
+	
+	strcpy(chr_g_progname,   argv[0]);
+	strcpy(chr_g_key,        argv[1]);
+	strcpy(chr_g_start_date, argv[2]);
+	strcpy(chr_g_funccode,argv[5]);
+	
+	
+	if ( CO_RtvSysParams(l_debug_info_ptr) == APL_FAILURE)
+	APL_GOBACK_FAIL
+	if(CO_RtvSysDt(chr_g_sys_date,l_debug_info_ptr)==APL_FAILURE)
+	APL_GOBACK_FAIL
+
+	
+   
+	if (data_rep(&p_intlenv_data_struct_h,l_debug_info_ptr) ==APL_FAILURE)
+   {
+      APL_GOBACK_FAIL
+   }
+
+	
+	APL_GOBACK_SUCCESS
+	RETURN_SUCCESS:
+	{
+	EXEC SQL UPDATE SYS_BATCHPROC
+			SET status_ind        = 'completed'
+			WHERE process_name    =  RTRIM(:argv[0])
+			AND   proc_init         =  RTRIM(:argv[1])
+			AND   START_DATE   =  :argv[2]
+			AND   status_ind      =  'started';
+	
+	IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"BATCH_IN_PROC",chr_g_progname,chr_g_key)
+
+	EXEC SQL COMMIT;
+	IS_ANY_ORA_ERROR
+
+	CO_ProcMonitor(g_logfile,"RECORD COMMITTED \n",NULL,NULL);
+	
+	CO_ProcMonitor(APL_OUT_FILE,
+            "Pre-Datalog Program exiting successfully",
+            NULL,
+            NULL);
+
+	sprintf(chr_g_log_buff,"T:Data Log exiting successfully\n");
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+	fclose(g_logfile);
+	exit(0);
+	}
+	
+	RETURN_FAILURE:
+	{
+	EXEC SQL ROLLBACK;
+	IS_ANY_ORA_ERROR
+	CO_ProcMonitor(g_logfile,"ROLLING BACK \n",NULL,NULL);
+	
+	CO_ProcMonitor(APL_OUT_FILE,
+            "Pre-Datalog Program exiting with errors",
+            NULL,
+            NULL);
+	
+	sprintf(chr_g_log_buff,"T:Data chr_log exiting with failure\n");
+	CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+	fclose(g_logfile);
+	exit(-1);
+	}
+} 
+
+
+ 
+
+
+int data_rep(INTL_ENV_DATA_STRUCT_H *p_intlenv_data_struct_h,DEBUG_INFO_STRUCT_H **l_debug_info_ptr) 
+{
+	struct sqlca sqlca;
+	
+	char chr_l_mstacc_a[APL_CLIENT_LENGTH]     	= APL_NULL_STRING;
+   char chr_l_client_a[APL_CLIENT_LENGTH] 		= APL_NULL_STRING;
+   char chr_l_instrcode_a[APL_INSTRUMENTCODE_LEN]       = APL_NULL_STRING;
+   char chr_l_locncode_c[APL_LOCNCODE_LENGTH]   = APL_NULL_STRING;
+	char chr_l_ca_id[CORP_ID_LEN]				= APL_NULL_STRING;
+	char chr_l_ca_ccy[APL_CCYCODE_LEN]		= APL_NULL_STRING;
+	char chr_l_ent_ccy[APL_CCYCODE_LEN]		= APL_NULL_STRING;
+	char chr_l_pay_srl_nbr[2] 					= APL_NULL_STRING;
+	char chr_l_pymt_ccy[APL_CCYCODE_LEN]		= APL_NULL_STRING;
+
+   double l_nominal_value         =0.0;
+   double l_safekeep_pos          =0.0;
+   double l_nval_rec       =0.0;
+   double l_nval_del       =0.0;
+   double l_val_rec        =0.0;
+   double l_val_del        =0.0;
+	double l_earnings			=0.0;
+	double l_f_cost			=0.0;
+	double l_sub_cost		=0.0;
+	double l_amount_bal			=0.0;
+	double l_received_amt			=0.0;
+	double l_quantity_bal			=0.0;
+	double l_quantity_received			=0.0;
+	double chr_l_ent_pos			=0.0;
+	double l_instr_inc_bal			=0.0;
+	double l_curr_pymt			=0.0;
+	double l_tax_amount			=0.0;
+	double l_other_chrgs			=0.0;
+	double l_quantity_paid			=0.0;
+	
+
+
+   short i_mstclt	         =0;
+   short i_dl_client         =0;
+   short i_instr_code          =0;
+   short i_loccode        =0;
+	short i_corp_id				=0;
+	short i_ca_currency				=0;
+   short i_nominal_value          =0;
+   short i_safekeep_pos           =0;
+   short i_nval_rec        =0;
+   short i_nval_del        =0;
+   short i_val_rec         =0;
+   short i_val_del         =0;
+	short i_earnings				=0;
+	short i_f_pr			=0;
+	short i_sub_pr			=0;
+	short i_amount_due			=0;
+	short i_amount_recd			=0;
+	short i_quantity_due			=0;
+	short i_quantity_recd			=0;
+	short i_entitl_ccy			=0;
+	short i_entitl_pos			=0;
+	short i_instr_inc_bal			=0;
+	short i_pymt_srl_nbr		=0;
+	short i_pymt_currency			=0;
+	short i_curr_pymt			=0;
+	short i_tax_amount			=0;
+	short i_other_chrgs			=0;
+	short i_quantity_paid			=0;
+
+   
+   EXEC SQL VAR chr_l_mstacc_a           IS STRING;
+   EXEC SQL VAR chr_l_client_a        IS STRING;
+   EXEC SQL VAR chr_l_instrcode_a            IS STRING;
+   EXEC SQL VAR chr_l_locncode_c          IS STRING;
+	EXEC SQL VAR chr_l_ca_id					IS STRING;
+	EXEC SQL VAR chr_l_ca_ccy				IS STRING;
+	EXEC SQL VAR chr_l_ent_ccy				IS STRING;
+	EXEC SQL VAR chr_l_pymt_ccy				IS STRING;
+
+
+   EXEC SQL VAR chr_g_old_ccy IS STRING;
+   EXEC SQL VAR chr_g_new_ccy IS STRING;
+
+
+   strcpy(chr_g_old_ccy, CONV_FROM_TRL);
+   strcpy(chr_g_new_ccy, CONV_TO_TRY);
+
+	#ifdef APL_THREADS
+   APL_SET_CONTEXT
+   EXEC SQL CONTEXT USE :my_ctx_local;
+   #endif
+
+	
+	APL_IF_DEBUG
+	{
+	CO_ProcMonitor( APL_OUT_FILE,
+				"Entered Function data_rep for Pre-Datalog\n",
+				NULL,
+				NULL);
+	}
+
+	
+	
+	
+	
+
+	sqlca.sqlcode = 0;
+	EXEC SQL DELETE CURRENCY_CONV_REPORT;
+   IS_ANY_ORA_ERROR
+
+	sqlca.sqlcode = 0;
+   EXEC SQL DECLARE ccy_conv CURSOR FOR
+         SELECT a.master_clt, a.client, b.instr_code, c.location_cd, nvl(b.NOMINAL_VALUE,0), nvl(c.safekeep_pos,0), nvl(c.NVALRECEIVE,0), nvl(c.NVALDELIVER,0), nvl(c.VAL_REC,0), nvl(c.VAL_DEL,0)
+         FROM MT_CLIENT a, MT_INSTRUMENT b, DL_SAFEK c
+         WHERE a.client = c.client and
+               b.instr_code  = c.instr_code ;
+
+   IS_ANY_ORA_ERROR
+
+   EXEC SQL OPEN ccy_conv;
+
+   IS_ANY_ORA_ERROR
+	
+   	for(;;)
+   	{
+      	EXEC SQL FETCH ccy_conv
+         	   INTO :chr_l_mstacc_a:i_mstclt, 
+					:chr_l_client_a:i_dl_client, 
+					:chr_l_instrcode_a:i_instr_code, 
+					:chr_l_locncode_c:i_loccode, 
+					:l_nominal_value:i_nominal_value, 
+					:l_safekeep_pos:i_safekeep_pos, 
+					:l_nval_rec:i_nval_rec, 
+					:l_nval_del:i_nval_del, 
+					:l_val_rec:i_val_rec, 
+					:l_val_del:i_val_del;
+      
+			IS_ANY_ORA_ERROR
+
+ 	     if (APL_ZERO_RESULT_SET)
+   	   break;
+
+   	  EXEC SQL INSERT INTO CURRENCY_CONV_REPORT (master_clt,
+		  client,
+		  instr_code,
+		  location_cd,
+		  NOMINAL_VALUE,
+		  safekeep_pos,
+		  NVALRECEIVE,
+		  NVALDELIVER,
+		  VAL_REC,
+		  VAL_DEL) 
+		  VALUES (
+		  :chr_l_mstacc_a,
+		  :chr_l_client_a,
+		  :chr_l_instrcode_a,
+		  :chr_l_locncode_c,
+		  :l_nominal_value,
+		  :l_safekeep_pos,
+		  :l_nval_rec,
+		  :l_nval_del,
+		  :l_val_rec,
+		  :l_val_del);
+
+      	IS_ANY_ORA_ERROR
+   	}
+
+	sprintf(chr_g_log_buff,"Inserted |%d| row(s) in CCY_CONV_REPORT table	before conversion\n",sqlca.sqlerrd[2]);
+   CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+	printf("Inserted |%d| row(s) in CCY_CONV_REPORT table before conversion\n",sqlca.sqlerrd[2]);
+
+	EXEC SQL CLOSE ccy_conv;
+      	
+	
+	
+	
+	
+
+	memset(chr_l_instrcode_a,NULL,(APL_INSTRUMENTCODE_LEN));
+	
+	sqlca.sqlcode = 0;
+	EXEC SQL DELETE CCY_CONV_AEVENT;
+   IS_ANY_ORA_ERROR
+
+	sqlca.sqlcode = 0;
+   EXEC SQL DECLARE ccy_conv_aevent CURSOR FOR
+         SELECT a.corp_id, a.instr_code, a.CA_CURRENCY, nvl(a.EARNINGS,0), nvl(a.FRACT_PR,0), nvl(a.SUB_PR,0), nvl(a.AMOUNT_BAL,0), nvl(a.RECEIVED_AMT,0), nvl(a.QUANTITY_BAL,0), nvl(a.quantity_received,0)
+         FROM CAEVENT a 
+         WHERE CA_CURRENCY = :chr_g_old_ccy
+         AND (STATUS IN ('RP', 'PP')
+               OR (CA_EVENT='RT'
+                  AND STATUS='CP'
+                  AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c
+                                     WHERE b.INSTR_CODE=c.INSTR_CODE
+                                     AND c.INSTR_PARENT IS NOT NULL
+                                     AND c.MOTHER_SEC_IND <> 'Y'
+                                     AND b.SAFEKEEP_POS>0)
+                  AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d
+                                WHERE d.CA_EVENT='RT'
+                                AND d.STATUS='CP'
+                                AND d.INSTR_CODE=a.INSTR_CODE)))
+         AND INSTR_CODE IN
+         (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE CURRENCY_CD = :chr_g_old_ccy);
+
+
+   IS_ANY_ORA_ERROR
+
+   EXEC SQL OPEN ccy_conv_aevent;
+
+   IS_ANY_ORA_ERROR
+	
+   	for(;;)
+   	{
+			EXEC SQL FETCH ccy_conv_aevent
+         	   INTO :chr_l_ca_id:i_corp_id, 
+					:chr_l_instrcode_a:i_instr_code, 
+					:chr_l_ca_ccy:i_ca_currency, 
+					:l_earnings:i_earnings, 
+					:l_f_cost:i_f_pr, 
+					:l_sub_cost:i_sub_pr, 
+					:l_amount_bal:i_amount_due, 
+					:l_received_amt:i_amount_recd, 
+					:l_quantity_bal:i_quantity_due, 
+					:l_quantity_received:i_quantity_recd;
+      
+			IS_ANY_ORA_ERROR
+
+ 	     if (APL_ZERO_RESULT_SET)
+   	   break;
+
+   	  EXEC SQL INSERT INTO CCY_CONV_AEVENT (corp_id,
+		  instr_code,
+		  CA_CURRENCY,
+		  earnings,
+		  FRACT_PR,
+		  SUB_PR,
+		  amount_bal,
+		  RECEIVED_AMT,
+		  quantity_bal,
+		  quantity_received) 
+		  VALUES (
+		  :chr_l_ca_id,
+		  :chr_l_instrcode_a,
+		  :chr_l_ca_ccy,
+		  :l_earnings,
+		  :l_f_cost,
+		  :l_sub_cost,
+		  :l_amount_bal,
+		  :l_received_amt,
+		  :l_quantity_bal,
+		  :l_quantity_received);
+
+      	IS_ANY_ORA_ERROR
+   	}
+
+	sprintf(chr_g_log_buff,"Inserted |%d| row(s) in CCY_CONV_AEVENT table	before conversion\n",sqlca.sqlerrd[2]);
+   CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+	printf("Inserted |%d| row(s) in CCY_CONV_AEVENT table before conversion\n",sqlca.sqlerrd[2]);
+
+	EXEC SQL CLOSE ccy_conv_aevent;
+	
+	
+	
+	
+	
+	
+	
+	
+
+	memset(chr_l_instrcode_a,NULL,(APL_INSTRUMENTCODE_LEN));
+	
+	sqlca.sqlcode = 0;
+	EXEC SQL DELETE CCY_CONV_AENTITL;
+   IS_ANY_ORA_ERROR
+
+	sqlca.sqlcode = 0;
+   EXEC SQL DECLARE ccy_conv_aentitl CURSOR FOR
+         SELECT a.corp_id, a.client, b.instr_code, nvl(a.ELIG_ENTITL_POS,0), a.CCY_FOR_ENTITL, nvl(a.INSTR_INC_BAL,0), nvl(a.RECEIVED_AMT,0), 
+					nvl(a.QUANTITY_BAL,0), nvl(a.quantity_received,0)
+         FROM CAENTITLEMENT a, CAEVENT b, MT_INSTRUMENT e 
+			WHERE a.corp_id = b.corp_id
+			AND b.instr_code = e.instr_code
+			AND CCY_FOR_ENTITL  = :chr_g_old_ccy
+         AND a.CORP_ID IN (SELECT CORP_ID FROM  CAEVENT a
+                        WHERE CA_CURRENCY = :chr_g_old_ccy
+                        AND (STATUS IN ('RP', 'PP')
+                              OR (CA_EVENT='RT'
+                                  AND STATUS='CP'
+                                  AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c
+                                                      WHERE b.INSTR_CODE=c.INSTR_CODE
+                                                      AND c.INSTR_PARENT IS NOT NULL
+                                                      AND c.MOTHER_SEC_IND <> 'Y'
+                                                      AND b.SAFEKEEP_POS>0)
+                                  AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d
+                                                WHERE d.CA_EVENT='RT'
+                                                AND d.STATUS='CP'
+                                                AND d.INSTR_CODE=a.INSTR_CODE)))
+                       AND INSTR_CODE IN
+                       (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE CURRENCY_CD = :chr_g_old_ccy));
+
+   IS_ANY_ORA_ERROR
+
+   EXEC SQL OPEN ccy_conv_aentitl;
+
+   IS_ANY_ORA_ERROR
+	
+   	for(;;)
+   	{
+			EXEC SQL FETCH ccy_conv_aentitl
+         	   INTO :chr_l_ca_id:i_corp_id,
+						:chr_l_client_a:i_dl_client,
+						:chr_l_instrcode_a:i_instr_code, 
+						:chr_l_ent_pos:i_entitl_pos,
+						:chr_l_ent_ccy:i_entitl_ccy,
+						:l_instr_inc_bal:i_instr_inc_bal,
+						:l_received_amt:i_amount_recd,
+						:l_quantity_bal:i_quantity_due,
+						:l_quantity_received:i_quantity_recd;
+      
+			IS_ANY_ORA_ERROR
+
+ 	     if (APL_ZERO_RESULT_SET)
+   	   break;
+
+   	  EXEC SQL INSERT INTO CCY_CONV_AENTITL (corp_id,
+		  client,
+		  instr_code,
+		  elig_entitl_pos,
+		  CCY_FOR_ENTITL,
+		  INSTR_INC_BAL,
+		  RECEIVED_AMT,
+		  quantity_bal,
+		  quantity_received) 
+		  VALUES (
+		  :chr_l_ca_id,
+		  :chr_l_client_a,
+		  :chr_l_instrcode_a,
+		  :chr_l_ent_pos,
+		  :chr_l_ent_ccy,
+		  :l_instr_inc_bal,
+		  :l_received_amt,
+		  :l_quantity_bal,
+		  :l_quantity_received);
+
+      	IS_ANY_ORA_ERROR
+   	}
+
+	sprintf(chr_g_log_buff,"Inserted |%d| row(s) in CCY_CONV_AENTITL table	before conversion\n",sqlca.sqlerrd[2]);
+   CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+	printf("Inserted |%d| row(s) in CCY_CONV_AENTITL table before conversion\n",sqlca.sqlerrd[2]);
+
+	EXEC SQL CLOSE ccy_conv_aentitl;
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	memset(chr_l_instrcode_a,NULL,(APL_INSTRUMENTCODE_LEN));
+	
+	sqlca.sqlcode = 0;
+	EXEC SQL DELETE CCY_CONV_APAYMENT;
+   IS_ANY_ORA_ERROR
+
+	sqlca.sqlcode = 0;
+   EXEC SQL DECLARE ccy_conv_apayment CURSOR FOR
+         SELECT a.corp_id, a.client, a.SEQNUM_PAY, b.instr_code, a.location_cd, a.PAYMENT_CCY, nvl(a.curr_pymt,0), nvl(a.quantity_received,0), nvl(a.TAX_AMOUNT,0), nvl(a.OTHER_CHRGS,0), nvl(a.quantity_paid,0)
+         FROM CACHEQUE a, CAEVENT b, MT_INSTRUMENT e
+         WHERE a.corp_id = b.corp_id
+			AND b.instr_code = e.instr_code
+			AND PAYMENT_CCY = :chr_g_old_ccy
+         AND a.CORP_ID IN (SELECT CORP_ID FROM  CAEVENT a
+                        WHERE CA_CURRENCY = :chr_g_old_ccy
+                        AND (STATUS IN ('RP', 'PP')
+                              OR (CA_EVENT='RT'
+                                  AND STATUS='CP'
+                                  AND RES_INSTR_CODE IN (SELECT b.INSTR_CODE FROM DL_SAFEK b, MT_INSTRUMENT c
+                                                      WHERE b.INSTR_CODE=c.INSTR_CODE
+                                                      AND c.INSTR_PARENT IS NOT NULL
+                                                      AND c.MOTHER_SEC_IND <> 'Y'
+                                                      AND b.SAFEKEEP_POS>0)
+                                  AND DECLARE_DT =(SELECT MAX(DECLARE_DT) FROM CAEVENT d
+                                                WHERE d.CA_EVENT='RT'
+                                                AND d.STATUS='CP'
+                                                AND d.INSTR_CODE=a.INSTR_CODE)))
+                       AND INSTR_CODE IN
+                       (SELECT INSTR_CODE FROM MT_INSTRUMENT WHERE CURRENCY_CD = :chr_g_old_ccy)); 
+
+   IS_ANY_ORA_ERROR
+
+   EXEC SQL OPEN ccy_conv_apayment;
+
+   IS_ANY_ORA_ERROR
+	
+   	for(;;)
+   	{
+			EXEC SQL FETCH ccy_conv_apayment
+         	   INTO :chr_l_ca_id:i_corp_id,
+						:chr_l_client_a:i_dl_client,
+						:chr_l_pay_srl_nbr,
+						:chr_l_instrcode_a:i_instr_code, 
+						:chr_l_locncode_c:i_loccode,
+						:chr_l_pymt_ccy:i_pymt_currency, 
+						:l_curr_pymt:i_curr_pymt,
+						:l_quantity_received:i_quantity_recd,
+						:l_tax_amount:i_tax_amount,
+						:l_other_chrgs:i_other_chrgs,
+						:l_quantity_paid:i_quantity_paid;
+      
+			IS_ANY_ORA_ERROR
+
+ 	     if (APL_ZERO_RESULT_SET)
+   	   break;
+
+   	  EXEC SQL INSERT INTO CCY_CONV_APAYMENT (corp_id,
+		  client,
+		  seqnum_pay,
+		  instr_code,
+		  location_cd,
+		  PAYMENT_CCY,
+		  curr_pymt,
+		  quantity_received,
+		  TAX_AMOUNT,
+		  OTHER_CHRGS,
+		  quantity_paid)
+		  VALUES (
+		  :chr_l_ca_id,
+		  :chr_l_client_a,
+		  :chr_l_pay_srl_nbr,
+		  :chr_l_instrcode_a,
+		  :chr_l_locncode_c,
+		  :chr_l_pymt_ccy,
+		  :l_curr_pymt,
+		  :l_quantity_received,
+		  :l_tax_amount,
+		  :l_other_chrgs,
+		  :l_quantity_paid);
+
+
+      	IS_ANY_ORA_ERROR
+   	}
+
+	sprintf(chr_g_log_buff,"Inserted |%d| row(s) in CCY_CONV_APAYMENT table	before conversion\n",sqlca.sqlerrd[2]);
+   CO_ProcMonitor(g_logfile,chr_g_log_buff,l_debug_info_ptr,NULL);
+
+	printf("Inserted |%d| row(s) in CCY_CONV_APAYMENT table before conversion\n",sqlca.sqlerrd[2]);
+
+	EXEC SQL CLOSE ccy_conv_apayment;
+
+
+
+
+	RETURN_SUCCESS:
+	{
+	APL_IF_DEBUG
+	CO_ProcMonitor(APL_OUT_FILE,
+				"Leaving processtion data_rep for Pre_Datalog successfully",
+				NULL,
+				NULL);
+	return (APL_SUCCESS);
+	}
+	
+	RETURN_FAILURE:
+	{
+	APL_IF_DEBUG
+	CO_ProcMonitor(APL_OUT_FILE,
+				"Leaving processtion data_rep for Pre_Datalog with errors",
+				NULL,
+				NULL);
+	return(APL_FAILURE);
+	}
+}
+

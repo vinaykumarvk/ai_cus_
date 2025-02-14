@@ -1,0 +1,161 @@
+
+
+
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+
+
+
+
+#include "CR_Common.h"
+
+#define S_HOLI_STATUS_LEN		3
+
+EXEC SQL INCLUDE sqlca;
+
+
+
+int CO_Chk_Holiday(	char *p_holi_date, 
+								int *p_exist,
+								DEBUG_INFO_STRUCT_H **l_debug_info_ptr,
+								char *p_exch_code )
+{
+
+	EXEC SQL BEGIN DECLARE SECTION;
+	struct sqlca  sqlca;
+	char       chr_l_holi_date[APL_DATE_LEN];
+	char       chr_l_holi_status[S_HOLI_STATUS_LEN];
+ char		  l_chr_temp[31]=APL_NULL_STRING;
+	EXEC SQL END DECLARE SECTION;
+	#ifdef APL_THREADS
+	APL_SET_CONTEXT
+	EXEC SQL CONTEXT USE	:my_ctx_local;
+	#endif
+
+
+	fprintf(APL_OUT_FILE,"Entered processtion CO_Chk_Holiday \n");
+
+	if ((p_holi_date == NULL) || (strcmp(p_holi_date, APL_NULL_STRING)) == 0)
+	{
+		APL_DATA_MISSING("HOLIDAY DATE",APL_NULL_STRING,APL_NULL_STRING)
+
+		APL_GOBACK_FAIL
+	}
+	
+	strcpy((char *)chr_l_holi_status, APL_STS_AUTH);
+
+	#ifdef SYS_DEBUG
+		fprintf(APL_OUT_FILE,"Holiday chr_date is %s \n",p_holi_date);
+	#endif
+
+	strncpy((char *)chr_l_holi_date, p_holi_date,APL_DATE_LEN-1);
+	chr_l_holi_date[APL_DATE_LEN-1] = NULL;
+
+/*Smita - Changed Col NAme - HDFCCA Base Version*/	
+	if (!strlen(p_exch_code))
+	{	
+		EXEC SQL SELECT H_REASON into :l_chr_temp FROM MT_HOLIDAY
+		WHERE trunc(H_DATE) = TO_DATE(SUBSTR(:chr_l_holi_date,0,10),'DD/MM/YYYY') // Kalyan -- Added trunc
+		AND STATUS = :chr_l_holi_status
+		AND BANK_IND = 'Y';
+	}
+	else
+	{
+		EXEC SQL SELECT H_REASON into :l_chr_temp FROM MT_HOLIDAY
+		WHERE trunc(H_DATE) = TO_DATE(SUBSTR(:chr_l_holi_date,0,10),'DD/MM/YYYY') // Kalyan -- Added trunc 
+		AND STATUS = :chr_l_holi_status AND EXCH_CODE =:p_exch_code;
+	}
+	printf("KS -- HREASON SELECTED FOR DATE [%s] IS ...[%s] \n",chr_l_holi_date,l_chr_temp);
+	IS_ANY_ORA_ERROR
+
+	if (APL_ZERO_RESULT_SET)
+		*p_exist = 0;
+	else
+		*p_exist = 1;
+														
+	APL_GOBACK_SUCCESS
+	
+
+	RETURN_SUCCESS :
+	{
+		fprintf(APL_OUT_FILE, "Leaving processtion CO_Chk_Holiday successfully\n");
+		return(APL_SUCCESS);
+	}
+
+	RETURN_FAILURE :
+	{
+		fprintf(APL_OUT_FILE, "Leaving processtion CO_Chk_Holiday with errors\n");
+		return(APL_FAILURE);
+	}
+
+}
+/*Added for Early Payin Changes*/
+int CO_RtvNextDays(	char *p_org_date, 
+								int int_no_days,
+								char *p_exch_code,
+								char *p_new_date,
+								DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+	struct sqlca  sqlca;
+	int l_int_payinday=0;
+	char l_org_date[APL_DATE_LEN] = APL_NULL_STRING;
+	char l_chr_newdate[APL_DATE_LEN] = APL_NULL_STRING;
+	int i=0;
+	int int_l_chkflg=0;
+
+	EXEC SQL BEGIN DECLARE SECTION;
+	
+	EXEC SQL VAR l_chr_newdate IS STRING;
+
+	EXEC SQL END DECLARE SECTION;
+
+	memset(l_org_date,NULL,APL_DATE_LEN);
+	memset(l_chr_newdate,NULL,APL_DATE_LEN);
+
+	strcpy(l_org_date,p_org_date);
+	printf("Orig Date |%s| No of Days |%d|   Exchange |%s|\n",l_org_date,int_no_days,p_exch_code);
+
+	for(i=0;i<int_no_days;i++)
+	{
+		for(;;)
+		{
+			EXEC SQL SELECT TO_CHAR(TO_DATE(:l_org_date) + 1) INTO :l_chr_newdate FROM DUAL;
+
+			if (APL_FAILURE == CO_Chk_Holiday(l_chr_newdate,&int_l_chkflg,l_debug_info_ptr,p_exch_code))
+				APL_GOBACK_FAIL
+
+			if (int_l_chkflg == 0)
+				break;
+			else
+				strcpy(l_org_date,l_chr_newdate);
+		}
+		strcpy(l_org_date,l_chr_newdate);
+	}
+
+	strcpy(p_new_date,l_chr_newdate);
+	printf("New Date |%s|\n",p_new_date);
+	
+	RETURN_SUCCESS :
+	{
+		fprintf(APL_OUT_FILE, "Leaving processtion CO_Chk_Holiday successfully\n");
+		return(APL_SUCCESS);
+	}
+
+	RETURN_FAILURE :
+	{
+		fprintf(APL_OUT_FILE, "Leaving processtion CO_Chk_Holiday with errors\n");
+		return(APL_FAILURE);
+	}
+
+}
+

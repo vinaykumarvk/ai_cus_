@@ -1,0 +1,830 @@
+
+
+#include "CO_HostStructdef.h" 
+#include "CA_Common.h"
+
+
+#define  PAGELENGTH 55
+#define  APL_FILENAME_LENGTH 50 
+#define  APL_MAXLINE_SIZE 451 
+#define  BUFFER_LEN_A 224
+#define  RTV_SYSTEM_DATA
+#define	 P_STATIC_AFTER "SQMMIS_PEND_" 
+#define  APL_BOOKINGOFFICE_LEN 3
+EXEC SQL INCLUDE SQLCA.H;
+
+
+int SMACSETTFn(FILE *p_fp_inifile,
+             	FILE *p_fp_logfile,
+             	char **argv,
+             	DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+
+int main(int argc,char **argv) // AIX - Warnings removal
+{
+	struct sqlca sqlca;
+   	DEBUG_INFO_STRUCT_H *l_debug_info_ptr = (DEBUG_INFO_STRUCT_H *) NULL;
+	/* Added by kotubabu for Linux Migration -Start*/
+    #ifdef OS_LINUX
+	FILE *p_fp_logfile;
+	FILE *p_fp_inifile;
+	#else
+    FILE *p_fp_logfile = APL_OUT_FILE;
+    FILE *p_fp_inifile = APL_OUT_FILE;
+    #endif
+    /* Added by kotubabu  for Linux Migration -END*/
+	
+	   /* Added by kotubabu for Linux Migration-Start*/
+    #ifdef OS_LINUX
+     p_fp_logfile = APL_OUT_FILE;
+	 p_fp_inifile = APL_OUT_FILE;
+    #endif
+   /* Added by kotubabu for Linux Migration-End*/
+	
+	
+	char	chr_p_progname[APL_BATCH_PROGNAME_LEN]= APL_NULL_STRING;
+	char	chr_p_key_a[APL_BATCH_KEY_LEN]= APL_NULL_STRING;
+	char	chr_p_start_date[APL_DATE_LEN]= APL_NULL_STRING;
+	char  	chr_p_funccode[CA_FUNC_CD_LEN]= APL_NULL_STRING;
+	
+	
+	
+	char 	chr_uname[APL_USERID_LEN] = APL_NULL_STRING;
+   	char 	chr_custody_id_b[APL_USERID_LEN] = APL_NULL_STRING;
+   	char 	chr_passwd[APL_USERID_LEN] = APL_NULL_STRING;
+	
+	char 	chr_p_inifile[PATH_LENGTH] = APL_NULL_STRING;
+	int 	int_h_prog_status=0;
+	int 	int_p_retval=0;
+ 	
+	EXEC SQL VAR chr_uname IS STRING;
+   	EXEC SQL VAR chr_passwd IS STRING;
+
+	
+	strcpy(chr_p_inifile,getenv("INTL_ROOT_PATH"));
+	strcat(chr_p_inifile,"intl_sun.cfg");
+	
+	if ( ( p_fp_inifile=fopen(chr_p_inifile,"r") ) == NULL)
+	exit(-1);
+  
+  	
+	APL_FETCH_DB_LOGIN_DETAILS(p_fp_inifile, chr_custody_id_b, chr_uname, chr_passwd, APL_OUT_FILE, &l_debug_info_ptr)
+
+   	EXEC SQL CONNECT :chr_uname IDENTIFIED BY :chr_passwd;
+
+   	if (sqlca.sqlcode)
+   	{
+   		APL_GOBACK_FAIL
+   	}
+   	else
+   	{
+		strcpy(chr_p_progname,argv[0]);
+		strcpy(chr_p_key_a,argv[1]);
+		strcpy(chr_p_start_date,argv[2]);
+		strcpy(chr_p_funccode,argv[5]);
+
+		
+   		if (APL_FAILURE == CO_Rtv_RptFileName("6Z", 
+				APL_LOGFILE_DESC,
+				100,
+				argv[5],
+				argv,
+				&p_fp_logfile,
+				&l_debug_info_ptr ))
+      		{
+         		APL_GOBACK_FAIL
+      		} 
+	
+      		
+		printf("Eric :Just after gdbgenrep\n");	
+      		EXEC SQL COMMIT WORK;
+
+      		if (sqlca.sqlcode)
+      		{
+			CO_ProcMonitor(p_fp_logfile, "Could not commit after opening chr_log file", NULL, NULL);
+         		APL_GOBACK_FAIL
+      		}
+	
+		
+
+		if (APL_FAILURE == CO_RtvSysParams(&l_debug_info_ptr))
+		{
+			fprintf(p_fp_logfile, "\nFailed in Get System Params\n");
+         		APL_GOBACK_FAIL
+		}
+		printf("Eric :Just after get system params\n");	
+		EXEC SQL select count(*)
+   		INTO  :int_h_prog_status
+   		FROM  SYS_BATCHPROC
+   		WHERE PROCESS_NAME=:argv[0]
+   		AND   PROC_INIT=:argv[1]
+		AND   TO_CHAR(TO_DATE(STARTDATE),'ddmmyy')=TO_CHAR(TO_DATE(:argv[2]),'ddmmyy')
+   		AND   STATUS='completed';
+
+   		IS_ANY_ORA_ERROR
+
+  		if (int_h_prog_status != 0)
+   		{
+			CO_ProcMonitor(p_fp_logfile, "Program Already Completed for Today", NULL, NULL);
+      			APL_GOBACK_SUCCESS
+   		}
+		printf("Eric :Just before calling wrapper processtion\n");	
+
+
+		int_p_retval = SMACSETTFn( p_fp_inifile, 
+					p_fp_logfile, 
+					argv,
+					&l_debug_info_ptr);
+
+ 	    	if ( int_p_retval == APL_FAILURE )
+     		{
+			fprintf(p_fp_logfile, "Unsuccessful in SMACSETTFn Exiting from main\n");
+			APL_GOBACK_FAIL
+     		}
+     		else
+     		{
+     	 		EXEC SQL UPDATE SYS_BATCHPROC
+     			SET  status = 'completed'
+  			WHERE PROCESS_NAME=:argv[0]
+  			AND   PROC_INIT=:argv[1]
+  			AND   STARTDATE=:argv[2]
+  			AND   STATUS='started';
+
+        		EXEC SQL COMMIT WORK RELEASE;
+			fprintf(p_fp_logfile, "Record Committed. \n SMACSETTFn Successful , Exiting from main\n");
+        		APL_GOBACK_SUCCESS
+     		}
+	}
+
+  	RETURN_SUCCESS:
+  	{
+   		CO_Proc_RptClose(p_fp_logfile, &l_debug_info_ptr); 
+		exit(0);
+ 	}
+  	RETURN_FAILURE:
+  	{	
+   		CO_Proc_RptClose(p_fp_logfile, &l_debug_info_ptr); 
+  		exit(-1);
+  	}
+}
+
+int SMACSETTFn(FILE *p_fp_inifile, 
+		FILE *p_fp_logfile, 
+		char **argv,
+		DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+struct sqlca sqlca;
+
+
+
+
+
+typedef struct 
+{
+	char	h_dl_client[11];
+	char	h_client_name[66];
+	char	h_contactinfo[161];
+	char	h_mastclt[11];
+	char	h_uniq_gcustody_id[13];
+	char	h_domestic[3];
+	char	h_deal_status[3];
+	char	h_indentity_no[17];
+	char	h_trans_class[3];
+	double	h_qty;
+	char	h_instr_code[9];
+	char	h_instr_isin[13];
+	char	h_instr_name[131];
+	char	h_instr_class[4];
+	char	h_newdt[APL_DATE_LEN];
+	char	h_dlt[APL_DATE_LEN];
+	char	h_csetl_date[APL_DATE_LEN];
+	char	h_asetl_dt[APL_DATE_LEN];
+	char	h_ccy[4];
+	double	h_amt;
+	char	h_brkr[11];
+	char	h_brkr_detail[66];
+	char	h_benefi_clt_cd[36];
+	char	h_benef_detail[66];
+	char	h_fail_cd[3];
+	char	h_subfailreas_cd[3];
+	char	h_rpr_ind[2];
+	char	h_manual_ind[2];
+	char	h_custinfo[71];
+	char	h_checker[15];
+	char	h_moneydate[APL_DATE_LEN];
+	char	h_dealcd[2];
+	char	h_clnt_class[3];
+	char	h_domcpclt_cd[11];
+	char	h_domcpclt_cd_detail[66];
+	char	h_prodateype[3];
+}A_ACCOUNT_STRUCT_H;
+
+typedef struct
+{
+	short	i_dl_client;
+	short	i_client_name;
+	short	i_contactinfo;
+	short	i_mastclt;
+	short	i_uniq_gcustody_id;
+	short	i_domestic;
+	short	i_deal_status;
+	short	i_indentity_no;
+	short	i_trans_class;
+	short	i_qty;
+	short	i_instr_code;
+	short	i_instr_isin;
+	short	i_instr_name;
+	short	i_instr_class;
+	short	i_newdt;
+	short	i_dlt;
+	short	i_csetl_date;
+	short	i_asetl_dt;
+	short	i_ccy;
+	short	i_amt;
+	short	i_brkr;
+	short	i_brkr_detail;
+	short	i_benefi_clt_cd;
+	short	i_benef_detail;
+	short	i_failreas_cd;
+	short	i_subfailreas_cd;
+	short	i_rpr_ind;
+	short	i_manual_ind;
+	short	i_custinfo;
+	short	i_checker;
+	short	i_moneydate;
+	short	i_dealcd;
+	short	i_clnt_class;
+	short	i_domcpclt_cd;
+	short	i_domcpclt_cd_detail;
+	short	i_prodateype;
+} A_ACCOUNT_STRUCT_I;
+
+
+char chr_today_date[9]=APL_NULL_STRING;
+char chr_bookingoffice[APL_BOOKINGOFFICE_LEN]=APL_NULL_STRING;
+char chr_citigroup_acc[11]=APL_NULL_STRING;
+char chr_org_failcode[3]=APL_NULL_STRING;
+
+
+char chr_is_manual[1]=APL_NULL_STRING;
+char chr_trans_mast_status[1]=APL_NULL_STRING;
+char fail_det[36]=APL_NULL_STRING;
+char sfeindentity_no[11]=APL_NULL_STRING;
+int deal_cd=0;
+char chr_h_late_hour[3]=APL_NULL_STRING;
+char chr_h_late_minute[3]=APL_NULL_STRING;
+char chr_h_late_day[3]=APL_NULL_STRING;
+int int_no_min_late=0;
+int int_no_hour_late=0;
+int int_no_day_late=0;
+char chr_is_late[1]=APL_NULL_STRING;
+
+A_ACCOUNT_STRUCT_H h_safekeeping;
+A_ACCOUNT_STRUCT_I i_safekeeping;
+
+INTL_REPT_STRUCT_H *l_intl_rept_struct_ha = NULL;
+
+char chr_p_filename_a[20]=APL_NULL_STRING;
+char chr_p_smacsett[PATH_LENGTH]=APL_NULL_STRING;
+char chr_p_smacsettfile_name[PATH_LENGTH]=APL_NULL_STRING;
+char chr_p_smacsettfinal_name[PATH_LENGTH]=APL_NULL_STRING;
+char chr_p_buf[BUFFER_LEN_A]=APL_NULL_STRING;
+char gl_client[11] = APL_NULL_STRING;
+char chr_cash_ccy[4] = APL_NULL_STRING;
+char chr_default_cashacc[11] = APL_NULL_STRING;
+FILE *fp = NULL;
+
+short i_default_cashacc=0;
+short i_cash_client=0;
+short i_cash_ccy=0;
+short i_org_failcode=0;
+
+short i_today_date=0;
+short i_bookingoffice=0;
+short i_failinfo=0;
+short i_sferefno=0;
+short i_citigroup_acc=0;
+short i_late_hour=0;
+short i_late_minute=0;
+short i_late_day=0;
+
+   char                  chr_g_restart_data[APL_RESTARTDATA_LENGTH];
+    short                 g_restart_data_i;
+
+
+
+memset(&h_safekeeping, NULL, sizeof(A_ACCOUNT_STRUCT_H));
+memset(&i_safekeeping, NULL, sizeof(A_ACCOUNT_STRUCT_I));
+
+EXEC SQL VAR chr_g_restart_data is string;
+EXEC SQL VAR h_safekeeping.h_instr_isin IS STRING;
+EXEC SQL VAR h_safekeeping.h_instr_code IS STRING;
+EXEC SQL VAR h_safekeeping.h_dl_client IS STRING;
+EXEC SQL VAR h_safekeeping.h_client_name IS STRING;
+EXEC SQL VAR h_safekeeping.h_contactinfo IS STRING;
+EXEC SQL VAR h_safekeeping.h_mastclt IS STRING;
+EXEC SQL VAR h_safekeeping.h_uniq_gcustody_id IS STRING;
+EXEC SQL VAR h_safekeeping.h_indentity_no IS STRING;
+EXEC SQL VAR h_safekeeping.h_trans_class IS STRING;
+EXEC SQL VAR h_safekeeping.h_instr_name IS STRING;
+EXEC SQL VAR h_safekeeping.h_ccy IS STRING;
+EXEC SQL VAR h_safekeeping.h_brkr IS STRING;
+EXEC SQL VAR h_safekeeping.h_brkr_detail IS STRING;
+EXEC SQL VAR h_safekeeping.h_benefi_clt_cd IS STRING;
+EXEC SQL VAR h_safekeeping.h_benef_detail IS STRING;
+EXEC SQL VAR h_safekeeping.h_fail_cd IS STRING;
+EXEC SQL VAR h_safekeeping.h_subfailreas_cd IS STRING;
+EXEC SQL VAR fail_det IS STRING;
+EXEC SQL VAR h_safekeeping.h_custinfo IS STRING;
+EXEC SQL VAR h_safekeeping.h_rpr_ind is STRING;
+EXEC SQL VAR h_safekeeping.h_manual_ind is STRING;
+EXEC SQL VAR h_safekeeping.h_checker is STRING;
+EXEC SQL VAR h_safekeeping.h_dealcd is STRING;
+EXEC SQL VAR gl_client is STRING;
+EXEC SQL VAR chr_cash_ccy is STRING;
+EXEC SQL VAR chr_default_cashacc is STRING;
+EXEC SQL VAR chr_org_failcode is STRING;
+EXEC SQL VAR sfeindentity_no is STRING;
+EXEC SQL VAR h_safekeeping.h_asetl_dt is STRING;
+EXEC SQL VAR h_safekeeping.h_clnt_class is STRING;
+EXEC SQL VAR h_safekeeping.h_domcpclt_cd is STRING;
+EXEC SQL VAR h_safekeeping.h_domcpclt_cd_detail is STRING;
+EXEC SQL VAR chr_citigroup_acc is STRING;
+EXEC SQL VAR h_safekeeping.h_prodateype is STRING;
+
+
+	
+	strcat(chr_p_filename_a,P_STATIC_AFTER);
+        strcat(chr_p_filename_a,g_mt_commonsys_params_struct_h.nation_code);
+
+	
+	printf("Eric: Before reading chr_token for hoff\n");	
+	if ( APL_FAILURE ==CO_ReadToken(p_fp_inifile,"SESAM_SETTLDATA_DIR",chr_p_smacsett,l_debug_info_ptr))// AIX		
+	{
+		CO_ProcMonitor(p_fp_logfile,"E:Could not read the SMACSETT directory from intl_sun.cfg",NULL,NULL);
+		APL_GOBACK_FAIL	
+	}
+	printf("Eric: After reading chr_token for hoff\n");	
+
+   	
+   	strcpy(chr_p_smacsettfile_name, chr_p_smacsett);
+   	strcat(chr_p_smacsettfile_name, chr_p_filename_a);
+        strcat(chr_p_smacsettfile_name, ".tmp");
+
+	printf("Eric : Just checking the h_file names \n");
+	if ((strcmp(chr_p_smacsettfile_name,APL_NULL_STRING) == 0))
+	{
+  		if (CO_InsertErr
+  				(l_debug_info_ptr,
+  				ERR_FDFILE_NOTVALID,
+  				
+  				APL_NULL_STRING,
+  				APL_NULL_STRING,
+  				APL_NULL_STRING,
+  				__LINE__,
+  				__FILE__
+  				) != APL_SUCCESS)
+  				APL_GOBACK_FAIL
+	}
+	printf("Eric: Argument0 is %s \n",argv[0]);
+	printf("Eric: Argument1 is %s \n",argv[1]);
+	printf("Eric: Argument2 is %s \n",argv[2]);
+
+
+  	EXEC SQL SELECT PROCESSING_STATUS INTO :chr_g_restart_data:g_restart_data_i
+     	FROM SYS_BATCHPROC
+     	WHERE PROCESS_NAME=:argv[0]
+        AND   PROC_INIT=:argv[1]
+        AND   STARTDATE=:argv[2]
+        AND   STATUS='started'
+     	FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+
+  	if(APL_ZERO_RESULT_SET)
+   	{
+      	CO_ProcMonitor(p_fp_logfile,"E:No entry in batch_in_proc",NULL,NULL);
+      	APL_GOBACK_FAIL
+   	}
+
+  	IS_ANY_ORA_ERROR
+
+	fprintf(p_fp_logfile, "SMACSETTFn successfully locked the batch record\n");
+
+
+
+
+EXEC SQL SELECT TO_CHAR(SYS_DATE, 'YYYYMMDD') INTO :chr_today_date:i_today_date
+FROM PRO_SYS_DATE;
+IS_ANY_ORA_ERROR
+
+EXEC SQL SELECT nation_code INTO :chr_bookingoffice:i_bookingoffice
+FROM MT_COMMON_SYS_PARAMS;
+IS_ANY_ORA_ERROR 
+
+EXEC SQL SELECT custody_clt_cd INTO :chr_citigroup_acc:i_citigroup_acc
+FROM MT_CORE_SYS_PARAMS;
+IS_ANY_ORA_ERROR
+
+
+
+fp = fopen(chr_p_smacsettfile_name, "w+");
+
+
+
+
+
+EXEC SQL DECLARE SAFEKEEPING CURSOR FOR
+SELECT 	t.client, translate(nvl(ac.cln_name,' '),chr(10)||chr(13)||chr(9)||chr(24),' '), 
+	translate(nvl(ac.cln_contact1,' '),chr(10)||chr(13)||chr(9)||chr(24),' '), 
+   	ac.CLN_master, ac.CLN_UNIQ_GCUSTODY_ID, ac.COUNTRY, t.DEAL_STAT, 
+	t.IDENTIY_NO, t.dl_class, t.QTY, t.instr_code, s.INSTR_ISIN,
+	translate(nvl(s.instr_name,' '),chr(10)||chr(13)||chr(9)||chr(24),' '), 
+	s.INSTR_TYPE, t.DATEOF_INPUT, t.deal_date, t.setl_date, t.INSTRUMENT_DT, t.currency_cd, 
+	t.AMOUNT, t.cp_clt, translate(nvl(t.CP_CLTNAME,' '),chr(10)||chr(13)||chr(9)||chr(24),' '), 
+	t.INSTRUCT_PERSON, translate(nvl(t.INSTRUCT_PERSONNM,' '),chr(10)||chr(13)||chr(9)||chr(24),' '), 
+	t.failreason_cd, t.sub_fail_cd,t.REAPIRED_IND, t.ENTRY, 
+	translate(nvl(t.client_note,' '),chr(10)||chr(13)||chr(9)||chr(24),' '), t.checker, t.MONEY_SETL_DT, t.deal_cd,
+	ac.CLN_TYPE, t.domestic_cpclt, translate(nvl(ac2.cln_name,' '),chr(10)||chr(13)||chr(9)||chr(24),' '), s.PROD_CLASS
+FROM MT_CLIENT ac, DL_DEAL t, MT_INSTRUMENT s, MT_CLIENT ac2
+WHERE ac.CLN_CODE = t.client 
+AND s.instr_code = t.instr_code
+AND t.domestic_cpclt = ac2.CLN_CODE
+ORDER BY t.client, t.instr_code; 
+
+IS_ANY_ORA_ERROR
+
+
+
+EXEC SQL OPEN SAFEKEEPING;
+printf("Eric: Opening Cursor SAFEKEEPING_ID\n");
+IS_ANY_ORA_ERROR
+printf("Eric: Checking errors for opening cursor SAFEKEEPING\n");
+
+
+
+
+
+for(;;)
+{
+	memset(&h_safekeeping, NULL, sizeof(A_ACCOUNT_STRUCT_H));
+	memset(&i_safekeeping, NULL, sizeof(A_ACCOUNT_STRUCT_I));
+	memset(chr_trans_mast_status,APL_NULL_CHAR,60);	
+	memset(chr_default_cashacc,APL_NULL_CHAR,APL_CLIENT_LENGTH);	
+	memset(gl_client,APL_NULL_CHAR,APL_CLIENT_LENGTH);	
+	memset(chr_cash_ccy,APL_NULL_CHAR,APL_CCYCODE_LEN);
+	
+	memset(chr_org_failcode, APL_NULL_CHAR, 3);
+	memset(fail_det, APL_NULL_CHAR, 36);
+	memset(sfeindentity_no, APL_NULL_CHAR, 11);
+	i_default_cashacc=0;
+	i_org_failcode=0;
+	
+	i_cash_client=0;
+	i_cash_ccy=0;
+	i_failinfo=0;
+	
+	
+	
+	EXEC SQL FETCH SAFEKEEPING INTO :h_safekeeping:i_safekeeping;
+	IS_ANY_ORA_ERROR
+	printf("The client selected is %s\n",h_safekeeping.h_dl_client);
+	printf("The instr_code selected is %s\n",h_safekeeping.h_instr_code);
+	printf("The refno selected is %s\n",h_safekeeping.h_indentity_no);
+	if (sqlca.sqlcode==1403)
+	{
+		break;
+	}
+
+	
+
+	EXEC SQL SELECT gl_client INTO :chr_default_cashacc:i_default_cashacc
+	FROM DL_DEAL
+	WHERE client = rtrim(:h_safekeeping.h_dl_client) 
+	AND IDENTIY_NO = rtrim(:h_safekeeping.h_indentity_no);
+	IS_ANY_ORA_ERROR
+
+	if (strcmp(chr_default_cashacc,APL_NULL_STRING)!=0)
+	{
+		
+
+		EXEC SQL SELECT GL_ACCOUNT, currency_cd INTO :gl_client:i_cash_client, :chr_cash_ccy:i_cash_ccy
+		FROM DL_CASHCLT
+		WHERE client = rtrim(:h_safekeeping.h_dl_client)
+		and DEFAULT_CCY = 'Y';
+		IS_ANY_ORA_ERROR
+
+		if (strcmp(chr_default_cashacc, gl_client) != 0)
+		{
+			
+
+			memset(gl_client, APL_NULL_CHAR, APL_CLIENT_LENGTH);	
+			memset(chr_cash_ccy, APL_NULL_CHAR, APL_CCYCODE_LEN);
+			i_cash_client=0;
+			i_cash_ccy=0;			
+			EXEC SQL SELECT GL_ACCOUNT, currency_cd INTO :gl_client:i_cash_client, :chr_cash_ccy:i_cash_ccy
+			FROM DL_CASHCLT
+			WHERE GL_ACCOUNT = rtrim(:chr_default_cashacc) 
+			AND client = rtrim(:h_safekeeping.h_dl_client) 
+			AND rownum < 2;
+			IS_ANY_ORA_ERROR
+		}
+	}
+
+	else
+	{
+		
+		EXEC SQL SELECT GL_ACCOUNT, currency_cd INTO :gl_client:i_cash_client, :chr_cash_ccy:i_cash_ccy
+		FROM DL_CASHCLT
+		WHERE client = rtrim(:h_safekeeping.h_dl_client)
+		AND DEFAULT_CCY = 'Y';
+		IS_ANY_ORA_ERROR
+
+		if (APL_ZERO_RESULT_SET)
+		{
+			
+
+			memset(gl_client, APL_NULL_CHAR, APL_CLIENT_LENGTH);	
+			memset(chr_cash_ccy, APL_NULL_CHAR, APL_CCYCODE_LEN);
+			i_cash_client=0;
+			i_cash_ccy=0;
+			EXEC SQL SELECT GL_ACCOUNT, currency_cd INTO :gl_client:i_cash_client, :chr_cash_ccy:i_cash_ccy
+			FROM DL_CASHCLT
+			WHERE client = rtrim(:h_safekeeping.h_dl_client)
+			AND rownum < 2;
+			IS_ANY_ORA_ERROR
+		}	
+	}
+
+		
+
+	EXEC SQL SELECT failreason_cd INTO : chr_org_failcode:i_org_failcode
+	FROM DL_DEALAUDIT
+	WHERE client = rtrim(:h_safekeeping.h_dl_client)
+	AND IDENTIY_NO = rtrim(:h_safekeeping.h_indentity_no)
+	AND failreason_cd is not NULL 
+	AND PROC_DATE = (	select min(PROC_DATE)
+			from DL_DEALAUDIT 
+			where client = rtrim(:h_safekeeping.h_dl_client)
+			and IDENTIY_NO = rtrim(:h_safekeeping.h_indentity_no)  
+			and failreason_cd is not NULL )
+        AND rownum < 2;
+	IS_ANY_ORA_ERROR
+
+	
+	printf("The chr_value of failreason_cd is %s\n",h_safekeeping.h_fail_cd);
+	if (strcmp(h_safekeeping.h_fail_cd, APL_NULL_STRING) != 0)
+	{
+		EXEC SQL SELECT FAILREASON_DET INTO : fail_det:i_failinfo
+		FROM PRO_FAILCODES
+		WHERE failreason_cd = rtrim(:h_safekeeping.h_fail_cd)
+		AND sub_fail_cd=rtrim(:h_safekeeping.h_subfailreas_cd);
+		IS_ANY_ORA_ERROR
+	}
+
+	
+	
+
+	EXEC SQL SELECT substr(MESSAGE_DET_A,0,instr(MESSAGE_DET_A, chr(10))-1) INTO : sfeindentity_no:i_sferefno
+	FROM DL_MSGLINK
+	WHERE INFORMATION like '%RCV%'
+	AND client = rtrim(:h_safekeeping.h_dl_client)
+	AND IDENTIY_NO = rtrim(:h_safekeeping.h_indentity_no);
+
+	IS_ANY_ORA_ERROR
+
+	
+
+	if (strcmp(h_safekeeping.h_domcpclt_cd, chr_citigroup_acc) == 0)
+	{
+		if (strcmp(h_safekeeping.h_prodateype, "1") == 0)
+		{
+
+			EXEC SQL SELECT
+trunc( DATEOF_INPUT - to_date(concat(to_char(setl_date-C.late_dl_days_b,'dd/chr_mm/chr_yyyy '),concat(C.latetime_b,':00')))),
+trunc(mod((DATEOF_INPUT - to_date(concat(to_char(setl_date-C.late_dl_days_b,'dd/chr_mm/chr_yyyy '),concat(C.latetime_b,':00'))))*24,24)),
+trunc(mod((DATEOF_INPUT - to_date(concat(to_char(setl_date-C.late_dl_days_b,'dd/chr_mm/chr_yyyy '),concat(C.latetime_b,':00'))))*24*60,60))
+INTO :chr_h_late_day:i_late_day, :chr_h_late_hour:i_late_hour, :chr_h_late_minute:i_late_minute
+FROM dl_deal, INVOICE_SYSTEMPARAM c
+WHERE client = rtrim(:h_safekeeping.h_dl_client) and IDENTIY_NO = rtrim(:h_safekeeping.h_indentity_no);
+
+		}
+		else if (strcmp(h_safekeeping.h_prodateype, "2") == 0)
+		{
+
+			EXEC SQL SELECT
+trunc( DATEOF_INPUT - to_date(concat(to_char(setl_date-C.late_dl_days_d,'dd/chr_mm/chr_yyyy '),concat(C.latetime_d,':00')))),
+trunc(mod((DATEOF_INPUT - to_date(concat(to_char(setl_date-C.late_dl_days_d,'dd/chr_mm/chr_yyyy '),concat(C.latetime_d,':00'))))*24,24)),
+trunc(mod((DATEOF_INPUT - to_date(concat(to_char(setl_date-C.late_dl_days_d,'dd/chr_mm/chr_yyyy '),concat(C.latetime_d,':00'))))*24*60,60))
+INTO :chr_h_late_day:i_late_day, :chr_h_late_hour:i_late_hour, :chr_h_late_minute:i_late_minute
+FROM dl_deal, INVOICE_SYSTEMPARAM c
+WHERE client = rtrim(:h_safekeeping.h_dl_client) and IDENTIY_NO = rtrim(:h_safekeeping.h_indentity_no);
+
+		}
+	}
+	else
+	{
+		if (strcmp(h_safekeeping.h_prodateype, "1") == 0)
+		{
+
+			EXEC SQL SELECT
+trunc( DATEOF_INPUT - to_date(concat(to_char(setl_date-C.late_dl_days_a,'dd/chr_mm/chr_yyyy '),concat(C.latetime_a,':00')))),
+trunc(mod((DATEOF_INPUT - to_date(concat(to_char(setl_date-C.late_dl_days_a,'dd/chr_mm/chr_yyyy '),concat(C.latetime_a,':00'))))*24,24)),
+trunc(mod((DATEOF_INPUT - to_date(concat(to_char(setl_date-C.late_dl_days_a,'dd/chr_mm/chr_yyyy '),concat(C.latetime_a,':00'))))*24*60,60))
+INTO :chr_h_late_day:i_late_day, :chr_h_late_hour:i_late_hour, :chr_h_late_minute:i_late_minute
+FROM dl_deal, INVOICE_SYSTEMPARAM c
+WHERE client = rtrim(:h_safekeeping.h_dl_client) and IDENTIY_NO = rtrim(:h_safekeeping.h_indentity_no);
+
+		}
+		else if (strcmp(h_safekeeping.h_prodateype, "2") == 0)
+		{
+
+			EXEC SQL SELECT
+trunc( DATEOF_INPUT - to_date(concat(to_char(setl_date-C.late_dl_days_c,'dd/chr_mm/chr_yyyy '),concat(C.latetime_c,':00')))),
+trunc(mod((DATEOF_INPUT - to_date(concat(to_char(setl_date-C.late_dl_days_c,'dd/chr_mm/chr_yyyy '),concat(C.latetime_c,':00'))))*24,24)),
+trunc(mod((DATEOF_INPUT - to_date(concat(to_char(setl_date-C.late_dl_days_c,'dd/chr_mm/chr_yyyy '),concat(C.latetime_c,':00'))))*24*60,60))
+INTO :chr_h_late_day:i_late_day, :chr_h_late_hour:i_late_hour, :chr_h_late_minute:i_late_minute
+FROM dl_deal, INVOICE_SYSTEMPARAM c
+WHERE client = rtrim(:h_safekeeping.h_dl_client) and IDENTIY_NO = rtrim(:h_safekeeping.h_indentity_no);
+
+		}
+	}
+
+	int_no_min_late = atoi(chr_h_late_minute);
+	int_no_hour_late = atoi(chr_h_late_hour);
+	int_no_day_late = atoi(chr_h_late_day);
+			
+	if (int_no_min_late > 0)		 
+	{
+                strcpy(chr_is_late, "Y");
+        }
+        else
+        {
+                strcpy(chr_is_late, "N");
+                strcpy(chr_h_late_day, "00");
+		int_no_day_late = 0;
+                strcpy(chr_h_late_hour, "00");
+		int_no_hour_late = 0;
+                strcpy(chr_h_late_minute, "00");
+		int_no_min_late = 0;
+	}
+	
+	
+
+	
+
+	
+
+	deal_cd = atoi(h_safekeeping.h_dealcd);
+	
+	if (	(strcmp(h_safekeeping.h_checker, APL_NULL_STRING) != 0) && 
+		(	(strcmp(h_safekeeping.h_asetl_dt, APL_NULL_STRING) == 0) ||
+			(	(strcmp(h_safekeeping.h_moneydate, APL_NULL_STRING) == 0) && 
+				(deal_cd > 2))))
+	{
+		strcpy(chr_trans_mast_status, "P");		
+
+		
+		
+	}
+
+	else if (strcmp(h_safekeeping.h_asetl_dt, APL_NULL_STRING) != 0)
+	{
+		strcpy(chr_trans_mast_status, "S");
+				
+		
+		
+	}
+
+	else if (strcmp(h_safekeeping.h_checker, APL_NULL_STRING) == 0)
+   	{
+		strcpy(chr_trans_mast_status, "U");
+	}
+
+
+	if (strcmp(h_safekeeping.h_manual_ind, "M") == 0)
+	{
+		strcpy(chr_is_manual, "Y");
+	}
+	else
+	{
+		strcpy(chr_is_manual, "N");
+	}
+
+	if (strcmp(h_safekeeping.h_rpr_ind, APL_NULL_STRING) == 0)
+	{
+		strcpy(h_safekeeping.h_rpr_ind, "N");
+	} 
+
+	
+
+
+	
+ 
+	if (strcmp(h_safekeeping.h_dl_client, APL_NULL_STRING) != 0)
+	{
+		fprintf(fp, "%-2s", chr_bookingoffice);
+		fprintf(fp, "%-10s", h_safekeeping.h_dl_client);
+		fprintf(fp, "%-65s", h_safekeeping.h_client_name);
+		fprintf(fp, "%-160s", h_safekeeping.h_contactinfo);
+		fprintf(fp, "%-10s", h_safekeeping.h_mastclt);
+		fprintf(fp, "%-12s", h_safekeeping.h_uniq_gcustody_id);
+		fprintf(fp, "%-2s", h_safekeeping.h_domestic);
+		fprintf(fp, "%-1s", chr_trans_mast_status);
+		fprintf(fp, "%-16s", h_safekeeping.h_indentity_no);
+		fprintf(fp, "%-16s", h_safekeeping.h_indentity_no);
+		fprintf(fp, "%-35s", " "); 
+		fprintf(fp, "%-35s", " ");
+		fprintf(fp, "%-10s", sfeindentity_no);
+		fprintf(fp, "%-2s", h_safekeeping.h_trans_class);
+		fprintf(fp, "%-25.4lf", h_safekeeping.h_qty);
+		fprintf(fp, "%-8s", h_safekeeping.h_instr_code);
+		fprintf(fp, "%-12s", h_safekeeping.h_instr_isin);
+		fprintf(fp, "%-130s", h_safekeeping.h_instr_name);
+		fprintf(fp, "%-3s", h_safekeeping.h_instr_class);
+		fprintf(fp, "%-20s", h_safekeeping.h_newdt);
+		fprintf(fp, "%-20s", h_safekeeping.h_dlt);
+		fprintf(fp, "%-20s", h_safekeeping.h_csetl_date);
+		fprintf(fp, "%-20s", h_safekeeping.h_asetl_dt);
+		fprintf(fp, "%-3s", h_safekeeping.h_ccy);
+		fprintf(fp, "%-18.3lf", h_safekeeping.h_amt);
+		fprintf(fp, "%-3s", chr_cash_ccy);
+		fprintf(fp, "%-10s", gl_client);
+		fprintf(fp, "%-10s", h_safekeeping.h_brkr);
+		fprintf(fp, "%-65s", h_safekeeping.h_brkr_detail);
+		fprintf(fp, "%-35s", h_safekeeping.h_benefi_clt_cd);
+		fprintf(fp, "%-65s", h_safekeeping.h_benef_detail);
+		fprintf(fp, "%-2s", chr_org_failcode);
+		fprintf(fp, "%-2s", h_safekeeping.h_fail_cd);
+		fprintf(fp, "%-35s", fail_det);
+		fprintf(fp, "%-2s", h_safekeeping.h_deal_status);
+		fprintf(fp, "%-1s", h_safekeeping.h_rpr_ind);
+		fprintf(fp, "%-1s", chr_is_manual);
+		fprintf(fp, "%-70s", h_safekeeping.h_custinfo);
+		fprintf(fp, "%-14s", h_safekeeping.h_checker);
+		fprintf(fp, "%-20s", h_safekeeping.h_moneydate);
+		fprintf(fp, "%-1s", h_safekeeping.h_dealcd);
+		fprintf(fp, "%-2s", h_safekeeping.h_clnt_class);
+		fprintf(fp, "%-10s", h_safekeeping.h_domcpclt_cd);
+		fprintf(fp, "%-65s", h_safekeeping.h_domcpclt_cd_detail);
+		fprintf(fp, "%-1s", chr_is_late);
+		fprintf(fp, "%.2d-", int_no_day_late);
+		fprintf(fp, "%.2d-", int_no_hour_late);
+		fprintf(fp, "%.2d\n", int_no_min_late); 
+	}
+}
+ 
+
+CO_Proc_RptClose(fp, &l_debug_info_ptr);
+
+strcpy(chr_p_smacsettfinal_name, chr_p_smacsett);
+strcat(chr_p_smacsettfinal_name, chr_p_filename_a);
+strcat(chr_p_smacsettfinal_name, ".DAT");
+printf("Eric: Before the handoff h_file movement\n");	
+memset(chr_p_buf,APL_NULL_CHAR,BUFFER_LEN_A);
+sprintf(chr_p_buf,"rm -f %s",chr_p_smacsettfinal_name);
+system(chr_p_buf);
+
+link(chr_p_smacsettfile_name,chr_p_smacsettfinal_name);
+unlink(chr_p_smacsettfile_name);
+printf("Eric: After UNLINK\n");	
+	
+l_intl_rept_struct_ha = (INTL_REPT_STRUCT_H *)calloc(1, sizeof(INTL_REPT_STRUCT_H));
+APL_MALLOC_FAIL(l_intl_rept_struct_ha) ;
+
+
+strncpy(l_intl_rept_struct_ha->report_name, chr_p_filename_a, APL_REPNAME_LENGTH + 2);
+l_intl_rept_struct_ha->report_name[APL_REPNAME_LENGTH + 3] = '\0';
+strncpy(l_intl_rept_struct_ha->report_desc, APL_HOFF_FILE_DESC, APL_REPDESC_LENGTH - 1);
+l_intl_rept_struct_ha->report_desc[APL_REPDESC_LENGTH - 1] = '\0';
+strcpy(l_intl_rept_struct_ha->report_date,argv[2]);
+l_intl_rept_struct_ha->report_width = 100;
+strcpy(l_intl_rept_struct_ha->task_desc,argv[5]);
+strcpy(l_intl_rept_struct_ha->fe_be_ind, APL_BE_IND);
+strcpy(l_intl_rept_struct_ha->usr,argv[3]);
+
+printf("Eric: Before CO_Proc_RptInsNew\n");	
+if (APL_FAILURE == CO_Proc_RptInsNew( l_intl_rept_struct_ha,"INTL_REP_PATH", l_debug_info_ptr))
+{
+APL_GOBACK_FAIL
+	printf("Eric: Failure CO_Proc_RptInsNew\n");	
+}
+printf("Eric: After CO_Proc_RptInsNew\n");
+APL_GOBACK_SUCCESS
+
+RETURN_SUCCESS :
+	{
+CO_ProcMonitor(p_fp_logfile," Successful ! in SMACSETT",l_debug_info_ptr,NULL);
+		CO_Proc_RptClose(fp, &l_debug_info_ptr);
+		printf("Eric: SUCCESS AT LAST \n");
+   		return(APL_SUCCESS);
+	}
+RETURN_FAILURE :
+	{
+		CO_ProcMonitor(p_fp_logfile," Failure in SMACSETT",l_debug_info_ptr,NULL);
+		CO_Proc_RptClose(fp, &l_debug_info_ptr);	
+		printf("Eric: FAILURE.... TRY AGAIN\n");
+   		return(APL_FAILURE);
+	}
+}
+

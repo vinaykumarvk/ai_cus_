@@ -1,0 +1,316 @@
+
+
+
+
+
+#include "stdio_64.h"
+#include <stdlib.h>
+#include <string.h>
+
+#include "CR_Common.h"
+#include "Intellect_Common.h"
+#include "IV_Control_A.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+/*Commented by kotubabu for Linux Migration
+#define OS_UNIX */
+#define LINERR_LENGTH1 100
+
+
+
+//main(int argc,char *argv[])
+int main(int argc,char **argv)//Changes done for AIX Migration
+{
+	int i,j;
+	char chr_intl_msg_arch_dr[50],chr_report_dir[50],chr_path[50];
+	char chr_l_sesaminipath[70] = APL_NULL_STRING;
+	char chr_h_batch_in_proc_rowid[APL_ROWID_LEN] = APL_NULL_STRING;
+	char h_ora_rowid[APL_ROWID_LEN]=APL_NULL_STRING;
+	char  **chr_param_list=NULL;
+	char chr_l_filler[150]=APL_NULL_STRING;
+
+	int int_l_num=0;
+	int int_l_count;
+	char **int_l_temp;
+	int int_l_num_fields=0;
+	int int_l_srno_a = 0;
+	char **chr_l_temp_fields;
+	char chr_l_date[APL_DATE_LEN] = APL_NULL_STRING;
+	char chr_l_now[APL_DATE_LEN] = APL_NULL_STRING;
+	char *a;
+	char chr_l_srnochar[6] = APL_NULL_STRING;
+	FILE *fp_SesamIni = (FILE *) NULL ;
+	FILE *fp_Report = (FILE *)NULL;
+	FILE *fp_UserLog = (FILE *)NULL;
+   DEBUG_INFO_STRUCT_H   *l_debug_info_struct = NULL, **l_debug_info_ptr = &l_debug_info_struct;
+
+	EXEC SQL BEGIN DECLARE SECTION;
+		char chr_custody_id_b[APL_USERID_LEN];
+		char chr_uname[APL_USERID_LEN];
+		char chr_passwd[APL_PASSWD_LEN];
+		char chr_l_reason[4000];
+		char chr_l_reasons[4000];
+		char chr_l_delimiter;
+		short i_ora_rowid;
+		int int_l_position;
+		DL_CCSFAILMSG_STRUCT_H  l_dl_ccsfailmsg_struct_h;
+		DL_CCSFAILMSG_STRUCT_I  l_dl_ccsfailmsg_struct_i={0,0,0,0,0};
+		EXEC SQL VAR chr_uname IS STRING;
+		EXEC SQL VAR chr_passwd IS STRING;
+		EXEC SQL VAR l_dl_ccsfailmsg_struct_h.h_dl_client IS STRING;
+		EXEC SQL VAR l_dl_ccsfailmsg_struct_h.h_indentity_no IS STRING;
+		EXEC SQL VAR l_dl_ccsfailmsg_struct_h.h_rep_dt IS STRING;
+		EXEC SQL VAR l_dl_ccsfailmsg_struct_h.h_failreas IS STRING;
+		struct sqlca sqlca;
+	EXEC SQL END DECLARE SECTION;	
+
+	memset(chr_l_sesaminipath, APL_NULL_CHAR, 70);
+	strcpy(chr_l_sesaminipath, getenv("INTL_ROOT_PATH"));
+	strcat(chr_l_sesaminipath, "/intl_sun.cfg");
+	sqlca.sqlcode = 0L;
+
+	if ( (fp_SesamIni = fopen(chr_l_sesaminipath, "r")) == (FILE *)NULL )
+	{
+		printf("Could not open intl_sun.cfg\n");
+		APL_GOBACK_FAIL
+		}
+
+	APL_FETCH_DB_LOGIN_DETAILS(fp_SesamIni, chr_custody_id_b, chr_uname, chr_passwd,
+								 APL_OUT_FILE, l_debug_info_ptr);
+
+	EXEC SQL CONNECT :chr_uname IDENTIFIED BY :chr_passwd;
+	IS_ANY_ORA_ERROR
+
+	
+
+	if ( APL_FAILURE == CO_Rtv_RptFileName("ccsl", APL_LOGFILE_DESC, 100,argv[5], argv, &fp_UserLog,l_debug_info_ptr) )
+   {
+        printf("Could not open User Log h_file.\n");
+        APL_GOBACK_FAIL
+   }
+	 
+	if ( APL_FAILURE == CO_Rtv_RptFileName("ccsf", "CCSFAIL", 100,argv[5], argv, &fp_Report,l_debug_info_ptr) )
+   {
+         printf("Could not open Report h_file.\n");
+         APL_GOBACK_FAIL
+   }
+
+
+
+printf("lock record in batch in proc ...\n");
+        EXEC SQL SELECT ROWID
+                                INTO :chr_h_batch_in_proc_rowid
+                                FROM SYS_BATCHPROC
+            WHERE PROCESS_NAME  = RTRIM(:argv[0])
+            AND     PROC_INIT             = RTRIM(:argv[1])
+            AND     STARTDATE       = :argv[2]
+            AND     STATUS          = 'started'
+            FOR UPDATE OF STATUS;
+
+printf("\n after locking record in batch in proc ...|%d|%s|%s|%s|",sqlca.sqlcode,argv[0],argv[1],argv[2]);
+        IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"BATCH_IN_PROC",argv[0],argv[1])
+	
+
+
+	if ( APL_FAILURE == CO_RtvMachDtTime(chr_l_date, l_debug_info_ptr) )
+	{
+		APL_GOBACK_FAIL
+	}
+	strcpy(chr_l_filler,"--");	
+	CO_PadString(chr_l_filler,'R',120,"-",l_debug_info_ptr);
+	fprintf(fp_Report,"%10c CCS INCOMING MESSAGE REPORT%15cDATE : %s \n",' ',' ',chr_l_date);
+	fprintf(fp_Report,"%s\n",chr_l_filler);
+	fprintf(fp_Report," Sr.%2cACCOUNT%8cREFNO%16cDATE%21cREASON\n",' ',' ',' ',' ');
+	fprintf(fp_Report,"%s\n",chr_l_filler);
+
+	EXEC SQL DECLARE REPORT_CURSOR CURSOR FOR
+				SELECT  CLIENT,IDENTIY_NO,REPORT_DT,REAS,ROWID   FROM DL_CCSFAILMSG WHERE (REPORT_IND = 'N') 
+				ORDER BY REPORT_DT,CLIENT,IDENTIY_NO; 
+
+	IS_ANY_ORA_ERROR
+
+	EXEC SQL OPEN REPORT_CURSOR;
+	IS_ANY_ORA_ERROR
+	for (;;)
+	{
+		int_l_srno_a = int_l_srno_a + 1;
+		EXEC SQL FETCH REPORT_CURSOR 
+					INTO  :l_dl_ccsfailmsg_struct_h.h_dl_client:l_dl_ccsfailmsg_struct_i.i_dl_client,
+							:l_dl_ccsfailmsg_struct_h.h_indentity_no:l_dl_ccsfailmsg_struct_i.i_indentity_no,
+							:l_dl_ccsfailmsg_struct_h.h_rep_dt:l_dl_ccsfailmsg_struct_i.i_rep_dt,
+							:l_dl_ccsfailmsg_struct_h.h_failreas:l_dl_ccsfailmsg_struct_i.i_reas,
+							:h_ora_rowid:i_ora_rowid;
+
+		IS_ANY_ORA_ERROR
+	
+		printf("sqlca is = %d\n",sqlca.sqlcode);
+		if(sqlca.sqlcode ==1403)
+		{
+			if(int_l_srno_a ==1)
+			fprintf(fp_UserLog,"No Rows in the CCS_FAILMAG TABLE WITH REP_FLG ='N'.");
+	
+			break;	
+		}
+		
+		 
+		if (strlen(l_dl_ccsfailmsg_struct_h.h_dl_client)== 0)
+		{
+			sprintf(l_dl_ccsfailmsg_struct_h.h_dl_client,"%10c",' ');
+			strcat(l_dl_ccsfailmsg_struct_h.h_dl_client,"\0"); //AIX -Warnings Removal
+		}
+		else
+		{
+			CO_PadString(l_dl_ccsfailmsg_struct_h.h_dl_client,'R',10," ",l_debug_info_ptr);
+		}
+		if(strlen(l_dl_ccsfailmsg_struct_h.h_indentity_no)==0)
+		{
+			sprintf(l_dl_ccsfailmsg_struct_h.h_indentity_no,"%16c",' ');
+			strcat(l_dl_ccsfailmsg_struct_h.h_indentity_no,"\0"); //AIX -Warnings Removal
+		}
+		else
+		{
+			CO_PadString(l_dl_ccsfailmsg_struct_h.h_indentity_no,'R',16," ",l_debug_info_ptr);
+		}
+		sprintf(chr_l_srnochar,"%d",int_l_srno_a);
+		CO_PadString(chr_l_srnochar,'L',4," ",l_debug_info_ptr);
+		printf("\n Sr No is a%sb\n \n",chr_l_srnochar);
+		fprintf(fp_Report, "%s.%2s%s%5s%s%5s%s%5s",chr_l_srnochar," ",l_dl_ccsfailmsg_struct_h.h_dl_client," ",l_dl_ccsfailmsg_struct_h.h_indentity_no," ",l_dl_ccsfailmsg_struct_h.h_rep_dt," ");
+		strcpy(chr_l_reasons , l_dl_ccsfailmsg_struct_h.h_failreas);
+		printf("l_reason = %s\n",chr_l_reasons);
+		if (APL_FAILURE == CO_SplitStr( chr_l_reasons,
+		                                        '#',
+		                                         &int_l_num,
+		                                         &int_l_temp ))
+					 {
+	          				//printf("inside lreason SPLIT %d\n", strlen(chr_l_reasons));Changes done for AIX Migration
+	          				printf("inside lreason SPLIT %d\n", (int)strlen(chr_l_reasons));
+								if(strlen(chr_l_reasons)==0)
+								{
+								CO_ProcMonitor(fp_UserLog, "Failure from StrSplitFni: NO ERROR DESCRIPTION", NULL, NULL);
+		
+								}
+
+					     
+   			     }
+				     else
+				     {
+							printf("split successful \n");
+				     }
+	for(int_l_count =0 ; int_l_count<int_l_num; int_l_count++)
+		printf("l_num = %d,int_l_temp[int_l_count] =%s \n",int_l_num,int_l_temp[int_l_count]);
+		 			
+		if (APL_FAILURE == CO_SplitStr(int_l_temp[0],
+	                                   '|',
+	                                   &int_l_num_fields,
+	                                   &chr_l_temp_fields ))
+		    {
+				printf("inside lreason SPLIT %d\n", (int)strlen(int_l_temp[0]));
+				if(strlen(int_l_temp[0]) == 0)
+				{
+					CO_ProcMonitor(fp_UserLog, "Failure from StrSplitFni:: NO ERROR DESCRIPTION", NULL, NULL);
+				}
+	    	}
+		else
+	      {
+		            printf("split successful \n");
+	   	}
+		if(int_l_num_fields !=0)
+		printf("BEFORE WHILEnumr firld ==== %s, int_l_num_fields =%d",chr_l_temp_fields[int_l_num_fields-1],int_l_num_fields);
+	
+		if(int_l_num_fields !=0)
+		{
+			while(strlen(chr_l_temp_fields[int_l_num_fields-1])<=1)
+			{		
+					int_l_num_fields = int_l_num_fields - 1 ;
+			}
+			printf("numr firld ==== %s, int_l_num_fields =%d\n",chr_l_temp_fields[int_l_num_fields-1],int_l_num_fields);
+			fprintf(fp_Report,"1. %s :%s\n",chr_l_temp_fields[int_l_num_fields-1],chr_l_temp_fields[2]);
+		}
+		else
+		{
+			if(int_l_num == 0)
+			{
+				fprintf(fp_Report,"%s\n",chr_l_reasons);
+			}
+			else
+			{	
+				fprintf(fp_Report,"%s\n",int_l_temp[0]);
+			}
+		}
+	
+		for(int_l_count=1;int_l_count<int_l_num;int_l_count++)
+		{
+			if (APL_FAILURE == CO_SplitStr( int_l_temp[int_l_count],
+                                          '|',
+                                          &int_l_num_fields,
+                                          &chr_l_temp_fields ))
+        		 {
+     			printf("inside lreason SPLIT %d\n", (int)strlen(int_l_temp[int_l_count])); //AIX -Warnings Removal
+				if(int_l_temp[int_l_count] == 0)
+				{
+					CO_ProcMonitor(fp_UserLog, "Failure from StrSplitFn", NULL, NULL);
+				}
+       			  }
+			else
+		   {
+		        printf("split successful \n");
+		   }
+			printf("%s \n",int_l_temp[int_l_count]);
+			if(int_l_num_fields !=0)
+			{
+				printf("inside splitinng of sunsequent functions\n");
+				while(strlen(chr_l_temp_fields[int_l_num_fields-1]) <=1)
+				{
+					int_l_num_fields -= int_l_num_fields - 1 ;
+				}
+			 	printf("numr firld ==== %s\n",chr_l_temp_fields[int_l_num_fields-1]);
+				fprintf(fp_Report,"%67c",' ');
+				fprintf(fp_Report,"%d. %s :%s\n",int_l_count+1,chr_l_temp_fields[int_l_num_fields-1],chr_l_temp_fields[2]);
+			}
+			else
+			{
+				fprintf(fp_Report,"%s\n",int_l_temp[int_l_count]);
+			}
+		}
+		
+		EXEC SQL UPDATE DL_CCSFAILMSG SET REPORT_IND='Y' WHERE ROWID=:h_ora_rowid;
+		IS_ANY_ORA_ERROR
+		fprintf(fp_Report,"\n");
+	}	
+	EXEC SQL CLOSE REPORT_CURSOR; 
+	IS_ANY_ORA_ERROR
+
+		EXEC SQL UPDATE SYS_BATCHPROC
+				SET STATUS = 'completed'
+				WHERE ((PROCESS_NAME = :argv[0])
+		  AND   PROC_INIT = RTRIM(:argv[1]) AND   STARTDATE = :argv[2] AND (STATUS = 'started'));
+	IS_ANY_ORA_ERROR_AND_ZERO_RESULTSET(ERR_REC_NOTFND,"BATCH_IN_PROC",argv[0],argv[1])	
+
+	EXEC SQL COMMIT;
+	IS_ANY_ORA_ERROR
+
+
+	RETURN_SUCCESS:
+	 {
+		 CO_ProcMonitor(APL_OUT_FILE, "Exiting Out Of  I_CCSFailRpt successfully\n",
+						 NULL, NULL);
+		 fprintf(fp_UserLog,"Report Completed successfully.\n");
+		CO_Proc_RptClose(fp_SesamIni,l_debug_info_ptr);
+       		CO_Proc_RptClose(fp_UserLog,l_debug_info_ptr);
+        	CO_Proc_RptClose(fp_Report,l_debug_info_ptr);
+		 return(APL_SUCCESS);
+	 }
+
+	 RETURN_FAILURE:
+	 {
+		 CO_ProcMonitor(APL_OUT_FILE, "Exiting Out Of I_CCSFailRpt unsuccessfully\n",
+											 NULL, NULL);
+		fprintf(fp_UserLog,"Report Generation has errors....\n");
+		CO_ProcMonitor(fp_UserLog, APL_NULL_STRING, l_debug_info_ptr, NULL);
+		CO_Proc_RptClose(fp_SesamIni,l_debug_info_ptr);
+        	CO_Proc_RptClose(fp_UserLog,l_debug_info_ptr);
+        	CO_Proc_RptClose(fp_Report,l_debug_info_ptr);
+		return(APL_FAILURE);
+	}
+}

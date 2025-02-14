@@ -1,0 +1,573 @@
+
+
+
+
+
+
+
+#include "stdio_64.h"
+#include <stdlib.h>
+#include "IV_Control_A.h"
+
+EXEC SQL INCLUDE SQLCA.H;
+
+int	 IV_Proc_ResendBill(	char 				**argv,
+							FILE 				*clt,
+							FILE 				*pymnt,
+							FILE 				*fl_techlog,
+							FILE 				*fl_userlog,
+							DEBUG_INFO_STRUCT_H	**l_debug_info_ptr) 
+{
+	int IV_Proc_ChkResend(FILE *clt, FILE *pymnt,
+					  char *p_mstclt_a, char *p_bl_prv_date,
+					  FILE **fl_temp_blprnt, FILE *fl_userlog,
+					  FILE *fl_techlog, char *chr_p_client,
+					  char h_remdup,int *int_countunauthacc,
+					  int *int_countunauthpymnt,
+					  DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+	extern int CO_Rtv_RptFileName(char *chr_rep_st, char *chr_rep_desc,
+										int rep_widateh, char *func_desc,
+										char **argv, FILE **file_handle,
+										DEBUG_INFO_STRUCT_H **l_debug_info_ptr);
+
+	
+
+	SYS_IVCONTROLPARAM_STRUCT 		l_sys_ivcntl_param_struct;
+	char						h_dl_client[APL_CLIENT_LENGTH]		= APL_NULL_STRING;
+	char						chr_l_client_a[APL_CLIENT_LENGTH]		= APL_NULL_STRING;
+	char						h_mstclt[APL_CLIENT_LENGTH]		= APL_NULL_STRING;
+	char						chr_h_restart[51]						= APL_NULL_STRING;
+	char						chr_h_statinfo[71]						= APL_NULL_STRING;
+	char 						chr_h_repdate[APL_DATE_LEN]			= APL_NULL_STRING;
+	int						int_retstat 								= 0;
+	int 						int_ctr  									= 0;
+	int					   int_fetch_cnt 							= 0;
+	int 						int_countunauthacc 					= 0;
+	int 						int_countunauthpymnt					= 0;
+	char						*y 									= (char *)NULL;
+	char						*a										= (char *)NULL; 
+	char						chr_p_remdup;
+	char						chr_l_stat_info[71] 					= APL_NULL_STRING;	
+	char						chr_h_resend_bill_dt[APL_DATE_LEN]	= APL_NULL_STRING;
+	FILE *fl_temp_blprnt = (FILE *)NULL;
+
+	EXEC SQL BEGIN DECLARE SECTION;
+		struct sqlca	sqlca;
+		short i_dl_client = 0;
+		short i_restart = 0;
+		short i_statinfo = 0;
+		short i_mstclt = 0;
+
+		
+
+		EXEC SQL VAR h_dl_client IS STRING;
+		EXEC SQL VAR h_mstclt IS STRING;
+		EXEC SQL VAR chr_h_restart IS STRING;
+		EXEC SQL VAR chr_h_statinfo IS STRING;
+
+	EXEC SQL END DECLARE SECTION;
+
+	
+
+	if ( APL_FAILURE == CO_Rtv_RptFileName("1L", APL_LOGFILE_DESC, 100, argv[5], 
+													argv, &fl_temp_blprnt, l_debug_info_ptr) )
+	{
+		fprintf(APL_OUT_FILE, "Could not open temporary h_file for printing bills.\n");
+		APL_GOBACK_FAIL
+	}
+
+	EXEC SQL COMMIT;
+
+	
+	EXEC SQL SELECT PROCESSING_STATUS,STAT_DET
+	INTO :chr_h_restart:i_restart,:chr_h_statinfo:i_statinfo
+	FROM SYS_BATCHPROC
+	WHERE (PROCESS_NAME 	  =:argv[0] 
+			AND STARTDATE =:argv[2]
+			AND STATUS 	  = 'started' )
+	FOR UPDATE OF PROCESSING_STATUS,STATUS;
+
+	if (sqlca.sqlcode <0)
+	{
+		fprintf(fl_userlog,"Batch Table Cannot Be Locked\n");
+		APL_GOBACK_FAIL
+	}
+
+	if (sqlca.sqlcode == 1403)
+	{
+		fprintf(fl_userlog,"No Record Found In Batch Table For Progname %s, Startdate %s and Status as started \n",argv[0], argv[2]);
+		CO_InsertErr(l_debug_info_ptr,
+							ERR_REC_NOTFND,
+							ltoa(sqlca.sqlcode),
+							APL_NULL_STRING,
+							APL_NULL_STRING,
+							__LINE__,
+							__FILE__);
+		APL_GOBACK_FAIL
+	}
+
+	
+
+
+	 strcpy(chr_h_resend_bill_dt,strtok_r(argv[9],",",&a));
+	y = strtok_r(NULL,",",&a);
+	chr_p_remdup = y[0];
+
+	printf("RESEND BILL DATE is %s \n",chr_h_resend_bill_dt);
+	 printf("REMINDER/DUPLICATE ind is %c \n",chr_p_remdup);
+
+	
+   if (strlen(chr_h_resend_bill_dt) == 0)
+   {
+      APL_DATA_MISSING("RESEND BILL DATE MISSING",
+                        APL_NULL_STRING,
+                        APL_NULL_STRING);
+      APL_GOBACK_FAIL
+   }
+	
+	if (strlen(y) == 0)
+	{
+		APL_DATA_MISSING("REMINDER/DUPLICATE ind MISSING",
+								APL_NULL_STRING,
+								APL_NULL_STRING);
+		APL_GOBACK_FAIL
+	}
+
+	
+
+	memset(&l_sys_ivcntl_param_struct ,NULL , sizeof(SYS_IVCONTROLPARAM_STRUCT) );
+
+	int_retstat = IV_SUCCESS;
+
+	if (APL_FAILURE == IV_Rtv_IVCNTLPARAM(&l_sys_ivcntl_param_struct,
+													&int_retstat,
+													l_debug_info_ptr))
+	{
+		if (int_retstat == IV_CRITCAL_ERROR_IND)
+		{
+			fprintf(fl_userlog,"Fatal Error Encoutered In Billing Control Parameter Table\n");
+			CO_InsertErr(l_debug_info_ptr,
+								DB_ERR_NO,
+								"BCNTLPARM",
+								APL_NULL_STRING,
+								APL_NULL_STRING,
+								__LINE__,
+								__FILE__);
+			APL_GOBACK_FAIL
+		}		
+		else if (int_retstat == IV_NO_DATA_FOUND_ERR)
+		{
+			fprintf(fl_userlog,"Billing Control Parameters not int_found\n");
+			CO_InsertErr(l_debug_info_ptr,
+								ERR_BILLCNTRL_PARAM_NOTFND,
+								APL_NULL_STRING,
+								APL_NULL_STRING,
+								APL_NULL_STRING,
+								__LINE__,
+								__FILE__);
+			APL_GOBACK_FAIL
+		}
+	}			
+
+	
+
+	if( 	(strcmp(y,"R") != 0) &&  (strcmp(y,"D") != 0)	)
+	{
+		fprintf(fl_userlog,"Resend Flag Should Be R Or D\n");
+		APL_GOBACK_FAIL
+	}
+
+	
+
+	if (l_sys_ivcntl_param_struct.generate_ind == 'Y')
+	{
+		CO_InsertErr(l_debug_info_ptr,
+							ERR_BILLS_NOT_DELVD,
+							APL_NULL_STRING,
+							APL_NULL_STRING,
+							APL_NULL_STRING,
+							__LINE__,
+							__FILE__);
+		fprintf(fl_userlog,"Bills Not Delivered .Cannot Resend Bills\n");
+		APL_GOBACK_FAIL
+	}
+
+	
+
+	fprintf(clt,"%6sEXCEPTION REPORT(BILL RESEND)"," ");
+
+	if (APL_FAILURE == CO_RtvSysDt(chr_h_repdate,
+													l_debug_info_ptr)	)
+	{
+		fprintf(fl_userlog,"Failed To Get System Date\n"); 
+		APL_GOBACK_FAIL
+	}
+
+	chr_h_repdate[10] = APL_NULL_CHAR;
+
+	fprintf(clt,"%6s%s\n"," ",chr_h_repdate);
+
+				
+	fprintf(clt,"%6sTHE FOLLOWING CUSTOMERS ARE UNAUTHORISED \n"," ");
+	fprintf(clt,"%6sTHEIR BILLS WOULD NOT BE RESENT\n"," ");
+
+	
+	fprintf(pymnt,"%6sEXCEPTION REPORT(BILL RESEND)"," ");
+	fprintf(pymnt,"%3s%s\n"," ",chr_h_repdate);
+	fprintf(pymnt,"%6sTHE FOLLOWING CUSTOMERS HAVE UNAUTHORISED PAYMENTS \n"," ");
+	fprintf(pymnt,"%6sTHEIR BILLS WOULD NOT BE RESENT\n"," ");
+
+	
+	while(	(y= strtok_r(NULL,";",&a)) != NULL	)
+	{
+		strcpy(chr_l_client_a, y);
+		printf("the client passed is %s\n",y);
+		int_ctr++;
+
+		
+		
+			
+
+		if	(APL_FAILURE == IV_Rtv_Dist_MastAcc( chr_l_client_a,
+			 												h_mstclt,
+															chr_h_resend_bill_dt,
+													
+															&int_retstat,
+															l_debug_info_ptr))
+		{
+			//fprintf(fl_userlog,"Failed To Select Distinct Master Account For Account\s",y); Changes done for AIX Migration
+			fprintf(fl_userlog,"Failed To Select Distinct Master Account For Account |%s|\n",y);
+			APL_GOBACK_FAIL
+		}	
+
+		
+	
+   	if (APL_FAILURE == IV_Proc_ChkResend(clt,
+											  pymnt,
+											  h_mstclt,
+												chr_h_resend_bill_dt,
+											  &fl_temp_blprnt,
+											  fl_userlog,
+											  fl_techlog,
+											  chr_l_client_a, 
+											  chr_p_remdup,
+											  &int_countunauthacc,
+											  &int_countunauthpymnt,
+											  l_debug_info_ptr)	)
+		{
+			fprintf(fl_userlog,"Errors in resend bills\n");
+			APL_GOBACK_FAIL
+		}
+	}	
+
+	
+	if (int_ctr == 0) 
+	{
+		
+
+		
+
+		EXEC SQL DECLARE mstresend CURSOR FOR
+		SELECT DISTINCT(CLIENT),MASTER_CLT FROM IV_SERVICE_CHRG 
+	
+		WHERE DATEOF_BILLING = :chr_h_resend_bill_dt;
+
+		
+
+		EXEC SQL OPEN mstresend;
+		
+		IS_ANY_ORA_ERROR;
+
+		for (;;)
+		{
+			EXEC SQL FETCH mstresend INTO :h_dl_client:i_dl_client,
+													:h_mstclt:i_mstclt;
+		
+			if (sqlca.sqlcode == 1403)
+			{
+			  	if(int_fetch_cnt == 0)
+		  		{
+					
+						fprintf(fl_userlog,"No Bills Can Be Resent As No Bills Have Been Generated\n");
+						CO_InsertErr(l_debug_info_ptr,
+											ERR_BILLS_NOT_DELVD,
+											h_dl_client,
+											APL_NULL_STRING,
+											APL_NULL_STRING,
+											__LINE__,
+											__FILE__);
+						APL_GOBACK_FAIL
+           		}
+			  		break;
+				}
+				else
+				
+				{
+					int_fetch_cnt++;
+					if (APL_FAILURE == IV_Proc_ChkResend(clt,
+														pymnt,
+														h_mstclt,
+														chr_h_resend_bill_dt,
+													
+														&fl_temp_blprnt,
+														fl_userlog,
+														fl_techlog,
+														h_dl_client,
+														chr_p_remdup,
+														&int_countunauthacc,
+														&int_countunauthpymnt,
+														l_debug_info_ptr)) // AIX - Warnings
+					{
+						fprintf(fl_userlog,"Errors in resend bills\n");
+						APL_GOBACK_FAIL
+					}
+				}
+		 	}
+			sprintf(chr_l_stat_info, "Record %d Processed",int_fetch_cnt);
+
+		   EXEC SQL UPDATE SYS_BATCHPROC 
+			SET STATUS    = 'completed',
+				 STAT_DET = :chr_l_stat_info
+			WHERE (PROCESS_NAME = :argv[0]
+					AND STARTDATE = :argv[2]
+					AND STATUS = 'started');
+		} 	
+	
+		if (int_ctr != 0)
+		{
+			sprintf(chr_l_stat_info, "Record %d Processed",int_ctr);
+		   EXEC SQL UPDATE SYS_BATCHPROC 
+			SET STATUS    = 'completed',
+				 STAT_DET = :chr_l_stat_info
+			WHERE (PROCESS_NAME = :argv[0]
+					AND STARTDATE = :argv[2]
+					AND STATUS = 'started');
+
+			IS_ANY_ORA_ERROR			
+		}
+
+	if (int_countunauthacc ==0)
+	{
+		fprintf(clt,"\n%6sNO UNAUTHORISED ACCOUNTS \n "," ");
+	}
+
+	if (int_countunauthpymnt ==0)
+	{
+		fprintf(pymnt,"\n%6sNO UNAUTHORISED PAYMENTS\n"," ");
+	}
+		
+	
+
+	if ( int_countunauthacc )
+	{
+		fprintf(fl_userlog, "Unauthorised Account(s) exist. Please identify to the corresponding report.\n");
+	}
+
+	if ( int_countunauthpymnt ) 
+	{
+		fprintf(fl_userlog, "Unauthorised Payment(s) exist. Please identify to the corresponding report.\n");
+	}
+
+APL_GOBACK_SUCCESS // AIX - Warnings
+	
+	{
+		RETURN_SUCCESS:
+		APL_IF_DEBUG
+		{	
+			CO_ProcMonitor(APL_OUT_FILE ,"Leaving processtion B_BlresendFn sucessfully\n",NULL,NULL);
+		}	
+		
+		fflush(fl_userlog);		
+		fflush(fl_techlog);		
+		fclose(fl_temp_blprnt);
+		fl_temp_blprnt = (FILE *)NULL;
+		return(APL_SUCCESS);
+
+		RETURN_FAILURE:
+		APL_IF_DEBUG
+		{
+			CO_ProcMonitor(APL_OUT_FILE,"Leaving processtion B_BlresendFn with errors\n",NULL,NULL);
+
+		}
+		
+		fflush(fl_userlog);		
+		fflush(fl_techlog);		
+		fclose(fl_temp_blprnt);
+		fl_temp_blprnt = (FILE *)NULL;
+		return (APL_FAILURE);
+	}
+}	
+
+
+int IV_Proc_ChkResend(	FILE *clt,
+					FILE *pymnt,
+					char *p_mstclt_a,
+					char *p_bl_prv_date,
+					FILE **fl_temp_blprnt,
+					FILE *fl_userlog,
+					FILE *fl_techlog,
+					char *chr_p_client,
+					char 	h_remdup,	
+					int *int_countunauthacc,
+					int *int_countunauthpymnt,
+					DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+
+IV_CLIENTSETUP_STRUCT l_iv_clt_setup_struct;
+
+int int_retstat= 0;
+int srlnum =0;
+int int_srnum =0;
+
+
+int int_h_countpymnt =0;
+int int_resend_flg = 0; 
+
+		memset(&l_iv_clt_setup_struct, NULL , sizeof(IV_CLIENTSETUP_STRUCT) );
+
+		
+		if (APL_FAILURE == IV_Rtv_IVCUSTSETUP(chr_p_client,
+														&l_iv_clt_setup_struct,
+														&int_retstat,
+														l_debug_info_ptr)	)
+		{
+			if (int_retstat == IV_CRITCAL_ERROR_IND)
+			{
+				fprintf(fl_userlog,"Fatal Error Encountered in Billing Customer Setup Table\n");
+				CO_InsertErr(l_debug_info_ptr,
+									DB_ERR_NO,
+									"BCUSTSETUP",
+									APL_NULL_STRING,
+									APL_NULL_STRING,
+									__LINE__,
+									__FILE__);
+				APL_GOBACK_FAIL
+			}	
+			else if (int_retstat == IV_NO_DATA_FOUND_ERR)
+			{
+				fprintf(fl_userlog,"Billing Setup Not Found For Account:%s\n",chr_p_client);
+				CO_InsertErr(l_debug_info_ptr,
+									ERR_BILLPARAM_NOTFND,
+									chr_p_client,
+									APL_NULL_STRING,
+									APL_NULL_STRING,
+									__LINE__,
+									__FILE__);
+				APL_GOBACK_FAIL
+			}
+		
+		}
+
+		
+
+		if(l_iv_clt_setup_struct.b_gen_ind != 'S' && strcmp(p_mstclt_a,chr_p_client) != 0)
+		{
+		  fprintf(fl_userlog,"Account Is Not Master Or Billed To Self. Cannot resend bill for client %s\n",chr_p_client);
+		  APL_GOBACK_SUCCESS
+		}
+
+		
+
+		if (l_iv_clt_setup_struct.stat_ind == 'U')
+		{
+			
+
+			(*int_countunauthacc)++;
+			printf("the chr_value of int_countunauthacc is %d\n",*int_countunauthacc);
+			srlnum++; 
+			fprintf(clt,"\n\n%6s SR NO .%6sACCOUNT\n"," "," ");
+			fprintf(clt,"-------------------------------\n");
+			fprintf(clt,"%6s %d"," ",srlnum);
+			fprintf(clt,"%6s%s\n"," ",chr_p_client);
+			fflush(clt);
+		   int_resend_flg = 1;
+		}
+
+
+		
+		if (APL_FAILURE == IV_Proc_CountIVPymt(chr_p_client,
+													  &int_h_countpymnt,
+													  &int_retstat,
+													  l_debug_info_ptr))
+		{
+			fprintf(fl_userlog,"Failed To Count The Payment Records \n");
+			APL_GOBACK_FAIL	
+		}
+
+		
+		
+		if (int_h_countpymnt !=0)
+		{
+			(*int_countunauthpymnt)++;
+			int_srnum++;
+			fprintf(pymnt,"\n\n%6sSR NO. %6sACCOUNT\n"," "," ");
+			fprintf(pymnt,"-----------------------------------------\n");
+			fprintf(pymnt,"%6s%d%6s"," ",int_srnum," ");
+			fprintf(pymnt,"%6s%s\n"," ",chr_p_client);
+			fflush(pymnt);
+		   int_resend_flg = 1;
+		}
+
+
+		if(l_iv_clt_setup_struct.total_osamount <= 0 && h_remdup == 'R')
+		{
+		  fprintf(fl_userlog,"No Outstanding Balance Exists. Cannot Resend Bill As Reminder For Account %s \n",chr_p_client);
+		  int_resend_flg = 1;
+		}
+		
+	   if(int_resend_flg == 1)
+		{
+		  APL_GOBACK_SUCCESS
+		}
+
+
+		if (h_remdup == 'R')
+		{
+				fprintf(fl_userlog, "Now generating telex for %s\n", chr_p_client);
+
+				
+
+				if (APL_FAILURE == IV_Proc_Tlx(chr_p_client, p_bl_prv_date, fl_temp_blprnt, 
+													fl_userlog, fl_techlog, l_debug_info_ptr) )
+				{
+					fprintf(fl_userlog,"Failed To Send a Bill Telex\n");
+					APL_GOBACK_FAIL
+				}
+		}	
+		
+		if (h_remdup == 'D')
+		{
+				fprintf(fl_userlog, "Now generating telex for %s\n", chr_p_client);
+
+				
+
+				if (APL_FAILURE == IV_Proc_Tlx(chr_p_client, p_bl_prv_date, fl_temp_blprnt,
+													fl_userlog, fl_techlog, l_debug_info_ptr) )
+				{
+					fprintf(fl_userlog,"Failed To Send a Bill Telex\n");
+					APL_GOBACK_FAIL
+				}
+		}
+
+	APL_GOBACK_SUCCESS
+		
+	
+	{
+		RETURN_SUCCESS:
+		APL_IF_DEBUG
+		{
+			fprintf(APL_OUT_FILE ,"Leaving Function ChkResend sucessfully\n");
+		}
+		return(APL_SUCCESS);
+
+		RETURN_FAILURE:
+		APL_IF_DEBUG
+		{
+			fprintf(APL_OUT_FILE,"Leaving processtion ChkResend with errors\n");
+		}	
+		return (APL_FAILURE);
+	}
+} 
+

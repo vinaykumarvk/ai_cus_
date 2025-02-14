@@ -1,0 +1,302 @@
+
+
+
+#include "IV_Control_A.h"
+#include <string.h> 
+
+EXEC SQL INCLUDE SQLCA.H;
+extern int int_g_eu_condexists; 
+
+
+int IV_PrntDetFtr_Web(FILE *bill,
+			 FILE *fl_userlog,
+			 char *chr_p_billdt,
+			 char *chr_p_client,
+			 SYS_IVCONTROLPARAM_STRUCT l_sys_ivcntl_param_struct,
+			 IV_CLIENTSETUP_STRUCT l_iv_clt_setup_struct,
+			 char p_mastsub,
+			 double p_totcomm,
+			 double p_totcust,
+			 double p_tottran,
+			 double p_totca,
+			 double p_tototh,
+			 int *int_currpos,
+			 double *p_tot_trans,
+			 double *p_tot_provcust,
+			 double *p_tot_ca,
+			 double *p_tot_oth,
+			 double *p_tot_comm,
+			 double *p_tot_tax,
+			 double *p_tot_educess,
+			 double *p_final_total,
+			 DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+struct sqlca sqlca;
+
+int int_retstat;
+IV_EXCHANGERATE_STRUCT l_iv_exchangerate_struct;
+IV_SERVICE_CHRG_STRUCT l_iv_service_chrg_struct;
+
+int int_netcommret = 0;
+int int_commtaxret = 0;
+int int_tottaxret = 0;
+int int_toteducess = 0;
+int int_totcommret =0;
+double netcomm =0;
+char h_mstclt[APL_CLIENT_LENGTH] = APL_NULL_STRING; 
+double taxfeeamount =0;
+double edufeeamount =0.0;
+double h_exchgrt=0;
+
+EXEC SQL BEGIN DECLARE SECTION;
+
+EXEC SQL VAR l_iv_clt_setup_struct.b_ccycd IS STRING;
+EXEC SQL VAR h_mstclt IS STRING; 
+
+EXEC SQL END DECLARE SECTION;
+
+char chr_f_netcomm[20];
+char chr_f_commtax[20],chr_f_tottax[20];
+char chr_f_totcomm[20],chr_f_educess[20]; 
+char chr_f_euronetcomm[20];
+char chr_l_amtstr[30]; 
+char l_client_name[200] = APL_NULL_STRING;
+
+double roundedamount = 0.0;
+double l_taxfee = TAXFEE;
+int int_l_retstat = 0;
+double l_ae_rate = 0.0;
+double dbl_h_totcust=0.0;
+double dbl_h_tottran=0.0;
+double dbl_h_totca =0.0;
+double dbl_h_totcomm =0.0;
+double edurate =0.0;
+double dbl_h_totdepo =0.0;
+double dbl_h_tototh =0.0;
+
+
+memset(chr_f_netcomm, APL_NULL_CHAR, 20);
+memset(chr_f_commtax, APL_NULL_CHAR, 20);
+memset(chr_f_tottax, APL_NULL_CHAR, 20);
+memset(chr_f_educess, APL_NULL_CHAR, 20);
+memset(chr_f_totcomm, APL_NULL_CHAR, 20);
+
+memset(&l_iv_service_chrg_struct, NULL , sizeof(IV_SERVICE_CHRG_STRUCT));
+
+l_ae_rate = 0.0;
+
+if (APL_FAILURE == ConvToFxFn_GR(l_iv_clt_setup_struct.b_ccycd,
+				 l_iv_clt_setup_struct.fees_ccy,
+                                 g_mt_commonsys_params_struct_h.dom_ccy,
+				 chr_p_billdt, 
+				 &l_ae_rate,
+				 &int_l_retstat,
+				 l_debug_info_ptr) )
+{
+	APL_GOBACK_FAIL
+}
+
+ dbl_h_tottran = p_tottran * l_ae_rate; 
+ dbl_h_totcust = p_totcust * l_ae_rate;
+ dbl_h_totca   = p_totca * l_ae_rate;
+ dbl_h_tototh  = p_tototh * l_ae_rate;
+ dbl_h_totcomm = p_totcomm * l_ae_rate;
+
+  	*p_tot_trans = dbl_h_tottran;
+	*p_tot_provcust = dbl_h_totcust;
+	*p_tot_ca = dbl_h_totca;
+	*p_tot_oth = dbl_h_tototh;
+	*p_tot_comm = dbl_h_totcomm;
+
+	EXEC SQL SELECT CLN_NAME INTO :l_client_name FROM MT_CLIENT WHERE CLN_CODE=:chr_p_client;
+
+	fprintf(bill,"<tr>");
+	fprintf(bill,"<td class='hot1' align='CENTER'>%s</td>",l_client_name);
+   
+	int_totcommret = IV_Proc_Round(&dbl_h_tottran,l_iv_clt_setup_struct.fees_ccy,chr_f_totcomm,l_debug_info_ptr);
+	if (int_totcommret == 1)
+	{
+		roundedamount = 0.0;
+		memset(chr_l_amtstr, APL_NULL_CHAR, 30); 
+		sscanf(chr_f_totcomm, "%lf", &roundedamount);
+		
+		CO_Rtv_FormatAmtCcy(roundedamount, chr_l_amtstr, 'Y', 'Y', l_iv_clt_setup_struct.fees_ccy, l_debug_info_ptr);
+		strcpy(chr_f_totcomm, chr_l_amtstr + 10); 
+
+		fprintf(bill,"<td class='hot1' align='RIGHT'>%s</td>",chr_f_totcomm);
+	}
+
+	int_totcommret = IV_Proc_Round(&dbl_h_totcust,l_iv_clt_setup_struct.fees_ccy,chr_f_totcomm,l_debug_info_ptr);
+	if (int_totcommret == 1)
+	{
+		roundedamount = 0.0;
+		memset(chr_l_amtstr, APL_NULL_CHAR, 30); 
+		sscanf(chr_f_totcomm, "%lf", &roundedamount);
+		
+		CO_Rtv_FormatAmtCcy(roundedamount, chr_l_amtstr, 'Y', 'Y', l_iv_clt_setup_struct.fees_ccy, l_debug_info_ptr);
+		strcpy(chr_f_totcomm, chr_l_amtstr + 10);
+		
+		fprintf(bill,"<td class='hot1' align='RIGHT'>%s</td>",chr_f_totcomm);
+		
+	}
+	
+	int_totcommret = IV_Proc_Round(&dbl_h_totca,l_iv_clt_setup_struct.fees_ccy,chr_f_totcomm,l_debug_info_ptr);
+	if (int_totcommret == 1)
+	{
+		roundedamount = 0.0;
+		memset(chr_l_amtstr, APL_NULL_CHAR, 30); 
+		sscanf(chr_f_totcomm, "%lf", &roundedamount);
+		
+		CO_Rtv_FormatAmtCcy(roundedamount, chr_l_amtstr, 'Y', 'Y', l_iv_clt_setup_struct.fees_ccy, l_debug_info_ptr);
+		strcpy(chr_f_totcomm, chr_l_amtstr + 10); 
+
+		fprintf(bill,"<td class='hot1' align='RIGHT'>%s</td>",chr_f_totcomm);
+		
+	}
+
+	int_totcommret = IV_Proc_Round(&dbl_h_tototh,l_iv_clt_setup_struct.fees_ccy,chr_f_totcomm,l_debug_info_ptr);
+	if (int_totcommret == 1)
+	{
+		roundedamount = 0.0;
+		memset(chr_l_amtstr, APL_NULL_CHAR, 30); 
+		sscanf(chr_f_totcomm, "%lf", &roundedamount);
+		
+		CO_Rtv_FormatAmtCcy(roundedamount, chr_l_amtstr, 'Y', 'Y', l_iv_clt_setup_struct.fees_ccy, l_debug_info_ptr);
+		strcpy(chr_f_totcomm, chr_l_amtstr + 10); 
+
+		fprintf(bill,"<td class='hot1' align='RIGHT'>%s</td>",chr_f_totcomm);
+				
+	}
+
+	int_totcommret = IV_Proc_Round(&dbl_h_totcomm,l_iv_clt_setup_struct.fees_ccy,chr_f_totcomm,l_debug_info_ptr);
+	if (int_totcommret == 1)
+	{
+		roundedamount = 0.0;
+		memset(chr_l_amtstr, APL_NULL_CHAR, 30); 
+		sscanf(chr_f_totcomm, "%lf", &roundedamount);
+		
+		CO_Rtv_FormatAmtCcy(roundedamount, chr_l_amtstr, 'Y', 'Y', l_iv_clt_setup_struct.fees_ccy, l_debug_info_ptr);
+		strcpy(chr_f_totcomm, chr_l_amtstr + 10); 
+
+		fprintf(bill,"<td class='hot1' align='RIGHT'>%s</td>",chr_f_totcomm);
+				
+	}
+ 
+	if (APL_FAILURE == IV_Rtv_IVSRVCHRG(chr_p_billdt,chr_p_client,p_mastsub,TAXFEE,&l_iv_service_chrg_struct,&int_retstat,l_debug_info_ptr))
+	{
+		if (int_retstat == IV_CRITCAL_ERROR_IND)
+		{
+			fprintf(fl_userlog,"DB ERROR(BSERVCHARGE)\n");
+			APL_GOBACK_FAIL
+		}
+		else if (int_retstat == IV_NO_DATA_FOUND_ERR)
+		{
+			l_iv_service_chrg_struct.comm_amt = 0;
+		}
+	}
+   
+
+	if (l_iv_service_chrg_struct.comm_amt > 0)
+	{
+		taxfeeamount = l_iv_service_chrg_struct.comm_amt;
+
+		int_tottaxret = IV_Proc_Round(&l_iv_service_chrg_struct.comm_amt,l_iv_service_chrg_struct.b_ccycd,chr_f_tottax,l_debug_info_ptr);
+		if (int_tottaxret == 1)
+		{
+			roundedamount = 0.0;
+			memset(chr_l_amtstr, APL_NULL_CHAR, 30); 
+			sscanf(chr_f_tottax, "%lf", &roundedamount);
+
+			CO_Rtv_FormatAmtCcy(roundedamount, chr_l_amtstr, 'Y', 'Y', l_iv_service_chrg_struct.b_ccycd,l_debug_info_ptr);
+			strcpy(chr_f_tottax, chr_l_amtstr + 10); 
+			
+			fprintf(bill,"<td class='hot1' align='RIGHT'>%s</td>",chr_f_tottax);
+
+		}
+	} 
+	else
+	{ 
+		taxfeeamount = 0 ;
+		fprintf(bill,"<td class='hot1' align='RIGHT'>0</td>");
+	}
+  
+	EXEC SQL SELECT FIELD_VAL INTO :edurate FROM PRO_GSSPLVAL WHERE MAIN_FUN = 'BILLING_TAX' AND SUB_PROCESS = 'EDUCATION_CESS';
+
+	IS_ANY_ORA_ERROR
+	
+	if(sqlca.sqlcode!=0)
+	{
+		fprintf(fl_userlog,"No Records for DOMCPAC in gssplval\n");
+		APL_GOBACK_FAIL
+	}
+
+	if (l_iv_service_chrg_struct.comm_amt > 0 && edurate > 0)
+	{
+		edufeeamount =  (taxfeeamount * edurate) /100 ;
+
+		int_toteducess = IV_Proc_Round(edufeeamount,l_iv_service_chrg_struct.b_ccycd,chr_f_educess,l_debug_info_ptr);
+		if (int_toteducess == 1)
+		{
+			roundedamount = 0.0;
+			memset(chr_l_amtstr, APL_NULL_CHAR, 30); 
+			sscanf(chr_f_educess, "%lf", &roundedamount);
+
+			CO_Rtv_FormatAmtCcy(roundedamount, chr_l_amtstr, 'Y', 'Y', l_iv_service_chrg_struct.b_ccycd,l_debug_info_ptr);
+			strcpy(chr_f_educess, chr_l_amtstr + 10); 
+			
+			fprintf(bill,"<td class='hot1' align='RIGHT'>%s</td>",chr_f_educess);
+		}
+
+	} 
+	else
+	{ 	
+		edufeeamount = 0 ;
+		fprintf(bill,"<td class='hot1' align='RIGHT'>0</td>");
+	}
+
+	 netcomm = p_totcomm + taxfeeamount + edufeeamount; 
+	
+	int_netcommret = IV_Proc_Round(&netcomm,l_iv_clt_setup_struct.b_ccycd,chr_f_netcomm,l_debug_info_ptr);
+
+	if (int_netcommret == 1)
+	{
+		roundedamount = 0.0;
+		memset(chr_l_amtstr, APL_NULL_CHAR, 30); 
+		sscanf(chr_f_netcomm, "%lf", &roundedamount);
+		
+		CO_Rtv_FormatAmtCcy(roundedamount, chr_l_amtstr, 'Y', 'Y', l_iv_clt_setup_struct.b_ccycd,l_debug_info_ptr);
+		strcpy(chr_f_netcomm, chr_l_amtstr + 10); 
+
+		fprintf(bill,"<td class='hot1' align='RIGHT'>%s</td>",chr_f_netcomm);
+	}
+	else  
+	{
+		fprintf(fl_userlog,"Returned Failed from netcomm Round \n"); 
+		APL_GOBACK_FAIL 
+	}
+
+	*p_tot_tax = taxfeeamount;
+	*p_tot_educess = edufeeamount;
+	*p_final_total = netcomm;
+
+	fprintf(bill,"</tr>");
+
+	
+
+RETURN_SUCCESS:
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Exiting out of IV_PrntDetFtr_Web succesfully\n",NULL,NULL);
+	}
+return(APL_SUCCESS);
+
+RETURN_FAILURE:
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"Exiting out of IV_PrntDetFtr_Web unsuccesfully\n",NULL,NULL);
+	}
+return (APL_FAILURE);
+
+}
+

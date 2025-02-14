@@ -1,0 +1,219 @@
+
+
+
+
+
+#include "IV_Control_A.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+int IV_Mod_NewIVACCTSAFEK(char *p_system_date,char *chr_p_client,char *p_instr_code, 
+                     char *chr_p_param_code, char *chr_p_param_val, double p_mktprice,
+	             char *p_blccycode,double p_safek,char p_cons_ind,
+	             double p_exch_rate,int *int_p_retstat,
+                     DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+EXEC SQL BEGIN DECLARE SECTION;
+IV_CLIENTHOLDING_STRUCT l_iv_clientholding_struct;
+EXEC SQL VAR l_iv_clientholding_struct.parameter_cd IS STRING;
+EXEC SQL VAR l_iv_clientholding_struct.client    IS STRING;
+EXEC SQL VAR l_iv_clientholding_struct.b_ccycd IS STRING;
+EXEC SQL VAR l_iv_clientholding_struct.proc_data_val  IS STRING;
+EXEC SQL END DECLARE SECTION;
+
+struct sqlca sqlca;
+#ifdef APL_THREADS
+        APL_SET_CONTEXT
+        EXEC SQL CONTEXT USE :my_ctx_local;
+#endif
+
+
+        strcpy(l_iv_clientholding_struct.dateof_billing,p_system_date);
+        strcpy(l_iv_clientholding_struct.client,chr_p_client);
+        strcpy(l_iv_clientholding_struct.instr_code,p_instr_code);
+        strcpy(l_iv_clientholding_struct.parameter_cd,chr_p_param_code);
+        strcpy(l_iv_clientholding_struct.proc_data_val,chr_p_param_val);
+        l_iv_clientholding_struct.mkrtpr = p_mktprice ;
+        strcpy(l_iv_clientholding_struct.b_ccycd,"PKR");
+        l_iv_clientholding_struct.safekeep_pos = p_safek;
+        l_iv_clientholding_struct.cons_flag = p_cons_ind;
+	l_iv_clientholding_struct.exchg_rt = p_exch_rate;
+        
+	EXEC SQL INSERT INTO IV_CLIENTHOLDING VALUES(:l_iv_clientholding_struct);
+
+	if(sqlca.sqlcode < 0)
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+	
+	IS_ANY_ORA_ERROR;
+
+        RETURN_SUCCESS:
+                return APL_SUCCESS;
+
+        RETURN_FAILURE:
+                return APL_FAILURE;
+
+}
+
+int IV_Mod_ConIVACCTSAFEK(char *chr_p_client,char *p_mstclt_a,int *int_p_retstat,
+		      DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+EXEC SQL BEGIN DECLARE SECTION;
+char h_dl_client[APL_CLIENT_LENGTH],h_mstclt[APL_CLIENT_LENGTH];
+char chr_h_bl_upto_dt[APL_DATE_LEN],h_ora_rowid[APL_ROWID_LEN];
+double h_safekeep_pos=0;
+IV_CLIENTHOLDING_STRUCT l_iv_clientholding_struct;
+I_IV_CLIENTHOLDING_STRUCT l_i_iv_clientholding_struct;
+short i_safekeep_pos = 0; 
+short i_ora_rowid = 0;
+EXEC SQL VAR h_dl_client IS STRING;
+EXEC SQL VAR h_mstclt IS STRING;
+EXEC SQL VAR chr_h_bl_upto_dt IS STRING;
+EXEC SQL VAR l_iv_clientholding_struct.parameter_cd IS STRING;
+EXEC SQL VAR l_iv_clientholding_struct.client    IS STRING;
+EXEC SQL VAR l_iv_clientholding_struct.b_ccycd IS STRING;
+EXEC SQL VAR l_iv_clientholding_struct.proc_data_val  IS STRING;
+EXEC SQL END DECLARE SECTION;
+
+struct sqlca sqlca;
+
+int int_fetch_cnt=0;
+int int_is_safek_cur_open = 0;
+
+strcpy(h_dl_client,chr_p_client);
+strcpy(h_mstclt,p_mstclt_a);
+strcpy(chr_h_bl_upto_dt,chr_g_bl_upto_dt);
+
+
+	EXEC SQL DECLARE safek_cur CURSOR FOR
+		 SELECT * FROM IV_CLIENTHOLDING
+		 WHERE dateof_billing = :chr_h_bl_upto_dt  AND
+		      client = :h_dl_client AND 
+		      cons_flag = 'I';
+	EXEC SQL OPEN safek_cur;
+
+	if(sqlca.sqlcode < 0)
+     	{
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+	}	
+	IS_ANY_ORA_ERROR;
+        int_is_safek_cur_open = 1;
+	for( ; ; )
+	{
+	    EXEC SQL FETCH safek_cur INTO :l_iv_clientholding_struct:l_i_iv_clientholding_struct;
+	    if(sqlca.sqlcode == 1403)
+	    {
+	       if(int_fetch_cnt > 0)
+		  break;
+	       else
+	       {
+		  *int_p_retstat = IV_NO_DATA_FOUND_ERR;
+		  APL_GOBACK_FAIL;
+	       }
+	    }
+	    int_fetch_cnt++;
+	    EXEC SQL SELECT safekeep_pos,rowid  INTO :h_safekeep_pos:i_safekeep_pos,:h_ora_rowid:i_ora_rowid
+		     FROM IV_CLIENTHOLDING
+		     WHERE dateof_billing = :chr_h_bl_upto_dt  AND
+		      client = :h_mstclt AND
+                      proc_data_val = :l_iv_clientholding_struct.proc_data_val AND
+		      instr_code   = :l_iv_clientholding_struct.instr_code AND
+                      cons_flag = 'C';
+	    
+	    if(sqlca.sqlcode < 0)
+     	    {
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+	    }
+	    IS_ANY_ORA_ERROR;
+
+	    if(i_safekeep_pos == -1)
+		h_safekeep_pos = 0;
+	    if(h_safekeep_pos != 0 && sqlca.sqlcode != 1403)
+	    {
+		EXEC SQL UPDATE IV_CLIENTHOLDING
+			 SET safekeep_pos = :h_safekeep_pos + :l_iv_clientholding_struct.safekeep_pos
+		         WHERE rowid = :h_ora_rowid;
+	    }
+	    else
+	    {
+		strcpy(l_iv_clientholding_struct.client,h_mstclt);
+	        l_iv_clientholding_struct.cons_flag = 'C';
+		EXEC SQL INSERT INTO IV_CLIENTHOLDING VALUES(:l_iv_clientholding_struct);
+	    }
+	    if(sqlca.sqlcode < 0)
+     	    {
+		*int_p_retstat = IV_CRITCAL_ERROR_IND;
+	    }
+
+	    IS_ANY_ORA_ERROR;
+
+	}
+	EXEC SQL CLOSE safek_cur;
+	
+	IS_ANY_ORA_ERROR;
+        int_is_safek_cur_open = 0;
+
+	RETURN_SUCCESS:
+        if(int_is_safek_cur_open == 1)
+        {
+	EXEC SQL CLOSE safek_cur;
+        }
+                return APL_SUCCESS;
+
+        RETURN_FAILURE:
+        if(int_is_safek_cur_open == 1)
+        {
+	EXEC SQL CLOSE safek_cur;
+        }
+                return APL_FAILURE;
+
+
+}
+
+int IV_Rtv_NewIVACCTSAFEK(char *chr_p_client,int *int_p_retstat,
+                      DEBUG_INFO_STRUCT_H **l_debug_info_ptr)
+{
+
+EXEC SQL BEGIN DECLARE SECTION;
+char h_dl_client[APL_CLIENT_LENGTH];
+char chr_h_bl_upto_dt[APL_DATE_LEN];
+int int_safek_exists=0;
+EXEC SQL VAR h_dl_client IS STRING;
+EXEC SQL VAR chr_h_bl_upto_dt IS STRING;
+EXEC SQL END DECLARE SECTION;
+
+struct sqlca sqlca;
+
+strcpy(h_dl_client,chr_p_client);
+strcpy(chr_h_bl_upto_dt,chr_g_bl_upto_dt);
+
+
+        EXEC SQL SELECT NVL(count(*),0)
+		 INTO :int_safek_exists
+                 FROM IV_CLIENTHOLDING
+                 WHERE dateof_billing = :chr_h_bl_upto_dt  AND
+                      client = :h_dl_client  ;
+
+        if(sqlca.sqlcode < 0)
+        {
+                *int_p_retstat = IV_CRITCAL_ERROR_IND;
+        }
+        IS_ANY_ORA_ERROR;
+
+        if(sqlca.sqlcode == 1403 || int_safek_exists == 0)
+        {
+          *int_p_retstat = IV_NO_DATA_FOUND_ERR;
+          APL_GOBACK_FAIL;
+        }
+
+
+        *int_p_retstat = IV_SUCCESS; 
+        RETURN_SUCCESS:
+                return APL_SUCCESS;
+
+        RETURN_FAILURE:
+                return APL_FAILURE;
+
+
+}
+

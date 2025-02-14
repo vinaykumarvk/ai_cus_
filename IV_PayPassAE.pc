@@ -1,0 +1,434 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ 
+
+
+#include "stdio_64.h"
+#include "IV_Control_A.h"
+#include "Intellect_Common.h"
+EXEC SQL INCLUDE SQLCA;
+
+
+
+
+int IV_Proc_PassPayAccEnt(	char					**argv,
+								FILE						*fl_techlog,
+								FILE						*fl_userlog,	
+								INTL_ENV_DATA_STRUCT_H	*p_intlenv_data_struct_h,
+								DEBUG_INFO_STRUCT_H			**l_debug_info_ptr
+							)
+{
+
+	char		chr_l_buf[BUFFER_LEN]				= APL_NULL_STRING;
+	int		int_retstat 							= 0;	
+	int		int_num								= 0;
+
+	int		int_l_commit_count					= 0;
+	char		**temp;						
+
+	char		h_batch_dt[APL_DATE_LEN] = APL_NULL_STRING;
+	char		chr_h_passflg[2]               = APL_NULL_STRING;
+	char		chr_h_modident[2]					= APL_NULL_STRING;
+	char		h_proc_num[6]					= APL_NULL_STRING;
+
+	char		chr_h_date[9]						= APL_NULL_STRING;
+
+	char   chr_l_value_date[APL_DATE_LEN] 	= APL_NULL_STRING;
+	char   int_l_temp[APL_DATE_LEN] 			= APL_NULL_STRING;
+
+	EXEC SQL BEGIN DECLARE SECTION;
+
+	char		chr_l_stat_info[71]								 = APL_NULL_STRING;
+	char	   chr_h_restart_data[50]							 = APL_NULL_STRING;
+	char		chr_h_batch_in_proc_progname[40] 				 = APL_NULL_STRING;
+	char		chr_h_batch_in_proc_statinfo[71] 				 = APL_NULL_STRING;
+	char		chr_h_batch_in_proc_startdate[APL_DATE_LEN] = APL_NULL_STRING;
+
+	char		chr_h_batch_in_proc_rowid[APL_ROWID_LEN] 	 = APL_NULL_STRING;
+	char		chr_h_batch_in_proc_status[15] 				 = APL_NULL_STRING;
+
+	struct	sqlca sqlca;
+	short		i_restart_info = 0;
+	short		int_i_batch_in_proc_rowid = 0;
+	short		i_batch_in_proc_statinfo = -1;
+
+	EXEC SQL VAR chr_h_batch_in_proc_progname IS STRING;
+	EXEC SQL VAR chr_h_batch_in_proc_startdate IS STRING;
+	EXEC SQL VAR chr_h_batch_in_proc_rowid IS STRING;
+	EXEC SQL VAR chr_h_batch_in_proc_status IS STRING;
+	EXEC SQL VAR chr_h_restart_data IS STRING;
+
+	EXEC SQL VAR h_batch_dt IS STRING;	
+	EXEC SQL VAR chr_l_stat_info	IS STRING;
+	EXEC SQL END DECLARE SECTION;
+
+	APL_IF_DEBUG
+	{
+		CO_ProcMonitor(APL_OUT_FILE,"\nInside IV_Proc_PassPayAccEnt processtion\n",NULL,NULL);
+	}
+
+
+	
+
+	strcpy(chr_h_batch_in_proc_progname,argv[0]);
+	strcpy(chr_h_batch_in_proc_startdate,argv[2]);
+
+
+	EXEC SQL SELECT ROWID, PROCESSING_STATUS
+	INTO :chr_h_batch_in_proc_rowid :int_i_batch_in_proc_rowid ,:chr_h_restart_data :i_restart_info
+	FROM SYS_BATCHPROC
+	WHERE PROCESS_NAME    =  :chr_h_batch_in_proc_progname
+	AND STARTDATE		= :chr_h_batch_in_proc_startdate  
+	AND STATUS			= 'started' 
+	FOR UPDATE OF PROCESSING_STATUS ,STATUS;
+
+	printf("after locking the batch table\n");
+
+	if (sqlca.sqlcode <0)
+	{
+		fprintf(fl_userlog,"Batch_in_proc table cannot be locked.Please pass accounting entries again\n");
+		APL_GOBACK_FAIL
+	}
+
+	if (APL_ZERO_RESULT_SET)
+	{
+		fprintf(fl_userlog,"No entry for this process_name %s ,start_dt %s in batch table\n",chr_h_batch_in_proc_progname,chr_h_batch_in_proc_startdate);
+		CO_InsertErr(l_debug_info_ptr,
+							ERR_REC_NOTFND,
+							ltoa(sqlca.sqlcode),
+							APL_NULL_STRING,
+							APL_NULL_STRING,
+							__LINE__,
+							__FILE__);
+		APL_GOBACK_FAIL
+
+	}
+
+	strcpy(chr_h_batch_in_proc_statinfo,APL_NULL_STRING);
+
+	EXEC SQL UPDATE SYS_BATCHPROC
+				SET STAT_DET 		= 	:chr_h_batch_in_proc_statinfo
+				WHERE PROCESS_NAME   	=  :chr_h_batch_in_proc_progname
+				AND STARTDATE		=  :chr_h_batch_in_proc_startdate  
+				AND STATUS			=  'started'; 
+
+	if (sqlca.sqlcode <0)
+	{
+		fprintf(fl_userlog,"Batch_in_proc table cannot be locked.Please pass accounting entries again\n");
+		CO_InsertErr(l_debug_info_ptr,
+							ERR_REC_NOTFND,
+							ltoa(sqlca.sqlcode),
+							APL_NULL_STRING,
+							APL_NULL_STRING,
+							__LINE__,
+							__FILE__);
+		APL_GOBACK_FAIL
+	}
+
+	if (APL_ZERO_RESULT_SET)
+	{
+		fprintf(fl_userlog,"No entry for this process_name %s ,start_dt %s in batch table\n",chr_h_batch_in_proc_progname,chr_h_batch_in_proc_startdate);
+		APL_GOBACK_FAIL
+
+	}
+
+
+	
+
+	
+
+
+	
+
+	printf("The  original parameter string passed was %s\n",argv[9]);
+
+	printf("before calling the split string processtion \n");
+
+	if (APL_FAILURE == CO_SplitStr( argv[9],
+												',',
+												&int_num,
+												&temp) )
+	{
+		fprintf(fl_userlog,"Failed to split input string\n");
+		APL_GOBACK_FAIL;
+	}	
+
+	if (int_num ==0 )
+	{
+		fprintf(fl_userlog,"No Parameters were passed to the processtion\n");
+		APL_GOBACK_FAIL
+	}
+	
+	strcpy(chr_h_passflg,temp[0]);
+	strcpy(chr_h_modident,temp[1]);
+	strcpy(h_proc_num,temp[2]);
+	strcpy(h_batch_dt,temp[3]);
+
+	printf("the chr_h_passflg is %s\n",chr_h_passflg);
+	printf("the chr_h_modident is %s\n",chr_h_modident);
+	printf("the proc_num is %s\n",h_proc_num);
+	printf("the proc_dt is %s\n",h_batch_dt);
+
+
+	
+
+	if (!strcmp(chr_h_passflg ,APL_NULL_STRING))  
+	{
+		fprintf(fl_userlog,"PASS FLG IS MISSING \n");
+		APL_DATA_MISSING("PassEntriesFlg ",APL_NULL_STRING,APL_NULL_STRING);	
+		APL_GOBACK_FAIL;
+	}
+	
+	if (!strcmp(chr_h_modident,APL_NULL_STRING))
+	{
+		fprintf(fl_userlog,"MOD_IDENT ind IS EMPTY\n");
+		APL_DATA_MISSING("MODULE_IND",APL_NULL_STRING,APL_NULL_STRING);
+		APL_GOBACK_FAIL;
+	}
+	
+	if (!strcmp(h_proc_num ,APL_NULL_STRING))
+	{
+		fprintf(fl_userlog,"BATCH_NO IS EMPTY\n");
+		APL_DATA_MISSING("PROC_NUM",APL_NULL_STRING,APL_NULL_STRING);
+		APL_GOBACK_FAIL;
+	}
+
+	if (!strcmp(h_batch_dt ,APL_NULL_STRING))
+	{
+		fprintf(fl_userlog,"BATCH_DATE IS EMPTY\n");
+		APL_DATA_MISSING("PROC_DT",APL_NULL_STRING,APL_NULL_STRING);
+		APL_GOBACK_FAIL;
+	}
+
+
+		
+
+		 
+
+		if (!strcmp(chr_h_passflg,"N"))
+		{
+			
+			if (!strcmp(chr_h_modident,"P"))
+			{
+				if (APL_FAILURE == IV_Mod_IVPymt_NulBtch_No(h_proc_num,
+																			 &int_retstat,
+																			 l_debug_info_ptr))
+				{
+					if (int_retstat == IV_CRITCAL_ERROR_IND)
+					{
+						fprintf(APL_OUT_FILE,"Fatal Error Encountered In BPAYMENT\n");							
+						fprintf(fl_userlog,"Fatal Error encountered in BPAYMENT \n");	
+						
+					}
+					if (int_retstat == IV_NO_DATA_FOUND_ERR)
+					{
+						fprintf(fl_userlog,"Batch number %s not int_found in BPAYMENT\n",h_proc_num);  
+						CO_InsertErr(l_debug_info_ptr,ERR_BATCHNO_NOTFND,
+											APL_NULL_STRING, APL_NULL_STRING,
+											APL_NULL_STRING,__LINE__,__FILE__);
+
+					}
+					APL_GOBACK_FAIL
+				}
+			}
+
+			
+
+			if (!strcmp(chr_h_modident,"C"))
+			{
+				if (APL_FAILURE == DL_Proc_AccEntRst(h_batch_dt, 
+															 h_proc_num,
+															 fl_userlog,
+															 argv,
+															 p_intlenv_data_struct_h,
+															 l_debug_info_ptr) )
+				{
+					APL_GOBACK_FAIL
+
+				}
+			}
+	
+			
+
+			if (!strcmp(chr_h_modident,"T"))
+			{
+				if (APL_FAILURE == CR_Proc_CAERst(h_batch_dt, 
+														 h_proc_num,
+														 fl_userlog,
+														 argv,
+														 p_intlenv_data_struct_h,
+														 l_debug_info_ptr) )
+				{
+					APL_GOBACK_FAIL
+
+				}
+			}
+	
+			
+
+			if (!strcmp(chr_h_modident,"A"))
+			{
+				if (APL_FAILURE == CA_ModRstAccEnt(h_proc_num,
+															 h_batch_dt,
+															 fl_userlog,
+															 argv,
+															 p_intlenv_data_struct_h,
+															 l_debug_info_ptr))
+				{
+					APL_GOBACK_FAIL
+				}
+			}
+
+			
+			if (APL_FAILURE == IV_Mod_ActEntStatus(h_proc_num,
+															 		h_batch_dt,
+															 		l_debug_info_ptr) )
+			{
+				fprintf(fl_userlog,"Failed to Update status_ind record from IACCTENT\n");
+				APL_GOBACK_FAIL
+			}
+		} 
+
+		
+
+		if (!strcmp(chr_h_passflg ,"Y"))
+		{
+			if (APL_FAILURE == EL_PassAccEnt(chr_h_modident,
+		 												  h_proc_num,
+														  h_batch_dt,
+														  argv,	
+														  "B",
+														  NULL,
+														  fl_userlog,
+														  l_debug_info_ptr))
+			{
+				fprintf(fl_userlog,"Failed To pass entries .Try Passing Again\n");
+				APL_GOBACK_FAIL;
+			}
+
+			
+			
+			if (!strcmp(chr_h_modident, "P"))
+   		{
+     			 if (APL_FAILURE == IV_Mod_IVPymt_ActGen_Dt( h_proc_num , &int_retstat, l_debug_info_ptr) )
+      		{
+         		if (int_retstat == IV_CRITCAL_ERROR_IND)
+         		{
+           	 		fprintf(fl_userlog,"Fatal l_debuglist in Billing PAYMENT Table. Failed to Update the Accounting Entries Generation Date \n");
+         		}
+
+	 	        if (int_retstat == IV_NO_DATA_FOUND_ERR)
+   		      {
+      		      fprintf(fl_userlog,"No Data Found For Batch_no %s in Billing PAYMENT Table\n",h_proc_num);
+         		}
+         		APL_GOBACK_FAIL
+      		}
+  		 	}
+			
+			if (!strcmp(chr_h_modident ,"B"))
+			{
+
+				if (APL_FAILURE == IV_Proc_IVCNTLPARAMPassAccGenFlg(&int_retstat,
+																				 l_debug_info_ptr) )
+				{
+         		if (int_retstat == IV_CRITCAL_ERROR_IND)
+         		{
+           	 	fprintf(fl_userlog,"Fatal l_debuglist in Billing Control Parameters Table. Failed to Update the Accounting Entries Generation Flag. \n");
+         		}
+         		APL_GOBACK_FAIL
+				}
+			}
+
+			if (!strcmp(chr_h_modident ,"A"))
+   		{
+	
+  		 	   if (APL_FAILURE == CA_ModPassAccEnt(h_proc_num,h_batch_dt,
+      		                                   fl_userlog,argv,
+         		                                l_debug_info_ptr))
+      		{
+         		APL_GOBACK_FAIL
+    	 		}
+ 		  	}
+			
+			if (APL_FAILURE == IV_Mod_ActEnt(h_proc_num,h_batch_dt,
+                                       l_debug_info_ptr))
+   		{
+      		fprintf(fl_userlog,"Failed to update the status_ind in Common Accounting Entries Table\n");
+      		APL_GOBACK_FAIL
+   		}
+		}		
+
+      EXEC SQL COMMIT WORK;
+      printf("commited\n");
+			
+		IS_ANY_ORA_ERROR
+
+      EXEC SQL SELECT ROWID
+      INTO :chr_h_batch_in_proc_rowid :int_i_batch_in_proc_rowid
+      FROM SYS_BATCHPROC
+      WHERE PROCESS_NAME   =  :argv[0]
+      AND STARTDATE    =  :argv[2]
+      AND STATUS       =  'started'
+      FOR UPDATE OF STATUS;
+
+      IS_ANY_ORA_ERROR;
+
+		
+		
+		
+
+		strcpy(chr_l_stat_info,"Records Committed");
+
+		strcpy(chr_h_batch_in_proc_status,"completed");
+		strcpy(chr_h_restart_data,APL_NULL_STRING);
+		i_restart_info = -1;	
+
+	 	EXEC SQL UPDATE SYS_BATCHPROC
+      	  SET STATUS = :chr_h_batch_in_proc_status,
+				  STAT_DET = :chr_l_stat_info,
+           PROCESSING_STATUS = :chr_h_restart_data :i_restart_info
+        	  WHERE ROWID = :chr_h_batch_in_proc_rowid;
+
+		IS_ANY_ORA_ERROR;
+
+   	if ( APL_ZERO_RESULT_SET )
+   	{
+      	fprintf(fl_userlog,"Failed to Update batch_in_proc because row_id could\
+not be int_found \n");
+      	printf("no rowid int_found\n");
+      	APL_GOBACK_FAIL;
+   	}
+
+   	APL_GOBACK_SUCCESS
+
+
+	
+
+	 RETURN_FAILURE:
+    APL_IF_DEBUG
+    {
+        CO_ProcMonitor(APL_OUT_FILE, "Exiting unsuccessfully out of\
+B_PayPassAccEntries().\n", (DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+    }
+    return (APL_FAILURE);
+
+	 RETURN_SUCCESS:
+    APL_IF_DEBUG
+    {
+      CO_ProcMonitor(APL_OUT_FILE,"Exiting succesfully out of \
+B_PayPassAccEntries().\n",(DEBUG_INFO_STRUCT_H **)NULL, (INTL_ENV_DATA_STRUCT_H *)NULL);
+    }
+    return (APL_SUCCESS);
+}
